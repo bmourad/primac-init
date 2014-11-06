@@ -1,0 +1,210 @@
+   SUBROUTINE CALC.JOB.RESV(CONO,JOBNO,SAVE.INV.JS.REC)
+*COPY>CPYLIB>COM1
+*COPY>JCS.CPYLIB>COM.JCS.LINK
+*COPY>ICS.CPYLIB>COM.INV.MAIN  
+*COPY>ICS.CPYLIB>COM.INV.SERIAL
+*COPY>JCS.CPYLIB>COM.INV.STATS 
+*COPY>PMC.CPYLIB>COM.CUST
+*COPY>OPS.CPYLIB>COM.ORDER
+*********************************************************************
+* REVISION    - [08.1]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - JCSBP
+* PROGRAM     - CALC.JOB.RESV
+* DESCRIPTION -
+* T26334 epitka 12/10/2001 * REV12
+* T28051 cmykleb 04/06/2004 * If a product is a FNGD item and with a uom
+*                             of "EA", when used on a job the qty is wrong
+*                             on that job.
+*T28567 lross 05/26/2005 * If raw matl it does not need / 1000 to MQTY.
+*********************************************************************
+*COPY>JCS.CPYLIB>JOB
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>WAREHOUSE
+*COPY>ICS.CPYLIB>CATEGORY
+*COPY>ICS.CPYLIB>INV.STATS
+*COPY>ICS.CPYLIB>INV.JOB.STATS
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>ICS.CPYLIB>INV.FNGD
+*COPY>ICS.CPYLIB>FNGD.BOM
+*COPY>OPS.CPYLIB>JOB.FNGD.STATS
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+   MAT SYSCOM.REC =  ""; SYS.TYPE = 2
+*
+   RQD.DATE.MV = 1
+   RQD.AMT.MV = 2
+   RQD.QTY.MV = 3
+*
+   PCNT = DCOUNT(JFS.PROD,VM)
+   REQD.PROD = ""; REQD.WHSE = ""; REQD.QTY = ""
+   FOR P = 1 TO PCNT
+      MPROD = JFS.PROD<1,P>; MQTY = JFS.M.QTY<1,P> / 1000
+      LOOP WHILE MPROD # "" DO
+         MATREAD IOF.REC FROM INV.FNGD, CONO:MPROD<1> ELSE
+            GOTO 1070
+         END
+         IF IOF.BOM = "" THEN GOTO 1070
+         MATREAD BOM.REC FROM FNGD.BOM, CONO:IOF.BOM ELSE
+            ERRMSG = "Cannot locate Bill Of Material # ":IOF.BOM
+            GOSUB 91000; GOTO 1070
+         END
+         LOCATE MPROD<1> IN BOM.PROD<1>,1 SETTING FND THEN
+            BOM.PROD = DELETE(BOM.PROD,1,FND,0)
+         END
+         BCNT = DCOUNT(BOM.PROD,VM)
+         FOR B = 1 TO BCNT
+            IF BOM.PROD<1,B> = "" THEN
+               MAT IOF.REC = ""
+            END ELSE
+               MATREAD IOF.REC FROM INV.FNGD, CONO:BOM.PROD<1,B> ELSE
+                  MAT IOF.REC = ""
+               END
+            END
+*T28051 v
+            MATREAD INV.REC FROM INVENTORY, CONO:BOM.PROD<1,B> ELSE
+               MAT INV.REC = ""
+            END
+*COPY>ICSBP>INV.UM.CNV
+             IF INV.M.LINE = 'FNGD' AND INV.UNIT<1,2> = 'EA' THEN
+                FCTR = 1
+             END ELSE
+                FCTR = 100
+                MQTY *= 1000 ;*T28567
+             END
+*T28051 ^
+            IF IOF.BOM = "" THEN
+               REQD.PROD<-1> = BOM.PROD<1,B>
+               REQD.WHSE<-1> = JFS.WHSE<1,P>
+               IF BOM.Q.TYPE<1,B> = "F" THEN
+*T28051 v
+*                 REQD.QTY<-1> = BOM.Q.RATIO<1,B> / 100
+                  REQD.QTY<-1> = BOM.Q.RATIO<1,B> / FCTR
+*T28051 ^
+               END ELSE
+                  REQD.QTY<-1> = INT(SUM(MQTY<1>) / 1000 * BOM.Q.RATIO<1,B>)
+               END
+            END ELSE
+               MPROD<-1> = BOM.PROD<1,B>
+               IF BOM.Q.TYPE<1,B> = "F" THEN
+*T28051 v
+*                 REQD.QTY<-1> = BOM.Q.RATIO<1,B> / 100
+                  REQD.QTY<-1> = BOM.Q.RATIO<1,B> / FCTR
+*T28051 ^
+               END ELSE
+                  REQD.QTY<-1> = INT(SUM(MQTY<1>) / 1000 * BOM.Q.RATIO<1,B>)
+               END
+            END
+         NEXT B
+1070*
+         MPROD = DELETE(MPROD,1,0,0)
+         MQTY = DELETE(MQTY,1,0,0)
+      REPEAT
+   NEXT P
+   DCNT = DCOUNT(REQD.PROD,AM)
+*
+*---- Check for duplicate products
+*
+   FOR D = 1 TO DCNT
+      IF REQD.QTY<D> > 0 THEN
+         PDNO = REQD.PROD<D>; WHNO = REQD.WHSE<D>
+         DD = D + 1
+         LOOP
+            LOCATE PDNO IN REQD.PROD,DD SETTING FND THEN
+               IF WHNO = REQD.WHSE<FND> THEN
+                  REQD.QTY<D> = REQD.QTY<D> + REQD.QTY<FND>
+                  REQD.QTY<FND> = 0
+               END
+            END ELSE
+               DD = 0
+            END
+         WHILE DD DO
+            DD = FND + 1
+         REPEAT
+      END
+   NEXT D
+   FOR D = 1 TO DCNT
+      PDNO = REQD.PROD<D>; WHNO = REQD.WHSE<D>
+      IWH.ID=CONO:PDNO:"!":WHNO
+      IF REQD.QTY<D> <= 0 THEN GOTO 1090
+      MATREAD INV.REC FROM INVENTORY, CONO:PDNO ELSE
+         ERRMSG = "Cannot locate Inventory Product # ":PDNO
+         GOSUB 91000; GOTO 1090
+      END
+      LOCATE WHNO IN INV.WHSE.CODE<1>,1 SETTING FND ELSE
+         WHNO = ""
+         WCNT = DCOUNT(INV.WHSE.CODE<1>,VM)
+         FOR W = 1 TO WCNT WHILE WHNO = ""
+            MATREAD WHSE.REC FROM WAREHOUSE, CONO:INV.WHSE.CODE<1,W> THEN
+               IF JOB.DIV = WHS.DIV OR WHS.DIV = "00" THEN WHNO = INV.WHSE.CODE<1,W>
+            END
+         NEXT W
+         IF WHNO = "" THEN
+            ERRMSG = "No warehouses setup in division (":JOB.DIV:") for Product # ":PDNO
+            GOSUB 91000; GOTO 1090
+         END
+      END
+      PTR = 1
+      LOOP
+         LOCATE PDNO IN JOB.RESV.MATL<1>,PTR SETTING MLOC THEN
+            IF WHNO = JOB.RESV.WHSE<1,MLOC> THEN
+               PTR = 0; MLOC = 0
+            END
+         END ELSE
+            PTR = 0
+         END
+      WHILE PTR DO
+         PTR = MLOC + 1
+      REPEAT
+      IF NOT(MLOC) THEN GOTO 1090
+      MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE ELSE
+         ERRMSG = "Cannot locate Product line (":INV.LINE:") for Product # ":PDNO
+         GOSUB 91000; GOTO 1090
+      END
+      MATREAD IWH.REC FROM INV.WHSE, CONO:PDNO:"!":WHNO ELSE
+         ERRMSG = "Cannot locate Warehouse (":WHNO:") for Product # ":PDNO
+         GOSUB 91000; GOTO 1090
+      END
+      JOB.RESV.MATL<1,MLOC> = PDNO
+      JOB.RESV.WHSE<1,MLOC> = WHNO
+      JOB.RESV.DATE<1,MLOC> = "ORD REQD"
+      JOB.ALOC.QTY<1,MLOC> = 0
+      JOB.RESV.QTY<1,MLOC> = 0
+      JOB.USED.QTY<1,MLOC> = 0
+      JOB.ALOC.AMT<1,MLOC> = 0
+      JOB.RESV.AMT<1,MLOC> = 0
+      JOB.USED.AMT<1,MLOC> = 0
+      BEGIN CASE
+         CASE CATG.COST.TYPE = "SD"
+            REQD.AMT = IWH.STD.COST
+         CASE CATG.COST.TYPE = "AV"
+            REQD.AMT = IWH.AVG.COST
+         CASE CATG.COST.TYPE = "LT"
+            REQD.AMT = IWH.LIST.COST
+         CASE 1
+            DIV.POS='';FISCAL.FLAG='JC';TRAN.PERIOD=''
+            ERR.FLG='';ERRMSG=''
+            LAST.PRICE=0
+            CALL GET.LAST.COST(IWH.ID,MAT IWH.REC,WAREHOUSE,CONTROL,ERR.FLG,ERRMSG,DIV.POS,FISCAL.FLAG,TRAN.PERIOD,LAST.PRICE)
+            REQD.AMT=LAST.PRICE+0
+      END CASE
+      LOCATE PDNO IN JFS.PROD<1>,1 SETTING FND THEN
+         SAVE.INV.JS.REC<MLOC,RQD.DATE.MV> = JFS.DATE<1,FND>
+      END
+      SAVE.INV.JS.REC<MLOC,RQD.AMT.MV> = REQD.AMT
+*COPY>ICSBP>INV.UM.CNV
+      IF ICR.SCAL THEN
+         MLTP = ("1":STR("0",ICR.SCAL)) + 0
+      END ELSE
+         MLTP = 1
+      END
+      SAVE.INV.JS.REC<MLOC,RQD.QTY.MV> = REQD.QTY<D> * MLTP
+1090*
+   NEXT D
+   GOTO 99999
+91000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+99999 RETURN
+END

@@ -1,0 +1,1180 @@
+   SUBROUTINE VOUCHER.REG.PO(V.CODE,PO.NO)
+*COPY>CPYLIB>COM1
+*COPY>PMC.CPYLIB>COM.COMPANY
+*COPY>POS.CPYLIB>COM.MPO
+*COPY>APS.CPYLIB>COM.APS.FILE.VARS
+*COPY>APS.CPYLIB>COM.TEMP.VOUCHERS
+*COPY>APS.CPYLIB>COM.VOUCHER.MAINT
+*********************************************************************
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* PROGRAM     - VOUCHER.REG.PO
+* BY          - JIHAD YAMOUT, C.B.A
+* DATE        - 11/24/86
+* DESCRIPTION
+*  This Program is used to enter all regular PO's and product's.
+* MOD 10/08/94 CLW Task 17919 - Accrual accounting
+* T19149 RKB 05/01/95 add support for credit div,dept,cctr
+* T19406 CT6 11/03/95 divisionalize, POs must have same div as Vouchers
+*T20016 RKB 01/29/96 add support to get div from po line warehouse.
+*T20016.1 RKB 02/06/96 add restriction to edit of accr acct acct dev dept 
+*                      cctr.
+*FIX001 RKB 04/16/96 Fix reference to CATG.INV change to OLD.ACCT.  This
+*                    problem was causing the credit side of the acct
+*                    distribution to get out of whack.
+*T21137 gat 10/24/1996 * Fix undefined variable on line 707.
+*T21177 diane 11/06/1996 * Rev11 upgrade.
+*T23803 gat 03/24/1999 * Fix reg po owner div to test whse div.
+*T25978 adelgado 01/31/2002 * Add the use of prompts (S,SR,SB,ST).
+*T27752 cmykleb 10/13/2003 * If the div # is not the same as the voucher
+*                            div # the account distribution was not
+*                            updating correctly.
+*********************************************************************
+*
+**** INSERT FILE EQUATES
+*
+*COPY>APS.CPYLIB>TEMP.VOUCHERS
+*COPY>APS.CPYLIB>VEND.STATS
+*COPY>APS.CPYLIB>VEND.PO.STATS
+*COPY>APS.CPYLIB>APS.FILE.VARS
+*COPY>PMC.CPYLIB>VEND
+*COPY>PMC.CPYLIB>PO
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>CATEGORY
+*COPY>ICS.CPYLIB>CATEGORY.MISC
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>POS.CPYLIB>MISC.PO
+*COPY>ICS.CPYLIB>WAREHOUSE
+*** INT
+*
+   BEGIN.PAGE = 6
+   PAGE.SIZE = 6
+   LINE.SPACE = 2
+   LINES = 0
+   LN = 0
+   OLD.START.LINE=0
+   TOTAL.VOUCH = 0
+   PAY.VALUES = ""
+   MAT INV.CNV.REC = ""
+   OPTION = ""
+   TEMP.ACCT.ACCRUE=0 ;*T20016.1
+*
+**** SETUP FOR SYSTEM ERRMSGS
+*
+   SYS.TYPE = 1
+   CALL SYSCOM(MAT SYSCOM.REC)
+*
+**** MAIN PROCESS
+*
+   VSTAT.KEY = CONO:TVO.VEND<1,1>:"!":TVO.PO.TYPE
+   MATREAD VSTAT.REC FROM VEND.STATS, VSTAT.KEY ELSE MAT VSTAT.REC = ""
+   IF TVO.PO.NOS = "" THEN
+      OPTION = "A"
+      LOOP
+         LN = LINES + 1
+         OLD.LINES = LINES
+         GOSUB 1000
+      WHILE LINES > OLD.LINES DO
+      REPEAT
+      LN = LINES
+   END ELSE
+      LINES = COUNT(TVO.PO.NOS, VM) + (TVO.PO.NOS # "")
+      LN = 1
+      IF TVO.PO # "MULTI" THEN
+         FOR LN = LINES TO 1 STEP - 1
+            IF TVO.PO.NOS<1,LN> # TVO.PO THEN
+               GOSUB 5000
+               ICR.CNV = DELETE(ICR.CNV,LN,0,0)
+               ICR.DV2 = DELETE(ICR.DV2,LN,0,0)
+               ICR.DV1 = DELETE(ICR.DV1,LN,0,0)
+               ICR.MT1 = DELETE(ICR.MT1,LN,0,0)
+            END
+         NEXT LN
+         LINES = COUNT(TVO.PO.NOS, VM) + (TVO.PO.NOS # "")
+         LN = 1
+      END
+      GOSUB 3000
+   END
+   GOSUB 10000
+*
+***** ENTER OPTIONS
+*
+   MORE = 1
+   LOOP
+      ECD.NUM = 14
+      SCV.REC(14)<ECD.SCRN.NO> = ""; ECD.ACTION = 4; CALL SCRN.EDIT
+      OPTION = ECD.RET.VALUE
+      BEGIN CASE
+         CASE OPTION = 'E' OR OPTION = 'END'
+            TVO.GRS.AMT = TOTAL.VOUCH
+            TVO.MER.AMT = TOTAL.VOUCH
+            MORE = 0
+         CASE OPTION = 'S'
+            LN = START.LINE + PAGE.SIZE
+            IF LN > LINES THEN LN = 1
+            GOSUB 10000
+      * T25978 v
+         CASE OPTION = 'SR'
+            LN -= PAGE.SIZE
+            IF LN < 1 THEN LN = 1
+            GOSUB 10000
+         CASE OPTION = 'ST'
+            LN = 1
+            GOSUB 10000
+         CASE OPTION = 'SB'
+            LN = LINES
+            GOSUB 10000
+      * T25978 ^
+         CASE OPTION = 'A'
+            LOOP
+               LN = LINES + 1
+               OLD.LINES = LINES
+               GOSUB 1000
+            WHILE LINES > OLD.LINES DO
+            REPEAT
+            LN = LINES
+         CASE OPTION = "C"
+            GOSUB 70000
+            IF LNO THEN
+               LN = LNO
+               SLN = BEGIN.PAGE + LINE.SPACE * MOD(LN - 1,PAGE.SIZE)
+               GOSUB 1000
+            END
+         CASE OPTION = "D"
+            GOSUB 70000
+            IF LNO THEN
+               LN = LNO
+               TOTAL.VOUCH = TOTAL.VOUCH - TVO.PO.VOUCH<1,LN>
+*20016 v
+               MATREAD WHSE.REC FROM WAREHOUSE,CONO:TVO.PO.WHSE<1,LN> ELSE
+                  MAT WHSE.REC = ''
+               END
+               IF WHS.DIV # "" THEN
+                  WORK.DIV = WHS.DIV
+               END ELSE
+                  WORK.DIV = GEN.DIV
+               END
+*20016 ^      
+               ECD.NUM = 13; SCV.REC(13)<ECD.SCRN.NO> = TOTAL.VOUCH
+               ECD.ACTION = 5; CALL SCRN.EDIT
+               GOSUB 5000
+               ICR.CNV = DELETE(ICR.CNV,LN,0,0)
+               ICR.DV2 = DELETE(ICR.DV2,LN,0,0)
+               ICR.DV1 = DELETE(ICR.DV1,LN,0,0)
+               ICR.MT1 = DELETE(ICR.MT1,LN,0,0)
+               LINES = COUNT(TVO.PO.NOS,VM) + (TVO.PO.NOS # "")
+               IF LN > 1 AND LN > LINES THEN LN = LN - 1
+               IF LN < 1 THEN LN = 1
+               OLD.START.LINE = 0
+            END
+            GOSUB 10000
+      END CASE
+   WHILE MORE DO
+   REPEAT
+   GOTO 99999
+*
+**** ENTER LINE INFORMATION
+*
+1000*
+   GOSUB 10000
+   SLN = BEGIN.PAGE + LINE.SPACE * MOD(LN -1, PAGE.SIZE)
+   P_X  = 0 ; P_Y = SLN ; P_VALUE = LN "L#3" ; P_OPT = "CL"
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   P_X  = 0 ; P_Y = SLN+1 ; P_VALUE = "" ; P_OPT = "CL"
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   TEMP.VALUES = ""
+   TEMP.ACCT.ACCRUE=0 ;* T20016.1
+   OLD.ACCT = ""
+   AP.ACCT = ''
+   TEMP.CNV = "MD2"
+   TEMP.DV1 = 1
+   TEMP.MT1 = 1
+   TEMP.DV2 = 1
+   TEMP.CNV<2> = "MD2"
+   TEMP.DV1<2> = 1
+   TEMP.MT1<2> = 1
+   TEMP.DV2<2> = 1
+   IF OPTION = "A" THEN GOTO 1010
+   TEMP.VALUES = TVO.PO.NOS<1,LN>
+   TEMP.VALUES<2> = TVO.PO.PROD<1,LN>
+   TEMP.VALUES<3> = TVO.PROD.DESC<1,LN>
+   TEMP.VALUES<4> = TVO.PO.WHSE<1,LN>
+*20016 v
+   MATREAD WHSE.REC FROM WAREHOUSE,CONO:TVO.PO.WHSE<1,LN> ELSE
+      MAT WHSE.REC = ''
+   END
+* T23803
+   IF TVO.DIV.OWNER # WHS.DIV AND TVO.DIV.OWNER # "00" THEN
+      ERRMSG = "Voucher Division does not match Whse Div"; GOSUB 91000;GOSUB 1000
+   END
+* T23803
+   IF WHS.DIV # "" THEN
+      WORK.DIV = WHS.DIV
+   END ELSE
+      WORK.DIV = GEN.DIV
+   END
+*20016 ^      
+   TEMP.VALUES<5> = TVO.PO.UM<1,LN>
+   TEMP.VALUES<6> = TVO.PO.QTY<1,LN>
+   TEMP.VALUES<7> = TVO.PO.U.COST<1,LN>
+   TEMP.VALUES<8> = TVO.PO.VOUCH<1,LN>
+   TEMP.VALUES<9> = TVO.SEQ.NO<1,LN>
+   TEMP.CNV = ICR.CNV<LN>
+   TEMP.DV1 = ICR.DV1<LN>
+   TEMP.MT1 = ICR.MT1<LN>
+   TEMP.DV2 = ICR.DV2<LN>
+   TEMP.CNV<2> = ICR.CNV<LN>
+   TEMP.DV1<2> = ICR.DV1<LN>
+   TEMP.MT1<2> = ICR.MT1<LN>
+   TEMP.DV2<2> = ICR.DV2<LN>
+   GOSUB 6000      ;* Task 17919
+*
+**** ENTER PO NUMBER
+*
+1010*
+   X = 4; Y = SLN; MAXL = 8; TYP = 1; O.R = "R"; VALDAT = ""; HMSG = "Enter a valid PO number"
+   BEGIN CASE
+      CASE TVO.PO # "MULTI"
+         DEFAULT = TVO.PO; O.R = "O"
+         VALDAT = TVO.PO
+      CASE TVO.PO.NOS<1,LN> # ""
+         DEFAULT = TVO.PO.NOS<1,LN>; O.R = "O"
+      CASE TEMP.VALUES<1> # ""
+         DEFAULT = TEMP.VALUES<1>; O.R = "O"
+      CASE TVO.PO.NOS<1,LN-1> # ""
+         DEFAULT = TVO.PO.NOS<1,LN-1>; O.R = "O"
+   END CASE
+   CALL EDIT.SUB
+   IF VALUE = "END" AND OPTION = "A" THEN
+      GOSUB 5500
+      ICR.CNV = DELETE(ICR.CNV,LN,0,0)
+      ICR.DV2 = DELETE(ICR.DV2,LN,0,0)
+      ICR.DV1 = DELETE(ICR.DV1,LN,0,0)
+      ICR.MT1 = DELETE(ICR.MT1,LN,0,0)
+      P_X  = 0 ; P_Y = SLN ; P_VALUE = "" ; P_OPT = "CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      P_X  = 0 ; P_Y = SLN+1 ; P_VALUE = "" ; P_OPT = "CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   END
+   IF VALUE = "END" THEN GOTO 1999
+   IF VALUE = "???" AND TVO.PO = "MULTI" THEN
+      IF VSTAT.PO # "" THEN
+         ECD.SCRN.NO = 4
+         SCV.REC(1)<ECD.SCRN.NO> = TVO.VEND<1,1>
+         SCV.REC(2)<ECD.SCRN.NO> = VEND.DESC
+         IF TVO.PO.TYPE = "R" THEN
+            SCV.REC(14)<ECD.SCRN.NO> = "REGULAR"
+         END ELSE
+            SCV.REC(14)<ECD.SCRN.NO> = "MISCELLANEOUS"
+         END
+         ECD.ACTION = 3; CALL SCRN.EDIT
+         PAY.VALUES = ""
+         CALL VEND.PO.INQ(PAY.VALUES)
+         ECD.SCRN.NO = 3; ECD.ACTION = 3; CALL SCRN.EDIT
+         OLD.START.LINE = 0
+         IF PAY.VALUES<1> = "" THEN
+            GOSUB 10000
+            GOTO 1000
+         END
+         LINES = COUNT(TVO.PO.NOS,VM) + (TVO.PO.NOS # "")
+         LN = LINES
+         IF OPTION = "A" THEN OLD.LINES = LINES - 1
+         GOSUB 3000
+         GOSUB 10000
+         GOTO 1999
+      END ELSE
+         ERRMSG = "No PO's associated with that vendor"; GOSUB 91000; GOTO 1010
+      END
+   END
+   IF TVO.PO # "MULTI" AND VALUE # TVO.PO THEN
+      ERRMSG = "Valid entry = ":TVO.PO
+      GOSUB 91000
+      GOTO 1010
+   END
+*TASK 19406 vvv
+   PO.DIV.AVAIL=1
+   IF TVO.PO.TYPE = "R" THEN
+      MATREAD PO.REC FROM PO, CONO:VALUE ELSE
+         MAT PO.REC = ""
+         PO.DIV.AVAIL=0
+      END
+      IF PO.DIV.OWNER # TVO.DIV.OWNER THEN
+         IF PO.DIV.AVAIL THEN
+            IF TVO.DIV.OWNER # "00" THEN
+               ERRMSG = "PO and Voucher must have the same Owning Division"
+               GOSUB 91000; GOTO 1010
+            END
+         END ELSE
+            PO.DIV.OWNER = TVO.DIV.OWNER
+            WORK.DIV=PO.DIV.OWNER
+         END
+      END
+   END ELSE
+      MATREAD MPO.REC FROM MISC.PO, CONO:VALUE ELSE MAT MPO.REC = ""
+      IF MPO.DIV.OWNER # TVO.DIV.OWNER THEN
+         IF TVO.DIV.OWNER # "00" THEN
+            ERRMSG = "PO and Voucher must have the same Owning Division"
+            GOSUB 91000; GOTO 1010
+         END
+      END
+   END
+*TASK 19406 ^^
+   CHECK.FLG = "P"
+   LOCATE VALUE IN VSTAT.PO<1>,1 SETTING FNDP ELSE FNDP = 0
+   IF FNDP = 0 AND VALUE # TEMP.VALUES<1> THEN
+      QUESTION = "This PO is not setup. Ok to use? (Y/N)"; GOSUB 11000
+      IF REPLY = "N" THEN GOTO 1000
+      CHECK.FLG = ""
+      IF TVO.PO.TYPE="M" AND TVO.MISC.CAT = '' THEN
+         GOSUB 7000
+         IF MCAT='' OR MCAT='E' OR MCAT='END' THEN GOTO 1000
+      END
+   END
+   MATREAD VPS.REC FROM VEND.PO.STATS , CONO:TVO.VEND:"!":TVO.PO.TYPE:"!":VALUE ELSE
+      IF CHECK.FLG = "P" AND VALUE # TEMP.VALUES<1> THEN
+         QUESTION = "This PO is not setup. Ok to use? (Y/N)"; GOSUB 11000
+         IF REPLY = "N" THEN GOTO 1000
+         CHECK.FLG = ""
+         IF TVO.PO.TYPE="M" AND TVO.MISC.CAT = '' THEN
+            GOSUB 7000
+            IF MCAT='' OR MCAT='E' OR MCAT='END' THEN GOTO 1000
+         END
+      END
+      MAT VPS.REC = ""
+   END
+   IF VALUE # TEMP.VALUES<1> THEN
+      FOR I=2 TO 9
+         TEMP.VALUES<I>=""
+      NEXT I
+   END
+   TEMP.VALUES<1> = VALUE
+*
+* Access regular po details for vouchering
+*
+   IF TVO.PO.TYPE = "R" AND VPS.PROD # "" THEN
+      ECD.SCRN.NO = 5
+      GOSUB 4000
+      GOTO 1999
+   END
+*
+* Access misc. po details for vouchering
+*
+   IF TVO.PO.TYPE = "M" AND VPS.PROD.DESC # "" THEN
+      MATREAD MPO.REC FROM MISC.PO, CONO:VALUE ELSE MAT MPO.REC=""
+      IF TVO.MISC.CAT='' THEN TVO.MISC.CAT=MPO.MISC.CAT
+      IF MPO.MISC.CAT # TVO.MISC.CAT THEN
+         ERRMSG = "PO category (":MPO.MISC.CAT:") does not match selected category (":TVO.MISC.CAT:")"
+         GOSUB 91000
+         GOTO 1000
+      END
+      ECD.SCRN.NO = 10
+      GOSUB 4000
+      GOTO 1999
+   END
+*
+**** ENTER PRODUCT NUMBER
+*
+1020*
+   X = 13; Y = SLN; MAXL = 15; TYP = 1; VALDAT = ""; HMSG = "Enter a valid product number"
+   BEGIN CASE
+      CASE TVO.PO.PROD<1,LN> # ""
+         DEFAULT = TVO.PO.PROD<1,LN>; O.R = "O"
+      CASE TEMP.VALUES<2> # ""
+         DEFAULT = TEMP.VALUES<2>; O.R = "O"
+   END CASE
+   IF TVO.PO.TYPE = "M" THEN O.R = "O"
+   CALL EDIT.SUB
+   IF VALUE = "END" THEN GOTO 1010
+   IF VALUE = "???" THEN
+      IF VPS.PROD # "" OR (VPS.PROD.DESC # "" AND TVO.PO.TYPE = "M") THEN
+         ECD.SCRN.NO = 5
+         GOSUB 4000
+         GOTO 1999
+      END ELSE
+         ERRMSG = "No product associated with this PO"; GOSUB 91000; GOTO 1020
+      END
+   END
+   IF TVO.PO.TYPE = "M" THEN
+1025*
+      TEMP.VALUES<2> = VALUE
+      BEGIN CASE
+         CASE TVO.PROD.DESC<1,LN> # ""
+            VALUE = TVO.PROD.DESC<1,LN>
+         CASE TEMP.VALUES<3> # ""
+            VALUE = TEMP.VALUES<3>
+         CASE 1
+            X = 13; Y = SLN+1; TYP = 1; MAXL = 30; O.R = "R"
+            HMSG = "Enter Product discription"
+            CALL EDIT.SUB
+            IF VALUE = "END" THEN GOTO 1010
+      END CASE
+      P_X  = 13 ; P_Y = SLN+1 ; P_VALUE = VALUE<1,1,1> "L#30" ; P_OPT = ""
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      LOCATE VALUE IN VPS.PROD.DESC<1>,1 SETTING FNDPD ELSE FNDPD = 0
+      IF FNDPD = 0 AND CHECK.FLG = "P" AND VALUE # TEMP.VALUES<3> THEN
+         QUESTION = "This product is not setup for this PO. Ok to use? (Y/N)"; GOSUB 11000
+         IF REPLY = "N" THEN GOTO 1020
+      END
+      TEMP.VALUES<3> = VALUE
+      IF FNDPD # "0" THEN TEMP.VALUES<9> = VPS.SEQ.NO<1,FNDPD> ELSE TEMP.VALUES<9> = ""
+      MAT INV.REC = ""
+      MAT CATG.REC = ""
+   END ELSE
+      LOCATE VALUE IN VPS.PROD<1>,1 SETTING FNDPD ELSE FNDPD = 0
+      IF FNDPD = 0 AND CHECK.FLG = "P" AND VALUE # TEMP.VALUES<2> THEN
+         QUESTION = "This product is not setup for this PO. Ok to use? (Y/N)"; GOSUB 11000
+         IF REPLY = "N" THEN GOTO 1020
+      END
+      MATREAD INV.REC FROM INVENTORY , CONO:VALUE ELSE
+         ERRMSG = "Product # (":VALUE:") not on file."; GOSUB 91000; GOTO 1020
+      END
+      IF INV.LINE = "" THEN
+         ERRMSG = "Product does not have a product line."
+         GOSUB 91000
+         GOTO 1020
+      END
+      MATREAD CATG.REC FROM CATEGORY, CONO : INV.LINE ELSE
+         ERRMSG = "Product line (":INV.LINE:") is not on file."
+         GOSUB 91000
+         GOTO 1020
+      END
+      IF CATG.ACCRU.LIAB = "" OR CATG.AP.ACCT = "" THEN
+         ERRMSG = "Invalid Account on Product Line."
+         GOSUB 91000
+         GOTO 1020
+      END
+      MATREAD PO.REC FROM PO, CONO:TEMP.VALUES<1> ELSE MAT PO.REC=""
+      IF PO.ACCRUE = "Y" THEN
+         TEMP.ACCT.ACCRUE = 1 ;*T20016.1
+         OLD.ACCT = CATG.ACCRU.LIAB
+         AP.ACCT = CATG.AP.ACCT
+      END ELSE
+         TEMP.ACCT.ACCRUE = 0 ;* T20016.1
+         OLD.ACCT = CATG.INV
+         AP.ACCT = CATG.AP.ACCT
+      END
+      TEMP.VALUES<2> = VALUE
+      TEMP.VALUES<3> = INV.FULL.DESC
+      P_X  = 13 ; P_Y = SLN+1 ; P_VALUE = TEMP.VALUES<3> "L#45" ; P_OPT = ""
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   END
+   IF INV.COST.WT + 0 = 0 THEN INV.COST.WT = 100
+   IF INV.SBR + 0 = 0 THEN INV.SBR = 1
+*
+**** ENTER WAREHOUSE
+*
+1030*
+   X = 29; Y = SLN; TYP = 1; MAXL = 4; O.R = 'R'; VALDAT = ""; HMSG = "Enter a valid warehouse number"
+   BEGIN CASE
+      CASE TVO.PO.WHSE<1,LN> # ""
+         DEFAULT = TVO.PO.WHSE<1,LN>; O.R = 'O'
+      CASE TEMP.VALUES<4> # ""
+         DEFAULT = TEMP.VALUES<4>; O.R = 'O'
+   END CASE
+   CALL EDIT.SUB
+   IF VALUE = "END" THEN GOTO 1010
+   IF TVO.PO.TYPE = "R" THEN
+      LOCATE VALUE IN INV.WHSE.CODE<1>,1 SETTING FNDW ELSE FNDW = 0
+      IF FNDW = 0 THEN
+         ERRMSG = "This warehouse is not set up for this product"; GOSUB 91000; GOTO 1030
+      END
+   END
+   TEMP.VALUES<4> = VALUE
+*20016 v
+   MATREAD WHSE.REC FROM WAREHOUSE,CONO:VALUE ELSE
+      MAT WHSE.REC = ''
+   END
+* T23803
+   IF TVO.DIV.OWNER # WHS.DIV  AND TVO.DIV.OWNER # "00" THEN
+      ERRMSG = "Voucher Division does not match Whse Div"; GOSUB 91000; GOSUB 1030
+   END
+* T23803
+   IF WHS.DIV # "" THEN
+      WORK.DIV = WHS.DIV
+   END ELSE
+      WORK.DIV = GEN.DIV
+   END
+*20016 ^      
+*
+**** ENTER ORDERING UNITS
+*
+1040*
+   BEGIN CASE
+      CASE TVO.PO.TYPE = "M"
+         X = 34; Y = SLN; TYP = 1; MAXL = 3; O.R = "R"; HMSG = "Enter ordering unit of measure"
+         BEGIN CASE
+            CASE TVO.PO.UM<1,LN> # ""
+               DEFAULT = TVO.PO.UM<1,LN>; O.R = "O"
+            CASE TEMP.VALUES<5> # ""
+               DEFAULT = TEMP.VALUES<5>; O.R = "O"
+         END CASE
+         CALL EDIT.SUB
+         IF VALUE = "END" THEN GOTO 1010
+         TEMP.VALUES<5> = VALUE
+      CASE INV.UNIT<1,1> # INV.UNIT<1,2>
+         X = 34; Y = SLN; TYP = 1; MAXL = 3; O.R = "R"; HMSG = "Enter a valid ordering unit of measure"
+         VALDAT = INV.UNIT<1,1>:VM:INV.UNIT<1,2>
+         BEGIN CASE
+            CASE TVO.PO.UM<1,LN> # ""
+               DEFAULT = TVO.PO.UM<1,LN>; O.R = "O"
+            CASE TEMP.VALUES<5> # ""
+               DEFAULT = TEMP.VALUES<5>; O.R = "O"
+         END CASE
+         CALL EDIT.SUB
+         IF VALUE = "END" THEN GOTO 1010
+         TEMP.VALUES<5> = VALUE
+      CASE 1
+         TEMP.VALUES<5> = INV.UNIT<1,1>
+         P_X  = 34 ; P_Y = SLN ; P_VALUE = TEMP.VALUES<5> "L#3" ; P_OPT = ""
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   END CASE
+   BEGIN CASE
+      CASE TVO.PO.TYPE = "M"
+         TEMP.CNV<1> = "MD2"; TEMP.DV2<1> = 1
+         TEMP.DV1<1> = 1; TEMP.MT1<1> = 1
+      CASE INV.UNIT<1,2> = "SHT" AND INV.UNIT<1,3> = "LBS"
+         TEMP.CNV<1> = "MD0"; TEMP.DV2<1> = 1
+         TEMP.DV1<1> = INV.M.WT; TEMP.MT1<1> = 10
+      CASE INV.UNIT<1,2> = "PC" AND INV.UNIT<1,3> = "MSI"
+         TEMP.CNV<1> = "MD0"; TEMP.DV2<1> = 1
+         TEMP.DV1<1> = INV.PAP.WIDTH/100; TEMP.MT1<1> = 100
+      CASE INV.UNIT<1,2> = "FT" AND INV.UNIT<1,3> = "MSI"
+         TEMP.CNV<1> = "MD0"; TEMP.DV2<1> = 12
+         TEMP.DV1<1> = INV.PAP.WIDTH/100; TEMP.MT1<1> = 1000
+      CASE 1
+         TEMP.CNV<1> = "MD2"; TEMP.DV2<1> = 1
+         TEMP.DV1<1> = 1; TEMP.MT1<1> = 1
+   END CASE
+   BEGIN CASE
+      CASE TVO.PO.TYPE = "M"
+         TEMP.CNV<2> = "MD2"; TEMP.DV2<2> = 1
+         TEMP.DV1<2> = 1; TEMP.MT1<2> = 1
+      CASE TEMP.VALUES<5> = "SHT" AND INV.UNIT<1,3> = "LBS"
+         TEMP.CNV<2> = "MD0"; TEMP.DV2<2> = 1
+         TEMP.DV1<2> = INV.M.WT; TEMP.MT1<2> = 10
+      CASE TEMP.VALUES<5> = "PC" AND INV.UNIT<1,3> = "MSI"
+         TEMP.CNV<2> = "MD0"; TEMP.DV2<2> = 1
+         TEMP.DV1<2> = INV.PAP.WIDTH/100; TEMP.MT1<2> = 100
+      CASE TEMP.VALUES<5> = "FT" AND INV.UNIT<1,3> = "MSI"
+         TEMP.CNV<2> = "MD0"; TEMP.DV2<2> = 12
+         TEMP.DV1<2> = INV.PAP.WIDTH/100; TEMP.MT1<2> = 1000
+      CASE 1
+         TEMP.CNV<2> = "MD2"; TEMP.DV2<2> = 1
+         TEMP.DV1<2> = 1
+         IF TEMP.VALUES<5> # INV.UNIT<1,3> THEN
+            TEMP.MT1<2> = INV.SBR
+         END ELSE
+            TEMP.MT1<2> = 1
+         END
+   END CASE
+*
+**** ENTER VOUCHERED QUANTITY
+*
+1050*
+   X = 38; Y = SLN; MAXL = 10; O.R = 'R'; VALDAT = ''; HMSG = "Enter vouchered quantity"
+   IF TEMP.CNV<2> = "MD0" THEN
+      TYP = 3
+      BEGIN CASE
+         CASE TVO.PO.QTY<1,LN> # ""
+            DEFAULT = INT(((TVO.PO.QTY<1,LN>/TEMP.DV1<2>)*TEMP.MT1<2>)/TEMP.DV2<2>+.5)
+            O.R = 'O'
+         CASE TEMP.VALUES<6> # ""
+            DEFAULT = INT(((TEMP.VALUES<6>/TEMP.DV1<2>)*TEMP.MT1<2>)/TEMP.DV2<2>+.5)
+      END CASE
+   END ELSE
+      TYP = 4; SCALER = 2
+      BEGIN CASE
+         CASE TVO.PO.QTY<1,LN> # ""
+            DEFAULT = OCONV(TVO.PO.QTY<1,LN>/TEMP.MT1<2>, "MD2")
+            O.R = "O"
+         CASE TEMP.VALUES<6> # ""
+            DEFAULT = OCONV(TEMP.VALUES<6>/TEMP.MT1<2>, "MD2")
+            O.R = "O"
+      END CASE
+   END
+   CALL EDIT.SUB
+   IF VALUE = "END" THEN GOTO 1010
+   IF TEMP.CNV<2> = "MD0" THEN
+      VALUE = INT(((VALUE/TEMP.MT1<2>)*TEMP.DV1<2>)*TEMP.DV2<2>+.5)
+   END ELSE
+      VALUE = VALUE * TEMP.MT1<2>
+   END
+   TEMP.VALUES<6> = VALUE
+*
+**** ENTER VOUCHERED UNIT OF PRICE
+*
+1060*
+   X = 49; Y = SLN; TYP = 4; SCALER = 4; MAXL = 9; O.R = "R"
+   VALDAT = ""; HMSG = "Enter vouchered unit price"
+   BEGIN CASE
+      CASE TVO.PO.U.COST<1,LN> # ""
+         DEFAULT = OCONV(TVO.PO.U.COST<1,LN>, "MD4")
+         O.R = 'O'
+      CASE TEMP.VALUES<7> # ""
+         DEFAULT = OCONV(TEMP.VALUES<7>, "MD4")
+         O.R = 'O'
+   END CASE
+   CALL EDIT.SUB
+   IF VALUE = "END" THEN GOTO 1010
+   IF VALUE # TVO.PO.U.COST<1,LN> OR TEMP.VALUES<1> # TVO.PO.NOS<1,LN> OR TEMP.VALUES<2> # TVO.PO.PROD<1,LN> OR TEMP.VALUES<3> # TVO.PROD.DESC<1,LN> OR TEMP.VALUES<4> # TVO.PO.WHSE<1,LN> OR TEMP.VALUES<5> # TVO.PO.UM<1,LN> OR TEMP.VALUES<6> # TVO.PO.QTY<1,LN> OR TEMP.VALUES<9> # TVO.SEQ.NO<1,LN> THEN
+      TVO.ENT.FLG<1,LN> = "E"
+   END
+   IF TEMP.CNV<2> = "MD2" THEN
+      TVO.PO.U.COST<1,LN> = INT(VALUE/TEMP.MT1<2>)
+   END ELSE
+      TVO.PO.U.COST<1,LN> = VALUE
+   END
+   TVO.PO.NOS<1,LN> = TEMP.VALUES<1>
+   TVO.PO.PROD<1,LN> = TEMP.VALUES<2>
+   TVO.PROD.DESC<1,LN> = TEMP.VALUES<3>
+   TVO.PO.WHSE<1,LN> = TEMP.VALUES<4>
+   IF TVO.PO.TYPE = "M" THEN
+      TVO.PO.UM<1,LN> = TEMP.VALUES<5>
+   END ELSE
+      TVO.PO.UM<1,LN> = INV.UNIT<1,2>
+   END
+   TVO.PO.QTY<1,LN> = TEMP.VALUES<6>
+   TVO.SEQ.NO<1,LN> = TEMP.VALUES<9>
+   ICR.CNV<LN> = TEMP.CNV<1>
+   ICR.DV1<LN> = TEMP.DV1<1>
+   ICR.MT1<LN> = TEMP.MT1<1>
+   ICR.DV2<LN> = TEMP.DV2<1>
+*
+**** CALCULATE AND PRINT TOTAL VOUCHERED
+*
+1070*
+   OLD.PO.VOUCH = TVO.PO.VOUCH<1,LN> + 0
+   IF OLD.ACCT # "" THEN
+      OLD.ACCT = OLD.ACCT : STR("0",IN.ACCT.LEN-LEN(OLD.ACCT))
+      OLD.ACCT = OLD.ACCT[1,IN.ACCT.LEN]
+      REV.AMT = TVO.PO.VOUCH<1,LN>
+      PTR = 1
+      LOOP
+         LOCATE OLD.ACCT IN TVO.ACCT<1>,PTR SETTING FND THEN
+            IF TVO.DIV<1,FND> = WORK.DIV THEN
+               IF REV.AMT > TVO.DIST.AMT<1,FND> THEN
+                  REV.AMT = REV.AMT - TVO.DIST.AMT<1,FND>
+                  TVO.DIST.AMT<1,FND> = 0
+               END ELSE
+                  TVO.DIST.AMT<1,FND> = TVO.DIST.AMT<1,FND> - REV.AMT
+                  REV.AMT = 0
+               END
+               IF TVO.DIST.AMT<1,FND> = 0 THEN
+                  TVO.ACCT = DELETE(TVO.ACCT,1,FND,0)
+                  TVO.DIST.AMT = DELETE(TVO.DIST.AMT,1,FND,0)
+                  TVO.ASSET.ID = DELETE(TVO.ASSET.ID,1,FND,0)
+                  TVO.DIV = DELETE(TVO.DIV,1,FND,0)
+                  TVO.DEPT = DELETE(TVO.DEPT,1,FND,0)
+                  TVO.CCTR = DELETE(TVO.CCTR,1,FND,0)
+                  TVO.ACCT.FLG = DELETE(TVO.ACCT.FLG,1,FND,0)
+                  TVO.CTR = COUNT(TVO.ACCT,VM) + (TVO.ACCT # "")
+*T20016.1 v                  
+                  VOUCHER.ACCRUE.FLAG = DELETE(VOUCHER.ACCRUE.FLAG,1,FND,0)
+*t20016.1 ^                  
+                  PTR = FND
+               END ELSE
+                  IF REV.AMT = 0 THEN PTR = 0 ELSE PTR = FND + 1
+               END
+            END ELSE
+               PTR = FND+1
+            END
+         END ELSE
+            PTR = 0
+         END
+      WHILE PTR DO
+      REPEAT
+   END
+   TOTAL.VOUCH = TOTAL.VOUCH - TVO.PO.VOUCH<1,LN>
+   TEMP1 = TVO.PO.QTY<1,LN>
+   TVO.PO.VOUCH<1,LN> = INT(((TVO.PO.U.COST<1,LN> / 100) * (TEMP1/(INV.COST.WT/100)))/100+.5)
+   GOSUB 2000
+*FIX001 v
+*** BUG FIX WHERE NEXT SEVERAL LINES OLD REFERENCE TO CATG.INV HAS BEEN
+**  REPLACED WITH THE OLD.ACCT REFERENCE FROM THE IF TEST BELOW TO THE
+**  IF TEST BELOW THE LOCATE 5 LINES DOWN
+   IF OLD.ACCT # "" THEN
+      OLD.ACCT = OLD.ACCT[1,IN.ACCT.LEN]
+      PTR=1
+      LOOP
+         LOCATE OLD.ACCT IN TVO.ACCT<1>,PTR SETTING FND THEN
+*FIX001 ^
+            IF TVO.DIV<1,FND> = WORK.DIV THEN
+               PTR=0
+            END ELSE
+               PTR=FND+1
+            END
+         END ELSE
+*T20016.1 v
+            IF TEMP.ACCT.ACCRUE THEN
+               VOUCHER.ACCRUE.FLAG<1,FND>=1
+*CSF 25150 v
+               TVO.ACCT.FLG<1,FND> = 'P'
+            END
+*T20016.1 ^             
+            TVO.ACCT<1,FND> = OLD.ACCT
+            TVO.DIST.AMT<1,FND> = 0
+            TVO.ASSET.ID<1,FND> = ""
+*              TVO.ACCT.FLG<1,FND> = 'P'
+*CSF 25150 ^
+*T20016 v
+*              TVO.DIV<1,FND> = GEN.DIV
+*CSF 25823 v
+*              TVO.DIV = WORK.DIV
+            TVO.DIV<1,FND> = WORK.DIV
+*CSF 25823 ^
+*T20016 ^            
+            TVO.DEPT<1,FND> = GEN.DEPT
+            TVO.CCTR<1,FND> = GEN.CCTR
+            PTR=0
+         END
+      WHILE PTR DO
+      REPEAT
+      TVO.DIST.AMT<1,FND> = TVO.DIST.AMT<1,FND> + TVO.PO.VOUCH<1,LN>
+   END
+   TOTAL.VOUCH = TOTAL.VOUCH + TVO.PO.VOUCH<1,LN>
+   SCV.REC(13)<ECD.SCRN.NO> = TOTAL.VOUCH
+   ECD.NUM = 13; ECD.ACTION = 5; CALL SCRN.EDIT
+   LINES = COUNT(TVO.PO.NOS,VM) + (TVO.PO.NOS # "")
+*
+* Calculate AP account Distribution Amounts   Task 17919
+*
+   IF AP.ACCT # "" THEN
+      AP.ACCT = AP.ACCT : STR("0",IN.ACCT.LEN-LEN(AP.ACCT))
+      AP.ACCT = AP.ACCT[1,IN.ACCT.LEN]
+      REV.AMT = OLD.PO.VOUCH
+      PTR = 1
+      LOOP
+         LOCATE AP.ACCT IN TVO.AP.ACCT<1>,PTR SETTING FND THEN
+            IF TVO.AP.DIV<1,FND> = WORK.DIV THEN
+               IF REV.AMT > TVO.AP.AMT<1,FND>*(-1) THEN
+                  REV.AMT = REV.AMT + TVO.AP.AMT<1,FND>
+                  TVO.AP.AMT<1,FND> = 0
+               END ELSE
+                  TVO.AP.AMT<1,FND> = TVO.AP.AMT<1,FND> + REV.AMT
+                  REV.AMT = 0
+               END
+               IF TVO.AP.AMT<1,FND> = 0 THEN
+                  TVO.AP.ACCT = DELETE(TVO.AP.ACCT,1,FND,0)
+                  TVO.AP.AMT = DELETE(TVO.AP.AMT,1,FND,0)
+                  TVO.AP.FLG = DELETE(TVO.AP.FLG,1,FND,0)
+*T19149 v
+                  TVO.AP.DIV = DELETE(TVO.AP.DIV,1,FND,0)
+                  TVO.AP.DEPT = DELETE(TVO.AP.DEPT,1,FND,0)
+                  TVO.AP.CCTR = DELETE(TVO.AP.CCTR,1,FND,0)
+*T19149 ^                  
+                  PTR = FND
+               END ELSE
+                  IF REV.AMT = 0 THEN PTR = 0 ELSE PTR = FND + 1
+               END
+            END ELSE
+               PTR = FND+1
+            END
+         END ELSE
+            PTR=0
+         END
+      WHILE PTR DO
+      REPEAT
+   END
+   IF AP.ACCT # "" THEN
+      AP.ACCT = AP.ACCT : STR("0",IN.ACCT.LEN-LEN(AP.ACCT))
+      AP.ACCT = AP.ACCT[1,IN.ACCT.LEN]
+      PTR=1
+      LOOP
+         LOCATE AP.ACCT IN TVO.AP.ACCT<1>,PTR SETTING FND THEN
+            IF TVO.AP.DIV<1,FND> = WORK.DIV THEN
+               PTR=0
+            END ELSE
+               PTR=FND+1
+            END
+         END ELSE
+            TVO.AP.ACCT<1,FND> = AP.ACCT
+            TVO.AP.AMT<1,FND> = 0
+*CSF 25150 v
+            IF PO.ACCRUE = 'Y' THEN
+               TVO.AP.FLG<1,FND> = 'P'
+            END
+*CSF 25150 ^
+*T19149 v
+*T20016 v
+*           TVO.AP.DIV<1,FND> = ''
+*           TVO.AP.DEPT<1,FND> = ''
+*           TVO.AP.CCTR<1,FND> = ''
+            TVO.AP.DIV<1,FND> = WORK.DIV
+            TVO.AP.DEPT<1,FND> = GEN.DEPT
+            TVO.AP.CCTR<1,FND> = GEN.CCTR
+            PTR=0
+         END
+      WHILE PTR DO
+      REPEAT
+*T20016 ^            
+*T19149 ^            
+      TVO.AP.AMT<1,FND> = TVO.AP.AMT<1,FND> - TVO.PO.VOUCH<1,LN>
+   END
+1999*
+   IF VALUE = "END" AND OPTION # "A" THEN
+      GOSUB 2000
+   END
+   RETURN
+*
+**** PRINT PROCESS LINE VALUES
+*
+2000*
+   P_X  = 0 ; P_Y = SLN ; P_VALUE = LN "L#3" ; P_OPT = ""
+   P_X  := AM:4 ; P_Y := AM:SLN ; P_VALUE := AM:TVO.PO.NOS<1,LN> "L#8"
+   P_X  := AM:13 ; P_Y := AM:SLN ; P_VALUE := AM:TVO.PO.PROD<1,LN> "L#15"
+   P_X  := AM:29 ; P_Y := AM:SLN ; P_VALUE := AM:TVO.PO.WHSE<1,LN> "L#4"
+   P_X  := AM:34 ; P_Y := AM:SLN ; P_VALUE := AM:TVO.PO.UM<1,LN> "L#3"
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   IF ICR.CNV<LN> = "MD0" THEN
+      P_X  = 38 ; P_Y = SLN ; P_VALUE = INT(((TVO.PO.QTY<1,LN>/ICR.DV1<LN>) * ICR.MT1<LN>)/ICR.DV2<LN> + .5) "R#10" ; P_OPT = ""
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   END ELSE
+      P_X  = 38 ; P_Y = SLN ; P_VALUE = OCONV(TVO.PO.QTY<1,LN>, "MD2") "R#10" ; P_OPT = ""
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   END
+   P_X  = 49 ; P_Y = SLN ; P_VALUE = OCONV(TVO.PO.U.COST<1,LN>, "MD4") "R#9" ; P_OPT = ""
+   P_X  := AM:60 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(TVO.PO.VOUCH<1,LN>, "MD2") "R#10"
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   P_X  = 13 ; P_Y = SLN+1 ; P_VALUE = TVO.PROD.DESC<1,LN> "L#45" ; P_OPT = ""
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   RETURN
+*
+**** PRINT PROCESS LINE VALUES
+*
+2500*
+   P_X  = 0 ; P_Y = SLN ; P_VALUE = LN "L#3" ; P_OPT = ""
+   P_X  := AM:4 ; P_Y := AM:SLN ; P_VALUE := AM:TEMP.VALUES<1> "L#8"
+   P_X  := AM:13 ; P_Y := AM:SLN ; P_VALUE := AM:TEMP.VALUES<2> "L#15"
+   P_X  := AM:29 ; P_Y := AM:SLN ; P_VALUE := AM:TEMP.VALUES<4> "L#4"
+   P_X  := AM:34 ; P_Y := AM:SLN ; P_VALUE := AM:TEMP.VALUES<5> "L#3"
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   IF TEMP.CNV<2> = "MD0" THEN
+      P_X  = 38 ; P_Y = SLN ; P_VALUE = INT(((TEMP.VALUES<6>/TEMP.DV1<2>) * TEMP.MT1<2>)/TEMP.DV2<2> + .5) "R#10" ; P_OPT = ""
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   END ELSE
+      P_X  = 38 ; P_Y = SLN ; P_VALUE = OCONV(TEMP.VALUES<6>, "MD2") "R#10" ; P_OPT = ""
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   END
+   P_X  = 49 ; P_Y = SLN ; P_VALUE = OCONV(TEMP.VALUES<7>, "MD4") "R#9" ; P_OPT = ""
+   P_X  := AM:60 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(TEMP.VALUES<8>, "MD2") "R#10"
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   P_X  = 13 ; P_Y = SLN+1 ; P_VALUE = TEMP.VALUES<3> "L#45" ; P_OPT = ""
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   RETURN
+*
+*--- GET ORD & REC BAL
+*
+3000*
+   TOTAL.VOUCH = 0
+   MAT INV.CNV.REC = ""
+   FOR TA = 1 TO LINES
+      MATREAD INV.REC FROM INVENTORY, CONO : TVO.PO.PROD<1,TA> ELSE MAT INV.REC = ""
+      TOTAL.VOUCH = TOTAL.VOUCH + TVO.PO.VOUCH<1,TA>
+*
+*--- SET UP INVENTORY CONVERSION
+*
+      BEGIN CASE
+         CASE TVO.PO.UM<1,TA> = "SHT" AND INV.UNIT<1,3> = "LBS"
+            ICR.CNV<TA> = "MD0"; ICR.DV2<TA> = 1
+            ICR.DV1<TA> = INV.M.WT; ICR.MT1<TA> = 10
+         CASE TVO.PO.UM<1,TA> = "PC" AND INV.UNIT<1,3> = "MSI"
+            ICR.CNV<TA> = "MD0"; ICR.DV2<TA> = 1
+            ICR.DV1<TA> = INV.PAP.WIDTH/100; ICR.MT1<TA> = 100
+         CASE TVO.PO.UM<1,TA> = "FT" AND INV.UNIT<1,3> = "MSI"
+            ICR.CNV<TA> = "MD0"; ICR.DV2<TA> = 12
+            ICR.DV1<TA> = INV.PAP.WIDTH/100; ICR.MT1<TA> = 1000
+         CASE 1
+            ICR.CNV<TA> = "MD2"; ICR.DV2<TA> = 1
+            ICR.DV1<TA> = 1; ICR.MT1<TA> = 1
+      END CASE
+      IF TVO.PO.U.COST<1,TA>+0 = 0 AND TVO.PO.VOUCH<1,TA>+0 # 0 THEN
+         IF ICR.CNV<TA> = "MD0" THEN
+            TEMP1 = INT(((TVO.PO.QTY<1,TA>/ICR.DV1<TA>)*ICR.MT1<TA>)/ICR.DV2<TA> + .5)
+         END ELSE
+            TEMP1 = TVO.PO.QTY<1,TA>
+         END
+         BEGIN CASE
+            CASE TEMP1 + 0 = 0
+               TVO.PO.U.COST<1,TA> = 0
+            CASE ICR.CNV<TA> = "MD0"
+               TVO.PO.U.COST<1,TA> = INT(((TVO.PO.VOUCH<1,TA> * 100) / TEMP1) + .5)
+            CASE 1
+               TVO.PO.U.COST<1,TA> = INT(((TVO.PO.VOUCH<1,TA> * 100) / TEMP1) * 100 + .5)
+         END CASE
+      END
+   NEXT TA
+   ECD.NUM = 13; SCV.REC(13)<ECD.SCRN.NO> = TOTAL.VOUCH
+   ECD.ACTION = 5; CALL SCRN.EDIT
+   RETURN
+*
+* Access purchase order for vouchering details
+*
+4000*
+   SCV.REC(1)<ECD.SCRN.NO> = TVO.VEND<1,1>
+   SCV.REC(2)<ECD.SCRN.NO> = VEND.DESC
+   SCV.REC(3)<ECD.SCRN.NO> = TEMP.VALUES<1>
+   SCV.REC(19)<ECD.SCRN.NO> = TVO.PO.TYPE
+   IF TVO.PO.TYPE = "R" THEN
+      SCV.REC(20)<ECD.SCRN.NO> = "REGULAR"
+   END ELSE
+      SCV.REC(20)<ECD.SCRN.NO> = "MISCELLANEOUS"
+   END
+   ECD.ACTION = 3; CALL SCRN.EDIT
+   PAY.VALUES<2> = ""
+   CALL PO.ACT.INQ(FNDP,PAY.VALUES)
+   ECD.SCRN.NO = 3
+   ECD.ACTION = 3; CALL SCRN.EDIT
+   OLD.START.LINE = 0
+   IF PAY.VALUES<2> = "" THEN
+* C25528 v
+      GOSUB 3000
+* C25528 ^
+      GOSUB 10000
+      GOSUB 2500
+      RETURN TO 1020
+   END
+   LINES = COUNT(TVO.PO.NOS,VM) + (TVO.PO.NOS # "")
+   LN = LINES
+   IF OPTION = "A" THEN OLD.LINES = LINES - 1
+   GOSUB 3000
+   GOSUB 10000
+   RETURN
+*
+*--- DELETE LINE ACCOUNTS
+*
+5000*
+   GOSUB 6000   ;* Task 17919
+   IF OLD.ACCT = "" THEN GOTO 5050
+   OLD.ACCT = OLD.ACCT : STR("0",IN.ACCT.LEN-LEN(OLD.ACCT))
+   OLD.ACCT = OLD.ACCT[1,IN.ACCT.LEN]
+   REV.AMT = TVO.PO.VOUCH<1,LN>
+   PTR = 1
+   LOOP
+      LOCATE OLD.ACCT IN TVO.ACCT<1>,PTR SETTING FND THEN
+*T27752 v
+*        IF TVO.DIV<1,FND> = WORK.DIV THEN
+         IF TVO.DIV<1,FND> = WORK.DIV OR TVO.DIV<1,FND> = '00' THEN
+*T27752 ^
+            IF REV.AMT > TVO.DIST.AMT<1,FND> THEN
+               REV.AMT = REV.AMT - TVO.DIST.AMT<1,FND>
+               TVO.DIST.AMT<1,FND> = 0
+            END ELSE
+               TVO.DIST.AMT<1,FND> = TVO.DIST.AMT<1,FND> - REV.AMT
+               REV.AMT = 0
+            END
+            IF TVO.DIST.AMT<1,FND> = 0 THEN
+               TVO.ACCT = DELETE(TVO.ACCT,1,FND,0)
+               TVO.DIST.AMT = DELETE(TVO.DIST.AMT,1,FND,0)
+               TVO.ASSET.ID = DELETE(TVO.ASSET.ID,1,FND,0)
+               TVO.DIV = DELETE(TVO.DIV,1,FND,0)
+               TVO.DEPT = DELETE(TVO.DEPT,1,FND,0)
+               TVO.CCTR = DELETE(TVO.CCTR,1,FND,0)
+               TVO.ACCT.FLG = DELETE(TVO.ACCT.FLG,1,FND,0)
+               TVO.CTR = COUNT(TVO.ACCT,VM) + (TVO.ACCT # "")
+*T20016.1 v
+               VOUCHER.ACCRUE.FLAG = DELETE(VOUCHER.ACCRUE.FLAG,1,FND,0)
+*T20016.1 ^               
+               PTR = FND
+            END ELSE
+               IF REV.AMT = 0 THEN PTR = 0 ELSE PTR = FND + 1
+            END
+         END ELSE
+            PTR=FND+1
+         END
+      END ELSE
+         PTR=0
+      END
+   WHILE PTR DO
+   REPEAT
+5050*
+   IF AP.ACCT = "" THEN GOTO 5500
+   AP.ACCT = AP.ACCT : STR("0",IN.ACCT.LEN-LEN(AP.ACCT))
+   AP.ACCT = AP.ACCT[1,IN.ACCT.LEN]
+   REV.AMT = TVO.PO.VOUCH<1,LN>
+   PTR = 1
+   LOOP
+      LOCATE AP.ACCT IN TVO.AP.ACCT<1>,PTR SETTING FND THEN
+         IF TVO.AP.DIV<1,FND> = WORK.DIV THEN
+            IF REV.AMT > TVO.AP.AMT<1,FND>*(-1) THEN
+               REV.AMT = REV.AMT + TVO.AP.AMT<1,FND>
+               TVO.AP.AMT<1,FND> = 0
+            END ELSE
+               TVO.AP.AMT<1,FND> = TVO.AP.AMT<1,FND> + REV.AMT
+               REV.AMT = 0
+            END
+            IF TVO.AP.AMT<1,FND> = 0 THEN
+               TVO.AP.ACCT = DELETE(TVO.AP.ACCT,1,FND,0)
+               TVO.AP.AMT = DELETE(TVO.AP.AMT,1,FND,0)
+               TVO.AP.FLG = DELETE(TVO.AP.FLG,1,FND,0)
+*T19149 v
+               TVO.AP.DIV = DELETE(TVO.AP.DIV,1,FND,0)
+               TVO.AP.DEPT = DELETE(TVO.AP.DEPT,1,FND,0)
+               TVO.AP.CCTR = DELETE(TVO.AP.CCTR,1,FND,0)
+*T19149 ^                  
+               PTR = FND
+            END ELSE
+               IF REV.AMT = 0 THEN PTR = 0 ELSE PTR = FND + 1
+            END
+         END ELSE
+            PTR=FND+1
+         END
+      END ELSE
+         PTR=0
+      END
+   WHILE PTR DO
+   REPEAT
+*
+*--- DELETE LINE ITEM
+*
+5500*
+   TVO.PO.NOS = DELETE(TVO.PO.NOS,1,LN,0)
+   TVO.PO.PROD = DELETE(TVO.PO.PROD,1,LN,0)
+   TVO.PO.WHSE = DELETE(TVO.PO.WHSE,1,LN,0)
+   TVO.PO.UM = DELETE(TVO.PO.UM,1,LN,0)
+   TVO.PO.QTY = DELETE(TVO.PO.QTY,1,LN,0)
+   TVO.PO.U.COST = DELETE(TVO.PO.U.COST,1,LN,0)
+   TVO.PO.VOUCH = DELETE(TVO.PO.VOUCH,1,LN,0)
+   TVO.PROD.DESC = DELETE(TVO.PROD.DESC,1,LN,0)
+   TVO.SEQ.NO = DELETE(TVO.SEQ.NO,1,LN,0)
+   TVO.ENT.FLG = DELETE(TVO.ENT.FLG,1,LN,0)
+   RETURN
+*
+*---- Set up debit and credit accounts
+*
+6000*
+   IF TVO.PO.PROD<1,LN> = "" THEN
+      OLD.ACCT = ""
+      TEMP.ACCT.ACCRUE=0 ;* T20016.1
+   END ELSE
+      MATREAD INV.REC FROM INVENTORY, CONO : TVO.PO.PROD<1,LN> ELSE MAT INV.REC = ""
+      IF INV.LINE = "" THEN
+         OLD.ACCT = ""
+         TEMP.ACCT.ACCRUE=0 ;*T20016.1
+         AP.ACCT = ''
+      END ELSE
+         MATREAD CATG.REC FROM CATEGORY, CONO : INV.LINE ELSE MAT CATG.REC = ""
+         MATREAD PO.REC FROM PO, CONO:TVO.PO.NOS<1,LN> ELSE MAT PO.REC=""
+         IF PO.ACCRUE = "Y" THEN
+            OLD.ACCT = CATG.ACCRU.LIAB
+            TEMP.ACCT.ACCRUE = 1 ;*T20016.1
+            AP.ACCT = CATG.AP.ACCT
+         END ELSE
+            OLD.ACCT = CATG.INV
+            AP.ACCT = CATG.AP.ACCT
+            TEMP.ACCT.ACCRUE=0 ;*T20016.1
+         END
+      END
+   END
+   RETURN
+*
+* Prompt for misc category   * Task 17919
+*
+7000*
+   ECD.NUM=19
+   SCV.REC(19)<ECD.SCRN.NO>='' ; ECD.ACTION=4 ; CALL SCRN.EDIT
+   MCAT = ECD.RET.VALUE
+   IF MCAT='' OR MCAT='E' OR MCAT='END' THEN GOTO 7099
+   MATREAD CAMISC.REC FROM CATEGORY.MISC, CONO:MCAT ELSE
+      ERRMSG = "Miscellaneous category not on file"
+      GOSUB 91000
+      GOTO 7000
+   END
+   IF TVO.MISC.CAT = '' THEN TVO.MISC.CAT = MCAT
+   IF MCAT # TVO.MISC.CAT THEN
+      ERRMSG = "PO category (":MCAT:") does not match selected category (":TVO.MISC.CAT:")"
+      GOSUB 91000
+      GOTO 7000
+   END
+   TEMP.ACCT.ACCRUE=0
+   OLD.ACCT = CAMISC.CRED.EXP
+   AP.ACCT = CAMISC.AP.ACCT
+   MPO.MISC.CAT=MCAT
+   MPO.MISC.DIV='00'
+   MPO.MISC.DPT='00'
+   MPO.MISC.CC='000'
+7099*
+   RETURN
+*
+***** SCROLL ROUTINE
+*
+10000*
+   START.LINE=1 + INT((LN-1)/PAGE.SIZE) * PAGE.SIZE
+   LAST.LINE=START.LINE + PAGE.SIZE - 1
+   IF LAST.LINE > LINES THEN LAST.LINE = LINES
+   IF START.LINE=OLD.START.LINE THEN GOTO 10001
+   OLD.START.LINE=START.LINE
+   CNT=1
+   FOR N=START.LINE TO LAST.LINE
+      S.SLN=BEGIN.PAGE + LINE.SPACE * MOD(N-1,PAGE.SIZE)
+      P_X  = 0 ; P_Y = S.SLN ; P_VALUE = N "L#3" ; P_OPT = ""
+      P_X  := AM:4 ; P_Y := AM:S.SLN ; P_VALUE := AM:TVO.PO.NOS<1,N> "L#8"
+      P_X  := AM:13 ; P_Y := AM:S.SLN ; P_VALUE := AM:TVO.PO.PROD<1,N> "L#15"
+      P_X  := AM:29 ; P_Y := AM:S.SLN ; P_VALUE := AM:TVO.PO.WHSE<1,N> "L#4"
+      P_X  := AM:34 ; P_Y := AM:S.SLN ; P_VALUE := AM:TVO.PO.UM<1,N> "L#3"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      IF ICR.CNV<N> = "MD0" THEN
+         P_X  = 38 ; P_Y = S.SLN ; P_VALUE = INT(((TVO.PO.QTY<1,N>/ICR.DV1<N>) * ICR.MT1<N>)/ICR.DV2<N> + .5) "R#10" ; P_OPT = ""
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      END ELSE
+         P_X  = 38 ; P_Y = S.SLN ; P_VALUE = OCONV(TVO.PO.QTY<1,N>, "MD2") "R#10" ; P_OPT = ""
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      END
+      P_X  = 49 ; P_Y = S.SLN ; P_VALUE = OCONV(TVO.PO.U.COST<1,N>, "MD4") "R#9" ; P_OPT = ""
+      P_X  := AM:60 ; P_Y := AM:S.SLN ; P_VALUE := AM:OCONV(TVO.PO.VOUCH<1,N>, "MD2") "R#10"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      P_X  = 13 ; P_Y = S.SLN+1 ; P_VALUE = TVO.PROD.DESC<1,N> "L#45" ; P_OPT = ""
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      CNT=CNT + 1
+   NEXT N
+   FOR N=CNT TO PAGE.SIZE
+      S.SLN=BEGIN.PAGE + LINE.SPACE * MOD(N-1,PAGE.SIZE)
+      P_X  = 0 ; P_Y = S.SLN ; P_VALUE = "" ; P_OPT = "CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      P_X  = 0 ; P_Y = S.SLN+1 ; P_VALUE = "" ; P_OPT = "CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   NEXT N
+10001*
+   RETURN
+*
+**** ENTER PROGRAM QUESTION
+*
+11000*
+   S.VALUE = VALUE
+   X = 0; Y = 23; TYP = 18; PMSG = QUESTION
+   CALL EDIT.SUB
+   IF VALUE = "END" THEN VALUE = "N"
+   REPLY = VALUE
+   VALUE = S.VALUE
+   P_X  = 0 ; P_Y = 23 ; P_VALUE = "" ; P_OPT = "CL"
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   RETURN
+*** ENTER LINE NUMBER
+70000*
+   GOSUB 10000
+   ECD.NUM = 15; SCV.REC(15)<ECD.SCRN.NO> = ""
+   ECD.MINV = OLD.START.LINE
+   ECD.MAXV = LAST.LINE
+   ECD.ACTION = 4; CALL SCRN.EDIT
+   LNO = ECD.RET.VALUE
+   IF LNO = "" OR LNO = "END" THEN LNO = 0
+   RETURN
+***** CALLS FOR SYSCOM
+91000*
+   ERR.TYPE = 1; CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+92000*
+   ERR.TYPE = 2; CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+93000*
+   ERR.TYPE = 3; CALL SYSCOM(MAT SYSCOM.REC)
+99999*
+   ECD.ACTION = 99 ; CALL SCRN.EDIT
+   RETURN
+   END
+

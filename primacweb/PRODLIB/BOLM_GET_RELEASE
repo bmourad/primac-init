@@ -1,0 +1,338 @@
+SUBROUTINE BOLM_GET_RELEASE
+********************************************************************************
+*   Program name :- BOLM_GET_RELEASE
+*   Created:- 4/8/2004 RAZI MOHIUDDIN
+*------------------------------------------------------------------------------*
+* In Properties:
+* --------------
+*  
+* Out Properties:
+* ---------------
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE PMC.CPYLIB SHIP.TO
+$INCLUDE PMC.CPYLIB SHIP.VIA
+$INCLUDE PMC.CPYLIB CUSTOMER
+$INCLUDE OPS.CPYLIB ORDER
+$INCLUDE OPS.CPYLIB ORDER.DETAIL
+$INCLUDE OPS.CPYLIB BOL
+$INCLUDE OPS.CPYLIB PICK.TICKET
+$INCLUDE OPS.CPYLIB ORDER.RELEASE
+$INCLUDE CPYLIB CHAR
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB INV.WHSE
+$INCLUDE ICS.CPYLIB CATEGORY
+
+
+ OPEN "","SHIP.TO" TO SHIP.TO ELSE
+      ERRMSG = "Cannot locate the SHIP.TO file"; GOTO 93000
+ END
+ OPEN "","DAILY.BOL" TO DAILY.BOL ELSE
+      ERRMSG = "Cannot locate the DAILY.BOL file"; GOTO 93000
+ END
+ OPEN "","BOL" TO BOL ELSE
+      ERRMSG = "Cannot locate the BOL file"; GOTO 93000
+ END
+ OPEN "","CUSTOMER" TO CUSTOMER ELSE
+      ERRMSG = "Cannot locate the BOL file"; GOTO 93000
+ END
+ OPEN "","ORDER" TO ORDER ELSE
+      ERRMSG = "Cannot locate the ORDER file"; GOTO 93000
+ END
+ OPEN "","ORDER.DETAIL" TO ORDER.DETAIL ELSE
+      ERRMSG = "Cannot locate the ORDER.DETAIL file"; GOTO 93000
+ END
+ OPEN 'ORDER.RELEASE' TO ORDER.RELEASE ELSE
+      ERRMSG='CANNOT OPEN ORDER.RELEASE FILE'
+      GOTO 93000
+ END
+
+ OPEN "","INVENTORY" TO INVENTORY ELSE
+      ERRMSG = "Cannot locate the INVENTORY file"; GOTO 93000
+ END
+ 
+ OPEN "","INV.WHSE" TO INV.WHSE ELSE
+      ERRMSG = "Cannot locate the INV.WHSE file"; GOTO 93000
+ END
+
+ OPEN "","CATEGORY" TO CATEGORY ELSE
+      ERRMSG = "Cannot locate the CATEGORY file"; GOTO 93000
+ END
+ERRMSG =''
+RELNO=''
+NEWREC=''
+ 
+STATUS=RBO.getProperty('','ID',ID)
+STATUS=RBO.getProperty('','BOL_CUST',BOL_CUST)
+STATUS=RBO.getProperty('','BOL_ORDNO',BOL_ORDNO)
+STATUS=RBO.getProperty('','BOL_RELEASE',BOL_RELEASE)
+
+CONO=ID[1,3]
+ID=ID[4,99]
+CUSTNO=BOL_CUST
+RELNO=BOL_RELEASE
+LN = 1
+IF RELNO # "" THEN
+NEWREC = 1
+
+         MATREAD ORR.REC FROM ORDER.RELEASE, CONO:RELNO ELSE
+            ERRMSG = "Cannot locate release # ":RELNO
+            GOTO 93000	
+	     GOTO 4099
+         END
+         IF NEWREC AND ORR.STATUS<1,1> # "" THEN
+            ERRMSG = "Release ":RELNO:" ":ORR.STATUS<1,1>
+            GOTO 93000
+	     GOTO 4099
+         END
+         ORDNO = ORR.ORD
+         SHPNO = ORR.SHIP.TO
+         GOSUB 4100
+         IF ERRMSG # "" THEN GOTO 4099
+         IF ORD.PICK.NO # "" THEN
+            ERRMSG = "Picking Ticket # required for this order."
+            GOTO 93000
+	     GOTO 4099
+         END
+	  ********* Added by gafoor
+	  IPTR = LN-1
+  	  PCNT = DCOUNT(OSD.PROD,VM)
+	   FOR PPTR = 1 TO PCNT
+	      PROD = OSD.PROD<1,PPTR>
+      	      WHSE = OSD.WHSE<1,PPTR>
+	      PROD.SEQ = OSD.PROD.SEQ<1,PPTR>
+	      PSEQ     = OSD.PROD.SEQ<1,PPTR>
+	      KIT      = OSD.KIT<1,PPTR>
+	      BOM.NUMBER = OSD.BOM.NUM<1,PPTR>
+	      GOSUB 7650
+	      IF NOT(BAD.PROD) THEN
+	        RCNT = DCOUNT(OSD.RECP.NO<1,PPTR>,SM)
+	        IF RCNT = 0 THEN RCNT = 1
+	         FOR RPTR = 1 TO RCNT
+	            RECP = OSD.RECP.NO<1,PPTR,RPTR>
+	            IF ((KIT = "K" OR KIT = "M") AND OSD.REL.NO<1,PPTR,RPTR> = "") OR OSD.REL.NO<1,PPTR,RPTR> = RELNO THEN
+       	        PKTKT=""; WLOC=""; WGHT=""
+              	 RQTY = OSD.REL.QTY<1,PPTR,RPTR>+0
+	               AQTY = RQTY
+       	        GOSUB 7550
+            	     END
+	         NEXT RPTR
+      		 END
+		NEXT PPTR
+
+   RETURN
+	  *********	
+	
+         FOR PDNO = PDCNT TO 1 STEP -1
+            PNO = PDPTR<PDNO>
+            QCNT = DCOUNT(QTYPTR<PDNO>,VM)
+            FOR QNO = QCNT TO 1 STEP -1
+               RNO = QTYPTR<PDNO,QNO>
+               IF OSD.REL.NO<1,PNO,RNO> # RELNO THEN
+                  QTYPTR = DELETE(QTYPTR,PDNO,QNO,0)
+               END
+            NEXT QNO
+            IF QTYPTR<PDNO> = "" THEN
+               PDPTR = DELETE(PDPTR,PDNO,0,0)
+               QTYPTR = DELETE(QTYPTR,PDNO,0,0)
+            END
+         NEXT PDNO
+         PDCNT = DCOUNT(PDPTR,AM)
+STATUS = RBO.setProperty('','Test', PDCNT)
+
+         IF PDCNT < 1 THEN
+            ERRMSG = "Cannot locate any available quantity for Release # ":RELNO
+	     GOSUB 93000          
+	     *GOSUB 91000      ;*T24815
+            ERRMSG = ''      ;*GET SHIP DETAILS
+	     MATREAD SPT.REC FROM SHIP.TO, CONO:CUSTNO:"!":SHPNO  THEN
+			SHIPDETAILS= SHPNO :"~": SPT.NAME :"~":SPT.ADDR1:"~":SPT.ADDR2:"~":SPT.STATE:"~":SPT.CITY:"~":SPT.ZIP:"~":SPT.SHIP.VIA:"~":CUSTNO
+
+	     END
+	     STATUS = RBO.setProperty('','SHIPDETAILS', SHIPDETAILS)
+	  END
+	***MODIFIED THIS SECTION
+ 	  IF PDCNT = 1 OR PDCNT = 2 THEN
+	     MATREAD SPT.REC FROM SHIP.TO, CONO:CUSTNO:"!":SHPNO  THEN
+			SHIPDETAILS= SHPNO :"~": SPT.NAME :"~":SPT.ADDR1:"~":SPT.ADDR2:"~":SPT.STATE:"~":SPT.CITY:"~":SPT.ZIP:"~":SPT.SHIP.VIA:"~":CUSTNO
+	     END
+	     STATUS = RBO.setProperty('','SHIPDETAILS', SHIPDETAILS)
+	 END
+	**************************
+END
+
+4099*
+   RETURN
+4100*
+   MATREADU ORD.REC FROM ORDER, CONO:ORDNO ELSE
+      RELEASE ORDER, CONO:ORDNO
+      ERRMSG = "Cannot locate Order # ":ORDNO
+      GOTO 93000
+      GOTO 4199
+   END
+   DIV.CODE = ORD.DIV; USER.ID = UPCASE(@LOGNAME); ERRMSG = ''
+   CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+   IF ERRMSG # '' THEN GOTO 4199
+  *GOSUB 6000
+   IF ERRMSG # '' THEN GOTO 93000
+   IF ORD.STATUS<1,1> = "CLOSED" OR ORD.STATUS<1,1> = "CANCEL" THEN
+      RELEASE ORDER, CONO:ORDNO
+      ERRMSG = "Order has either been closed or cancelled"
+	GOTO 93000      
+	GOTO 4199
+   END
+   IF CUSTNO = "" THEN
+      CUSTNO = ORD.CUST
+   END ELSE
+      IF CUSTNO # ORD.CUST THEN
+         RELEASE ORDER, CONO:ORDNO
+         ERRMSG = "Order (":ORDNO:") belongs to customer # ":ORD.CUST
+      	  GOTO 93000
+	  GOTO 4199
+      END
+   END
+   MATREAD CUST.REC FROM CUSTOMER, CONO:ORD.CUST ELSE
+      RELEASE ORDER, CONO:ORDNO
+      ERRMSG = "Cannot locate customer # ":ORD.CUST
+	GOTO 93000      
+	GOTO 4199
+   END
+   LOCATE SHPNO IN ORD.SHIP.TO<1>,2 SETTING SLOC ELSE
+      ERRMSG = "Cannot associate ship to (":SHPNO:") with order # ":ORDNO
+      GOTO 93000
+      GOTO 4199
+   END
+   MATREAD SPT.REC FROM SHIP.TO, CONO:CUSTNO:"!":SHPNO ELSE
+      ERRMSG = "Cannot locate ship to # ":SHPNO
+      GOTO 93000 
+      GOTO 4199
+   END
+   MATREAD ORD.DET.REC FROM ORDER.DETAIL, CONO:ORDNO:"!":SHPNO ELSE
+      ERRMSG = "Cannot locate Order / Ship to # ":ORDNO:" / ":SHPNO
+      GOTO 93000
+      GOTO 4199
+   END
+   PCNT = DCOUNT(OSD.PROD,VM)
+   PDPTR = ""; QTYPTR = ""
+   PRODPTR = ""
+   FOR PNO = 1 TO PCNT
+      RCNT = DCOUNT(OSD.FI.QTY<1,PNO>,SVM)
+      FOR RNO = 1 TO RCNT
+	IF OSD.KIT<1,PNO> # "N" THEN
+            IF OSD.KIT<1,PNO> = "K" THEN
+               IF OSD.FI.QTY<1,PNO,RNO> > 0 THEN
+	          LOCATE PNO IN PDPTR,1 SETTING PLOC ELSE
+                     PDPTR<PLOC> = PNO
+                  END
+                  QTYPTR<PLOC,-1> = RNO
+               END ELSE
+                  LOCATE PNO IN PDPTR,1 SETTING PLOC ELSE
+                     PDPTR<PLOC> = PNO
+                  END
+                  QTYPTR<PLOC,-1> = RNO + 1
+               END
+            END ELSE
+               IF OSD.FI.QTY<1,PNO,RNO> > 0 THEN
+                  LOCATE PNO IN PDPTR,1 SETTING PLOC ELSE
+                     PDPTR<PLOC> = PNO
+                  END
+                  QTYPTR<PLOC,-1> = RNO
+               END
+            END
+         END ELSE
+            IF OSD.FI.QTY<1,PNO,RNO> > 0 THEN
+               LOCATE PNO IN PDPTR,1 SETTING PLOC ELSE
+                  PDPTR<PLOC> = PNO
+               END
+               QTYPTR<PLOC,-1> = RNO
+            END
+         END
+      NEXT RNO
+   NEXT PNO
+   PDCNT = DCOUNT(PDPTR,AM)
+   IF PDCNT < 1 THEN
+      ERRMSG = "Cannot locate any available quantity for this Order/Ship to ":ORDNO:" / ":SHPNO
+      GOTO 93000
+   END
+4199*
+   RETURN
+
+***************** added by gafoor
+7650*
+BAD.PROD = 0
+   MATREAD INV.REC FROM INVENTORY, CONO:PROD ELSE
+      ERRMSG = "Invalid Product number."
+      GOSUB 93000
+      BAD.PROD = 1
+      RETURN
+   END
+   MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE ELSE
+      ERRMSG = "Cannot locate CATEGORY ":INV.LINE:" for product ":PROD
+      GOSUB 93000
+      BAD.PROD = 1
+      RETURN
+   END
+   MATREAD IWH.REC FROM INV.WHSE, CONO:PROD:"!":WHSE ELSE
+      ERRMSG = "Cannot locate INV.WHSE - ":PROD:"!":WHSE
+      GOSUB 93000
+      BAD.PROD = 1
+      RETURN
+   END
+   RETURN
+
+7550 *
+   IF FIRST THEN
+      BOL.ORDER = ""
+      FIRST = 0
+   END
+   SID = PROD:"!":WHSE:"!":ORDNO:"!":RECP
+   SPTR = DCOUNT(TEMP.SID<1>,VM) + 1
+   IF SPTR THEN
+      UPDCNT = UPDCNT + 1
+      IPTR = IPTR + 1
+      TEMP.SID = INSERT(TEMP.SID,1,IPTR,0,SID)
+      BOL.TYPE = INSERT(BOL.TYPE,1,IPTR,0,TEMP.TYPE)
+      BOL.ORDER = INSERT(BOL.ORDER,1,IPTR,0,ORDNO)
+      BOL.PROD = INSERT(BOL.PROD,1,IPTR,0,PROD)
+      BOL.WHSE = INSERT(BOL.WHSE,1,IPTR,0,WHSE)
+      BOL.LOC = INSERT(BOL.LOC,1,IPTR,0,"")
+      BOL.KIT = INSERT(BOL.KIT,1,IPTR,0,KIT)
+      BOL.SEQ = INSERT(BOL.SEQ,1,IPTR,0,PSEQ)
+      BOL.BOM.NUM = INSERT(BOL.BOM.NUM,1,IPTR,0,BOM.NUMBER)
+      BOL.RECP.NO = INSERT(BOL.RECP.NO,1,IPTR,0,"")
+      TEMP.AVAIL = INSERT(TEMP.AVAIL,1,IPTR,0,AQTY)
+      BEGIN CASE
+         CASE WLOC = ""
+            BOL.QTY = INSERT(BOL.QTY,1,IPTR,0,"")
+         CASE RQTY <= AQTY
+            BOL.QTY = INSERT(BOL.QTY,1,IPTR,0,RQTY)
+         CASE 1
+            BOL.QTY = INSERT(BOL.QTY,1,IPTR,0,AQTY)
+      END CASE
+      BOL.RELEASE = INSERT(BOL.RELEASE,1,IPTR,0,RELNO)   ;*T24693
+      BOL.PKTKT = INSERT(BOL.PKTKT,1,IPTR,0,PKTKT)
+      BOL.SHP.WT = INSERT(BOL.SHP.WT,1,IPTR,0,WGHT)
+      BOL.SHP.AMT = INSERT(BOL.SHP.AMT,1,IPTR,0,"")
+      BOL.POST.FLAG = INSERT(BOL.POST.FLAG,1,IPTR,0,"")
+      BOL.SKD.CNT = INSERT(BOL.SKD.CNT,1,IPTR,0,"");* T20661
+      BOL.CRTN.CNT = INSERT(BOL.CRTN.CNT,1,IPTR,0,"");* T20661
+      TEMP.LOC.AVAIL = INSERT(TEMP.LOC.AVAIL,1,IPTR,0,"")
+      TEMP.DESC = INSERT(TEMP.DESC,1,IPTR,0,"")
+   END
+*
+   RETURN
+
+
+**************
+
+
+93000*
+   IF ERRMSG # "" THEN
+      STATUS = RBO.setProperty('','ServerStatus', 1)
+      STATUS = RBO.setProperty('','ServerMessage', ERRMSG)
+      STATUS = RBO.setProperty('','CHKERRMSG', CHKERRMSG)
+   END
+
+RETURN
+
+

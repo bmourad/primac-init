@@ -1,0 +1,2109 @@
+*********************************************************************
+* REVISION - [08.2]
+* PROGRAM  - RS.STOCK.REC
+* AUTHOR   - Scott McHargue, COMPUTER BUSINESS ASSOCIATES
+* DATE     - 08/10/90
+* DESCRIPTION
+* TASK 20032 JR 1/16/96 - ROUNDING ERROR ON FT]PC]MSI STOCK
+*T20697 RKB 7/2/96 FIX ABILITY TO ADD WHEN LINES > 99
+*T22202 renee 09/03/1997 * Receiving should not allow a warehouse with a
+*                          different division than the owning division
+*                          of the PO.
+*T23278 markt 10/16/1998 * Check for divisional security
+*T25740 edvard 07/19/2001 * Replaced COM.STOCK.REC,COM.TRN or 
+*                           COM.TRN.FNGD with R12ICS.COM      
+*                            Enabled to work with rev12 data file
+*                            structure
+*T26296 edwin 11/19/2001 * Display messages when duplicate Roll/Skid
+*                          Barcode Number are entered.
+*T26126 adelgado 02/26/2002 * Implement the LOCKED clause for READU.
+*T25740 epitka 04/03/2002 * REV12
+*T26497 adelgado 04/04/2002 * Add validation rule for Inter-Divisional
+*                             Whse.
+*T26556 adelgado 05/14/2002 * Allow to add manual serial and generate
+*                             barcode.
+*T26556 adelgado 07/05/2002 * Fix to not allow entry of non-serial
+*                             tracking items.
+*T26764 cmykleb 07/23/2002 * Update RSXRF.LN.NO and PO.NO.OF.ROLLS when
+*                            a new serial is created.
+*T26198 adelgado 08/29/2002 * Fix to accept PO.NO = '*BAD*'
+*T27009 epitka   1104/2002 * Fix posting problem
+*T27306 lross 05/05/2003 * Receiving one of several lines on PO causes
+*                          Manifest record to get out-of-sync.
+*T27902 lross 01/27/2004 * See task for details.
+*T27904 cmykleb 02/13/2004 * Janus gun changes.
+*T28054 lross 04/11/2004 * Error in issuing warning for excess received.
+*T28064 lross 04/14/2004 * Display Product info when enter PO Line No.
+*T28300 lross 10/18/2004 *  Serial Stock Receipts Maint - Had conversions 
+*                           for SHT/MSI TY
+*T28422 lross 01/28/2005 * Restore orig QTY conversions plus tweek to
+*                          make work for any conversions not in orig.
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>CPYLIB>SCOMMON1
+*COPY>ICS.CPYLIB>COM.INV.MAIN  
+*COPY>ICS.CPYLIB>COM.INV.SERIAL
+*COPY>ICS.CPYLIB>COM.INV.LINK  
+*COPY>POS.CPYLIB>COM.PO.INTRF
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>CPYLIB>SCREEN.COM
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>ICS.CPYLIB>PO.MAN.XREF
+*COPY>ICS.CPYLIB>PO.RSKI.XREF 
+*COPY>ICS.CPYLIB>INV_SERIAL
+*COPY>PMC.CPYLIB>VEND
+*COPY>PMC.CPYLIB>PO
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>JCS.CPYLIB>JOB
+*COPY>ICS.CPYLIB>SAVE.STOCK.REC
+*COPY>APS.CPYLIB>APS.FILE.VARS
+*COPY>CPYLIB>SYSCOM
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>ICS.CPYLIB>CATEGORY
+*COPY>CPYLIB>GEN.XREF.SUB
+*COPY>ICS.CPYLIB>WAREHOUSE
+*COPY>ICS.CPYLIB>DAILY_STOCK
+*
+   DEFFUN GET.SERIAL.SEQ(CONO,CONTROL.FILE,INV_SERIAL.FILE) 
+*
+   DEFFUN CALC.DIAM(COST.QTY,STK.QTY,MAT INV.REC)
+   DEFFUN UOM.CONVERSION.CALC(QTY,FROM.UOM,TO.UOM,WGT,WIDTH,ROND,LN)    ;* T27902
+*---- SETUP FOR SYSTEM ERRMSGS
+*
+   SYS.TYPE = 1
+   CALL SI_SYSCOM(MAT SYSCOM.REC)
+*
+*---- OPEN ALL FILES
+*
+   OPEN "","COMPANY" TO COMPANY ELSE
+      ERRMSG = "CANNOT OPEN COMPANY FILE";GOTO 93000 
+   END
+   OPEN "","CONTROL" TO CONTROL ELSE
+      ERRMSG = "CANNOT OPEN CONTROL FILE";GOTO 93000 
+   END
+*T27902 v
+   OPEN "","XREF.DATA" TO XREF.DATA ELSE
+      ERRMSG = "CANNOT OPEN XREF.DATA FILE";GOTO 93000 
+   END
+   OPEN "","PREFIX" TO PREFIX ELSE
+      ERRMSG = "CANNOT OPEN PREFIX FILE";GOTO 93000 
+   END
+*T27902 ^
+   OPEN "","PO.MAN.XREF" TO PO.MAN.XREF ELSE
+      ERRMSG ="CANNOT OPEN PO.MAN.XREF FILE";GOTO 93000 
+   END
+   OPEN "","PO.RSKI.XREF" TO PO.RSKI.XREF ELSE
+      ERRMSG ="CANNOT OPEN PO.RSKI.XREF FILE";GOTO 93000 
+   END
+   OPEN "","INV_SERIAL" TO INV_SERIAL ELSE
+      ERRMSG = "CANNOT OPEN INV_SERIAL FILE";GOTO 93000
+   END
+   OPEN "","INV_SERIAL_DELETED" TO INV_SERIAL_DELETED ELSE
+      ERRMSG = "CANNOT OPEN INV_SERIAL_DELETED FILE";GOTO 93000
+   END
+   OPEN "","DAILY_STOCK" TO DAILY_STOCK ELSE
+      ERRMSG="CANNOT OPEN DAILY_STOCK FILE";GOTO 93000
+   END
+   OPEN "","ICS.SCREENS" TO ICS.SCREENS ELSE
+      ERRMSG = "CANNOT OPEN ICS.SCREENS FILE";GOTO 93000
+   END
+   OPEN "","PO" TO PO ELSE
+      ERRMSG = "CANNOT OPEN PO FILE"; GOTO 93000
+   END
+   OPEN "","VEND" TO VEND ELSE
+      ERRMSG = "CANNOT OPEN VEND FILE"; GOTO 93000 
+   END
+   OPEN "","CATEGORY" TO CATEGORY ELSE
+      ERRMSG = "CATEGORY FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","INVENTORY" TO INVENTORY ELSE
+      ERRMSG = "CANNOT OPEN INVENTORY FILE";GOTO 93000 
+   END
+   OPEN "","INV.STATS" TO INV.STATS ELSE
+      ERRMSG = "INV.STATS FILE IS MISSING"; GOTO 93000 
+   END
+   OPEN "","INV.WHSE.LOC" TO INV.WHSE.LOC ELSE
+      ERRMSG = "INV.WHSE.LOC IS MISSING"; GOTO 93000
+   END
+   OPEN "","INV.WHSE" TO INV.WHSE ELSE
+      ERRMSG = "INV.WHSE IS MISSING"; GOTO 93000
+   END
+   OPEN "","INV.HIST" TO INV.HIST ELSE
+      ERRMSG = "INV.HIST IS MISSING"; GOTO 93000
+   END
+   OPEN "","INV.TRAN.HIST" TO INV.TRAN.HIST ELSE
+      ERRMSG = "INV.TRAN.HIST FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","INV.JOB.STATS" TO INV.JOB.STATS ELSE
+      ERRMSG = "INV.JOB.STATS FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","JOB" TO JOB ELSE
+      ERRMSG = "JOB IS MISSING"; GOTO 93000
+   END
+   OPEN "","WAREHOUSE" TO WAREHOUSE ELSE
+      ERRMSG = "WAREHOUSE IS MISSING"; GOTO 93000
+   END
+*
+*---- INITIALIZATION
+*
+   CONO = ""
+   CALL GET.CONO1 (CONO, MAT COMP.REC, COMPANY, CONTROL)
+   IF CO.APS.R.INTRF > 1 THEN
+      OPEN "","VEND.STATS" TO VEND.STATS ELSE
+         ERRMSG = "CANNOT OPEN VEND.STATS FILE";GOTO 93000 
+      END
+      OPEN "","VEND.PO.STATS" TO VEND.PO.STATS ELSE
+         ERRMSG="CANNOT OPEN VEND.PO.STATS FILE";GOTO 93000 
+      END
+      OPEN "","VEND.PROD.STATS" TO VEND.PROD.STATS ELSE
+         ERRMSG = "CANNOT OPEN VEND.PROD.STATS FILE"; GOTO 93000
+      END
+   END
+*
+   SCREEN INIT;#
+   S$SCR = 1
+   SCREEN DEFINE;RS.STOCK.REC;ICS.SCREENS
+   SCREEN FORMAT
+   SCREEN COUNT;;11
+   LINE.COUNT = S$LCNT
+   LINE.SPACE = S$LSPC
+   LINE.CNT = 0
+   REF.NO = ""
+   CURR.REF.NO = ""
+   EDIT.FLAG = 0
+   MAT GEN.XREF.REC = ""
+   GXR.CO = CONO
+*
+   DIM HOLD.ISTK.REC(ISTK.REC.SIZE) ; MAT HOLD.ISTK.REC=""
+   DIM S.REC(25)
+   EQU S.SERIAL        TO S.REC(1);*
+   EQU S.PO.LINE.NO    TO S.REC(2)
+   EQU S.QTY           TO S.REC(3);*
+   EQU S.LOC           TO S.REC(4);*
+   EQU S.MILL.ID       TO S.REC(5);*
+   EQU S.QTY.ENTERED   TO S.REC(6)
+   EQU S.WHSE          TO S.REC(7);*
+   EQU S.PROD.NO       TO S.REC(9)
+   EQU S.INV.FULL.DESC TO S.REC(10);*
+   EQU S.INV.PAP.TYPE  TO S.REC(11)
+   EQU S.TOT.WEIGHT    TO S.REC(12)
+   EQU S.UNIT          TO S.REC(13);*UOM
+   EQU S.INV.UNIT      TO S.REC(14)
+   EQU S.INV.M.WT      TO S.REC(15)
+   EQU S.STK.QTY       TO S.REC(16)
+   EQU S.INV.PAP.WIDTH TO S.REC(17)
+   EQU S.POST.DATE     TO S.REC(19);*
+   EQU S.STATUS        TO S.REC(20)
+   EQU S.EDIT.DATE     TO S.REC(21)
+   EQU S.UN.PRICE      TO S.REC(24)
+   EQU S.INV.SBR       TO S.REC(25) ;*T28300
+*
+   MAT S.REC = ''
+   ICR.CNV = ""
+   DIFF.UM = ""
+   ICR.DV1 = ""
+   ICR.DV2 = ""
+   ICR.MT1 = ""
+   ENTERED = ""
+   BALANCE = ""
+   LINE.STATUS=""
+*  RQX=''; OQX='' ;*T28300
+   GOTO 110
+*
+*---- MAIN PROCESSING
+*
+100 *
+   RELEASE
+   SCREEN CLEAR
+110 *
+   S$DATA(1)<S$SCR> = DATE()
+   SCREEN DISPLAY;;1
+   SCREEN FIELD;;2
+   SCREEN INPUT;;2;GOTO 99999
+   PO.NO = S$VALUE
+   MAT S.REC = ""
+   SS = 0
+   OLD.DSR.ID = '' ; * T27904
+   MANUAL.ENTRY = 0      ;* T26556
+  * T26126 v
+   MATREADU RSXRF.REC FROM PO.RSKI.XREF, CONO: PO.NO LOCKED 
+      ERRMSG = 'P/O record is locked by user - ':GETUSERNAME(STATUS())
+      GOSUB 91000;GOTO 100 
+   END ELSE
+  * T26126 ^
+      MAT RSXRF.REC = ""
+      IF PO.NO = "*BAD*" THEN
+         ERRMSG ="No errors present!"
+* T26556 v
+         GOSUB 91000
+         GOTO 100
+      END ELSE
+      * ERRMSG ="Invalid P/O for this function"
+         MANUAL.ENTRY = 1
+      END
+* T26556 ^
+   END
+   PO.PRESENT = 1
+   IF PO.NO = "*BAD*" THEN
+      PO.PRESENT = 0
+      MAT PO.REC = ""
+      MAT VEND.REC = ""
+      MAT RSMAN.REC = MAT RSXRF.REC
+      GXR.SRCH.ID = PO.NO:'!1'
+      S$DATA(5)<S$SCR> = '1'
+      SCREEN DISPLAY;;5
+      S.SERIAL = RSMAN.RS.NO
+      S.PO.LINE.NO = RSMAN.LINE.NO
+      MANIFEST = 1          ;* T26198
+   END ELSE
+    * T26126 v
+      MATREADU PO.REC FROM PO, CONO:PO.NO LOCKED
+         ERRMSG = 'P/O record is locked by user - ':GETUSERNAME(STATUS())
+         GOSUB 91000;GOTO 100 
+      END ELSE
+    * T26126 ^
+*T27306 (T26556 left out) v
+         IF DCOUNT(RSXRF.RS.NO,VM) > 0 THEN MANUAL.ENTRY = 1 ;*T27306
+         IF NOT(MANUAL.ENTRY) THEN
+            ERRMSG = "P/O record cannot be found"
+            GOSUB 91000
+            GOTO 100
+         END ELSE
+            SCREEN FIELD;;37
+            SCREEN INPUT;;37;GOTO 100
+            IF S$VALUE='Y' THEN
+               MAT PO.REC = ''
+               PO.DIV.OWNER = '00'
+            END ELSE GOTO 100
+         END
+         PO.PRESENT=0;*T27306
+*T27306 ^
+      END
+      IF PO.PRESENT THEN MANUAL.ENTRY = 0 ;*27306
+      DIV.CODE = PO.DIV.OWNER; USER.ID = UPCASE(@LOGNAME); ERRMSG = ''
+      CALL SI.CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+      IF ERRMSG # '' THEN
+         GOSUB 91000
+         GOTO 100
+      END
+*T27306 v Merged block from below
+      IF NOT(MANUAL.ENTRY) THEN
+         S$DATA(3)<S$SCR>  = PO.VEND.NO
+         SCREEN DISPLAY;;3
+      END ELSE
+         SCREEN FIELD;;3
+         SCREEN INPUT;;3;GOTO 100
+         PO.VEND.NO = S$DATA(3)<S$SCR>
+      END
+*T27306 ^ End of merged block
+      MATREAD VEND.REC FROM VEND,CONO:PO.VEND.NO ELSE
+         ERRMSG = "Vendor record cannot be found"
+         GOSUB 91000
+         GOTO 100
+      END
+*T27306 v Merge from below
+      S$DATA(4)<S$SCR>  = VEND.DESC 
+      SCREEN DISPLAY;;4
+*T27306 ^
+    * T26556 v
+*T27306  IF MANUAL.ENTRY THEN
+      IF NOT(MANUAL.ENTRY) THEN
+         PO.LINE.CNT = DCOUNT(PO.PROD.NUM,VM)
+         BCFLAG=0
+         FOR PO.LINE.PTR=1 TO PO.LINE.CNT WHILE BCFLAG=0
+            MATREAD INV.REC FROM INVENTORY, CONO:PO.PROD.NUM<1,PO.LINE.PTR> ELSE MAT INV.REC = ""
+            MATREAD CATG.REC FROM CATEGORY,CONO:INV.LINE ELSE MAT CATG.REC=''
+            IF CATG.TRK.LVL='S' THEN
+               BCFLAG=1
+            END
+         NEXT PO.LINE.PTR
+         IF BCFLAG=0 THEN
+            ERRMSG = "Invalid P/O for this function"
+            GOSUB 91000
+            GOTO 100
+         END
+      END
+    * T26556 ^
+      GXR.SRCH.ID = PO.MAN
+      MCNT = DCOUNT(PO.MAN,VM)
+      FOR MPTR = 1 TO MCNT
+         MAN.ID = PO.NO:'!':PO.MAN<1,MPTR>
+         GXR.SRCH.ID = REPLACE(GXR.SRCH.ID,1,MPTR,0,MAN.ID)
+      NEXT MPTR
+      NEW.MANIFEST = ''
+*T27306 v Moved to above
+*  S$DATA(3)<S$SCR>  = PO.VEND.NO
+*  SCREEN DISPLAY;;3
+*  S$DATA(4)<S$SCR>  = VEND.DESC 
+*  SCREEN DISPLAY;;4
+*T27306 ^
+      GOSUB ENT.MAN.NUM
+      IF S$VALUE = 'END' THEN GOTO 100
+   END
+   GOSUB LOAD.S.REC
+   GOSUB LOAD.HEADER.DATA
+   GOSUB LOAD.MLINES
+   GOSUB UPDATE.TOTALS
+   REF.NO = 1
+   CURR.REF.NO = ""
+   GOSUB SCROLL.ROUTINE
+   IF PO.NO # "*BAD*" THEN
+      GOSUB ENT.DATE
+      IF S$VALUE = "END" THEN GOTO 100
+      GOSUB ENT.PERIOD
+      IF S$VALUE = "END" THEN GOTO 100
+      GOSUB ENT.MAN.WGT
+      IF S$VALUE = "END" THEN GOTO 100
+      IF (MANUAL.ENTRY) AND (NEW.MANIFEST) THEN GOSUB ADD.SERIAL  ;* T26556
+   END
+*
+************
+ENT.OPTION: 
+************
+*
+   IF PO.NO = "*BAD*" THEN
+      SCREEN FIELD;;31
+      SCREEN INPUT;;31
+   END ELSE
+      SCREEN FIELD;;21
+      SCREEN INPUT;;21
+   END
+   OPT = S$VALUE
+   BEGIN CASE
+      CASE OPT = "E" OR OPT = "END"
+         GOTO 100
+      CASE OPT = "A" AND LINE.CNT < 999 ;* T20697
+         GOSUB ADD.SERIAL             ;* T26556
+      CASE OPT = "C" AND LINE.CNT > 0
+         MODE = "C"
+         GOSUB ENT.LINE.NUM
+         IF S$VALUE # "" AND S$VALUE # "END" THEN
+            IF S$VALUE = "ALL" OR S$VALUE = "A" THEN
+               S$VALUE = ""
+               FOR REF.NO = 1 TO LINE.CNT WHILE S$VALUE # "END"
+                  GOSUB SCROLL.ROUTINE
+                  GOSUB CHG.DETAIL.LINE
+*T27902 v
+                  CURR.REF.NO=''
+                  GOSUB SCROLL.ROUTINE
+*
+               NEXT REF.NO
+            END ELSE
+               REF.NO = S$VALUE
+               GOSUB CHG.DETAIL.LINE
+*T27902 ^
+               CURR.REF.NO=''
+               GOSUB SCROLL.ROUTINE
+*
+            END
+         END
+      CASE OPT = "D" AND LINE.CNT > 0
+         MODE = "D"
+         GOSUB ENT.LINE.NUM
+         IF S$VALUE # "" AND S$VALUE # "END" THEN
+            IF S$VALUE = "ALL" OR S$VALUE = "A" THEN
+               FOR REF.NO = 1 TO LINE.CNT
+*T28300 v
+                 IF S.POST.DATE<1,REF.NO> = '' THEN
+                    S$DATA(12)<S$SCR,REF.NO> = "X"
+                 END
+*T28300 ^
+               NEXT REF.NO
+            END ELSE
+               REF.NO = S$VALUE
+               IF S$DATA(12)<S$SCR,REF.NO> = "X" THEN
+                  S$DATA(12)<S$SCR,REF.NO> = ""
+               END ELSE
+*T28300 v
+                 IF S.POST.DATE<1,REF.NO> = '' THEN
+                   S$DATA(12)<S$SCR,REF.NO> = "X"
+                 END
+*T28300 ^
+               END
+            END
+            CURR.REF.NO = ""
+            GOSUB SCROLL.ROUTINE
+         END
+      CASE OPT = "S" OR OPT = "SF"
+         REF.NO = CURR.REF.NO + LINE.COUNT
+         IF REF.NO > LINE.CNT THEN REF.NO = 1
+         GOSUB SCROLL.ROUTINE
+      CASE OPT = "SR"
+         REF.NO = CURR.REF.NO - LINE.COUNT
+         IF REF.NO < 1 THEN REF.NO = 1
+         GOSUB SCROLL.ROUTINE
+      CASE OPT = "ST"
+         REF.NO = 1
+         GOSUB SCROLL.ROUTINE
+      CASE OPT = "SB"
+         REF.NO = LINE.CNT
+         IF REF.NO < 1 THEN REF.NO = 1
+         GOSUB SCROLL.ROUTINE
+      CASE OPT = "1"
+         GOSUB ENT.DATE
+         IF S$VALUE#'END' THEN
+            GOSUB ENT.PERIOD
+         END
+      CASE OPT='2'
+         GOSUB ENT.PERIOD
+      CASE OPT = "3"
+         GOSUB ENT.MAN.WGT
+      CASE OPT = "F" AND PO.NO = "*BAD*"
+         FOR REF.NO = LINE.CNT TO 1 STEP -1
+            IF S$DATA(12)<S$SCR,REF.NO> = "X" THEN
+               DELETE INV_SERIAL, CONO:S.SERIAL<1,REF.NO>
+               LOCATE S.SERIAL<1,REF.NO> IN RSMAN.RS.NO<1>,1 SETTING SPTR THEN
+                  RSMAN.RS.NO = DELETE(RSMAN.RS.NO,1,SPTR,0)
+                  RSMAN.LINE.NO = DELETE(RSMAN.LINE.NO,1,SPTR,0)
+               END
+               LOCATE S.SERIAL<1,REF.NO> IN RSXRF.RS.NO<1>,1 SETTING SPTR THEN
+                  RSXRF.RS.NO = DELETE(RSXRF.RS.NO,1,SPTR,0)
+                  RSXRF.LN.NO = DELETE(RSXRF.LN.NO,1,SPTR,0)
+               END
+            END
+         NEXT REF.NO
+         IF RSMAN.RS.NO = "" THEN
+            DELETE PO.MAN.XREF, CONO:PO.NO:"!1"
+         END ELSE
+            MATWRITE RSMAN.REC ON PO.MAN.XREF, CONO:PO.NO:"!1"
+         END
+         IF RSXRF.RS.NO = "" THEN
+            DELETE PO.RSKI.XREF, CONO:PO.NO
+         END ELSE
+            MATWRITE RSXRF.REC ON PO.RSKI.XREF, CONO:PO.NO
+         END
+         GOTO 100
+      CASE OPT = "F"
+         LOCATE '' IN S.QTY.ENTERED<1> SETTING JUNK THEN
+            SCREEN FIELD;;52 
+            SCREEN INPUT;;52 
+            IF S$VALUE='Y' THEN
+               FOR REF.NO = LINE.CNT TO 1 STEP -1
+                  IF S.QTY.ENTERED<1,REF.NO>='' AND S.POST.DATE<1,REF.NO>='' THEN
+                     S$DATA(12)<S$SCR,REF.NO>='X'
+                  END
+               NEXT REF.NO
+            END
+         END
+         FOR REF.NO = LINE.CNT TO 1 STEP -1
+            IF S$DATA(12)<S$SCR,REF.NO> = "X" THEN
+               ISTK.ID = CONO:S.SERIAL<1,REF.NO>
+               MATREAD ISTK.REC FROM INV_SERIAL_DELETED,ISTK.ID THEN
+                  ERRMSG = 'Cannot delete received Serial ':S.SERIAL<1,REF.NO>
+                  GOSUB 91000
+               END ELSE
+                  MATREADU ISTK.REC FROM INV_SERIAL,ISTK.ID THEN
+                     IF S.POST.DATE<1,REF.NO> # '' THEN
+                        RELEASE INV_SERIAL, CONO:S.SERIAL<1,REF.NO>
+                        ERRMSG = 'Cannot delete received Serial ':S.SERIAL<1,REF.NO>
+                        GOSUB 91000
+                     END ELSE
+                        ISTK.MANIFEST.NO = ''
+                        ISTK.QTY.ENTERED=''
+                        ISTK.LOC=''
+                        ISTK.PLACE = ''     ;* T26556
+                        ISTK.STATUS = ''
+                        MATWRITE ISTK.REC ON INV_SERIAL,ISTK.ID
+                        GOSUB DEL.MLINE.DATA
+                        RSMAN.RS.NO = DELETE(RSMAN.RS.NO,1,REF.NO,0)
+                        RSMAN.PLACE = DELETE(RSMAN.PLACE,1,REF.NO,0)     ;* T26556
+                        RSMAN.LINE.NO = DELETE(RSMAN.LINE.NO,1,REF.NO,0) ;*T27306
+                     END
+                  END ELSE
+                     RELEASE INV_SERIAL, CONO:S.SERIAL<1,REF.NO>
+                     GOSUB DEL.MLINE.DATA
+                  END
+               END
+            END
+         NEXT REF.NO
+         IF BALANCE+0 # 0 THEN
+            S$DATA(26)<S$SCR> = ""
+            SCREEN FIELD;;26
+            SCREEN INPUT;;26
+            IF S$VALUE # "Y" THEN
+               GOSUB LOAD.MLINES
+               CURR.REF.NO = ""
+               REF.NO = 1
+               GOSUB SCROLL.ROUTINE
+               GOTO ENT.OPTION
+            END
+         END
+         PROB = 0
+         TOT = ""; SUM = ""
+         FOR LPTR = 1 TO LINE.CNT
+            IF S.POST.DATE<1,LPTR> = "" THEN
+               POLINE = S.PO.LINE.NO<1,LPTR>
+               TOT<1,POLINE> = TOT<1,POLINE> + S.QTY<1,LPTR>
+               IF S.WHSE<1,LPTR> = PO.WHSE<1,POLINE> THEN 
+                  SUM<1,POLINE> = SUM<1,POLINE> + S.QTY<1,LPTR>
+               END
+            END
+         NEXT LPTR
+         PLCNT = DCOUNT(PO.PROD.NUM,VM)
+         FOR I = 1 TO PLCNT
+            NEW.OPEN = PO.QTY.OPEN<1,I> - TOT<1,I>
+*T28054 v Nonsense! Below will always yield a zero result unless qty recd
+*         is at least double the qty ordered.
+*           IF NEW.OPEN < 0 AND PO.QTY.OPEN<1,I> > 0 THEN
+*              IF INT(NEW.OPEN / PO.QTY.OPEN<1,I>) = 0 THEN
+*                 NEW.OPEN = 0
+*              END
+*           END
+*T28054 ^
+*T28422 v
+            LOCATE I IN S.PO.LINE.NO<1>,1 SETTING LNO THEN
+              PO.OPEN.STK=INT(PO.QTY.OPEN<1,I>/ICR.DV1<LNO,1>*ICR.MT1<LNO,1>/ICR.DV2<LNO,1>+.5)
+              TOT.STK=INT(TOT<1,I>/ICR.DV1<LNO,1>*ICR.MT1<LNO,1>/ICR.DV2<LNO,1>+.5)
+              DIFF = ABS(PO.OPEN.STK - TOT.STK)
+              IF (S.INV.UNIT<1,LNO,3> = 'MSI' AND DIFF <= 50) OR (S.INV.UNIT<1,LNO,3> # 'MSI' AND DIFF <= 9) THEN NEW.OPEN = 0
+            END
+*28422 ^
+*T27306 IF NEW.OPEN < 0 THEN
+            IF NEW.OPEN < 0 AND NOT(MANUAL.ENTRY) THEN
+               NEW.OPEN = 0
+               ERRMSG = "Warning! Received more than ordered for P/O line #":I
+               GOSUB 91000
+            END
+            NEW.ALLOC = SUM(PO.JB.OPEN<1,I>) - SUM<1,I>
+            IF NEW.ALLOC < 0 THEN NEW.ALLOC = 0
+*T27306 IF NEW.OPEN < NEW.ALLOC THEN
+            IF NEW.OPEN < NEW.ALLOC AND NOT(MANUAL.ENTRY) THEN
+               ERRMSG = "Remaining allocation exceeds P/O open for P/O line #":I
+               GOSUB 91000
+               LINE.STATUS<1,I> = ERRMSG
+               ERRMSG=""
+            END 
+         NEXT I
+         REF.PTR = 1
+         NEW.SERIAL = 0
+         S.CNT = DCOUNT(S.SERIAL,VM)
+         FOR SS=1 TO S.CNT
+            ISTK.ID = CONO:S.SERIAL<1,SS>
+            MATREADU ISTK.REC FROM INV_SERIAL,ISTK.ID THEN
+               ISTK.MANIFEST.NO = MANIFEST
+               ISTK.QTY.ENTERED = S.QTY.ENTERED<1,SS>
+               ISTK.PLACE = 'M'      ;* T26556
+*T27902 v
+               IF MANUAL.ENTRY THEN
+                  ISTK.PO.NO = PO.NO
+                  ISTK.PO.LINE=S.PO.LINE.NO<1,SS>
+                  ISTK.PROD=S.PROD.NO<1,SS>
+                  ISTK.WHSE=S.WHSE<1,SS>
+                  ISTK.PRINT.DATE=''
+                  ISTK.UOM=S.UNIT<1,SS>
+                  ISTK.UNIT.COST=S.UN.PRICE<1,SS>
+               END
+*T27902 ^
+*T27904 v
+               IF DSR.TYPE = "J" THEN
+                  NEW.SERIAL = 1
+                  LOCATE S.SERIAL<1,SS> IN RSXRF.RS.NO,1 SETTING VAR ELSE
+                     RSXRF.RS.NO = INSERT(RSXRF.RS.NO,1,-1,0,S.SERIAL<1,SS>)
+                     RSXRF.LN.NO = INSERT(RSXRF.LN.NO,1,-1,0,S.PO.LINE.NO<1,SS>)
+                     PO.NO.OF.ROLLS<1,S.PO.LINE.NO<1,SS>> += 1
+                  END
+                  IF ISTK.PO.LINE + 0 = 0 THEN ISTK.PO.LINE = 1
+                  IF ISTK.PROD # PO.PROD.NUM<1,ISTK.PO.LINE> THEN
+                     ISTK.PROD = PO.PROD.NUM<1,ISTK.PO.LINE>
+                     ISTK.WHSE = PO.WHSE<1,ISTK.PO.LINE>
+                     ISTK.UOM = PO.JB.UNITS<1,ISTK.PO.LINE>
+                  END
+               END
+*T27904 ^
+               MATWRITE ISTK.REC ON INV_SERIAL,ISTK.ID
+            END ELSE
+               NEW.SERIAL = 1
+               RSXRF.RS.NO = INSERT(RSXRF.RS.NO,1,-1,0,S.SERIAL<1,SS>)
+               ;*T26764 v
+               RSXRF.LN.NO = INSERT(RSXRF.LN.NO,1,-1,0,S.PO.LINE.NO<1,SS>)
+               PO.NO.OF.ROLLS<1,S.PO.LINE.NO<1,SS>> += 1
+               ;*T26764 ^
+               MAT ISTK.REC=""
+               ISTK.PO.NO = PO.NO
+               ISTK.PO.LINE=S.PO.LINE.NO<1,SS>
+               ISTK.PROD=S.PROD.NO<1,SS>
+               ISTK.WHSE=S.WHSE<1,SS>
+               ISTK.PRINT.DATE=''
+               ISTK.UOM=S.UNIT<1,SS>
+               ISTK.UNIT.COST=S.UN.PRICE<1,SS>
+               ISTK.MANIFEST.NO=MANIFEST
+               ISTK.QTY.ENTERED=S.QTY.ENTERED<1,SS>
+               ISTK.PLACE = 'M'      ;* T26556
+               MATWRITE ISTK.REC ON INV_SERIAL,ISTK.ID
+            END
+         NEXT SS
+         MAT DSR.REC=""
+         DSR.PO = PO.NO
+         DSR.VEND=PO.VEND.NO
+         DSR.DATE=RECP.DATE
+         DSR.PERIOD=RSMAN.PERIOD
+         DSR.SHPMNT.NO=MANIFEST
+         DSR.SHPMNT.TOT=RSMAN.MAN.TOT.WGT
+         SV.CNT=0
+         POST.FLAG = 0 ; * T27941
+         FOR SS=1 TO S.CNT
+*T27902 v
+*           LOCATE S.PO.LINE.NO<1,SS> IN DSR.PO.LINE<1> SETTING LN THEN
+            LOCATE S.PO.LINE.NO<1,SS> IN DSR.PO.LINE<1>,1 BY 'AR' SETTING LN THEN
+*T27902 ^
+               SV.CNT=DCOUNT(DSR.SERIAL<1,LN>,SVM)
+            END ELSE
+               SV.CNT=0
+            END
+*           T27902 v
+            IF NOT(SV.CNT) THEN
+               INS '' BEFORE DSR.PO.LINE<1,LN>
+               INS '' BEFORE DSR.LINE.STATUS<1,LN>
+               INS '' BEFORE DSR.PROD<1,LN>
+               INS '' BEFORE DSR.UOM<1,LN>
+               INS '' BEFORE DSR.WHSE<1,LN>
+               INS '' BEFORE DSR.UN.PRICE<1,LN>
+               INS '' BEFORE DSR.LOC<1,LN>
+               INS '' BEFORE DSR.SERIAL<1,LN>
+               INS '' BEFORE DSR.QTY<1,LN>
+               INS '' BEFORE DSR.STK.QTY<1,LN>
+               INS '' BEFORE DSR.POST.DATE<1,LN>
+               INS '' BEFORE DSR.DIAM<1,LN>
+               INS '' BEFORE DSR.MILL.ID<1,LN>
+            END
+*           T27902 ^
+            SV.CNT+=1
+            DSR.PO.LINE<1,LN> = S.PO.LINE.NO<1,SS>
+            DSR.LINE.STATUS<1,LN> = LINE.STATUS<1,LN>
+            DSR.PROD<1,LN> = S.PROD.NO<1,SS>
+            DSR.UOM<1,LN> = S.UNIT<1,SS>
+            DSR.WHSE<1,LN> = S.WHSE<1,SS>
+            DSR.UN.PRICE<1,LN> = S.UN.PRICE<1,SS>
+            DSR.LOC<1,LN,SV.CNT> = S.LOC<1,SS>
+            DSR.SERIAL<1,LN,SV.CNT>=S.SERIAL<1,SS>
+            DSR.QTY<1,LN,SV.CNT>=S.QTY<1,SS>
+            DSR.STK.QTY<1,LN,SV.CNT>=S.STK.QTY<1,SS>
+*T27306 v Had subscripts reversed
+            DSR.POST.DATE<1,LN,SV.CNT>=S.POST.DATE<1,SS>;*T27009
+            IF DSR.POST.DATE<1,LN,SV.CNT>='' THEN POST.FLAG=1;*T27941
+            MATREAD INV.REC FROM INVENTORY,CONO:S.PROD.NO<1,SS> THEN
+               DSR.DIAM<1,LN,SV.CNT>=CALC.DIAM(S.QTY<1,SS>,S.STK.QTY<1,SS>,MAT INV.REC)
+            END ELSE
+               MAT INV.REC=''
+            END
+            DSR.STATUS=S.STATUS
+            DSR.MILL.ID<1,LN,SV.CNT>=S.MILL.ID<1,SS>
+         NEXT SS
+         IF POST.FLAG THEN ; * T27941
+            MATWRITE DSR.REC ON DAILY_STOCK,DSR.ID
+*T27941 v
+         END ELSE
+            ERRMSG = 'All lines on this receipt have already been posted.'
+            GOSUB 91000
+         END
+*T27941 ^
+*T27904 v
+         IF OLD.DSR.ID # '' THEN DELETE DAILY_STOCK, OLD.DSR.ID
+*T27904 ^
+         RSMAN.RS.NO = S.SERIAL
+         RSMAN.LINE.NO  = S.PO.LINE.NO
+         RSMAN.STATUS = ""
+         IF RSMAN.RS.NO = "" THEN
+            DELETE PO.MAN.XREF, CONO:PO.NO:"!":MANIFEST
+            DELETE DAILY_STOCK,CONO:PO.NO:"!":MANIFEST
+            LOCATE MANIFEST IN PO.MAN<1>,1 SETTING PPTR THEN
+               PO.MAN = DELETE(PO.MAN,1,PPTR,0)
+               NEW.MANIFEST = 0
+            END
+         END ELSE
+            MATWRITE RSMAN.REC ON PO.MAN.XREF, CONO:PO.NO:"!":MANIFEST
+         END
+         IF NEW.SERIAL THEN
+            MATWRITE RSXRF.REC ON PO.RSKI.XREF, CONO: PO.NO
+         END
+         IF NEW.MANIFEST THEN
+            PO.MAN = INSERT(PO.MAN,1,-1,0,MANIFEST)
+         END
+         PO.CHG.FLG = 1
+*T27306 v
+         IF NOT(MANUAL.ENTRY) THEN
+            MATWRITE PO.REC ON PO, CONO:PO.NO
+         END ELSE RELEASE PO, CONO:PO.NO
+*T27306 ^
+         GOTO 100
+      CASE OPT = "R"
+         GOSUB ENT.LINE.NUM
+         IF S$VALUE # "" AND S$VALUE # "END" THEN
+            IF S$VALUE = "ALL" OR S$VALUE = "A" THEN
+               GOSUB SCROLL.ROUTINE
+               FOR REF.NO = 1 TO LINE.CNT
+                  GOSUB SCROLL.ROUTINE
+                  GOSUB 450
+               NEXT REF.NO
+            END ELSE
+               REF.NO = S$VALUE
+               GOSUB 450
+            END
+         END
+   END CASE
+   GOTO ENT.OPTION
+*
+*************************************************************************
+****  S U B R O U T I N E S *********************************************
+*************************************************************************
+*
+*********
+450 *
+*********
+*
+   S$VAL = REF.NO
+   S$DATA(12)<S$SCR,REF.NO> = "*"
+   SCREEN DISPLAY;;12
+   S$VAL = REF.NO
+   S$DATA(23)<S$SCR,REF.NO> = S.PROD.NO<1,REF.NO>:" , ":S.INV.FULL.DESC<1,REF.NO>:" , ":S.INV.PAP.TYPE<1,REF.NO>
+   SCREEN DISPLAY;;23 
+   SCREEN FIELD;;33
+   SCREEN INPUT;;33
+   S$DATA(12)<S$SCR,REF.NO> = ""    
+   S$VAL = REF.NO
+   SCREEN DISPLAY;;12 
+   RETURN 
+*
+*****************
+CHG.DETAIL.LINE: 
+*****************
+*
+   IF S.POST.DATE<1,REF.NO> # "" THEN
+      ERRMSG = "Serial was received on ": OCONV(S.POST.DATE<1,REF.NO>,"D2/")
+      GOSUB 91000
+   END ELSE
+      S$VAL = REF.NO
+      S$DATA(23)<S$SCR,REF.NO> = S.PROD.NO<1,REF.NO>:" , ":S.INV.FULL.DESC<1,REF.NO>:" , ":S.INV.PAP.TYPE<1,REF.NO>
+      SCREEN DISPLAY;;23
+      GOSUB GET.MLINE.DATA
+      IF S$VALUE = "END" THEN
+         CURR.REF.NO = ""
+         GOSUB SCROLL.ROUTINE
+      END ELSE
+      END
+      S$DATA(23)<S$SCR,REF.NO> = ""
+      S$VAL = REF.NO
+      SCREEN DISPLAY;;12 
+      S$VAL = REF.NO
+      SCREEN DISPLAY;;23 
+      S$VAL = REF.NO
+      SCREEN DISPLAY;;21
+   END
+   RETURN
+*
+**************
+ENT.LINE.NUM: 
+**************
+*
+   SCREEN FIELD;;22
+   SCREEN INPUT;;22;RETURN
+   S$MINV = CURR.REF.NO
+   S$MAXV = S$MINV + LINE.COUNT - 1
+   IF S$MAXV > LINE.CNT THEN S$MAXV = LINE.CNT
+   IF S$VALUE # "" THEN
+      IF NUM(S$VALUE) THEN
+         IF S$VALUE > S$MAXV OR S$VALUE < S$MINV THEN
+            ERRMSG =  "*** Out of range ***"
+            GOSUB 91000
+            GOTO ENT.LINE.NUM
+         END
+      END ELSE
+         IF S$VALUE # "ALL" AND S$VALUE # "A" THEN
+            ERRMSG = "*** Invalid input ***"
+            GOSUB 91000
+            GOTO ENT.LINE.NUM
+         END
+      END
+   END
+   S$MINV = ""
+   S$MAXV = ""
+   RETURN
+*
+****************
+DEL.MLINE.DATA: 
+****************
+*
+   S.SERIAL = DELETE(S.SERIAL,1,REF.NO,0)
+   S.PO.LINE.NO = DELETE(S.PO.LINE.NO,1,REF.NO,0)
+   S.QTY = DELETE(S.QTY,1,REF.NO,0)
+   S.LOC = DELETE(S.LOC,1,REF.NO,0)
+   S.MILL.ID = DELETE(S.MILL.ID,1,REF.NO,0)
+   S.QTY.ENTERED = DELETE(S.QTY.ENTERED,1,REF.NO,0)
+   S.WHSE = DELETE(S.WHSE,1,REF.NO,0)
+   S.PROD.NO = DELETE(S.PROD.NO,1,REF.NO,0)
+   S.INV.FULL.DESC = DELETE(S.INV.FULL.DESC,1,REF.NO,0)
+   S.INV.PAP.TYPE = DELETE(S.INV.PAP.TYPE,1,REF.NO,0)
+   S.UNIT = DELETE(S.UNIT,1,REF.NO,0)
+   S.INV.UNIT = DELETE(S.INV.UNIT,1,REF.NO,0)
+   S.INV.M.WT = DELETE(S.INV.M.WT,1,REF.NO,0)
+   S.INV.PAP.WIDTH = DELETE(S.INV.PAP.WIDTH,1,REF.NO,0)
+   S.STK.QTY = DELETE(S.STK.QTY,1,REF.NO,0)
+   S.EDIT.DATE = DELETE(S.EDIT.DATE,1,REF.NO,0)
+   S.POST.DATE = DELETE(S.POST.DATE,1,REF.NO,0)
+   S$DATA(12) = DELETE(S$DATA(12),1,REF.NO,0) 
+   GOSUB UPDATE.TOTALS
+   RETURN
+*
+**********
+ENT.DATE: 
+**********
+*
+   SCREEN FIELD;;50
+   IF RSMAN.ENTRY.DATE#'' THEN
+      S$DEFAULT=RSMAN.ENTRY.DATE
+      S$DATA(50)<S$SCR> = RSMAN.ENTRY.DATE
+   END ELSE
+      S$DEFAULT = DATE()
+      S$DATA(50)<S$SCR>=DATE()
+   END
+   SCREEN INPUT;;50
+   IF S$VALUE#'END' THEN
+      DEF.PERIOD = "";ERR.FLG = "";ERRMSG = ""                              
+      CALL CHECK.PERIOD.DATE(CONO,S$VALUE,DEF.PERIOD,DIV.CODE,ERR.FLG,ERRMSG,COMPANY,CONTROL)
+      BEGIN CASE                           
+         CASE ERRMSG = ""                   
+            RSMAN.ENTRY.DATE = S$VALUE
+            RECP.DATE=S$VALUE
+         CASE ERR.FLG = 0                   
+            RSMAN.ENTRY.DATE = S$VALUE
+            RECP.DATE=S$VALUE
+            GOSUB 91000                      
+         CASE ERR.FLG = 1                   
+            GOSUB 91000;GOTO ENT.DATE        
+         CASE ERR.FLG = 2                   
+            GOSUB 91000; S$VALUE='END'
+      END CASE                             
+      ERRMSG = ""                          
+      ERR.FLG = ""                         
+   END ELSE
+      S$DATA(50)<S$SCR> = RSMAN.ENTRY.DATE
+      SCREEN DISPLAY;;50
+   END
+   RETURN
+*
+***************
+ENT.PERIOD: 
+***************
+*
+   IF CO.ICS.PERIOD.FLG='N' THEN
+      SCREEN FIELD;;53
+      S$DEFAULT=DEF.PERIOD
+      SCREEN INPUT;;53
+      IF S$VALUE#'END' THEN
+         ERR.FLG = "";ERRMSG = ""                                              
+         CALL CHECK.PERIOD.DATE(CONO,RSMAN.ENTRY.DATE,S$VALUE,DIV.CODE,ERR.FLG,ERRMSG,COMPANY,CONTROL)
+         BEGIN CASE                           
+            CASE ERRMSG = ""                   
+               RSMAN.PERIOD=S$VALUE
+            CASE ERR.FLG = 0                   
+               RSMAN.PERIOD = S$VALUE    
+               GOSUB 91000                      
+            CASE ERR.FLG = 1                   
+               GOSUB 91000;GOTO ENT.PERIOD      
+            CASE ERR.FLG = 2                   
+               GOSUB 91000;S$VALUE = "END"
+         END CASE                             
+         ERRMSG = ""                          
+         ERR.FLG = ""                         
+      END ELSE
+         S$DATA(53)<S$SCR> = RSMAN.PERIOD
+         SCREEN DISPLAY;;53              
+      END
+   END ELSE
+      RSMAN.PERIOD=DEF.PERIOD
+      S$DATA(53)<S$SCR> = RSMAN.PERIOD
+      SCREEN DISPLAY;;53
+   END
+   RETURN
+*
+**************
+ENT.MAN.NUM: 
+**************
+*
+   SCREEN FIELD;;5
+   SCREEN INPUT;;5;RETURN
+   BEGIN CASE
+      CASE S$VALUE  = "???" OR S$VALUE = ''
+         OPEN "","PREFIX" TO PREFIX ELSE
+            ERRMSG = "UNABLE TO OPEN PREFIX"
+            GOSUB 91000
+            GOTO ENT.MAN.NUM
+         END
+         OPEN "","XREF.DATA" TO XREF.DATA ELSE
+            ERRMSG = "UNABLE TO OPEN XREF.DATA"
+            GOSUB 91000
+            GOTO ENT.MAN.NUM
+         END
+         GXR.NAME = "MANIFEST"
+         GXR.FILE = PO.MAN.XREF
+         GXR.OPEN.DATA = 'PO.MAN.XREF'
+         CALL GEN.XREF.SUB(MAT GEN.XREF.REC,PREFIX,XREF.DATA)
+         SCREEN FORMAT
+         SCREEN DISPLAY;;ALL
+         IF GXR.ID = "" THEN GOTO ENT.MAN.NUM
+         S$VALUE = FIELD(GXR.ID,"!",2)
+      CASE S$VALUE = 'N'
+         GOT.ONE = 0
+         LOOP UNTIL GOT.ONE DO
+            IF PO.LAST.MAN = '' THEN
+               PO.LAST.MAN = 1
+               S$VALUE = 1
+            END ELSE
+               PO.LAST.MAN = PO.LAST.MAN + 1
+               S$VALUE = PO.LAST.MAN
+            END
+            MATREAD RSMAN.REC FROM PO.MAN.XREF, CONO:PO.NO:"!":S$VALUE ELSE 
+               GOT.ONE = 1
+            END
+         REPEAT
+         NEW.MANIFEST = 1
+   END CASE
+   MATREADU RSMAN.REC FROM PO.MAN.XREF, CONO:PO.NO:"!":S$VALUE ELSE 
+      MANIFEST = S$VALUE
+      IF NOT(NEW.MANIFEST) THEN
+         SCREEN FIELD;;32
+         SCREEN INPUT;;32;GOTO ENT.MAN.NUM
+         IF S$VALUE = 'N' THEN
+            RELEASE PO.MAN.XREF, CONO:PO.NO:"!":S$VALUE
+            GOTO ENT.MAN.NUM
+         END
+         NEW.MANIFEST = 1
+      END
+      *** Creating new manifest with serials that are not assigned ***
+      *** to a manifest yet.                                       ***
+      MAT RSMAN.REC = ''
+      S$VALUE = MANIFEST
+      RSMAN.RS.NO = RSXRF.RS.NO
+      RSMAN.LINE.NO = RSXRF.LN.NO ;*T27306
+      RCNT = DCOUNT(RSXRF.RS.NO,VM)
+      MAT HOLD.ISTK.REC = MAT ISTK.REC
+*T27306 v
+      *** Deletion must be in right-to-left manner else skips ***
+      *** may occur.                                          ***
+      FOR RPTR = RCNT TO 1 STEP - 1
+         ISTK.ID=CONO:RSXRF.RS.NO<1,RPTR>
+         MATREAD ISTK.REC FROM INV_SERIAL_DELETED,ISTK.ID THEN
+            LOCATE RSXRF.RS.NO<1,RPTR> IN RSMAN.RS.NO<1>,1 SETTING SPTR THEN
+               RSMAN.RS.NO = DELETE(RSMAN.RS.NO,1,SPTR,0)
+               RSMAN.LINE.NO = DELETE(RSMAN.LINE.NO,1,SPTR,0) ;*T27306
+            END
+         END ELSE
+            MATREAD ISTK.REC FROM INV_SERIAL,ISTK.ID THEN
+               IF ISTK.MANIFEST.NO # '' THEN
+                  LOCATE RSXRF.RS.NO<1,RPTR> IN RSMAN.RS.NO<1>,1 SETTING SPTR THEN
+                     RSMAN.RS.NO = DELETE(RSMAN.RS.NO,1,SPTR,0)
+                     RSMAN.LINE.NO = DELETE(RSMAN.LINE.NO,1,SPTR,0) ;*T27306
+                  END
+               END
+            END
+         END
+      NEXT RPTR
+      MAT ISTK.REC = MAT HOLD.ISTK.REC
+      NEW.MANIFEST = 1
+*     RSMAN.MAN.NO = MANIFEST
+   END
+   S.SERIAL = RSMAN.RS.NO
+   S.PO.LINE.NO=RSMAN.LINE.NO
+   MANIFEST = S$VALUE
+   RSMAN.MAN.NO = MANIFEST
+*T27306 v Load Manual PO values.
+   IF MANUAL.ENTRY AND NOT(PO.PRESENT) THEN
+      FOR P = 1 TO DCOUNT(RSMAN.RS.NO,VM)
+         MATREAD ISTK.REC FROM INV_SERIAL,CONO:RSMAN.RS.NO<1,P> THEN
+            PTR=1
+            LOOP
+               LOCATE ISTK.PROD IN PO.PROD.NUM<1>,PTR SETTING FND THEN
+                  IF ISTK.WHSE = PO.WHSE<1,FND> THEN
+                     PTR = 0
+                  END ELSE
+                     PTR = FND+1
+                  END
+               END ELSE
+                  INS ISTK.PROD BEFORE PO.PROD.NUM<1,RSMAN.LINE.NO<1,P>>
+                  INS ISTK.WHSE BEFORE PO.WHSE<1,RSMAN.LINE.NO<1,P>>
+                  INS ISTK.UOM BEFORE PO.UNIT.FLG<1,RSMAN.LINE.NO<1,P>>
+                  INS ISTK.UNIT.COST BEFORE PO.GROS.PRICE<1,RSMAN.LINE.NO<1,P>>
+                  PTR = 0
+               END
+            WHILE PTR DO
+            REPEAT
+         END
+      NEXT P
+   END
+*T27306 ^
+   RETURN
+*
+************
+ENT.MAN.WGT: 
+************
+*
+   SCREEN FIELD;;6
+   SCREEN INPUT;;6;RETURN
+   RSMAN.MAN.TOT.WGT = S$VALUE
+   GOSUB UPDATE.TOTALS
+   RETURN
+*
+***************
+GET.MLINE.DATA: 
+***************
+*
+   S$VAL = REF.NO
+   SCREEN DISPLAY;;11
+   IF MODE # 'A' THEN GOTO ENT.QTY
+   NEW.SERIAL = 0
+   S$VAL = REF.NO
+   SCREEN FIELD;;13
+   SCREEN INPUT;;13;GOTO 19950
+   BEGIN CASE
+*T27902 v
+*     CASE S$VALUE = 'N'
+      CASE S$VALUE = 'N' AND CATG.BARCODE = "Y"
+*T27902 ^
+* T26556 v
+         BAD.SERIAL.BUILD = 0
+         GOSUB BUILD.NEW.SERIAL
+         IF (BAD.SERIAL.BUILD) THEN GOTO GET.MLINE.DATA
+         ISTK.SEQ=GET.SERIAL.SEQ(CONO,CONTROL,INV_SERIAL)
+         READU TMP.REC FROM INV_SERIAL, CONO:ISTK.SEQ ELSE NULL
+* T26556 ^
+         NEW.SERIAL = 1
+         S.SERIAL<1,REF.NO>=ISTK.SEQ
+         S$DATA(13)<S$SCR,REF.NO> = S.SERIAL<1,REF.NO>
+         S$VAL = REF.NO
+         SCREEN DISPLAY;;13
+         S$DATA(30)<S$SCR,REF.NO> = S.UNIT<1,REF.NO>
+         S$VAL = REF.NO
+         SCREEN DISPLAY;;30
+         S$VAL = REF.NO
+         S$DATA(23)<S$SCR,REF.NO> = S.PROD.NO<1,REF.NO>:" , ":S.INV.FULL.DESC<1,REF.NO>:" , ":S.INV.PAP.TYPE<1,REF.NO>
+         SCREEN DISPLAY;;23
+         S$DATA(18)<S$SCR,REF.NO>=S.WHSE<1,REF.NO>
+         S$VAL=REF.NO
+         SCREEN DISPLAY;;18
+*T27902 v
+* CASE 1
+      CASE S$VALUE # "N" AND CATG.BARCODE # "Y"
+         MATREADU ISTK.REC FROM INV_SERIAL,CONO:S$VALUE THEN
+            INV.ID=CONO:ISTK.PROD
+            IWH.ID=INV.ID:"!":ISTK.WHSE
+            GOSUB CHECK.DATA
+*      IF S.STATUS<1,REF.NO>="" THEN  
+            IF S.STATUS='' THEN
+               LOCATE S$VALUE IN S.SERIAL<1>,1 SETTING NDX THEN        ; *26296
+                  ERRMSG = 'Duplicate Serial for this Purchase order '
+                  GOSUB 91000
+                  GOTO GET.MLINE.DATA
+               END ELSE
+                  IF ISTK.POST.DATE # '' THEN
+                     ERRMSG = 'Serial was received on ':OCONV(ISTK.POST.DATE,'D2/')
+                     GOSUB 91000
+                     GOTO GET.MLINE.DATA
+                  END
+                  IF ISTK.MANIFEST.NO # '' THEN
+                     ERRMSG = 'Serial belongs to Purchase order ':ISTK.PO.NO:' manifest ':ISTK.MANIFEST.NO
+                     GOSUB 91000
+                     GOTO GET.MLINE.DATA
+                  END
+                  IF ISTK.PO.NO # PO.NO THEN                            ; *26296
+                     ERRMSG = 'Serial belongs to Purchase order ':ISTK.PO.NO
+                     GOSUB 91000
+                     GOTO GET.MLINE.DATA
+                  END
+               END
+* T26556 v
+*     END
+            END ELSE
+               LOCATE S$VALUE IN S.SERIAL<1>,1 SETTING NDX THEN        ; *26296
+                  ERRMSG='Serial already exists on line ':NDX
+                  GOSUB 91000
+                  GOTO GET.MLINE.DATA
+               END
+            END
+            SS=REF.NO
+            S.SERIAL<1,SS>=S$VALUE
+            GOSUB SET.S.REC
+            GOSUB GET.CONV
+         END ELSE
+            BAD.SERIAL.BUILD = 0
+            GOSUB BUILD.NEW.SERIAL
+            IF (BAD.SERIAL.BUILD) THEN GOTO GET.MLINE.DATA
+            NEW.SERIAL = 1
+            S.SERIAL<1,REF.NO> = S$VALUE
+* T26556 ^
+         END
+         S$DATA(13)<S$SCR,REF.NO> = S.SERIAL<1,REF.NO>
+         S$VAL = REF.NO
+         SCREEN DISPLAY;;13
+         S$DATA(30)<S$SCR,REF.NO> = S.UNIT<1,REF.NO>
+         S$VAL = REF.NO
+         SCREEN DISPLAY;;30
+         S$VAL = REF.NO
+         S$DATA(23)<S$SCR,REF.NO> = S.PROD.NO<1,REF.NO>:" , ":S.INV.FULL.DESC<1,REF.NO>:" , ":S.INV.PAP.TYPE<1,REF.NO>
+         SCREEN DISPLAY;;23
+         S$DATA(18)<S$SCR,REF.NO>=S.WHSE<1,REF.NO>
+         S$VAL=REF.NO
+         SCREEN DISPLAY;;18
+*T27902 v
+      CASE 1
+         IF S$VALUE = 'N' AND CATG.BARCODE # 'Y' THEN
+            ERRMSG='Product not setup for PRIMAC generated barcodes.'
+         END
+         IF S$VALUE # 'N' AND CATG.BARCODE = 'Y' THEN
+            ERRMSG='Must enter "N" to generate barcode.'
+         END
+         IF ERRMSG='' THEN
+            ERRMSG='Invalid Serial input'
+         END
+         GOSUB 91000
+         S$DATA(13)<S$SCR,REF.NO> = ""
+         S$VAL = REF.NO
+         SCREEN DISPLAY;;13
+         GOTO GET.MLINE.DATA
+*T27902 ^
+   END CASE
+*
+*********
+ENT.QTY: 
+*********
+*
+   TEMP.QTY.ENTERED=0
+   S$VAL = REF.NO
+   SCREEN FIELD;;14
+*T28300 28422
+*  IF S.UNIT<1,REF.NO> = "LBS" OR S.UNIT<1,REF.NO> = "MSI" THEN 
+   IF S.UNIT<1,REF.NO>#'SHT' AND S.UNIT<1,REF.NO>#'FT' AND S.UNIT<1,REF.NO>#'PC' THEN
+      S$TYP = 4
+      S$SCALER = 2
+      IF S.QTY.ENTERED<1,REF.NO>#'' THEN
+         S$DATA(14)<S$SCR,REF.NO> = S$DATA(14)<S$SCR,REF.NO> * 100
+      END
+   END ELSE 
+      S$TYP = 3
+   END
+*T28422 v
+*  BEGIN CASE
+*     CASE OQX<1,REF.NO> AND ICR.DV1<REF.NO,2>=''
+*        S$MAXL=8; S$O.R='R'
+*        S$TYP=4; S$SCALER=2; S$MINV=0; S$MAXV=9999999
+*        BEGIN CASE
+*           CASE S.QTY<1,REF.NO> # '' AND ICR.CNV<REF.NO,1>="MD2"
+*              S$O.R='O'
+*              S$DATA(14)<S$SCR,REF.NO>=INT(((S.QTY<1,REF.NO>/ICR.DV1<REF.NO,1>)*ICR.MT1<REF.NO,1>)/ICR.DV2<REF.NO,1>+.5)
+*              S$DATA(14)<S$SCR,REF.NO>=OCONV(S$DATA(14)<S$SCR,REF.NO>/INV.SBR,"MD2")
+*           CASE S.QTY<1,REF.NO> # "" AND ICR.CNV<REF.NO,1>="MD0"
+*              S$O.R='O'
+*              S$DATA(14)<S$SCR,REF.NO>=INT(S.QTY<1,REF.NO>/10)
+*              S$DATA(14)<S$SCR,REF.NO>=OCONV(S$DATA(14)<S$SCR,REF.NO>/INV.SBR,"MD2")
+*        END CASE
+*        SCREEN INPUT;;14;GOTO 19950
+*        IF S$VALUE#"END" THEN
+*           S$VALUE=S$VALUE * S.INV.SBR<1,REF.NO>
+*           S$VALUE=S$VALUE * 10
+*           RQ.VALUE=INT(((S$VALUE/ICR.DV1<REF.NO,1>)*ICR.MT1<REF.NO,1>)/ICR.DV2<REF.NO,1>+.5)
+*           WT.VALUE=INT(((RQ.VALUE/ICR.MT1<REF.NO,1>)*ICR.DV1<REF.NO,1>)*ICR.DV2<REF.NO,1>+.5)
+*           OQ.VALUE=INT(WT.VALUE/10/S.INV.SBR<1,REF.NO>+.5)
+*           S$DATA(14)<S$SCR,REF.NO> = OQ.VALUE
+*        END
+*     CASE OQX<1,REF.NO>
+*        S$TYP=3; S$MAXL=8; S$O.R='R'
+*        S$MINV=0; S$MAXV=9999999
+*        IF S.QTY<1,REF.NO> # '' THEN
+*           S$O.R='O'
+*           S$DATA(14)<S$SCR,REF.NO>=INT(((S.QTY<1,REF.NO>/ICR.DV1<REF.NO,2>)*ICR.MT1<REF.NO,2>)/ICR.DV2<REF.NO,2>+.5)
+*        END
+*        SCREEN INPUT;;14;GOTO 19950
+*        IF S$VALUE#"END" THEN
+*           WT.VALUE=INT(((S$VALUE/ICR.MT1<REF.NO,2>)*ICR.DV1<REF.NO,2>)*ICR.DV2<REF.NO,2>+.5)
+*           RQ.VALUE=INT(((WT.VALUE/ICR.DV1<REF.NO,1>)*ICR.MT1<REF.NO,1>)/ICR.DV2<REF.NO,1>+.5)
+*           WT.VALUE=INT(((RQ.VALUE/ICR.MT1<REF.NO,1>)*ICR.DV1<REF.NO,1>)*ICR.DV2<REF.NO,1>+.5)
+*           OQ.VALUE=INT(((WT.VALUE/ICR.DV1<REF.NO,2>)*ICR.MT1<REF.NO,2>)/ICR.DV2<REF.NO,2>+.5)
+*           S$DATA(14)<S$SCR,REF.NO> = OQ.VALUE
+*        END
+*     CASE RQX<1,REF.NO>
+*        S$MAXL=8; S$O.R='R'
+*        S$MINV=0; S$MAXV=9999999  ;*T20896
+*        BEGIN CASE
+*           CASE ICR.CNV<REF.NO,1>="MD0"
+*              S$TYP=3
+*              S$MAXL=8
+*              S$MAXV=9999999
+*           CASE 1
+*              S$TYP=4; S$SCALER=2
+*              IF S$DATA(14)<S$SCR,REF.NO> # '' THEN S$DATA(14)<S$SCR,REF.NO> = ICONV(S$DATA(14)<S$SCR,REF.NO>,ICR.CNV<REF.NO,1>)
+*        END CASE
+*        IF S.QTY<1,REF.NO> <> '' THEN
+*           S$O.R='O'
+*           S$DATA(14)<S$SCR,REF.NO>=INT(((S.QTY<1,REF.NO>/ICR.DV1<REF.NO,1>) *ICR.MT1<REF.NO,1>)/ICR.DV2<REF.NO,1> + .5)
+*           S$DATA(14)<S$SCR,REF.NO>=OCONV(S$DATA(14)<S$SCR,REF.NO>,ICR.CNV<REF.NO,1>)
+*           IF S$DATA(14)<S$SCR,REF.NO> # '' THEN S$DATA(14)<S$SCR,REF.NO> = ICONV(S$DATA(14)<S$SCR,REF.NO>,ICR.CNV<REF.NO,1>)
+*        END
+*        SCREEN INPUT;;14;GOTO 19950
+*        IF S$VALUE#"END" THEN
+*           WT.VALUE=INT(((S$VALUE/ICR.MT1<REF.NO,1>)*ICR.DV1<REF.NO,1>)*ICR.DV2<REF.NO,1>+.5)
+*           OQ.VALUE=0
+*           RQ.VALUE=INT(((WT.VALUE/ICR.DV1<REF.NO,1>)*ICR.MT1<REF.NO,1>)/ICR.DV2<REF.NO,1>+.5)
+*           S$DATA(14)<S$SCR,REF.NO> = RQ.VALUE
+*        END
+*  END CASE
+   SCREEN INPUT;;14;GOTO 19950
+   IF S$VALUE = "" THEN
+*     EOI=1
+**    P_X =RQX<1,REF.NO> ; P_S$Y=SLN ; P_VALUE=OCONV(RQ.VALUE,ICR.CNV) "R#11" ; P_OPT=""
+*     CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+*     RSMAN.MAN.TOT.WGT=RSMAN.MAN.TOT.WGT - S.QTY<1,REF.NO> + WT.VALUE
+*     RSMAN.MAN.TOT.WGT=RSMAN.MAN.TOT.WGT - S.STK.QTY<1,REF.NO> + S$VALUE
+*     S.QTY<1,REF.NO>=WT.VALUE
+*     S.STK.QTY<1,REF.NO>=RQ.VALUE
+*  END ELSE
+*     EOI=1
+*     FLD=0
+*T28300 ^
+      S$DATA(14)<S$SCR,REF.NO> = ""
+      S$DATA(15)<S$SCR,REF.NO> = ""
+      S$DATA(16)<S$SCR,REF.NO> = ""
+      S.QTY<1,REF.NO> = ""
+      S.QTY.ENTERED<1,REF.NO> = ""
+      S.LOC<1,REF.NO> = ""
+      S.MILL.ID<1,REF.NO> = ""
+      S$VAL = REF.NO
+      SCREEN DISPLAY;;14
+      S$VAL = REF.NO
+      SCREEN DISPLAY;;18
+      S$VAL = REF.NO
+      SCREEN DISPLAY;;15
+      S$VAL = REF.NO
+      SCREEN DISPLAY;;16
+      GOTO 19950
+   END
+   TEMP.QTY.ENTERED = S$VALUE
+   IF DIFF.UM<REF.NO> = "Y" THEN
+*  IF OQX<1,REF.NO> AND ICR.DV1<REF.NO,2> # '' THEN ;*T28300
+      TEMP.ROLL.WEIGHT = S$VALUE
+      IF ICR.CNV<REF.NO,2> = "MD0" THEN
+         S$VALUE = INT(((S$VALUE/ICR.MT1<REF.NO,2>)*ICR.DV1<REF.NO,2>)*ICR.DV2<REF.NO,2> + .5)
+      END
+      IF ICR.CNV<REF.NO,1> = "MD0" THEN
+         IF ICR.CNV<REF.NO,2> # "MD0" THEN
+            S$VALUE = S$VALUE * 10
+         END
+         S$VALUE = INT(((S$VALUE/ICR.DV1<REF.NO,1>)*ICR.MT1<REF.NO,1>)/ICR.DV2<REF.NO,1> + .5)
+         TEMP.STK.QTY = S$VALUE
+         S$VALUE = INT(((S$VALUE/ICR.MT1<REF.NO,1>)*ICR.DV1<REF.NO,1>)*ICR.DV2<REF.NO,1> + .5)
+      END ELSE
+         S$VALUE = S$VALUE * ICR.MT1<REF.NO,1> * 10
+         TEMP.STK.QTY = ""
+      END
+   END ELSE
+      IF ICR.CNV<REF.NO,1> = "MD0" THEN
+         TEMP.STK.QTY = S$VALUE
+         S$VALUE = INT(((S$VALUE/ICR.MT1<REF.NO,1>)*ICR.DV1<REF.NO,1>)*ICR.DV2<REF.NO,1> + .5)
+      END ELSE
+         S$VALUE = S$VALUE * 10
+         TEMP.STK.QTY = ""
+      END
+   END
+   TEMP.ROLL.WEIGHT = S$VALUE
+*
+***********
+ENT.WHSE: 
+**********
+*
+   IF S.WHSE<1,REF.NO>='' THEN
+      S$VAL = REF.NO
+      SCREEN FIELD;;18
+      SCREEN INPUT;;18
+      IF S$VALUE = "END" THEN
+         GOTO ENT.QTY
+      END
+      TEMP.WHSE = S$VALUE
+   END ELSE
+      TEMP.WHSE=S.WHSE<1,REF.NO>
+   END
+  * T26497 v
+   IF CO.INTR.WHSE # '' AND TEMP.WHSE = CO.INTR.WHSE THEN
+      ERRMSG = 'CAN NOT APPLY, USING AN INTER-DIVISIONAL WHSE IS RESTRICTED'
+      S$DATA(18)<S$SCR,REF.NO> = S.WHSE<1,REF.NO>
+      GOSUB 91000 ; GOTO ENT.WHSE
+   END
+  * T26497 ^
+   MATREAD IWH.REC FROM INV.WHSE, CONO: S.PROD.NO<1,REF.NO>:"!": TEMP.WHSE ELSE
+      ERRMSG = "Inventory warehouse record cannot be found"
+      GOSUB 91000
+      S$DATA(18)<S$SCR,REF.NO> = S.WHSE<1,REF.NO>
+      GOTO ENT.WHSE
+   END
+   MATREAD WHSE.REC FROM WAREHOUSE, CONO:TEMP.WHSE ELSE
+      MAT WHSE.REC = ""
+   END
+   IF WHS.DIV # PO.DIV.OWNER AND PO.DIV.OWNER # "00" THEN
+      ERRMSG = "Warehouse Division does not match PO's owner Division"
+      GOSUB 91000
+      S$DATA(18)<S$SCR,REF.NO> = S.WHSE<1,REF.NO>
+      GOTO ENT.WHSE
+   END
+*
+**********
+ENT.LOC: 
+**********
+*
+   IF TEMP.ROLL.WEIGHT = 0 THEN
+      TEMP.LOC = ""
+      S$DATA(15)<S$SCR,REF.NO> = ""
+      S$VAL = REF.NO
+      SCREEN DISPLAY;;15
+   END ELSE
+      S$VAL = REF.NO
+      SCREEN FIELD;;15
+      BEGIN CASE
+         CASE REF.NO = 1
+         CASE S.LOC<1,REF.NO> # ""
+         CASE TEMP.WHSE # S.WHSE<1,REF.NO-1>
+         CASE S.LOC<1,REF.NO-1> = ""
+         CASE 1
+            S$O.R = "O"
+            S$DEFAULT = S.LOC<1,REF.NO-1>
+      END CASE
+      SCREEN INPUT;;15 
+      IF S$VALUE = "END" THEN
+         GOTO ENT.QTY
+      END
+      TEMP.LOC = S$VALUE
+      IF FIELD(TRIM(TEMP.LOC),' ',2) # "" OR TRIM(TEMP.LOC) = "" THEN
+         ERRMSG = "You may not use SPACES in the Location ID"
+         GOSUB 91000
+         GOTO ENT.LOC
+      END
+      TEMP.LOC = TRIM(TEMP.LOC)
+   END
+   S$DATA(15)<S$SCR,REF.NO> = TEMP.LOC
+   S$VAL = REF.NO
+   SCREEN DISPLAY;;15
+*
+************
+ENT.MILL.ID: 
+************
+*
+   IF TEMP.ROLL.WEIGHT = 0 THEN
+      TEMP.MILL.ID = ""
+      S$DATA(16)<S$SCR,REF.NO> = ""
+      S$VAL = REF.NO
+      SCREEN DISPLAY;;16
+   END ELSE
+      S$VAL = REF.NO
+      SCREEN FIELD;;16
+      SCREEN INPUT;;16
+      IF S$VALUE = "END" THEN
+         GOTO ENT.QTY
+      END
+      TEMP.MILL.ID = S$VALUE
+   END
+*
+**********
+11000 *
+***********
+*
+   S.QTY.ENTERED<1,REF.NO> = TEMP.QTY.ENTERED
+   S.QTY<1,REF.NO> = TEMP.ROLL.WEIGHT
+   SS = REF.NO
+   GOSUB 45000
+   S.STK.QTY<1,REF.NO> = TEMP.STK.QTY
+   IF S.INV.PAP.TYPE<1,REF.NO>='ROLL' OR S.INV.PAP.TYPE='LROLL' OR S.INV.PAP.TYPE<1,REF.NO>='PCOAT' THEN
+   END
+   S.LOC<1,REF.NO> = TEMP.LOC
+   S.MILL.ID<1,REF.NO> = TEMP.MILL.ID
+   S.WHSE<1,REF.NO> = TEMP.WHSE
+   IF S.EDIT.DATE<1,REF.NO> # "" THEN EDIT.FLAG = 1
+*
+**********
+19950 *
+**********
+*
+   IF S.UNIT<1,REF.NO> = "LBS" OR S.UNIT<1,REF.NO> = "MSI" THEN
+      S$DATA(14)<S$SCR,REF.NO> = OCONV(S.QTY.ENTERED<1,REF.NO>, "MD2")
+   END
+   IF MODE = "A" AND S$VALUE = "END" THEN S$DATA(14)<S$SCR,REF.NO> = ""
+   GOSUB LOAD.MLINES
+   GOSUB UPDATE.TOTALS
+   RETURN
+*
+*T27306 v & T27902 v
+************
+ENT.PRODUCT: 
+************
+   S$VAL = REF.NO
+   S$O.R='O'
+   IF PO.PROD.NUM<1,PO.LINE> # '' THEN
+      S$DEFAULT=PO.PROD.NUM<1,PO.LINE>
+   END ELSE
+      S$O.R='R'
+   END
+   SCREEN FIELD;;34
+   SCREEN INPUT;;34;RETURN
+*T27902 v
+   IF S$VALUE = '' OR S$VALUE = '???' THEN
+      SCREEN FIELD;;56
+      SCREEN INPUT;;56;GOTO ENT.PRODUCT
+      IF S$VALUE # '' THEN
+         GXR.NAME = "INVENTORY"
+         GXR.XREF = INVENTORY.XREF
+         GXR.FILE = INVENTORY
+         GXR.SRCH.ID = S$VALUE
+         CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+         IF GXR.ID = '' THEN GOTO ENT.PRODUCT
+         S$VALUE = GXR.ID
+      END ELSE GOTO ENT.PRODUCT
+   END
+*T27902 ^
+   MATREAD INV.REC FROM INVENTORY,CONO:S$VALUE ELSE
+      ERRMSG='Invalid Product ID'
+      GOSUB 91000
+      GOTO ENT.PRODUCT
+   END
+*T27902 v
+   MATREAD CATG.REC FROM CATEGORY,CONO:INV.LINE ELSE MAT CATG.REC = ""
+   IF CATG.TRK.LVL # "S" THEN
+      ERRMSG='Product is not serially tracked - use Regular Stock Receipts.'
+      GOSUB 91000
+      GOTO ENT.PRODUCT
+   END
+   IF CATG.INV="" OR CATG.ACCRU.LIAB="" OR CATG.AP.ACCT="" THEN
+      ERRMSG="ACCOUNT DETAILS NOT SET UP FOR PRODUCT LINE '":INV.LINE:"'"
+      GOSUB 91000
+      GOTO ENT.PRODUCT
+   END
+   IF INV.M.LINE="FNGD" THEN
+      ERRMSG="FINISHED GOODS INVENTORY CAN'T BE RECEIVED"
+      GOSUB 91000
+      GOTO ENT.PRODUCT
+   END
+   CHG.PROD=0
+   IF PO.PROD.NUM<1,PO.LINE> # "" AND PO.PROD.NUM<1,PO.LINE> # S$VALUE THEN
+      ERRMSG='PO LINE# ':PO.LINE:' already has product ':PO.PROD.NUM<1,PO.LINE>
+      GOSUB 91000
+      IF NOT(PO.PRESENT) THEN
+         SCREEN FIELD;;54
+         HOLD.SVALUE = S$VALUE
+         SCREEN INPUT;;54;GOTO ENT.PRODUCT
+         IF S$VALUE = 'Y' THEN
+            S$VALUE=HOLD.SVALUE
+            CHG.PROD=1
+         END ELSE
+            S$VALUE=PO.PROD.NUM<1,PO.LINE>
+         END
+      END ELSE
+         S$VALUE=PO.PROD.NUM<1,PO.LINE>
+      END
+   END
+   MATREAD INV.REC FROM INVENTORY,CONO:S$VALUE ELSE
+      ERRMSG='Invalid Product ID'
+      GOSUB 91000
+      GOTO ENT.PRODUCT
+   END
+   IF CHG.PROD THEN
+      FOR SS = 1 TO DCOUNT(S.SERIAL,VM)
+         IF S.PO.LINE.NO<1,SS> = PO.LINE THEN
+            S.PROD.NO<1,SS>=S$VALUE
+            S.INV.FULL.DESC<1,SS>=INV.FULL.DESC
+            S.INV.PAP.TYPE<1,SS>=INV.PAP.TYPE
+         END
+      NEXT SS
+   END
+   S.PROD.NO<1,REF.NO>=S$VALUE
+   S.INV.FULL.DESC<1,REF.NO>=INV.FULL.DESC
+   S.INV.PAP.TYPE<1,REF.NO>=INV.PAP.TYPE
+   S$DATA(23)<S$SCR,REF.NO> = S.PROD.NO<1,REF.NO>:" , ":S.INV.FULL.DESC<1,REF.NO>:" , ":S.INV.PAP.TYPE<1,REF.NO>
+   S$VAL=REF.NO
+   SCREEN DISPLAY;;23 
+*T27902 ^
+   PO.PROD.NUM<1,PO.LINE> = S$VALUE
+   PO.UNIT.FLG<1,PO.LINE> = INV.UNIT<1,1>
+*********
+ENT.WAREHOUSE: 
+*********
+   S$O.R='O'
+   IF PO.WHSE<1,1> # '' THEN
+      S$DEFAULT=PO.WHSE<1,1>
+   END ELSE
+      S$O.R='R'
+   END
+   S$VALDAT=INV.WHSE.CODE<1,1>
+   S$HMSG=INV.WHSE.CODE<1,1>
+   FOR I = 2 TO DCOUNT(INV.WHSE.CODE,VM)
+      S$VALDAT := ',':INV.WHSE.CODE<1,I>
+      S$PMSG:=',':INV.WHSE.CODE<1,I>
+   NEXT I
+   SCREEN FIELD;;35
+   SCREEN INPUT;;35;GOTO ENT.PRODUCT
+   LOCATE S$VALUE IN INV.WHSE.CODE<1> SETTING WFND ELSE
+      ERRMSG='Invalid warehouse for product'
+      GOSUB 91000
+      GOTO ENT.WAREHOUSE
+   END
+   INV.WHSE.KEY=CONO:PO.PROD.NUM<1,PO.LINE>:'!':S$VALUE
+   MATREAD IWH.REC FROM INV.WHSE , INV.WHSE.KEY ELSE
+      ERRMSG='Cannot Locate INV.WHSE - ':INV.WHSE.KEY
+      GOSUB 91000; GOTO ENT.PRODUCT
+   END
+   MATREAD WHSE.REC FROM WAREHOUSE, CONO:S$VALUE ELSE
+      ERRMSG="Warehouse ":S$VALUE:" not on file"
+      GOSUB 91000; GOTO ENT.PRODUCT
+   END
+   IF PO.LINE = 1 AND NOT(PO.PRESENT) THEN
+      DIV.CODE = WHS.DIV; USER.ID = UPCASE(@LOGNAME); ERRMSG = ''
+      CALL SI.CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+      IF ERRMSG # '' THEN
+         GOSUB 91000
+         GOTO ENT.WAREHOUSE
+      END
+      PO.DIV.OWNER = WHS.DIV
+   END
+   IF PO.LINE > 1 AND NOT(PO.PRESENT) THEN
+      IF PO.DIV.OWNER # '00' AND WHS.DIV # PO.DIV.OWNER THEN
+         ERRMSG='Warehouse DIV must be ':PO.DIV.OWNER
+         GOSUB 91000
+         GOTO ENT.WAREHOUSE
+      END
+   END
+   PO.WHSE<1,PO.LINE> = S$VALUE
+*******
+ENT.PRICE: 
+*******
+   LOCATE PO.VEND.NO IN INV.VENDOR<1>,1 SETTING VV ELSE VV=0 
+   IF VV THEN PO.GROS.PRICE<1,PO.LINE>=INV.PRICE<1,VV>
+   IF PO.GROS.PRICE<1,PO.LINE>='' THEN
+      S$O.R='R'
+   END ELSE
+      S$O.R='O'
+      S$DEFAULT=PO.GROS.PRICE<1,PO.LINE>
+   END
+   SCREEN FIELD;;36
+   SCREEN INPUT;;36;GOTO ENT.WAREHOUSE
+   PO.GROS.PRICE<1,PO.LINE> = S$VALUE
+*T27902 v
+********
+ENT.UOM: 
+********
+   IF S.UNIT<1,REF.NO> # '' THEN
+      S$DEFAULT = S.UNIT<1,REF.NO>
+   END ELSE
+      S$O.R='O'
+      S$DEFAULT = INV.UNIT<1,1>
+   END
+   S$VALDAT=INV.UNIT<1,1> ; S$PMSG=INV.UNIT<1,1>
+   IF INV.UNIT<1,1> # INV.UNIT<1,2> THEN
+      S$VALDAT=S$VALDAT:',':INV.UNIT<1,2>
+      S$PMSG=S$PMSG :" , ":INV.UNIT<1,2>
+   END
+   IF INV.UNIT<1,1> # INV.UNIT<1,3> THEN
+      S$VALDAT=S$VALDAT:',':INV.UNIT<1,3>
+      S$PMSG=S$PMSG:" , ":INV.UNIT<1,3>
+   END
+   SCREEN FIELD;;55
+   SCREEN INPUT;;55;GOTO ENT.PRICE
+   S.UNIT<1,REF.NO>=S$VALUE
+   PO.UNIT.FLG<1,PO.LINE>=S$VALUE
+*T27902 ^
+   RETURN
+*
+*T27306 ^
+**************
+LOAD.S.REC: 
+**************
+*
+   DSR.ID = CONO:PO.NO:"!":MANIFEST
+   MATREADU DSR.REC FROM DAILY_STOCK,DSR.ID THEN
+      LINE.CNT = 0
+      S.CNT = DCOUNT(S.SERIAL,VM)
+      LINE.CNT = S.CNT
+      FOR SS=1 TO S.CNT
+         MATREAD ISTK.REC FROM INV_SERIAL,CONO:S.SERIAL<1,SS> ELSE            
+            MATREAD ISTK.REC FROM INV_SERIAL_DELETED,CONO:S.SERIAL<1,SS> ELSE  
+               MAT ISTK.REC = ""                                                  
+               ERRMSG = "Serial information record cannot be found":S.SERIAL<1,SS>
+               GOTO 93000                                                         
+            END                                                                  
+         END
+         INV.ID=CONO:ISTK.PROD
+         IWH.ID=INV.ID:"!":ISTK.WHSE
+         GOSUB CHECK.DATA
+         FIND S.SERIAL<1,SS> IN DSR.SERIAL SETTING FLD,VL,SVL THEN
+            S.EDIT.DATE<1,SS> = DSR.EDIT.DATE
+            S.PROD.NO<1,SS> = DSR.PROD<1,VL>
+            S.WHSE<1,SS> = DSR.WHSE<1,VL>
+            S.UN.PRICE<1,SS> = DSR.UN.PRICE<1,VL>
+            S.UNIT<1,SS> = DSR.UOM<1,VL>
+            S.STATUS=DSR.STATUS
+            S.QTY<1,SS> = DSR.QTY<1,VL,SVL>
+            S.STK.QTY<1,SS> =DSR.STK.QTY<1,VL,SVL>
+            S.LOC<1,SS> = DSR.LOC<1,VL,SVL>
+            S.MILL.ID<1,SS> = DSR.MILL.ID<1,VL,SVL>
+            S.POST.DATE<1,SS> =  ISTK.POST.DATE
+            S.INV.FULL.DESC<1,SS> = INV.FULL.DESC
+            S.QTY.ENTERED<1,SS> = ISTK.QTY.ENTERED
+*T27904 v
+            IF S.QTY.ENTERED<1,SS> = "" THEN
+               S.QTY.ENTERED<1,SS> = DSR.QTY.ENTERED<1,VL,SVL>
+            END
+*T27904 ^
+            S.INV.PAP.TYPE<1,SS> = INV.PAP.TYPE     
+            S.INV.M.WT<1,SS> = INV.M.WT             
+            S.INV.PAP.WIDTH<1,SS> = INV.PAP.WIDTH   
+            FOR I = 1 TO 4                          
+               S.INV.UNIT<1,SS,-1>=INV.UNIT<1,I>
+            NEXT I                                  
+            S.INV.SBR<1,SS> = INV.SBR ;*T28300
+            GOSUB GET.CONV                          
+         END
+      NEXT SS
+   END ELSE
+      MAT DSR.REC=""
+      S.CNT=DCOUNT(S.SERIAL<1>,VM)
+      LINE.CNT = S.CNT
+      FOR SS=1 TO S.CNT
+         MATREAD ISTK.REC FROM INV_SERIAL,CONO:S.SERIAL<1,SS> ELSE            
+            MATREAD ISTK.REC FROM INV_SERIAL_DELETED,CONO:S.SERIAL<1,SS> ELSE
+               MAT ISTK.REC = ""                                                  
+               ERRMSG = "Serial information record cannot be found":S.SERIAL<1,SS>
+               GOTO 93000                                                         
+            END                                                                  
+         END
+         INV.ID=CONO:ISTK.PROD
+         IWH.ID=INV.ID:"!":ISTK.WHSE
+         GOSUB CHECK.DATA
+         GOSUB SET.S.REC
+         GOSUB GET.CONV
+      NEXT SS
+   END
+*T27904 v
+   IF PO.DATE = '' AND DSR.TYPE = 'J' THEN
+      GOSUB JANUS.PO.CHANGE
+      IF ABORT.FLAG THEN GOTO 100
+   END
+*T27904 ^
+   RETURN
+*
+***************
+CHECK.DATA: 
+****************
+*
+   INV.PRESENT = 1
+   IWH.PRESENT = 1
+   IF PO.NO = "*BAD*" THEN
+      INV.PRESENT = 0
+      IWH.PRESENT = 0
+      MAT INV.REC = ""
+      MAT IWH.REC = ""
+   END ELSE
+      MATREAD INV.REC FROM INVENTORY,INV.ID ELSE
+         INV.PRESENT = 0
+         IWH.PRESENT = 0
+         MAT INV.REC = ""
+         MAT IWH.REC = ""
+         ERRMSG = "Inventory record cannot be found - ":ISTK.PROD
+         GOSUB 91000
+         S.STATUS = "INV.REC. MISSING"
+      END
+      IF INV.PRESENT THEN
+         MATREAD IWH.REC FROM INV.WHSE,IWH.ID ELSE
+            MAT IWH.REC = ""
+            ERRMSG = "Inventory warehouse record cannot be found - ":IWH.ID
+            GOSUB 91000
+            S.STATUS = "IWH.REC":IWH.ID:" IS MISSING"
+         END
+      END
+      IF S.STATUS = '' THEN
+         MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE ELSE
+            ERRMSG = "Product Line '":INV.LINE:"' Missing"; GOSUB 91000
+            S.STATUS = ERRMSG
+         END
+         IF S.STATUS = '' THEN
+            IF CATG.INV="" OR CATG.ACCRU.LIAB="" OR CATG.AP.ACCT="" THEN
+               ERRMSG = "Acct Details Missing for Prod Line '":INV.LINE:"'"; GOSUB 91000
+               S.STATUS = ERRMSG
+            END
+         END
+      END
+   END
+   RETURN
+*
+***********
+GET.CONV: 
+***********
+*
+   IF NOT(INV.PRESENT) THEN
+      S$DATA(14)<S$SCR,SS> = S.QTY.ENTERED<1,SS>
+      RETURN
+   END
+*T28300 v
+   BEGIN CASE
+      CASE S.INV.UNIT<1,SS,2> = "SHT" AND S.INV.UNIT<1,SS,3> = "LBS"
+         ICR.CNV<SS,1> = "MD0"; ICR.DV2<SS,1> = 1
+         ICR.DV1<SS,1> = S.INV.M.WT<1,SS>; ICR.MT1<SS,1> = 1
+*        IF S.UNIT<1,SS> = S.INV.UNIT<1,SS,2> THEN RQX<1,SS> = 1
+*        IF S.UNIT<1,SS> = 'LBS' THEN OQX<1,SS> = 1; RQX<1,SS> = 1
+      CASE S.INV.UNIT<1,SS,2> = "PC" AND S.INV.UNIT<1,SS,3> = "MSI"
+         ICR.CNV<SS,1> = "MD0"; ICR.DV2<SS,1> = 1
+         ICR.DV1<SS,1>=S.INV.PAP.WIDTH<1,SS>/100;ICR.MT1<SS,1>=10
+*        IF S.UNIT<1,SS> = 'PC' THEN RQX<1,SS> = 1
+*        IF S.UNIT<1,SS> = 'MSI' THEN OQX<1,SS> = 1; RQX<1,SS> = 1
+*        IF S.UNIT<1,SS> = 'FT' THEN
+*          ICR.DV1<SS,2>=S.INV.PAP.WIDTH<1,SS>/100; ICR.MT1<SS,2>=100
+*          ICR.DV2<SS,2>=12; OQX<1,SS> = 1; RQX<1,SS> = 1
+*        END
+      CASE S.INV.UNIT<1,SS,2> = "FT" AND S.INV.UNIT<1,SS,3> = "MSI"
+         ICR.CNV<SS,1> = "MD0"; ICR.DV2<SS,1> = 12
+         ICR.DV1<SS,1>=S.INV.PAP.WIDTH<1,SS>/100;ICR.MT1<SS,1>=100
+*        IF S.UNIT<1,SS> = 'FT' THEN RQX<1,SS> = 1
+*        IF S.UNIT<1,SS> = 'MSI' THEN OQX<1,SS> = 1; RQX<1,SS> = 1
+*        IF S.UNIT<1,SS> = 'PC' THEN
+*          ICR.DV1<SS,2>=S.INV.PAP.WIDTH<1,SS>/100;ICR.MT1<SS,2>=10
+*          ICR.DV2<SS,2>=1; OQX<1,SS> = 1; RQX<1,SS> = 1
+*        END
+      CASE 1
+         ICR.CNV<SS,1> = "MD2"; ICR.DV2<SS,1> = 1
+         ICR.DV1<SS,1> = 10; ICR.MT1<SS,1> = S.INV.SBR<1,SS>
+*        IF S.UNIT<1,SS> # S.INV.UNIT<1,SS,2> THEN
+*          OQX<1,SS>=1 ; RQX<1,SS> =1
+*        END ELSE RQX<1,SS> = 1
+*T28300 ^
+   END CASE
+*T28300 v T28422 UNDO * Below
+   BEGIN CASE
+      CASE S.UNIT<1,SS>="SHT" AND S.INV.UNIT<1,SS,3>="LBS"
+         ICR.CNV<SS,2> = "MD0"; ICR.DV2<SS,2> = 1
+         ICR.DV1<SS,2> = S.INV.M.WT<1,SS>; ICR.MT1<SS,2> = 1
+      CASE S.UNIT<1,SS>="PC" AND S.INV.UNIT<1,SS,3>="MSI"
+         ICR.CNV<SS,2> = "MD0"; ICR.DV2<SS,2> = 1
+         ICR.DV1<SS,2>=S.INV.PAP.WIDTH<1,SS>/100;ICR.MT1<SS,2>=10
+      CASE S.UNIT<1,SS>="FT" AND S.INV.UNIT<1,SS,3>="MSI"
+         ICR.CNV<SS,2> = "MD0"; ICR.DV2<SS,2> = 12
+         ICR.DV1<SS,2>=S.INV.PAP.WIDTH<1,SS>/100;ICR.MT1<SS,2>=100
+      CASE 1
+         ICR.CNV<SS,2> = "MD2"; ICR.DV2<SS,2> = 1
+         ICR.DV1<SS,2> = 10; ICR.MT1<SS,2> = 1
+   END CASE
+   IF S.UNIT<1,SS> # S.INV.UNIT<1,SS,2> THEN 
+      DIFF.UM<SS> = "Y" 
+   END ELSE
+      DIFF.UM<SS> = "N"
+   END
+*
+***********
+45000 *
+***********
+*
+*  IF S.UNIT<1,SS> = "LBS" OR S.UNIT<1,SS> = "MSI" THEN 
+   IF S.UNIT<1,SS>#'SHT' AND S.UNIT<1,SS>#'FT' AND S.UNIT<1,SS>#'PC' THEN
+      S$DATA(14)<S$SCR,SS> = OCONV(S.QTY.ENTERED<1,SS>,"MD2")
+   END ELSE
+      S$DATA(14)<S$SCR,SS> = S.QTY.ENTERED<1,SS>
+   END
+   GOSUB SCROLL.ROUTINE
+   RETURN
+*
+***************
+SCROLL.ROUTINE: 
+***************
+*
+   START.REF.NO = 1 + INT((REF.NO-1)/LINE.COUNT)*LINE.COUNT
+   IF START.REF.NO = CURR.REF.NO THEN RETURN
+   CURR.REF.NO = START.REF.NO
+   S$VAL = START.REF.NO
+   S$CNT = DCOUNT(S$DATA(13)<S$SCR>,VM) 
+   SCREEN MULTI;;C;11;12;13;14;30;18;15;16;51
+   RETURN
+*
+******************
+LOAD.HEADER.DATA: 
+******************
+*
+   S$DATA(3)<S$SCR>  = PO.VEND.NO
+   S$DATA(4)<S$SCR>  = VEND.DESC
+   S$DATA(5)<S$SCR>  = RSMAN.MAN.NO
+   S$DATA(6)<S$SCR>  = RSMAN.MAN.TOT.WGT
+   S$DATA(50)<S$SCR> = RSMAN.ENTRY.DATE  
+   S$DATA(53)<S$SCR> = RSMAN.PERIOD
+   SCREEN DISPLAY;;ALL
+   RETURN
+*
+**************
+LOAD.MLINES: 
+**************
+*
+   S$DATA(13)<S$SCR> = S.SERIAL
+   S$DATA(18)<S$SCR> = S.WHSE
+   S$DATA(15)<S$SCR> = S.LOC
+   S$DATA(16)<S$SCR> = S.MILL.ID
+   S$DATA(30)<S$SCR> = S.UNIT
+   S$DATA(51)<S$SCR> = S.POST.DATE
+   RETURN
+*
+***************
+UPDATE.TOTALS: 
+***************
+*
+   ENTERED = ""
+   TCNT = DCOUNT(S.SERIAL,VM)
+   FOR TPTR = 1 TO TCNT
+      IF S.POST.DATE<1,TPTR> = "" THEN
+         IF S.UNIT<1,TPTR> = "LBS" OR S.UNIT<1,TPTR> = "MSI" THEN
+            ENTERED+=S.QTY.ENTERED<1,TPTR>
+         END ELSE
+            ENTERED+=S.QTY.ENTERED<1,TPTR>*100
+         END
+      END
+   NEXT TPTR
+   S$DATA(28)<S$SCR> = ENTERED
+   SCREEN DISPLAY;;28
+   IF RSMAN.MAN.TOT.WGT = "" THEN
+      BALANCE = ""
+   END ELSE
+      BALANCE = RSMAN.MAN.TOT.WGT - ENTERED
+   END
+   S$DATA(29)<S$SCR> = BALANCE
+   SCREEN DISPLAY;;29
+   RETURN
+*
+*
+**********
+SET.S.REC: 
+**********
+*
+   S.PO.LINE.NO<1,SS> = ISTK.PO.LINE      
+   S.PROD.NO<1,SS> = ISTK.PROD            
+   S.MILL.ID<1,SS> = ISTK.MILL.ID    
+   S.QTY<1,SS> = ISTK.ORG.QTY            
+   S.QTY.ENTERED<1,SS> = ISTK.QTY.ENTERED 
+   S.STK.QTY<1,SS> = ISTK.ORG.STK.QTY    
+   S.WHSE<1,SS> = ISTK.WHSE               
+   S.LOC<1,SS> = ISTK.LOC                 
+   S.POST.DATE<1,SS> = ISTK.POST.DATE     
+   S.EDIT.DATE<1,SS> = ISTK.EDIT.DATE     
+   S.UN.PRICE<1,SS> = ISTK.UNIT.COST
+   S.INV.FULL.DESC<1,SS> = INV.FULL.DESC
+   S.INV.PAP.TYPE<1,SS> = INV.PAP.TYPE
+   S.INV.M.WT<1,SS> = INV.M.WT
+   S.INV.PAP.WIDTH<1,SS> = INV.PAP.WIDTH
+*T28422 v
+   BEGIN CASE
+   CASE ISTK.UOM # ''
+     S.UNIT<1,SS> = ISTK.UOM
+   CASE PO.JB.UNITS<1,S.PO.LINE.NO<1,SS>> # ''
+     S.UNIT<1,SS> = PO.JB.UNITS<1,S.PO.LINE.NO<1,SS>> ;*T28300
+   CASE 1
+     S.UNIT<1,SS> = INV.UNIT<1,1>
+   END CASE
+*T28422 ^
+   FOR I = 1 TO 4
+      S.INV.UNIT<1,SS,I> = INV.UNIT<1,I>
+   NEXT I
+   S.INV.SBR<1,SS> = INV.SBR ;*T28300
+   RETURN
+* T26556 v
+**********
+ADD.SERIAL: 
+**********
+   MODE = "A"
+   DONE = 0
+   OLD.PO.LINE = ''
+   FOR REF.NO = LINE.CNT+1 TO 999 UNTIL DONE ;* T20697
+      IF OLD.PO.LINE = '' THEN
+         S$MINV = 1
+         S$MAXV = DCOUNT(PO.PROD.NUM,VM)
+         IF S$MAXV+0 < S$MINV THEN S$MAXV = S$MINV ;*T27306
+         IF MANUAL.ENTRY THEN S$MAXV +=1 ;*T27306
+         SCREEN FIELD;;27
+         SCREEN INPUT;;27;GOTO ENT.OPTION
+         PO.LINE=S$VALUE
+*T27306 v
+         IF MANUAL.ENTRY THEN
+            GOSUB ENT.PRODUCT
+            IF S$VALUE='END' THEN GOTO ENT.OPTION
+*T28064 Move logic below only on 1st Add of PO line.
+*        END
+         END ELSE
+            MATREAD INV.REC FROM INVENTORY, CONO:PO.PROD.NUM<1,PO.LINE> ELSE MAT INV.REC = ""
+            S$VAL = REF.NO
+            S$DATA(23)<S$SCR,REF.NO> = PO.PROD.NUM<1,PO.LINE>:" , ":INV.FULL.DESC:" , ":INV.PAP.TYPE
+            SCREEN DISPLAY;;23
+            MATREAD CATG.REC FROM CATEGORY,CONO:INV.LINE ELSE MAT CATG.REC=''
+            IF CATG.TRK.LVL#'S' THEN
+               ERRMSG = 'PO line item is not a serial tracked item.'
+               GOSUB 91000
+               GOTO ADD.SERIAL
+            END ELSE
+               IF DCOUNT(PO.PROD.NUM,VM) > 1 THEN
+                  SCREEN FIELD;;59
+                  SCREEN INPUT;;59;GOTO ADD.SERIAL
+                  IF S$VALUE = 'N' THEN
+                     S$DATA(23)<S$SCR,REF.NO>=''
+                     S$VAL = REF.NO
+                     SCREEN DISPLAY;;23
+                     GOTO ADD.SERIAL
+                  END
+               END
+            END
+         END
+*T28064 ^
+      END ELSE
+         PO.LINE = OLD.PO.LINE
+      END
+      LINE.CNT = LINE.CNT + 1
+      GOSUB SCROLL.ROUTINE
+* T26556 v T28064 Moved above to inside IF OLD.PO.LINE ...
+*     MATREAD INV.REC FROM INVENTORY, CONO:PO.PROD.NUM<1,PO.LINE> ELSE MAT INV.REC = ""
+*     MATREAD CATG.REC FROM CATEGORY,CONO:INV.LINE ELSE MAT CATG.REC=''
+*     IF CATG.TRK.LVL='S' THEN
+      GOSUB GET.MLINE.DATA
+*     END ELSE
+*        ERRMSG = 'PO line item is not a serial track item.'
+*        GOSUB 91000
+*        S$VALUE = 'END'
+*     END
+* T26556 ^
+      IF S$VALUE = "END" THEN
+         DONE = 1
+         LINE.CNT = LINE.CNT - 1
+         GOSUB DEL.MLINE.DATA
+         S$DATA(13) = DELETE(S$DATA(13),S$SCR,REF.NO,0)
+         S$DATA(14) = DELETE(S$DATA(14),S$SCR,REF.NO,0)
+         S$DATA(23) = DELETE(S$DATA(23),S$SCR,REF.NO,0)
+         S$DATA(30) = DELETE(S$DATA(30),S$SCR,REF.NO,0)
+      END
+      OLD.PO.LINE = PO.LINE
+   NEXT REF.NO
+   REF.NO = LINE.CNT
+   CURR.REF.NO = ""
+   GOSUB SCROLL.ROUTINE
+  *
+   RETURN
+****************
+BUILD.NEW.SERIAL: 
+****************
+   S.EDIT.DATE<1,REF.NO>=''
+   S.STATUS=''
+   S.QTY<1,REF.NO>=''
+   S.STK.QTY<1,REF.NO>=''
+   S.LOC<1,REF.NO>=''
+   S.MILL.ID<1,REF.NO>=''
+   S.POST.DATE<1,REF.NO>=''
+   S.QTY.ENTERED<1,REF.NO>=''
+   LOCATE PO.LINE IN S.PO.LINE.NO<1>,1 SETTING LPOS THEN
+      S.PO.LINE.NO<1,REF.NO>=PO.LINE
+      S.PROD.NO<1,REF.NO> = S.PROD.NO<1,LPOS>
+      S.WHSE<1,REF.NO>=S.WHSE<1,LPOS>
+      S.UN.PRICE<1,REF.NO>=S.UN.PRICE<1,LPOS>
+      S.UNIT<1,REF.NO> = S.UNIT<1,LPOS>
+      S.INV.FULL.DESC<1,REF.NO> = S.INV.FULL.DESC<1,LPOS>
+      S.INV.PAP.TYPE<1,REF.NO> = S.INV.PAP.TYPE<1,LPOS>
+      S.INV.M.WT<1,REF.NO> = S.INV.M.WT<1,LPOS>
+      S.INV.PAP.WIDTH<1,REF.NO> = S.INV.PAP.WIDTH<1,LPOS>
+      FOR I = 1 TO 4 
+         S.INV.UNIT<1,REF.NO,I> = S.INV.UNIT<1,LPOS,I>
+      NEXT I
+      S.INV.SBR<1,REF.NO> = S.INV.SBR<1,LPOS> ;*T28300
+      SS = REF.NO; GOSUB GET.CONV
+   END ELSE
+      S.PO.LINE.NO<1,REF.NO>=PO.LINE
+      S.PROD.NO<1,REF.NO>=PO.PROD.NUM<1,PO.LINE>
+      S.WHSE<1,REF.NO>=PO.WHSE<1,PO.LINE>
+      S.UN.PRICE<1,REF.NO>=PO.GROS.PRICE<1,PO.LINE>
+      S.UNIT<1,REF.NO>=PO.UNIT.FLG<1,PO.LINE>
+      INV.ID=CONO:S.PROD.NO<1,REF.NO>
+      IWH.ID=INV.ID:"!":S.WHSE<1,REF.NO>
+      GOSUB CHECK.DATA
+      IF S.STATUS#'' THEN
+         ERRMSG=S.STATUS
+         GOSUB 91000
+         BAD.SERIAL.BUILD = 1 ; RETURN
+      END ELSE
+         S.INV.FULL.DESC<1,REF.NO>=INV.FULL.DESC
+         S.INV.PAP.TYPE<1,REF.NO>=INV.PAP.TYPE
+         S.INV.M.WT<1,REF.NO>=INV.M.WT
+         S.INV.PAP.WIDTH<1,REF.NO>=INV.PAP.WIDTH
+         FOR I=1 TO 4
+            S.INV.UNIT<1,REF.NO,I>=INV.UNIT<1,I>
+         NEXT I
+         S.INV.SBR<1,REF.NO> = INV.SBR ;*T28300
+         SS = REF.NO; GOSUB GET.CONV
+      END
+   END
+  *
+   RETURN
+* T26556 ^
+*T27904 v
+*
+***************
+JANUS.PO.CHANGE: 
+***************
+*
+   OLD.DSR.ID = DSR.ID
+   ABORT.FLAG = 0
+   SCREEN FIELD;;57
+   SCREEN INPUT;;57
+   IF S$VALUE = 'END' THEN ABORT.FLAG = 1;RETURN
+   MATREAD PO.REC FROM PO, CONO:S$VALUE ELSE
+      ERRMSG = 'PO # not on file.'
+      GOSUB 91000
+      GOTO JANUS.PO.CHANGE
+   END
+   PO.NO = S$VALUE
+   SCREEN FIELD;;58
+   S$DEFAULT = MANIFEST
+   SCREEN INPUT;;58
+   IF S$VALUE = 'END' THEN ABORT.FLAG = 1;RETURN
+   MANIFEST = S$VALUE
+   NEW.DSR.ID = CONO:PO.NO:"!":MANIFEST
+   READU CHECKIT FROM DAILY_STOCK, NEW.DSR.ID LOCKED
+      ERRMSG = 'Daily Stock record is locked by user - ':GETUSERNAME(STATUS())
+      GOSUB 91000
+      GOTO JANUS.PO.CHANGE
+   END ELSE CHECKIT = ''
+   IF CHECKIT # '' THEN
+      ERRMSG = 'There is already a daily stock record with the same PO and Manifest #.'
+      GOSUB 91000
+      GOTO JANUS.PO.CHANGE
+   END
+   DSR.ID = NEW.DSR.ID
+   RSMAN.MAN.NO = MANIFEST
+   S$DATA(2)<S$SCR> = PO.NO
+   SCREEN DISPLAY;;2
+   S$DATA(5)<S$SCR> = MANIFEST
+   SCREEN DISPLAY;;5
+   MATREADU RSXRF.REC FROM PO.RSKI.XREF, CONO: PO.NO LOCKED
+      ERRMSG = 'P/O record is locked by user - ':GETUSERNAME(STATUS())
+      GOSUB 91000;GOTO 100 
+   END ELSE MAT RSXRF.REC = ''
+   *** UPDATE THE DAILY STOCK RECORD ***
+   FOR S = 1 TO S.CNT
+      LNO = S.PO.LINE.NO<1,S>
+      DSR.PROD<1,S> = PO.PROD.NUM<1,LNO>
+      DSR.WHSE<1,S> = PO.WHSE<1,LNO>
+      DSR.UOM<1,S> = PO.JB.UNITS<1,LNO>
+      S.PROD.NO<1,S> = PO.PROD.NUM<1,LNO>
+      S.WHSE<1,S> = PO.WHSE<1,LNO>
+      S.UNIT<1,S> = PO.JB.UNITS<1,LNO>
+   NEXT S
+   RETURN
+*T27904 ^
+*---- CALLS FOR SYSCOM
+*
+91000 *
+   ERR.TYPE = 1; CALL SI_SYSCOM(MAT SYSCOM.REC)
+   RETURN
+92000 *
+   ERR.TYPE = 2; CALL SI_SYSCOM(MAT SYSCOM.REC)
+   RETURN
+93000 *
+   ERR.TYPE = 3; CALL SI_SYSCOM(MAT SYSCOM.REC)
+*
+*---- END OF PROGRAM
+*
+99999 *
+   SCREEN CLEAR;;D
+   SCREEN CLOSE
+*       PRINT @(-1)
+END

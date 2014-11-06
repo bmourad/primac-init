@@ -1,0 +1,339 @@
+SUBROUTINE PHYIM_VALIDATE_QTY_DIAM_UPRICE
+********************************************************************************
+*   Program name :- PHYIM_VALIDATE_QTY_DIAM_UPRICE
+*   Created:- 6/6/2006
+*   Programmer :- Syed Suhail Hussain 
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB CATEGORY
+$INCLUDE ICS.CPYLIB INV.WHSE
+$INCLUDE ICS.CPYLIB INV_RECEIPTS
+$INCLUDE ICS.CPYLIB INV_RECP_WHSE
+$INCLUDE ICS.CPYLIB INV_SERIAL
+$INCLUDE ICS.CPYLIB INV.CNV
+$INCLUDE JCS.CPYLIB JOB
+$INCLUDE OPS.CPYLIB JOB.FNGD.STATS
+$INCLUDE CPYLIB CHAR
+
+OPEN "","INVENTORY" TO INVENTORY ELSE ERRMSG = "CANNOT OPEN INVENTORY FILE";GOTO 91000
+OPEN "","CATEGORY" TO CATEGORY ELSE ERRMSG = "CANNOT OPEN CATEGORY FILE";GOTO 91000
+OPEN "","INV.WHSE" TO INV.WHSE ELSE ERRMSG = "CANNOT OPEN INV.WHSE FILE";GOTO 91000
+OPEN "","INV_RECEIPTS" TO INV_RECEIPTS ELSE ERRMSG = "CANNOT OPEN INV_RECEIPTS FILE";GOTO 91000
+OPEN "","INV_RECP_WHSE" TO INV_RECP_WHSE ELSE ERRMSG = "CANNOT OPEN INV_RECP_WHSE FILE";GOTO 91000
+OPEN "","INV_SERIAL" TO INV_SERIAL ELSE ERRMSG = "CANNOT OPEN INV_SERIAL FILE";GOTO 91000
+OPEN "","INV_SERIAL_DELETED" TO INV_SERIAL_DELETED ELSE ERRMSG = "CANNOT OPEN INV_SERIAL_DELETED FILE";GOTO 91000
+OPEN "","JOB" TO JOB ELSE ERRMSG = "CANNOT OPEN JOB FILE";GOTO 91000
+OPEN "","JOB.FNGD.STATS" TO JOB.FNGD.STATS ELSE ERRMSG = "CANNOT OPEN JOB.FNGD.STATS FILE";GOTO 91000
+
+   DEFFUN CALC_STK_QTY(COST.QTY,MAT INV.CNV.REC,ROND,LN)
+   DEFFUN CALC_COST_QTY(STK.QTY,MAT INV.CNV.REC,ROND,LN)
+   DEFFUN CALC_DIAM(COST.QTY,STK.QTY,MAT INV.REC)
+
+   EQU INV.UOM.STK TO INV.UNIT<1,2>
+   EQU INV.UOM.CST TO INV.UNIT<1,3>
+
+* Insert method code here
+STATUS = RBO.getProperty("","PMCProperty",PMCProperty)
+STATUS = RBO.getProperty("","INARR",INARR)
+
+CONO = PMCProperty<1,4>
+PHYSI.PRODUCT  = INARR<1,1>
+PHYSI.WHSE     = INARR<1,2>
+PHYSI.LOC      = INARR<1,3>
+PHYSI.PERIOD   = INARR<1,4>
+PHYSI.SERIAL   = INARR<1,5>
+TEMP.PO        = INARR<1,6>
+TEMP.PREV.QTY  = INARR<1,7>
+TEMP.CURR.QTY  = INARR<1,8>
+PHYSI.PREV.DIA = INARR<1,9>
+PHYSI.CURR.DIA = INARR<1,10>
+PHYSI.UNIT.COST= INARR<1,11>
+
+RevisedQty     = TEMP.CURR.QTY
+DiamQty        = ICONV(PHYSI.CURR.DIA,"MD2")
+unitPriceValue = ""  ;*PHYSI.UNIT.COST
+
+TEMP.ONHAND = ""
+RET_VALUE = ""
+ECD.RET.VALUE = ""
+TEMP.COST = ""
+PREV_QTY = ""
+GOSUB GET.CONV
+
+IF ICR.CNV = "MD0" THEN
+   IF DCOUNT(RevisedQty,".") > 1 THEN
+      ERRMSG = "*** INVALID FORMAT ***"
+      GOTO 91000
+   END
+END
+IF PHYSI.UNIT.COST # "" THEN PHYSI.UNIT.COST = ICONV(PHYSI.UNIT.COST,"MD4")
+***********
+ENT.QTY: 
+***********
+*
+   IF TEMP.PREV.QTY = "" THEN
+      TEMP.PREV.QTY = "0"
+      RET_VAL<1,-1> = "9#" : OCONV(0,ICR.CNV)
+      PREV_QTY = "1"
+   END
+   IF TEMP.ONHAND = "" THEN
+      *IF INV.FACTOR+0 >0 AND INV.PAP.WIDTH+0 >0 AND INV.CORE.DIA+0 >0 THEN
+      *   IF INV.PAP.TYPE="ROLL" OR INV.PAP.TYPE="LROLL" OR INV.PAP.TYPE="PCOAT" THEN
+      *      ECD.O.R='O'
+      *   END
+      *END
+      ECD.RET.VALUE = RevisedQty
+      BEGIN CASE
+         CASE ICR.SCAL=2
+            RevisedQty = ICONV(RevisedQty,'MD2')
+         CASE 1
+            IF ICR.CNV = "MD2" THEN RevisedQty = RevisedQty * 100  
+      END CASE
+      RET_VALUE<1,-1> = "10#" : OCONV(RevisedQty,ICR.CNV)
+      IF RevisedQty+0 GT 0 THEN
+         IF CATG.TRK.LVL='S' THEN
+            ISTK.ID = CONO:PHYSI.SERIAL
+         END ELSE
+            ISTK.ID = CONO:'R':PHYSI.SERIAL:"!":PHYSI.WHSE:"!":PHYSI.LOC
+         END
+         MATREAD ISTK.REC FROM INV_SERIAL,ISTK.ID ELSE MAT ISTK.REC=''
+         TMP=CALC_COST_QTY(RevisedQty,MAT INV.CNV.REC,'.5','')
+         IF TMP<ISTK.CUR.QTY-ISTK.RSVB.QTY THEN
+            ERRMSG = 'Cannot adjust serial below reserved qty. '
+            ERRMSG := CALC_STK_QTY(ISTK.CUR.QTY-ISTK.RSVB.QTY,MAT INV.CNV.REC,'.5','')
+            GOTO 91000
+         END ELSE
+            TEMP.ONHAND = RevisedQty
+         END
+      END
+   END ELSE
+      ERR=1
+   END
+*   RETURN
+*
+**********
+ENT.DIAM: 
+**********
+*
+   IF INV.PAP.TYPE="ROLL" OR INV.PAP.TYPE="LROLL" OR INV.PAP.TYPE="PCOAT" THEN
+      IF PHYSI.PREV.DIA = "" THEN
+         PHYSI.PREV.DIA = 0
+         RET_VALUE<1,-1> = "11#" : OCONV("0",ICR.CNV)
+      END
+      ENT.FLAG = 0
+      BEGIN CASE
+         CASE TEMP.ONHAND = 0
+            TEMP.DIA = 0
+            RET_VALUE<1,-1> = "12#" : OCONV(TEMP.DIA,ICR.CNV)
+         CASE CATG.TRK.LVL#"S" AND TEMP.PO#"INIT"
+         CASE TEMP.ONHAND#""
+            TMP.WGT=CALC_COST_QTY(TEMP.ONHAND,MAT INV.CNV.REC,'.5','')
+            COST.QTY=TMP.WGT ; STK.QTY=TEMP.ONHAND
+            DIAM=CALC_DIAM(COST.QTY,STK.QTY,MAT INV.REC)
+            IF DIAM#'' THEN
+               TEMP.DIA=DIAM
+               RET_VALUE<1,-1> = "12#" : OCONV(TEMP.DIA,ICR.CNV)
+            END
+         CASE 1
+            IF DiamQty = "" THEN
+               RET_VALUE<1,-1> = "IP#12"
+               GOTO 92000
+            END
+            TEMP.DIA = DiamQty
+            ECD.RET.VALUE = DiamQty
+            ENT.FLAG = 1
+      END CASE
+      IF (ECD.RET.VALUE + 0) = 0 AND ENT.FLAG = 0 THEN
+            IF DiamQty = "" THEN
+               RET_VALUE<1,-1> = "IP#12"
+               GOTO 92000
+            END
+            TEMP.DIA = DiamQty
+      END
+      ERR = 0
+      IF NOT(ERR) THEN
+         IF (TEMP.ONHAND + 0) = 0 THEN
+            BEGIN CASE
+               CASE INV.PAP.TYPE = "ROLL"
+                  TEMP.ONHAND = (((TEMP.DIA/100*TEMP.DIA/100)-(INV.CORE.DIA/100*INV.CORE.DIA/100))*100)
+                  TEMP.ONHAND = INT((TEMP.ONHAND/100)*(INV.PAP.WIDTH/10000)*(INV.FACTOR/10000)/10*100+0.5)
+               CASE INV.PAP.TYPE = "LROLL" OR INV.PAP.TYPE = "PCOAT"
+                  TEMP.ONHAND = (((TEMP.DIA/100*TEMP.DIA/100)-(INV.CORE.DIA/100*INV.CORE.DIA/100))*100)
+                  BEGIN CASE
+                     CASE INV.UOM.STK = "FT"
+                        TEMP.ONHAND = INT((TEMP.ONHAND/100)*3.1416/4*(100000/INV.FACTOR)/12+0.5)
+                     CASE INV.UOM.STK = "PC"
+                        TEMP.ONHAND = INT((TEMP.ONHAND/100)*3.1416/4*(100000/INV.FACTOR)/10+0.5)
+                  END CASE
+            END CASE
+            IF TEMP.ONHAND < 0 THEN TEMP.ONHAND = 0
+            ISTK.ID = CONO:PHYSI.SERIAL
+            MATREAD ISTK.REC FROM INV_SERIAL,ISTK.ID ELSE MAT ISTK.REC=''
+            TMP=CALC_COST_QTY(TEMP.ONHAND,MAT INV.CNV.REC,'.5','')
+            ERRMSG = ""
+            IF TMP<ISTK.CUR.QTY-ISTK.RSVB.QTY THEN
+               ERRMSG = 'Cannot adjust serial below reserved qty. '
+               ERRMSG := CALC_STK_QTY(ISTK.RSVB.QTY,MAT INV.CNV.REC,'.5','')
+               TEMP.ONHAND = TEMP.CURR.QTY
+               TEMP.DIA = PHYSI.CURR.DIA
+            END
+            IF ERRMSG # "" THEN RET_VALUE<1,-1> = "ERR#": ERRMSG
+            RET_VALUE<1,-1> = "10#" : OCONV(TEMP.ONHAND,ICR.CNV)
+         END
+      END
+   END ELSE
+      TEMP.DIA = ""
+   END
+*  RETURN
+*
+***************
+ENT.UNIT.COST: 
+***************
+* 
+   REQ_IP = 0
+   COMP_VAL = ""
+   IF PREV_QTY # 1 THEN COMP_VAL = TEMP.PREV.QTY
+   IF TEMP.ONHAND>ICONV(COMP_VAL,ICR.CNV) THEN
+      BEGIN CASE
+         CASE INV.M.LINE='FNGD' AND PHYSI.SERIAL[1,3]#'NEW'
+            TEMP.COST = PHYSI.UNIT.COST
+         CASE PHYSI.UNIT.COST = "" AND CATG.PHY.INV.METH # ""
+            TEMP.PREV = TEMP.PREV.QTY    ;*PHYSI.PREV.QTY
+            IF TEMP.ONHAND < 0 THEN ROND="-.5" ELSE ROND=".5"
+            TEMP.CURR=CALC_COST_QTY(TEMP.ONHAND,MAT INV.CNV.REC,ROND,'')
+            IF TEMP.COST = "" THEN
+               GOSUB CALC.UNIT.COST
+               TEMP.COST = CHECK.COST
+            END
+            IF CATG.PHY.INV.ALLOW = "Y" THEN
+               IF unitPriceValue = "" THEN 
+                  RET_VALUE<1,-1> = "13#" : OCONV(TEMP.COST,"MD4")
+                  RET_VALUE<1,-1> = "IP#13"
+                  REQ_IP = 1
+               END
+               TEMP.COST = unitPriceValue
+            END
+         CASE 1
+            IF CATG.PHY.INV.ALLOW = "Y" THEN
+               IF unitPriceValue = "" THEN
+                  RET_VALUE<1,-1> = "IP#13"
+                  REQ_IP = 1
+               END
+               TEMP.COST = unitPriceValue
+            END ELSE
+               TEMP.COST = PHYSI.UNIT.COST
+            END
+      END CASE
+   END ELSE
+      TEMP.COST = PHYSI.UNIT.COST
+   END
+   IF REQ_IP = 0 THEN
+      RET_VALUE<1,-1> = "13#" : OCONV(TEMP.COST,"MD4")
+   END
+   IF PHYSI.SERIAL # "" THEN
+      MATREAD ISTK.REC FROM INV_SERIAL, CONO:PHYSI.SERIAL ELSE
+         MATREAD ISTK.REC FROM INV_SERIAL_DELETED,CONO:PHYSI.SERIAL ELSE
+            RET_VALUE<1,-1> = "RO"
+         END
+      END
+   END
+
+   GOTO 92000
+RETURN
+
+****************
+CALC.UNIT.COST: 
+****************
+*
+   BEGIN CASE
+      CASE CATG.PHY.INV.METH = 'LC'
+         CHECK.COST = 0
+         PROD = PHYSI.PRODUCT
+         RECP.CNT=DCOUNT(IWH.RECP.NO,VM)
+         IF RECP.CNT>0 THEN
+            GOT.LAST=0 ; LAST.COST=0
+            ;* inventory received in a future period should not
+            ;* be considered for a last cost
+            FOR R=RECP.CNT TO 1 STEP -1 UNTIL  (GOT.LAST)
+               IF IWH.RECP.PERIOD<1,R> <= PHYSI.PERIOD THEN
+                  RECP.NO=IWH.RECP.NO<1,R>
+                  IRW.ID=CONO:RECP.NO:'!':PHYSI.WHSE
+                  MATREAD IRW.REC FROM INV_RECP_WHSE,IRW.ID THEN
+                     INVR.ID=CONO:RECP.NO
+                     MATREAD INVR.REC FROM INV_RECEIPTS,INVR.ID THEN
+                        LAST.COST = INVR.UNIT.COST
+                        GOT.LAST = 1
+                     END
+                  END
+               END
+            NEXT R
+            CHECK.COST = LAST.COST
+         END
+      CASE CATG.PHY.INV.METH = 'SD'
+         CHECK.COST = IWH.STD.COST
+      CASE CATG.PHY.INV.METH = 'AV'
+         CHECK.COST = IWH.AVG.COST
+      CASE CATG.PHY.INV.METH = 'LT'
+         CHECK.COST = IWH.LIST.COST
+      CASE 1
+         CHECK.COST = 0
+   END CASE
+RETURN
+
+************
+GET.CONV: 
+************
+   MATREAD INV.REC FROM INVENTORY,CONO:PHYSI.PRODUCT ELSE
+      MAT INV.REC = ""
+   END
+   MATREAD CATG.REC FROM CATEGORY,CONO:INV.LINE ELSE
+      MAT CATG.REC = ""
+   END
+   WHSE.ID=CONO:PHYSI.PRODUCT:'!':PHYSI.WHSE
+   MATREAD IWH.REC FROM INV.WHSE, WHSE.ID ELSE
+      MAT IWH.REC = ""
+   END
+   $INCLUDE ICSBP INV.UM.CNV
+
+*v ADDED TO GET THE VALUE OF TEMP.COST
+   IF INV.M.LINE='FNGD' THEN
+      IF PHYSI.SERIAL[1,3]='NEW' AND TEMP.PO # "INIT" THEN
+         JOB.ID=CONO:TEMP.PO
+         MATREAD JOB.REC FROM JOB,JOB.ID THEN
+            MATREAD JFS.REC FROM JOB.FNGD.STATS,JOB.ID ELSE
+               MAT JFS.REC=''
+            END
+            PTR = 1
+            LOOP
+               LOCATE PHYSI.PRODUCT IN JFS.PROD<1>,PTR SETTING FND THEN
+                  IF PHYSI.WHSE = JFS.WHSE<1,FND> THEN
+                     PTR = 0
+                  END
+               END ELSE
+                  PTR = 0
+                  FND = 0
+               END
+            WHILE PTR DO
+               PTR = FND + 1
+            REPEAT
+            IF FND THEN
+               EOJ=1
+               TEMP.COST = JFS.U.PRICE<1,FND>
+            END
+         END
+      END
+   END
+*^
+RETURN
+
+92000*
+   STATUS = RBO.setProperty("","RET_VALUE",RET_VALUE)
+RETURN
+
+* End of method code
+91000*
+   STATUS = RBO.setProperty("","ServerStatus",1)
+   STATUS = RBO.setProperty("","ServerMessage",ERRMSG)
+RETURN
+

@@ -1,0 +1,13 @@
+SUBROUTINE WIN.ARGS.MD(ARGS)
+* Subroutine Parse out arguments from the command line
+* Compile for: MD
+* (C) Copyright IBM Corporation 2003. All rights reserved
+* Copyright (c) 1991-1998. Impact Business Systems
+*
+ARGS=""
+* Need to parse out command line (see WIN.ARGS.UD)
+PRINT "Command line arguments not implemented"
+*
+RETURN
+*
+END

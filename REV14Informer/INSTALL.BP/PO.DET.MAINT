@@ -1,0 +1,515 @@
+      SUBROUTINE PO.DET.MAINT(CONO,PO.CODE,LNP)
+*COPY>CPYLIB>COM1
+*COPY>POS.CPYLIB>COM.PO
+*COPY>POS.CPYLIB>COM.PO.INTRF
+**************************************************************
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - POSBP
+* PROGRAM     - PO.DET.MAINT
+* BY          - JIHAD YAMOUT ,C.B.A
+* DATE        - 02/04/84
+* MODIFIED    - NLB
+* DATE MOD    - 10/20/88
+* COMMENTS    - ADDED CUST INVENTORY CHECK
+* DESCRIPTION - THIS PROGRAM INPUT JOB AND DISC AND QTY ORDER
+* MOD         - task 14705 (csf10622) RWW 2.12.90, cmp jobs may zero
+*             - their respective outstanding allocation and let PO's 
+*             - zero their on order
+* TASK 20129 JR FIX JOB DELETE
+*T23256 lanny 09/11/1998 * ALLOW ALLOC ON RE-OPENED JOBS.
+**************************************************************
+*ENDDOC
+*
+*---- FILE EQUATES
+*
+*COPY>PMC.CPYLIB>PO
+*COPY>JCS.CPYLIB>JOB
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>PMC.CPYLIB>VEND
+*COPY>ICS.CPYLIB>WAREHOUSE
+*COPY>PMC.CPYLIB>DIVISION
+*COPY>PMC.CPYLIB>DEPARTMENT
+*COPY>PMC.CPYLIB>COST.CNTR
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>GEN.XREF.SUB
+***** INT
+      MAT GEN.XREF.REC = ''
+      GXR.CO = CONO
+      BEGIN.PAGE = 7
+      PAGE.SIZE = 4
+      LINE.SPACE = 2
+      ERRMSG = ""
+      UNKNOWN = "??????????"
+      MAT INV.CNV.REC = ""
+      DESC.LINE = ""
+      LINE.CUST = ""
+      ECD.SCRN.NO = 3
+      LINES = 0
+      OLD.START.LINE = 0
+      BAL.ORD = 0 ; BAL.REC = 0 ; BAL.OPEN = 0
+      TOT.ORD = 0 ; TOT.REC = 0 ; TOT.OPEN = 0
+**** MAIN PROCESSING
+      SCV.REC(1)<ECD.SCRN.NO> = PO.VEND.NO
+      SCV.REC(2)<ECD.SCRN.NO> = VEND.DESC
+      SCV.REC(3)<ECD.SCRN.NO> = PO.CODE
+      SCV.REC(4)<ECD.SCRN.NO> = PO.PROD.NUM<1,LNP>
+      SCV.REC(5)<ECD.SCRN.NO> = INV.FULL.DESC
+      ECD.ACTION = 3; CALL SCRN.EDIT
+      OPEN.QTY = PO.QTY.OPEN<1,LNP>
+      BEGIN CASE
+      CASE INV.UNIT<1,2> = "SHT" AND INV.UNIT<1,3> = "LBS"
+         ICR.CNV = "MD0"; ICR.DV2 = 1
+         ICR.DV1 = INV.M.WT; ICR.MT1 = 1
+      CASE INV.UNIT<1,2> = "PC" AND INV.UNIT<1,3> = "MSI"
+         ICR.CNV = "MD0"; ICR.DV2 = 1
+         ICR.DV1 = INV.PAP.WIDTH/100; ICR.MT1 = 10
+      CASE INV.UNIT<1,2> = "FT" AND INV.UNIT<1,3> = "MSI"
+         ICR.CNV = "MD0"; ICR.DV2 = 12
+         ICR.DV1 = INV.PAP.WIDTH/100; ICR.MT1 = 100
+      CASE 1
+         ICR.CNV = "MD2"; ICR.DV2 = 1
+         ICR.DV1 = 10; ICR.MT1 = 1
+      END CASE
+      IF PO.JOB.NO<1,LNP> = "" THEN
+         GOSUB 1030
+         LOOP
+            OPTION = 'A'
+            LNJ = LINES + 1
+            OLD.LINES = LINES
+            GOSUB 1000
+         WHILE LINES > OLD.LINES DO REPEAT
+         LNJ = LINES
+      END ELSE
+         LINES = COUNT(PO.JOB.NO<1,LNP>,SVM) + (PO.JOB.NO<1,LNP> # "")
+         FOR LNJ = 1 TO LINES
+            MATREAD JOB.REC FROM JOB, CONO:PO.JOB.NO<1,LNP,LNJ> ELSE MAT JOB.REC = ""
+            MATREAD CUST.REC FROM CUSTOMER, CONO:JOB.CUST ELSE
+               MAT CUST.REC = ""
+               CUST.NAME = UNKNOWN
+            END
+            LINE.CUST<1,LNJ> = JOB.CUST
+            DESC.LINE<1,LNJ> = CUST.NAME
+         NEXT LNJ
+         LNJ = 1
+      END
+      GOSUB 10000
+      GOSUB 1020
+**** ENTER OPTION
+500*
+      ECD.NUM = 6; SCV.REC(6)<ECD.SCRN.NO> = ""
+      ECD.ACTION = 4; CALL SCRN.EDIT
+      OPTION = ECD.RET.VALUE
+      BEGIN CASE
+      CASE OPTION = 'E' OR OPTION = 'END'
+         GOTO 99999
+      CASE OPTION = 'A'
+         LOOP
+            LNJ = LINES + 1
+            OLD.LINES = LINES
+            GOSUB 1000
+         WHILE LINES > OLD.LINES DO REPEAT
+         LNJ = LINES
+      CASE OPTION = 'C'
+         GOSUB 60000
+         IF LNO THEN
+            LNJ = LNO
+            SLN = BEGIN.PAGE + LINE.SPACE * MOD(LNJ - 1,PAGE.SIZE)
+            GOSUB 1001
+         END
+         IF PO.JB.RECEVED<1,LNP,LNJ> * 1 = 0 AND PO.JB.ONORD<1,LNP,LNJ> * 1 = 0 THEN
+            PO.JOB.NO = DELETE(PO.JOB.NO,1,LNP,LNJ)
+* TASK 20129
+*            PO.JB.UNITS = DELETE(PO.JB.UNITS,1,LNP,LNJ)
+* TASK 20129
+            PO.JB.ONORD = DELETE(PO.JB.ONORD,1,LNP,LNJ)
+            PO.JB.RECEVED = DELETE(PO.JB.RECEVED,1,LNP,LNJ)
+            PO.JB.OPEN = DELETE(PO.JB.OPEN,1,LNP,LNJ)
+            PO.JB.DEPT = DELETE(PO.JB.DEPT,1,LNP,LNJ) ;* pss
+            PO.JB.CCTR = DELETE(PO.JB.CCTR,1,LNP,LNJ) ;* pss
+            LINE.CUST = DELETE(LINE.CUST,1,LNJ,0)
+            DESC.LINE = DELETE(DESC.LINE,1,LNJ,0)
+            LINES = COUNT(PO.JOB.NO<1,LNP>,SVM) + (PO.JOB.NO<1,LNP> # "")
+            GOSUB 1020
+            IF LNJ > 1 AND LNJ > LINES THEN LNJ = LNJ - 1
+            IF LNJ < 1 THEN LNJ = 1
+            OLD.START.LINE = 0
+         END
+      CASE OPTION = 'D'
+         GOSUB 60000
+         IF LNO THEN
+            LNJ = LNO
+            IF PO.JB.RECEVED<1,LNP,LNJ> * 1 = 0 THEN
+               PO.JOB.NO = DELETE(PO.JOB.NO,1,LNP,LNJ)
+* TASK 20129
+*            PO.JB.UNITS = DELETE(PO.JB.UNITS,1,LNP,LNJ)
+* TASK 20129
+               PO.JB.ONORD = DELETE(PO.JB.ONORD,1,LNP,LNJ)
+               PO.JB.RECEVED = DELETE(PO.JB.RECEVED,1,LNP,LNJ)
+               PO.JB.OPEN = DELETE(PO.JB.OPEN,1,LNP,LNJ)
+               PO.JB.DEPT = DELETE(PO.JB.DEPT,1,LNP,LNJ) ;* pss
+               PO.JB.CCTR = DELETE(PO.JB.CCTR,1,LNP,LNJ) ;* pss
+               LINE.CUST = DELETE(LINE.CUST,1,LNJ,0)
+               DESC.LINE = DELETE(DESC.LINE,1,LNJ,0)
+               LINES = COUNT(PO.JOB.NO<1,LNP>,SVM) + (PO.JOB.NO<1,LNP> # "")
+               GOSUB 1020
+               IF LNJ > 1 AND LNJ > LINES THEN LNJ = LNJ - 1
+               IF LNJ < 1 THEN LNJ = 1
+               OLD.START.LINE = 0
+            END ELSE
+               ERRMSG = "ITEM THAT HAS BEEN UPDATED CAN'T BE DELETED"
+               GOSUB 91000
+            END
+         END
+      CASE OPTION = 'S'
+         LNJ = LNJ + PAGE.SIZE
+         IF LNJ > LINES THEN LNJ = 1
+      END CASE
+      GOSUB 10000
+      GOTO 500
+**** ENTER JOB INFORMATION
+1000*
+      IF BAL.ORD <= 0 THEN GOTO 1999
+      GOSUB 10000
+      SLN = BEGIN.PAGE + LINE.SPACE * MOD(LNJ - 1,PAGE.SIZE)
+      PRINT @(0,SLN) :CL: LNJ "R#3"
+**** ENTER JOB NUMBER AND PRINT DESCRIPTION
+1001X = 4 ; Y = SLN ; TYP = 1 ; MAXL = 8 ; O.R = 'R' ; VALDAT = '' ; HMSG = ''
+      IF PO.JOB.NO<1,LNP,LNJ> # "" THEN
+         DEFAULT = PO.JOB.NO<1,LNP,LNJ> ; O.R = 'O'
+      END
+      CALL EDIT.SUB
+      IF VALUE = 'END' AND OPTION = 'A' THEN
+         PO.JOB.NO = DELETE(PO.JOB.NO,1,LNP,LNJ)
+         PO.JB.ONORD = DELETE(PO.JB.ONORD,1,LNP,LNJ)
+         PO.JB.RECEVED = DELETE(PO.JB.RECEVED,1,LNP,LNJ)
+         PO.JB.OPEN = DELETE(PO.JB.OPEN,1,LNP,LNJ)
+         PO.JB.DEPT = DELETE(PO.JB.DEPT,1,LNP,LNJ) ;* pss
+         PO.JB.CCTR = DELETE(PO.JB.CCTR,1,LNP,LNJ) ;* pss
+         PRINT @(0,SLN) :CL:
+         PRINT @(0,SLN+1) :CL:
+         GOTO 1999
+      END
+      IF VALUE = 'END' AND OPTION = 'C' THEN
+         PRINT @(4,SLN):PO.JOB.NO<1,LNP,LNJ> "L#8"
+         GOTO 1999
+      END ELSE
+         LOCATE VALUE IN PO.JOB.NO<1,LNP>,1 SETTING FND ELSE FND = 0
+         IF FND AND FND # LNJ THEN
+            ERRMSG = "JOB ":VALUE:" IS ALREADY ENTERED ON LINE ":FND
+            GOSUB 91000; GOTO 1001
+         END
+         MATREAD JOB.REC FROM JOB , CONO:VALUE ELSE
+            ERRMSG = "JOB NUMBER (":VALUE:") NOT ON FILE" ;GOSUB 91000 ; GOTO 1001
+         END
+*TASK 18828 ; *CLS 3/95
+         MATREAD WHSE.REC FROM WAREHOUSE, CONO:PO.WHSE<1,LNP> ELSE MAT WHSE.REC = ''
+         IF JOB.DIV # WHS.DIV AND WHS.DIV # "00" THEN 
+            ERRMSG = "JOB ":VALUE:" HAS A DIFFERENT DIVISION THAN THE PRODUCT"
+            GOSUB 91000
+            GOTO 1001
+         END
+*
+         IF JOB.TRACK.DATE<1,4> <= PO.DEL.DATE<1,LNP> THEN
+            ERRMSG = "JOB DUE DATE HAS ALREADY PASSED"
+            GOSUB 91000
+            GOTO 1001
+         END
+*
+         IF INV.CUST # "" THEN
+            IF "X":JOB.CUST # "X":INV.CUST THEN
+               ERRMSG = "THIS INVENTORY IS OWNED BY CUSTOMER ":INV.CUST
+               GOSUB 91000
+               GOTO 1001
+            END
+         END
+1002*
+*
+* commented out per task 14705
+*
+*=======================================================================
+*      IF JOB.STATUS<1,1> > 3 THEN
+*         X = 43; Y = SLN;MAXL = 11
+*         IF ICR.CNV = "MD0" THEN
+*            TYP = 3
+*            DEFAULT = INT(((PO.JB.ONORD<1,LNP,LNJ>/ICR.DV1)*ICR.MT1)/ICR.DV2 + .5)
+*            O.R = "O"
+*         END ELSE
+*            TYP = 4; SCALER = 2
+*            PO.JB.RECEVED<1,LNP,LNJ> = PO.JB.RECEVED<1,LNP,LNJ> + 0
+*            PO.JB.ONORD<1,LNP,LNJ> =PO.JB.ONORD<1,LNP,LNJ> + 0
+*            DEFAULT = OCONV(INT(PO.JB.ONORD<1,LNP,LNJ>/10), "MD2")
+*            O.R = "O"
+*         END
+*         CALL EDIT.SUB
+*         IF VALUE = "END" THEN OLD.START.LINE = 0; GOTO 1999
+*         IF ICR.CNV = "MD0" THEN
+*            VALUE = INT(((VALUE/ICR.MT1)*ICR.DV1)*ICR.DV2 + .5)
+*         END ELSE
+*            VALUE = VALUE * 10
+*         END
+*         IF VALUE = PO.JB.RECEVED<1,LNP,LNJ> OR VALUE = PO.JB.ONORD<1,LNP,LNJ> THEN
+*            NULL
+*         END ELSE
+*            ERRMSG = "TOTAL QUANTITY ALLOCATED MUST EITHER REMAIN THE SAME OR EQUAL QUANTITY RECEIVED" ; GOSUB 91000; GOTO 1002
+*         END
+*         PO.JB.ONORD<1,LNP,LNJ>= VALUE
+*         OLD.START.LINE = 0; GOTO 1999
+*      END
+*====================================================================
+*
+         PO.JOB.NO<1,LNP,LNJ> = VALUE
+         MATREAD CUST.REC FROM CUSTOMER , CONO:JOB.CUST ELSE
+            CUST.NAME = UNKNOWN
+         END
+      END
+      PRINT @(13,SLN) : JOB.CUST "L#6" :
+      PRINT @(13,SLN+1) : CUST.NAME "L#24" :
+      LINE.CUST<1,LNJ> = JOB.CUST
+      DESC.LINE<1,LNJ> = CUST.NAME
+* pss v
+**** INPUT DEPARTMENT
+1004*
+      X = 28 ; Y = SLN ; TYP = 1 ; MAXL = 2 ; O.R = 'O' ; VALDAT = ''
+      DEFAULT = PO.JB.DEPT<1,LNP,LNJ>
+      CALL EDIT.SUB
+      BEGIN CASE
+      CASE VALUE = "END" AND OPTION = "A"
+         GOTO 1001
+      CASE VALUE = "END"
+         OLD.START.LINE = 0
+         GOTO 1999
+      CASE VALUE = '??'
+         GXR.NAME = 'DEPARTMENT'
+         GXR.XREF=DIVISION
+         GXR.FILE=DEPARTMENT
+         GXR.ID=''
+         GXR.SRCH.ID=JOB.DIV
+         CALL GEN.XREF.SUB(MAT GEN.XREF.REC,PREFIX,XREF.DATA)
+         ECD.ACTION=2;CALL SCRN.EDIT
+         ECD.ACTION=3;CALL SCRN.EDIT
+         IF GXR.ID='' THEN GOTO 1004
+         PO.JB.DEPT<1,LNP,LNJ> = GXR.ID
+         OLD.START.LINE=0; GOSUB 10000
+         SLN = BEGIN.PAGE + LINE.SPACE * MOD(LNJ - 1,PAGE.SIZE)
+         VALUE=GXR.ID
+      END CASE
+      IF VALUE # '' THEN
+         MATREAD DEPT.REC FROM DEPARTMENT, CONO:VALUE ELSE
+            ERRMSG='DEPARTMENT ':VALUE:' IS INVALID'
+            ECD.ACTION=2;CALL SCRN.EDIT;GOSUB 91000;GOTO 1004
+         END
+         LOCATE JOB.DIV IN DEPT.DIV<1>,1 SETTING FDDV ELSE FDDV = 0
+         IF FDDV = 0 THEN
+            ERRMSG='DEPARTMENT NOT VALID FOR JOB DIVISION'
+            GOSUB 91000; GOTO 1004
+         END
+      END
+      PO.JB.DEPT<1,LNP,LNJ> = VALUE
+**** INPUT COST CENTER
+1005*
+      IF PO.JB.DEPT<1,LNP,LNJ> = '' THEN
+         PO.JB.CCTR<1,LNP,LNJ> = ''
+         OLD.START.LINE=0; GOSUB 10000
+         SLN = BEGIN.PAGE + LINE.SPACE * MOD(LNJ - 1,PAGE.SIZE)
+         VALUE = ''
+      END ELSE
+         X = 33 ; Y = SLN ; TYP = 1 ; MAXL = 3 ; O.R = 'O' ; VALDAT = ''
+         DEFAULT = PO.JB.CCTR<1,LNP,LNJ>
+         CALL EDIT.SUB
+         BEGIN CASE
+         CASE VALUE = "END" AND OPTION = "A"
+            GOTO 1001
+         CASE VALUE = "END"
+            OLD.START.LINE = 0
+            GOTO 1999
+         CASE VALUE = "???"
+            GXR.NAME = 'CCTR.DEPT'
+            GXR.XREF=DEPARTMENT
+            GXR.FILE=COST.CNTR
+            GXR.ID=''
+            GXR.SRCH.ID=PO.JB.DEPT<1,LNP,LNJ>
+            CALL GEN.XREF.SUB(MAT GEN.XREF.REC,PREFIX,XREF.DATA)
+            ECD.ACTION=2;CALL SCRN.EDIT
+            ECD.ACTION = 3;CALL SCRN.EDIT
+            IF GXR.ID='' THEN GOTO 1005
+            PO.JB.CCTR<1,LNP,LNJ> = GXR.ID
+            OLD.START.LINE=0; GOSUB 10000
+            SLN = BEGIN.PAGE + LINE.SPACE * MOD(LNJ - 1,PAGE.SIZE)
+            VALUE=GXR.ID
+         END CASE
+         IF VALUE # '' THEN
+            MATREAD CCTR.REC FROM COST.CNTR, CONO:VALUE ELSE
+               ERRMSG='COST.CNTR ':VALUE:' IS INVALID'
+               GOSUB 91000;GOTO 1005
+            END
+            IF CCTR.DEPT # PO.JB.DEPT<1,LNP,LNJ> THEN
+               ERRMSG='INCORRECT DEPARTMENT FOR COST CENTER ':VALUE
+               GOSUB 91000;GOTO 1005
+            END
+         END
+      END
+      PO.JB.CCTR<1,LNP,LNJ> = VALUE
+* pss ^
+**** INPUT UNITS
+1006*
+      PRINT @(38,SLN): PO.JB.UNITS<1,LNP> "L#3" :
+**** INPUT QTY ORDERD
+1007*
+      X = 43; Y = SLN; O.R = "R"; MAXL = 11; MINV = 0; MAXV = 9999999999
+      IF ICR.CNV = "MD0" THEN
+         TYP = 3
+         IF PO.JB.ONORD<1,LNP,LNJ> # "" THEN
+            DEFAULT = INT(((PO.JB.ONORD<1,LNP,LNJ>/ICR.DV1)*ICR.MT1)/ICR.DV2 + .5)
+            O.R = "O"
+         END
+      END ELSE
+         TYP = 4; SCALER = 2
+         IF PO.JB.ONORD<1,LNP,LNJ> # "" THEN
+            DEFAULT = OCONV(INT(PO.JB.ONORD<1,LNP,LNJ>/10), "MD2")
+            O.R = "O"
+         END
+      END
+*TASK14705
+      CCNV = "MD0"
+      IF ICR.CNV # "" THEN CCNV = ICR.CNV
+      DFLT = ICONV(DEFAULT,CCNV)
+*
+      CALL EDIT.SUB
+      IF VALUE = "END" AND OPTION = "A" THEN GOTO 1001
+      IF VALUE = "END" THEN OLD.START.LINE = 0; GOTO 1999
+*TASK14705
+*T23256 v
+*   IF JOB.STATUS<1,1> > 3 AND VALUE GT DFLT THEN
+      IF JOB.STATUS<1,1> > 3 AND JOB.STATUS<1,1> # 5 AND VALUE GT DFLT THEN
+*T23256 ^
+         ERRMSG = "YOU MAY NOT INCREASE ALLOCATED AMT ON COMPLETED JOBS!!"
+         GOSUB 91000
+         GOTO 1007
+      END
+*
+      IF ICR.CNV = "MD0" THEN
+         VALUE = INT(((VALUE/ICR.MT1)*ICR.DV1)*ICR.DV2 + .5)
+      END ELSE
+         VALUE = VALUE * 10
+      END
+      IF VALUE < PO.JB.RECEVED<1,LNP,LNJ> AND PO.JB.RECEVED<1,LNP,LNJ> > 0 THEN
+         ERRMSG = "TOTAL QUANTITY ALLOCATED CAN'T BE LESS THAN QUANTITY RECEIVED" ; GOSUB 91000; GOTO 1007
+      END
+      IF VALUE - PO.JB.RECEVED<1,LNP,LNJ> > BAL.OPEN + (PO.JB.ONORD<1,LNP,LNJ> - PO.JB.RECEVED<1,LNP,LNJ>) THEN
+         ERRMSG = "QUANTITY ALLOCATED CAN'T BE MORE THAN QUANTITY ORDERED" ; GOSUB 91000 ; GOTO 1007
+      END
+      PO.JB.ONORD<1,LNP,LNJ> = VALUE
+**** INPUT QTY RECEVED
+1008*
+      IF ICR.CNV = "MD0" THEN
+         PRINT @(56,SLN):INT(((PO.JB.RECEVED<1,LNP,LNJ>/ICR.DV1)*ICR.MT1)/ICR.DV2 + .5) "R#11" :
+      END ELSE
+         PRINT @(56,SLN):OCONV(INT(PO.JB.RECEVED<1,LNP,LNJ>/10), "MD2") "R#11":
+      END
+**** PRINT OPEN QTYS
+1009*
+      PO.JB.OPEN<1,LNP,LNJ> = PO.JB.ONORD<1,LNP,LNJ> - PO.JB.RECEVED<1,LNP,LNJ>
+      IF ICR.CNV = "MD0" THEN
+         PRINT @(69,SLN):INT(((PO.JB.OPEN<1,LNP,LNJ>/ICR.DV1)*ICR.MT1)/ICR.DV2 + .5) "R#11" :
+      END ELSE
+         PRINT @(69,SLN):OCONV(INT(PO.JB.OPEN<1,LNP,LNJ>/10), "MD2") "R#11":
+      END
+      LINES = COUNT(PO.JOB.NO<1,LNP>,SVM) + (PO.JOB.NO<1,LNP> # "")
+      GOSUB 1020
+1999*
+      RETURN
+**** PRINT TOTALS
+1020*
+      TOT.ORD = 0 ; TOT.REC = 0 ; TOT.OPEN = 0
+      FOR AD = 1 TO LINES
+         TOT.ORD = TOT.ORD + PO.JB.ONORD<1,LNP,AD>
+         TOT.REC = TOT.REC + PO.JB.RECEVED<1,LNP,AD>
+         TOT.OPEN = TOT.OPEN + PO.JB.OPEN<1,LNP,AD>
+      NEXT AD
+1030*
+      BAL.ORD = PO.TOT.ONORD<1,LNP> - PO.TOT.CANCEL<1,LNP> - TOT.ORD
+      BAL.REC = (PO.TOT.RECEVED<1,LNP> + PO.PREV.RECEVED<1,LNP>) - TOT.REC
+      BAL.OPEN = PO.QTY.OPEN<1,LNP> - TOT.OPEN
+      IF ICR.CNV = "MD0" THEN
+         PRINT @(42,17):INT(((TOT.ORD/ICR.DV1)*ICR.MT1)/ICR.DV2 + .5) "R#12" :
+         PRINT @(55,17):INT(((TOT.REC/ICR.DV1)*ICR.MT1)/ICR.DV2 + .5) "R#12" :
+         PRINT @(68,17):INT(((TOT.OPEN/ICR.DV1)*ICR.MT1)/ICR.DV2 + .5) "R#12" :
+         PRINT @(42,19):INT(((BAL.ORD/ICR.DV1)*ICR.MT1)/ICR.DV2 + .5) "R#12" :
+         PRINT @(55,19):INT(((BAL.REC/ICR.DV1)*ICR.MT1)/ICR.DV2 + .5) "R#12" :
+         PRINT @(68,19):INT(((BAL.OPEN/ICR.DV1)*ICR.MT1)/ICR.DV2 + .5) "R#12" :
+      END ELSE
+         PRINT @(42,17):OCONV(INT(TOT.ORD/10), "MD2") "R#12" :
+         PRINT @(55,17):OCONV(INT(TOT.REC/10), "MD2") "R#12" :
+         PRINT @(68,17):OCONV(INT(TOT.OPEN/10), "MD2") "R#12" :
+         PRINT @(42,19):OCONV(INT(BAL.ORD/10), "MD2") "R#12" :
+         PRINT @(55,19):OCONV(INT(BAL.REC/10), "MD2") "R#12" :
+         PRINT @(68,19):OCONV(INT(BAL.OPEN/10), "MD2") "R#12" :
+      END
+      RETURN
+**** SCROLL ROUTINE FOR JOBS
+10000*
+      START.LINE = 1 + INT((LNJ-1)/PAGE.SIZE) * PAGE.SIZE
+      IF START.LINE = OLD.START.LINE THEN GOTO 10001
+      OLD.START.LINE = START.LINE
+      LAST.LINE = START.LINE + PAGE.SIZE - 1
+      CNT = 1
+      FOR N = START.LINE TO LAST.LINE UNTIL N > LINES
+         SLN = BEGIN.PAGE + LINE.SPACE * MOD(N-1,PAGE.SIZE)
+         PRINT @(0,SLN) :CL:
+         PRINT @(0,SLN+1) :CL:
+         PRINT @(0,SLN): N "R#3" :
+         PRINT @(4,SLN): PO.JOB.NO<1,LNP,N> "L#8" :
+         PRINT @(13,SLN): LINE.CUST<1,N> "L#6" :
+         PRINT @(28,SLN): PO.JB.DEPT<1,LNP,N> "L#2";* pss
+         PRINT @(33,SLN): PO.JB.CCTR<1,LNP,N> "L#3";* pss
+         PRINT @(38,SLN):PO.JB.UNITS<1,LNP> "L#3" :
+         IF ICR.CNV = "MD0" THEN
+            PRINT @(43,SLN):INT(((PO.JB.ONORD<1,LNP,N>/ICR.DV1)*ICR.MT1)/ICR.DV2 + .5) "R#11" :
+            PRINT @(56,SLN):INT(((PO.JB.RECEVED<1,LNP,N>/ICR.DV1)*ICR.MT1)/ICR.DV2 + .5) "R#11" :
+            PRINT @(69,SLN):INT(((PO.JB.OPEN<1,LNP,N>/ICR.DV1)*ICR.MT1)/ICR.DV2 + .5) "R#11" :
+         END ELSE
+            PRINT @(43,SLN):OCONV(INT(PO.JB.ONORD<1,LNP,N>/10), "MD2") "R#11" :
+            PRINT @(56,SLN):OCONV(INT(PO.JB.RECEVED<1,LNP,N>/10), "MD2") "R#11" :
+            PRINT @(69,SLN):OCONV(INT(PO.JB.OPEN<1,LNP,N>/10), "MD2") "R#11" :
+         END
+         PRINT @(13,SLN+1) : DESC.LINE<1,N> "L#24" :
+         CNT = CNT + 1
+      NEXT N
+      FOR M = CNT TO PAGE.SIZE
+         SLN = BEGIN.PAGE + LINE.SPACE * MOD(M-1,PAGE.SIZE)
+         PRINT @(0,SLN):CL:
+         PRINT @(0,SLN+1) :CL:
+      NEXT M
+10001*
+      RETURN
+**** ENTER LINE NUMBER
+60000*
+      GOSUB 10000
+      ECD.NUM = 7; SCV.REC(7)<ECD.SCRN.NO> = ""
+      ECD.MINV = OLD.START.LINE
+      IF LAST.LINE < LINES THEN
+         ECD.MAXV = LAST.LINE
+      END ELSE
+         ECD.MAXV = LINES
+      END
+      ECD.ACTION = 4; CALL SCRN.EDIT
+      LNO = ECD.RET.VALUE
+      IF LNO = '' OR LNO = 'END' THEN LNO = 0
+      RETURN
+**** CALLS FOR SYSCOM
+91000*
+      PRINT @(0,23): CL : ERRMSG :
+      INPUT REPLY,1 :
+      PRINT @(0,23) : CL :
+      RETURN
+99999*
+      PRINT @(-1) :
+      RETURN
+   END

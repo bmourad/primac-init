@@ -1,0 +1,138 @@
+SUBROUTINE GET_GLX_INQ_DETAIL
+********************************************************************************
+*   Program name :- GET_GLX_INQ_DETAIL
+*   Created:- 12/31/2002
+*------------------------------------------------------------------------------
+*
+*
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+
+* Insert method code here
+$INCLUDE PMC.CPYLIB COMPANY
+$INCLUDE PMC.CPYLIB COA
+$INCLUDE GLS.CPYLIB GLM
+$INCLUDE APS.CPYLIB SQV
+$INCLUDE ARS.CPYLIB MANUAL.INVOICE
+$INCLUDE JCS.CPYLIB INVOICE
+$INCLUDE CPYLIB CHAR
+
+* Open files
+ERRMSG = ''
+OPEN 'COMPANY' TO COMPANY ELSE ERRMSG = 'CANNOT OPEN COMPANY FILE'
+OPEN 'GLM' TO GLM ELSE ERRMSG = 'CANNOT OPEN GLM FILE'
+OPEN 'COA' TO COA ELSE ERRMSG = 'CANNOT OPEN COA FILE'
+OPEN 'SQV' TO SQV ELSE ERRMSG = 'CANNOT OPEN SQV FILE'
+OPEN 'MANUAL.INVOICE' TO MANUAL.INVOICE ELSE ERRMSG = 'CANNOT OPEN MANUAL.INVOICE FILE'
+OPEN 'INVOICE' TO INVOICE ELSE ERRMSG = 'CANNOT OPEN INVOICE FILE'
+IF ERRMSG THEN
+  CALL RBO_ERROR_SUB(ERRMSG)
+  RETURN
+END
+
+* Get properties
+STATUS = RBO.getProperty('','ID',ID)
+STATUS = RBO.getProperty('','ACCT',ACCT)
+STATUS = RBO.getProperty('','GLM_LineItems',LINE.ID)
+*STATUS = RBO.getProperty('','GLM_LineIndex',DPTR) ; * LINE Number
+
+LINE.ID = RAISE(LINE.ID)
+
+* Get CONO
+CONO = ID[1,3]
+MATREAD COMP.REC FROM COMPANY, CONO ELSE
+  ERRMSG = 'Invalid Company ID (':CONO:').'
+  CALL RBO_ERROR_SUB(ERRMSG); RETURN
+END
+
+* Get Acct
+MATREAD COA.REC FROM COA, CONO : ACCT ELSE
+  ERRMSG = 'Cannot locate account - ' : ACCT CO.ACCT.MASK
+  CALL RBO_ERROR_SUB(ERRMSG); RETURN
+END
+
+* Check detail level
+IF COA.DETAIL # 'D' THEN
+  ERRMSG = 'Cannot select detail for an account with detail level other than "D".'
+  CALL RBO_ERROR_SUB(ERRMSG); RETURN
+END
+*MATREAD GLM.REC FROM GLM, CONO : LINE.ID<DPTR> ELSE MAT GLM.REC = ''
+MATREAD GLM.REC FROM GLM, CONO : LINE.ID ELSE MAT GLM.REC = ''
+BEGIN CASE
+  CASE GLM.SRC = "VR" ;* VOUCHER DETAILS
+    VCH.AMT = GLM.AMT
+    SQV.ID = GLM.DESC[1,6]
+    ARGS = CONO:SQV.ID
+    ARGS<1,2> = GLM.AMT
+    STATUS = RBO.setProperty('','InquiryRBO','GLADI_VR')
+    STATUS = RBO.setProperty('','InquiryRBOArgs',ARGS)
+    ;* CALL VOUCHER.DET.INQ(SQV.ID,VCH.AMT)
+  CASE GLM.SRC = "CD" ;* DEBIT VENDOR INQUIRY AND INDIVIDUAL VOUCHER DETAILS
+    CHKNO = TRIM(FIELD(GLM.DESC,"-",1))
+    CHKDATE = ICONV(FIELD(GLM.DESC,"-",2)[12,8],"D2/")
+    VCH.NO = FIELD(GLM.DESC,"-",2)[1,6]
+    MATREAD SQV.REC FROM SQV,CONO:VCH.NO ELSE MAT SQV.REC = ''
+    FND = 1
+    LOCATE CHKNO IN SQV.CHK.NO<1>,1 SETTING PTR ELSE FND = 0
+    IF FND = 1 THEN ACCT = SQV.DISB.ACCT<1,PTR>
+    MCD.ID = "A":ACCT:CHKDATE:CHKNO
+    ARGS = CONO:MCD.ID
+    ARGS<1,2> = CHKNO
+    *ARGS<1,3> = ACCT.NO
+    ARGS<1,3> = ACCT
+    ARGS<1,4> = COA.DESC
+    STATUS = RBO.setProperty('','InquiryRBO','GLADI_CD')
+    STATUS = RBO.setProperty('','InquiryRBOArgs',ARGS)
+    ;* CALL APS.CHECK.DET.INQ(MCD.ID,CHKNO,ACCT.NO,GL.DESC)
+  CASE GLM.SRC = "CR";* CREDIT INQUIRY AND INDIVIDUAL INVOICE DETAILS
+    CHKNO = TRIM(FIELD(GLM.DESC,"-",1))
+    CHKDATE = TRIM(FIELD(FIELD(GLM.DESC,"-",2)," ",2))
+    CHKDATE=GLM.DESC[27,8]
+    CHKDATE = ICONV(CHKDATE,"D2/")
+    INVNO = FIELD(FIELD(GLM.DESC,"-",2)," ",1)
+    LINV = LEN(INVNO)
+    IF INVNO[LINV-1,2] = "AC" THEN
+      ERRMSG = "No invoice to display for ON ACCT cash receipt."
+      CALL RBO_ERROR_SUB(ERRMSG); RETURN
+    END ELSE
+      IF INVNO[LINV-1,2] # "MI" THEN
+        MATREAD IVC.REC FROM INVOICE,CONO:INVNO ELSE MAT IVC.REC = ''
+        CUSTNO = IVC.CUST.NO
+      END ELSE
+        MATREAD MIV.REC FROM MANUAL.INVOICE,CONO:INVNO ELSE MAT MIV.REC = ''
+        CUSTNO = MIV.CUST.NO
+      END
+      CHR.ID = CUSTNO:"!":CHKDATE:"!":CHKNO:"!"
+      ARGS = CONO:CHR.ID
+      ARGS<1,2> = CHKNO
+      ARGS<1,3> = ACCT
+      *ARGS<1,3> = ACCT.NO
+      ARGS<1,4> = COA.DESC
+      STATUS = RBO.setProperty('','InquiryRBO','GLADI_CR')
+      STATUS = RBO.setProperty('','InquiryRBOArgs',ARGS)
+      ;* CALL ARS.CHECK.DET.INQ(CHR.ID,CHKNO,ACCT.NO,GL.DESC)
+    END
+  CASE GLM.SRC = "SJ" ;* ?????????????????
+    INV.ID = TRIM(FIELD(GLM.DESC,"-",1))
+    ARGS = CONO:INV.ID
+    STATUS = RBO.setProperty('','InquiryRBO','GLADI_SJ')
+    STATUS = RBO.setProperty('','InquiryRBOArgs',ARGS)
+    ;* CALL INVOICE.INQ(INV.ID)
+  CASE GLM.SRC = "MJ" ;* INDIVIDUAL INVOICE INQUIRY
+    MIV.ID = TRIM(FIELD(GLM.DESC,"-",1))
+    ARGS = CONO:MIV.ID
+    STATUS = RBO.setProperty('','InquiryRBO','GLADI_MJ')
+    STATUS = RBO.setProperty('','InquiryRBOArgs',ARGS)
+    ;* CALL MANUAL.INV.INQ(MIV.ID)
+END CASE
+
+* End of method code
+RETURN
+

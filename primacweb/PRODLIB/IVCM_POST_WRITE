@@ -1,0 +1,114 @@
+SUBROUTINE IVCM_POST_WRITE
+********************************************************************************
+*   Program name :- IVCM_POST_WRITE
+*   Created:- 9/18/2003
+*------------------------------------------------------------------------------*
+*
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+
+$INCLUDE WWINSERT RBO.H
+$INCLUDE JCS.CPYLIB DAILY.INVOICE
+$INCLUDE JCS.CPYLIB JOB
+$INCLUDE JCS.CPYLIB INVOICE
+$INCLUDE PMC.CPYLIB COMPANY
+$INCLUDE PMC.CPYLIB VOID.INVOICES
+$INCLUDE CPYLIB CHAR
+
+OPEN '','CONTROL' TO CONTROL ELSE ERRMSG='CONTROL FILE IS MISSING'; GOTO 99999
+OPEN "","JOB" TO JOB ELSE ERRMSG="JOB FILE IS MISSING"; GOTO 99999
+OPEN "","COMPANY" TO COMPANY ELSE ERRMSG="COMPANY FILE IS MISSING"; GOTO 99999
+OPEN "","DAILY.INVOICE" TO DAILY.INVOICE ELSE ERRMSG="DAILY.INVOICE FILE IS MISSING"; GOTO 99999
+OPEN "","INVOICE" TO INVOICE ELSE ERRMSG="INVOICE FILE IS MISSING"; GOTO 99999
+OPEN "","VOID.INVOICES" TO VOID.INVOICES ELSE ERRMSG="VOID.INVOICES FILE IS MISSING"; GOTO 99999
+
+IVC.NO = ''
+IVC_NEW_NO = ''
+JOB_NO = ''
+MENU = ''
+
+STATUS=RBO.getProperty('','PMCProperty',PMCProperty)
+CONO = PMCProperty<1,4>
+STATUS = RBO.getProperty('','IVC_NEW_NO',IVC_NEW_NO) ;* in case of N collect from the hidden field of Page
+STATUS = RBO.getProperty('','JOB_NO',JOB_NO)
+STATUS = RBO.getProperty('','IVC_NO',IVC.NO) ;* in case of New Entry "N" else INVoice no
+STATUS = RBO.getProperty('','IVC_MENU',MENU);* CREDIT or DEBIT or PREBILL
+STATUS = RBO.getProperty('','IVC_TERMS',TERMS)
+STATUS = RBO.getProperty('','DI_CHG_JOB',IVC.CHG.JOB)
+
+MATREAD COMP.REC FROM COMPANY, CONO ELSE
+      ERRMSG = "Invalid Company ID (":CONO:")"
+      GOTO 99999
+END
+
+OPEN "","OPEN.RECV" TO OPEN.RECV ELSE
+	ERRMSG="OPEN.RECV FILE IS MISSING"
+	GOTO 99999
+END
+
+         IF IVC.NO="N" THEN
+550         READU  IVC.NO FROM CONTROL, CONO:"NEXT.INVOICE.NO" ELSE IVC.NO=1
+            N.IVC.NO= IVC.NO + 1
+            IVC.NO=STR("0",6-LEN(IVC.NO)):IVC.NO
+            WRITE N.IVC.NO ON CONTROL, CONO:"NEXT.INVOICE.NO"
+            
+            BEGIN CASE
+               CASE MENU="CREDIT"
+                  IVC.NO=IVC.NO:"CM"
+               CASE MENU="DEBIT"
+                  IVC.NO=IVC.NO:"DM"
+               CASE MENU="PREBILL"
+                  IVC.NO=IVC.NO:"PB"
+		 CASE MENU="N"
+                  IVC.NO=IVC.NO
+            END CASE
+
+            READ REC FROM DAILY.INVOICE,CONO:IVC.NO ELSE GOTO 560
+            GOTO 550
+560         READ REC FROM INVOICE,CONO:IVC.NO ELSE GOTO 565
+            GOTO 550
+565         READ REC FROM VOID.INVOICES,CONO:IVC.NO ELSE GOTO 570
+            GOTO 550
+570         IF  CO.ARS="Y" THEN
+               READ REC FROM OPEN.RECV,CONO:IVC.NO ELSE GOTO 580
+               GOTO 550
+580         END
+         END
+*****
+*Added to update the InvoiceNumber in job file	
+
+	MATREAD JOB.REC FROM JOB, CONO:JOB_NO ELSE MAT JOB.REC = ''
+	FOR X = 1 TO DCOUNT(IVC.CHG.JOB,@VM)
+*         IF IVC.CHG.JOB<1,X> # '' THEN IVC.CHG.JOB<1,X> = JOB_NO
+       NEXT X
+*****
+	  JCNT	= COUNT(IVC.CHG.JOB,@VM) + (IVC.CHG.JOB # "")
+
+         FOR J=1 TO JCNT
+            IF IVC.CHG.JOB<1,J> # "" THEN
+               MATREADU JOB.REC FROM JOB, CONO:IVC.CHG.JOB<1,J> ELSE
+                  RELEASE JOB, IVC.CHG.JOB<1,J>
+                  ERRMSG="CANNOT LOCATE JOB RECORD - ":IVC.CHG.JOB<1,J>
+                  GOTO 99999
+               END
+               LOCATE IVC.NO IN JOB.INV.NO<1>,1 SETTING PTR ELSE
+                  PTR=COUNT(JOB.INV.NO,@VM) + (JOB.INV.NO # "") + 1
+                  JOB.INV.NO<1,PTR>=IVC.NO
+               END
+              MATWRITE JOB.REC ON JOB, CONO:IVC.CHG.JOB<1,J>
+            END
+590      NEXT J
+		MATWRITE IVC.REC ON DAILY.INVOICE, CONO:IVC.NO
+RETURN
+
+99999*
+STATUS = RBO.setProperty('','ServerStatus',1)
+STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+
+RETURN

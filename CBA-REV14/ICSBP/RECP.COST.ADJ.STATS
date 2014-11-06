@@ -1,0 +1,129 @@
+;*
+;* Adjust cost in VEND... stats files files
+;*
+ERRMSG=''
+VSTAT.KEY = CONO : INVR.VEND :"!R"
+VPS.KEY = VSTAT.KEY :"!": INVR.PO
+*T28779 v
+IF PO.FOUND THEN
+  VPDS.KEY = VPS.KEY :"!": PROD : "!": WHSE:"@":PO.PROD.SEQ<1,INVR.PO.LN>
+END ELSE
+  VPDS.KEY = VPS.KEY :"!": PROD : "!": WHSE
+END
+*T28779 ^
+MATREADU VPDS.REC FROM VEND.PROD.STATS, VPDS.KEY THEN
+  VPTR = 1
+  LOOP
+    LOCATE INVR.ENT.DATE IN VPDS.REC.FI.DATE<1>,VPTR SETTING D.FND ELSE D.FND =0
+    BEGIN CASE
+      CASE D.FND = 0
+        VPTR = 0
+      CASE OLD.UN.COST # VPDS.REC.UN.COST<1,D.FND>
+        VPTR = D.FND + 1
+      CASE 1
+        VPTR = 0
+    END CASE
+  WHILE VPTR DO
+  REPEAT
+  IF D.FND = 0 THEN
+    RELEASE VEND.PROD.STATS, VPDS.KEY
+    ERRMSG = "Vend.Prod.Stats was not updated"
+  END ELSE
+    MATREADU VPS.REC FROM VEND.PO.STATS, VPS.KEY THEN
+      VPTR = 1
+      LOOP
+        LOCATE PROD IN VPS.PROD<1>,VPTR SETTING P.FND ELSE P.FND = 0
+        BEGIN CASE
+          CASE P.FND = 0
+            VPTR = 0
+*T28779   CASE WHSE # VPS.WHSE<1,P.FND>
+          CASE WHSE:"@":PO.PROD.SEQ<1,INVR.PO.LN> # VPS.WHSE<1,P.FND>
+            VPTR = P.FND + 1
+          CASE 1
+            VPTR = 0
+        END CASE
+      WHILE VPTR DO
+      REPEAT
+      IF P.FND = 0 THEN
+        RELEASE VEND.PO.STATS, VPS.KEY
+        RELEASE VEND.PROD.STATS, VPDS.KEY
+        ERRMSG = "Vend.Po.Stats was not updated"
+      END ELSE
+        MATREADU VSTAT.REC FROM VEND.STATS, VSTAT.KEY ELSE
+          MAT VSTAT.REC = ""
+        END
+        LOCATE INVR.PO IN VSTAT.PO<1>,1 SETTING POFND ELSE POFND = 0
+        ;*
+        ;*--- update rec cost
+        ;*
+        STAT.AMT=CALC.EXT.COST(AVAIL,INVR.UNIT.COST,INV.COST.WT,.5)
+        VPS.REC.AMT<1,P.FND>-=STAT.AMT
+        VPS.REC.QTY<1,P.FND>-=INT(AVAIL/10)
+        IF POFND THEN
+          VSTAT.PO.RECV<1,POFND>-=STAT.AMT
+          IF VSTAT.PO.RECV<1,POFND> < 0 THEN VSTAT.PO.RECV<1,POFND> = 0
+        END
+        IF VPS.REC.QTY<1,P.FND> < 0 THEN
+          VPS.REC.QTY<1,P.FND> = 0
+          VPS.REC.AMT<1,P.FND> = 0
+        END ELSE
+          IF VPS.REC.AMT<1,P.FND> < 0 THEN VPS.REC.AMT<1,P.FND> = 0
+        END
+        VPDS.REC.QTY<1,D.FND>-=INT(AVAIL/10)
+        IF VPDS.REC.QTY<1,D.FND> < 0 THEN VPDS.REC.QTY<1,D.FND> = 0
+        ;*
+        ;*--- update adj cost
+        ;*
+        VPDS.UPDATE = 0
+        VPDS.CNT=DCOUNT(VPDS.REC.FI.DATE,VM)
+        VPTR = 1
+        LOOP
+          LOCATE INVR.ENT.DATE IN VPDS.REC.FI.DATE<1>,VPTR SETTING D.FND ELSE VPTR = 0 ;*task 14133
+          BEGIN CASE
+            CASE VPTR = 0
+              IF VPDS.CNT GE D.FND THEN
+                VPTR = D.FND + 1 
+              END ELSE
+                VPTR = 0
+                IF VPDS.UPDATE THEN
+                  D.FND = SAV.D.FND
+                END
+              END
+            CASE OLD.UN.COST # VPDS.REC.UN.COST<1,D.FND>
+              VPTR = D.FND + 1
+            CASE 1
+              VPDS.REC.UN.COST<1,D.FND> = NEW.UN.COST
+              VPDS.UPDATE = 1
+              VPTR = VPTR + 1
+              SAV.D.FND = D.FND
+          END CASE
+        WHILE VPTR DO
+        REPEAT
+        IF NOT(VPDS.UPDATE) THEN
+          VPDS.REC.DATE<1,-1> = INVR.ENT.DATE
+          VPDS.REC.FI.DATE<1,-1> = INVR.ENT.DATE
+          VPDS.REC.QTY<1,-1> = 0
+          VPDS.REC.UN.COST<1,-1> = NEW.UN.COST
+        END
+        VPDS.REC.QTY<1,D.FND>+=INT(AVAIL/10)
+        STAT.AMT=CALC.EXT.COST(AVAIL,NEW.UN.COST,INV.COST.WT,.5)
+        VPS.REC.AMT<1,P.FND>+=STAT.AMT
+        VPS.REC.QTY<1,P.FND>+=INT(AVAIL/10)
+        IF POFND THEN
+          VSTAT.PO.RECV<1,POFND>+=STAT.AMT
+          MATWRITE VSTAT.REC ON VEND.STATS, VSTAT.KEY
+        END ELSE
+          RELEASE VEND.STATS, VSTAT.KEY
+        END
+        MATWRITE VPDS.REC ON VEND.PROD.STATS, VPDS.KEY
+        MATWRITE VPS.REC ON VEND.PO.STATS, VPS.KEY
+      END
+    END ELSE
+      RELEASE VEND.PO.STATS, VPS.KEY
+      RELEASE VEND.PROD.STATS, VPDS.KEY
+      ERRMSG = "Vend.Po.Stats was not updated"
+    END
+  END
+END ELSE
+  RELEASE VEND.PROD.STATS, VPDS.KEY
+END

@@ -1,0 +1,872 @@
+      SUBROUTINE PEN.JOB.SCHED.BCK.SUB(CONO,ACTION,BLK,ERRMSG,MAT ALL.REC,MAT HOLD.REC,XDATE,SFT,MLT.CNT,MAT EDIT.COM,CK.DATE,TEMP.DATE)
+*********************************************************************
+* REVISION - [08.1]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM   - PRIMAC
+* SOURCE   - PSSBP
+* PROGRAM  - PEN.JOB.SCHED.BCK.SUB
+* AUTHOR   - WALID YAMOUT, COMPUTER BUSINESS ASSOCIATES
+* DATE     - 01/11/89
+* DESCRIPTION
+* This program will get all the dates, equipments and shifts for a
+* continuous scheduling line item. (PENDING BACKWARD SCHEDULING).
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>CPYLIB>SCOMMON1
+*COPY>PSS.CPYLIB>COM.PSS.FILE.VARS
+*COPY>PSS.CPYLIB>COM.CCTR.SCHED
+*COPY>PSS.CPYLIB>COM.JOB.SCHED
+*COPY>PSS.CPYLIB>CCTR.SCHED
+*COPY>PSS.CPYLIB>PSS.FILE.VARS
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>SCREEN.COM
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+*
+*---- SET UP SYSCOM
+*
+      SYS.TYPE = 1
+      CALL SI_SYSCOM(MAT SYSCOM.REC)
+*
+*---- LINE ITEM HOLD AREA
+*
+      DIM HOLD.REC(15)
+      EQU DEPT         TO HOLD.REC(1)
+      EQU CCTR         TO HOLD.REC(2)
+      EQU H.CODE       TO HOLD.REC(3)
+      EQU H.SHIFT      TO HOLD.REC(4)
+      EQU H.EQUIP      TO HOLD.REC(5)
+      EQU H.LOAD       TO HOLD.REC(6)
+      EQU H.DATE       TO HOLD.REC(7)
+      EQU H.PO         TO HOLD.REC(8)
+      EQU H.DC         TO HOLD.REC(9)
+      EQU H.DAYS       TO HOLD.REC(10)
+      EQU H.CONT.SCH   TO HOLD.REC(11)
+      EQU H.SAME.EQUIP TO HOLD.REC(12)
+      EQU CCTR.HRS     TO HOLD.REC(13)
+*
+*---- DEFINE DIMENSIONED VARIABLES
+*
+      DIM ALL.REC(5)
+      EQU ALL.DATE TO ALL.REC(1)      ;* (MA)        date
+      EQU ALL.EQP  TO ALL.REC(2)      ;* (MA,MV)     date,resrc
+      EQU ALL.SFT  TO ALL.REC(3)      ;* (MA,MV,MSV) date,resrc,shift
+      EQU ALL.HRS  TO ALL.REC(4)      ;* (MA,MV,MSV) date,resrc,shift
+*
+*---- INITIALIZATION
+*
+      IF ACTION = "W" THEN WIN.MODE = 1 ELSE WIN.MODE = 0
+      ACTION = ""
+      MAT ALL.REC = ""
+      SDONE = 0
+      MLT = 0
+      MPTR = 0
+      XPTR = 0
+      SFND = 0
+      XEQP = ""                       ;* (MA) resource
+      XHRS = ""                       ;* (MA) resource hrs
+      XFLG = ""                       ;* (MA) resource flag
+*                                          "N" = non-contiguous
+      XCMP = ""                       ;* (MA) resource flag
+*                                          "C" = complete
+      THRS = 0
+      READ TP.DIV FROM PSS.LOCK, @TTY ELSE TP.DIV = ""
+*
+*---- MAIN PROCESSING
+*
+      BEGIN CASE
+*     CASE H.LOAD = "Y" AND H.SAME.EQUIP = "Y"
+         CASE H.LOAD = "Y"
+            GOSUB 11000
+         CASE H.CONT.SCH = "Y" AND H.EQUIP # ""
+            GOSUB 13000
+         CASE H.CONT.SCH = "Y" AND H.SAME.EQUIP = "Y"
+            GOSUB 14000
+         CASE H.CONT.SCH = "Y" AND H.SAME.EQUIP = "S"
+            GOSUB 15000
+         CASE H.CONT.SCH = "Y" AND H.SAME.EQUIP = "D"
+            GOSUB 16000
+         CASE 1
+            BLK = 1
+            ERRMSG = "(GEN.JOB.SCHED.BCK.SUB) Invalid parameters"
+      END CASE
+      IF BLK OR XDATE < CK.DATE THEN
+*
+*---- (ERROR) RELEASE ALL LOCKED RECORDS
+*
+         DCNT = DCOUNT(ALL.DATE,AM)
+         FOR DD = DCNT TO 1 STEP - 1
+            GOSUB 31000
+         NEXT DD
+         MAT ALL.REC = ""
+      END
+      GOTO 99999
+*
+*---------------------*
+*--- SUBROUTINES   ---*
+*---------------------*
+*
+*--- OVERLOAD AND USE SAME RESOURCE
+*
+11000 *
+*DEBUG.MSG="11000";GOSUB 89500
+*
+*---- BUILD ALL.REC
+*
+      IF H.SHIFT = "" THEN SFT2 = 1 ELSE SFT2 = H.SHIFT
+      IF H.EQUIP = "" THEN MLT1 = 1 ELSE MLT1 = H.EQUIP
+      LOOP
+      UNTIL SDONE OR BLK OR XDATE < CK.DATE DO
+         GOSUB 20000
+         IF BLK THEN GOTO 11589
+         FOR SS = SFT TO SFT2 STEP -1 UNTIL SDONE
+            IF PCCS.AVL.SHR<1,SS> > 0 THEN
+               MLT.CNT = PCCS.MULT<1,SS>
+               IF MLT.CNT < 1 THEN MLT.CNT = 1
+               IF H.EQUIP # "" AND H.EQUIP < MLT.CNT THEN MLT.CNT = H.EQUIP
+               FOR MLT = MLT1 TO MLT.CNT
+                  LOCATE MLT IN ALL.EQP<DD>,1 SETTING EE ELSE NULL
+                  LOCATE MLT IN XEQP,1 SETTING EFND ELSE
+                     XEQP<EFND> = MLT
+                  END
+                  SCNT = DCOUNT(ALL.SFT<DD,EE>,SVM) + 1
+                  RHRS = PCCS.REM.SM.HRS<1,SS,MLT>
+                  ALL.DATE<DD> = XDATE
+                  ALL.EQP<DD,EE> = MLT
+                  ALL.SFT<DD,EE,SCNT> = SS
+                  ALL.HRS<DD,EE,SCNT> = RHRS
+*                 XEQP<EFND> = MLT
+                  XHRS<EFND> = XHRS<EFND> + RHRS
+                  SDONE = MLT
+*DEBUG.MSG="      SS=":SS:", MLT=":MLT;GOSUB 89500;GOSUB 89000
+               NEXT MLT
+            END
+*DEBUG.MSG="    SS=":SS;GOSUB 89500;GOSUB 89000
+         NEXT SS
+         IF SDONE THEN
+            BEST.EQP = 0
+            BEST.HRS = 0
+            MCNT = DCOUNT(ALL.EQP<DD>,VM)
+            FOR MPTR = 1 TO MCNT
+               CURR.EQP = ALL.EQP<DD,MPTR>
+               CURR.HRS = SUM(ALL.HRS<DD,MPTR>)
+               BEGIN CASE
+                  CASE BEST.EQP = 0
+                     BEST.EQP = CURR.EQP
+                     BEST.HRS = CURR.HRS
+                  CASE BEST.HRS >= CCTR.HRS
+                     IF CURR.HRS >= CCTR.HRS AND CURR.HRS < BEST.HRS THEN
+                        BEST.EQP = CURR.EQP
+                        BEST.HRS = CURR.HRS
+                     END
+                  CASE CURR.HRS > BEST.HRS
+                     BEST.EQP = CURR.EQP
+                     BEST.HRS = CURR.HRS
+               END CASE
+            NEXT MPTR
+            IF BEST.EQP > 0 THEN
+               DD1=1;DD2=DD;EQP=BEST.EQP;SS1=1;SS2=3;GOSUB 19200
+               ALL.HRS<DD,1> = CCTR.HRS
+            END
+*DEBUG.MSG="  XDATE=":OCONV(XDATE,"D2/");GOSUB 89500;GOSUB 89000
+         END ELSE
+            XDATE = XDATE - 1
+            IF H.SHIFT = "" THEN SFT = 3 ELSE SFT = H.SHIFT
+            GOSUB 80000
+         END
+11589 REPEAT
+      RETURN
+*
+*-----------------------------------------------*
+*   SCHEDULE CONTINUOUS ON SPECIFIED RESOURCE   *
+*-----------------------------------------------*
+*
+13000 *
+*DEBUG.MSG="13000";GOSUB 89500
+*
+*---- BUILD ALL.REC
+*
+      MLT = H.EQUIP
+      LOOP
+      UNTIL SDONE OR BLK OR XDATE < CK.DATE DO
+         GOSUB 20000
+         IF BLK THEN GOTO 13589
+         FOR SS = SFT TO 1 STEP -1 UNTIL SDONE
+            IF PCCS.AVL.SHR<1,SS> > 0 AND MLT <= PCCS.MULT<1,SS> THEN
+               EE = 1
+               EFND = 1
+               XEQP = MLT
+               SCNT = DCOUNT(ALL.SFT<DD,EE>,SVM) + 1
+               RHRS = PCCS.REM.SM.HRS<1,SS,MLT>
+               BEGIN CASE
+                  CASE RHRS <= 0
+                     DD1=1;DD2=DD;EQP=MLT;SS1=1;SS2=SS-1;GOSUB 19100
+                  CASE RHRS + XHRS<EFND> >= CCTR.HRS    ;* REQUIRED HOURS AVAILABLE
+                     DIFF.HRS = CCTR.HRS - XHRS<EFND>
+                     ALL.DATE<DD> = XDATE
+                     ALL.EQP<DD,EE> = MLT
+                     ALL.SFT<DD,EE,SCNT> = SS
+                     ALL.HRS<DD,EE,SCNT> = DIFF.HRS
+*                 XEQP<EFND> = MLT
+                     XHRS<EFND> = XHRS<EFND> + DIFF.HRS
+                     SDONE = MLT
+                  CASE XHRS<EFND>+0 = 0 OR RHRS = PCCS.AVL.SHR<1,SS>    ;* FIRST OR AVAILABLE FOR ENTIRE SHIFT
+                     ALL.DATE<DD> = XDATE
+                     ALL.EQP<DD,EE> = MLT
+                     ALL.SFT<DD,EE,SCNT> = SS
+                     ALL.HRS<DD,EE,SCNT> = RHRS
+*                 XEQP<EFND> = MLT
+                     XHRS<EFND> = XHRS<EFND> + RHRS
+                  CASE 1                ;* NON-CONTINUOUS RESOURCE
+                     ALL.DATE<DD> = XDATE
+                     ALL.EQP<DD,EE> = MLT
+                     ALL.SFT<DD,EE,SCNT> = SS
+                     ALL.HRS<DD,EE,SCNT> = RHRS
+                     XHRS<EFND> = RHRS
+                     DD1=1;DD2=DD;EQP=MLT;SS1=1;SS2=SS-1;GOSUB 19100
+               END CASE
+            END
+*DEBUG.MSG="    SS=":SS;GOSUB 89500;GOSUB 89000
+         NEXT SS
+*DEBUG.MSG="  XDATE=":OCONV(XDATE,"D2/");GOSUB 89500;GOSUB 89000
+         IF SDONE = 0 THEN
+            XDATE = XDATE - 1
+            SFT = 3
+            GOSUB 80000
+         END
+13589 REPEAT
+      RETURN
+*
+*------------------------------------------*
+*   SCHEDULE CONTINUOUS ON SAME RESOURCE   *
+*------------------------------------------*
+*
+14000 *
+*DEBUG.MSG="14000";GOSUB 89500
+*
+*---- BUILD ALL.REC
+*
+      LOOP
+      UNTIL SDONE OR BLK OR XDATE < CK.DATE DO
+         GOSUB 20000
+         IF BLK THEN GOTO 14589
+         FOR SS = SFT TO 1 STEP -1 UNTIL SDONE
+            IF PCCS.AVL.SHR<1,SS> > 0 THEN
+               MLT.CNT = PCCS.MULT<1,SS>
+               IF MLT.CNT < 1 THEN MLT.CNT = 1
+               FOR MLT = 1 TO MLT.CNT UNTIL SDONE
+                  LOCATE MLT IN ALL.EQP<DD>,1 SETTING EE ELSE NULL
+                  LOCATE MLT IN XEQP,1 SETTING EFND ELSE
+                     XEQP<EFND> = MLT
+                  END
+                  SCNT = DCOUNT(ALL.SFT<DD,EE>,SVM) + 1
+                  RHRS = PCCS.REM.SM.HRS<1,SS,MLT>
+                  BEGIN CASE
+                     CASE RHRS <= 0
+                        DD1=1;DD2=DD;EQP=MLT;SS1=1;SS2=SS-1;GOSUB 19100
+                     CASE RHRS + XHRS<EFND> >= CCTR.HRS    ;* REQUIRED HOURS AVAILABLE
+                        DIFF.HRS = CCTR.HRS - XHRS<EFND>
+                        ALL.DATE<DD> = XDATE
+                        ALL.EQP<DD,EE> = MLT
+                        ALL.SFT<DD,EE,SCNT> = SS
+                        ALL.HRS<DD,EE,SCNT> = DIFF.HRS
+*                    XEQP<EFND> = MLT
+                        XHRS<EFND> = XHRS<EFND> + DIFF.HRS
+                        SDONE = MLT
+                        DD1=1;DD2=DD;EQP=MLT;SS1=1;SS2=3;GOSUB 19200
+                     CASE XHRS<EFND>+0 = 0 OR RHRS = PCCS.AVL.SHR<1,SS>    ;* FIRST OR AVAILABLE FOR ENTIRE SHIFT
+                        ALL.DATE<DD> = XDATE
+                        ALL.EQP<DD,EE> = MLT
+                        ALL.SFT<DD,EE,SCNT> = SS
+                        ALL.HRS<DD,EE,SCNT> = RHRS
+*                    XEQP<EFND> = MLT
+                        XHRS<EFND> = XHRS<EFND> + RHRS
+                     CASE 1                ;* NON-CONTINUOUS RESOURCE
+                        ALL.DATE<DD> = XDATE
+                        ALL.EQP<DD,EE> = MLT
+                        ALL.SFT<DD,EE,SCNT> = SS
+                        ALL.HRS<DD,EE,SCNT> = RHRS
+                        XHRS<EFND> = XHRS<EFND> + RHRS
+                        DD1=1;DD2=DD;EQP=MLT;SS1=1;SS2=SS-1;GOSUB 19100
+                  END CASE
+*DEBUG.MSG="      SS=":SS:", MLT=":MLT;GOSUB 89500;GOSUB 89000
+               NEXT MLT
+            END
+*DEBUG.MSG="    SS=":SS;GOSUB 89500;GOSUB 89000
+         NEXT SS
+*DEBUG.MSG="  XDATE=":OCONV(XDATE,"D2/");GOSUB 89500;GOSUB 89000
+         IF SDONE = 0 THEN
+            XDATE = XDATE - 1
+            SFT = 3
+            GOSUB 80000
+         END
+14589 REPEAT
+      RETURN
+*
+*-----------------------------------------------------------*
+*   SCHEDULE CONTINUOUS ALLOWING RESOURCE CHANGE BY SHIFT   *
+*-----------------------------------------------------------*
+*
+15000 *
+*DEBUG.MSG="15000";GOSUB 89500
+*
+*---- BUILD ALL.REC
+*
+      PREV.EQP = 0
+      LOOP
+      UNTIL SDONE OR BLK OR XDATE < CK.DATE DO
+         GOSUB 20000
+         IF BLK THEN GOTO 15589
+         FOR SS = SFT TO 1 STEP -1 UNTIL SDONE
+            IF PCCS.AVL.SHR<1,SS> > 0 THEN
+               MLT.CNT = PCCS.MULT<1,SS>
+               IF MLT.CNT < 1 THEN MLT.CNT = 1
+               FOR MLT = 1 TO MLT.CNT
+                  LOCATE MLT IN ALL.EQP<DD>,1 SETTING EE ELSE NULL
+                  LOCATE MLT IN XEQP,1 SETTING EFND ELSE
+                     XEQP<EFND> = MLT
+                  END
+                  SCNT = DCOUNT(ALL.SFT<DD,EE>,SVM) + 1
+                  RHRS = PCCS.REM.SM.HRS<1,SS,MLT>
+*                 DHRS = SUM(ALL.HRS<DD,EE>)
+                  DHRS = 0
+                  BEGIN CASE
+*                 CASE XCMP<EFND> = "C"
+*                    NULL
+*                 CASE RHRS <= 0 AND DHRS > 0
+*                    XFLG<EFND> = "N"
+*                    DD1=DD;DD2=DD;EQP=MLT;SS1=1;SS2=SS-1;GOSUB 19100
+                     CASE RHRS <= 0
+                        XFLG<EFND> = "N"
+                     CASE XFLG<EFND> = "" AND (RHRS + THRS + DHRS) >= CCTR.HRS    ;* REQUIRED HOURS AVAILABLE
+                        DIFF.HRS = CCTR.HRS - THRS - DHRS
+                        ALL.DATE<DD> = XDATE
+                        ALL.EQP<DD,EE> = MLT
+                        ALL.SFT<DD,EE,SCNT> = SS
+                        ALL.HRS<DD,EE,SCNT> = DIFF.HRS
+*                    XEQP<EFND> = MLT
+                        XHRS<EFND> = XHRS<EFND> + DIFF.HRS
+                        XCMP<EFND> = "C"
+                        SDONE = MLT
+                     CASE XFLG<EFND> = "N" AND (RHRS + DHRS) >= CCTR.HRS    ;* REQUIRED HOURS AVAILABLE
+                        DIFF.HRS = CCTR.HRS - DHRS
+                        ALL.DATE<DD> = XDATE
+                        ALL.EQP<DD,EE> = MLT
+                        ALL.SFT<DD,EE,SCNT> = SS
+                        ALL.HRS<DD,EE,SCNT> = DIFF.HRS
+*                    XEQP<EFND> = MLT
+                        XHRS<EFND> = XHRS<EFND> + DIFF.HRS
+                        XCMP<EFND> = "C"
+                        SDONE = MLT
+                     CASE (THRS = 0 AND DHRS = 0) OR RHRS = PCCS.AVL.SHR<1,SS>    ;* FIRST OR AVAILABLE FOR ENTIRE SHIFT
+                        ALL.DATE<DD> = XDATE
+                        ALL.EQP<DD,EE> = MLT
+                        ALL.SFT<DD,EE,SCNT> = SS
+                        ALL.HRS<DD,EE,SCNT> = RHRS
+*                    XEQP<EFND> = MLT
+                        XHRS<EFND> = XHRS<EFND> + RHRS
+                     CASE 1                ;* NON-CONTIGUOUS RESOURCE
+                        ALL.DATE<DD> = XDATE
+                        ALL.EQP<DD,EE> = MLT
+                        ALL.SFT<DD,EE,SCNT> = SS
+                        ALL.HRS<DD,EE,SCNT> = RHRS
+                        XHRS<EFND> = XHRS<EFND> + RHRS
+                        XFLG<EFND> = "N"
+*                    DD1=DD;DD2=DD;EQP=MLT;SS1=1;SS2=SS-1;GOSUB 19100
+                  END CASE
+*DEBUG.MSG="      SS=":SS:", MLT=":MLT;GOSUB 89500;GOSUB 89000
+               NEXT MLT
+            END
+            XDONE = 1
+            XCNT = DCOUNT(XEQP,AM)
+            FOR XPTR = 1 TO XCNT WHILE XDONE
+               IF XFLG<XPTR> # "N" THEN XDONE = 0
+            NEXT XPTR
+            IF XDONE THEN
+               DD1=1;DD2=DD;EQP=0;SS1=1;SS2=SS-1;GOSUB 19200
+               PREV.EQP = 0
+            END
+            BEST.EQP = 0
+            BEST.HRS = 0
+            BEST.CMP = ""
+            BDONE = 0
+            MCNT = DCOUNT(ALL.EQP<DD>,VM)
+            FOR MPTR = 1 TO MCNT UNTIL BDONE
+               CURR.EQP = ALL.EQP<DD,MPTR>
+               CURR.HRS = SUM(ALL.HRS<DD,MPTR>)
+               LOCATE CURR.EQP IN XEQP,1 SETTING XPTR ELSE NULL
+               CURR.CMP = XCMP<XPTR>
+               BEGIN CASE
+                  CASE CURR.CMP = "C"
+                     BEGIN CASE
+                        CASE CURR.EQP = PREV.EQP
+                           BEST.EQP = CURR.EQP
+                           BEST.HRS = CURR.HRS
+                           BEST.CMP = CURR.CMP
+                           BDONE = 1
+                        CASE BEST.CMP = ""
+                           BEST.EQP = CURR.EQP
+                           BEST.HRS = CURR.HRS
+                           BEST.CMP = CURR.CMP
+                        CASE CURR.HRS < BEST.HRS
+                           BEST.EQP = CURR.EQP
+                           BEST.HRS = CURR.HRS
+                           BEST.CMP = CURR.CMP
+                     END CASE
+                  CASE 1
+                     BEGIN CASE
+                        CASE CURR.HRS > BEST.HRS
+                           BEST.EQP = CURR.EQP
+                           BEST.HRS = CURR.HRS
+                           BEST.CMP = CURR.CMP
+                        CASE CURR.HRS = BEST.HRS AND CURR.EQP = PREV.EQP
+                           BEST.EQP = CURR.EQP
+                           BEST.HRS = CURR.HRS
+                           BEST.CMP = CURR.CMP
+                     END CASE
+               END CASE
+            NEXT MPTR
+            IF BEST.EQP > 0 THEN
+               DD1=DD;DD2=DD;EQP=BEST.EQP;SS1=SS;SS2=SS;GOSUB 19200
+               PREV.EQP = BEST.EQP
+            END
+            THRS = SUM(XHRS)
+            XFLG = ""
+            XCMP = ""
+*DEBUG.MSG="    SS=":SS;GOSUB 89500;GOSUB 89000
+         NEXT SS
+*DEBUG.MSG="  XDATE=":OCONV(XDATE,"D2/");GOSUB 89500;GOSUB 89000
+         IF SDONE = 0 THEN
+            XDATE = XDATE - 1
+            SFT = 3
+            GOSUB 80000
+         END
+15589 REPEAT
+      RETURN
+*
+*---------------------------------------------------------*
+*   SCHEDULE CONTINUOUS ALLOWING RESOURCE CHANGE BY DAY   *
+*---------------------------------------------------------*
+*
+16000 *
+*DEBUG.MSG="16000";GOSUB 89500
+*
+*---- BUILD ALL.REC
+*
+      PREV.EQP = 0
+      LOOP
+      UNTIL SDONE OR BLK OR XDATE < CK.DATE DO
+         GOSUB 20000
+         IF BLK THEN GOTO 16589
+         FOR SS = SFT TO 1 STEP -1
+            IF PCCS.AVL.SHR<1,SS> > 0 THEN
+               MLT.CNT = PCCS.MULT<1,SS>
+               IF MLT.CNT < 1 THEN MLT.CNT = 1
+               FOR MLT = 1 TO MLT.CNT
+                  LOCATE MLT IN ALL.EQP<DD>,1 SETTING EE ELSE NULL
+                  LOCATE MLT IN XEQP,1 SETTING EFND ELSE
+                     XEQP<EFND> = MLT
+                  END
+                  SCNT = DCOUNT(ALL.SFT<DD,EE>,SVM) + 1
+                  RHRS = PCCS.REM.SM.HRS<1,SS,MLT>
+                  DHRS = SUM(ALL.HRS<DD,EE>)
+                  BEGIN CASE
+                     CASE XCMP<EFND> = "C"
+                        NULL
+                     CASE RHRS <= 0 AND DHRS > 0
+                        XFLG<EFND> = "N"
+                        DD1=DD;DD2=DD;EQP=MLT;SS1=1;SS2=SS-1;GOSUB 19100
+                     CASE RHRS <= 0
+                        XFLG<EFND> = "N"
+                     CASE XFLG<EFND> = "" AND (RHRS + THRS + DHRS) >= CCTR.HRS    ;* REQUIRED HOURS AVAILABLE
+                        DIFF.HRS = CCTR.HRS - THRS - DHRS
+                        ALL.DATE<DD> = XDATE
+                        ALL.EQP<DD,EE> = MLT
+                        ALL.SFT<DD,EE,SCNT> = SS
+                        ALL.HRS<DD,EE,SCNT> = DIFF.HRS
+*                    XEQP<EFND> = MLT
+                        XHRS<EFND> = XHRS<EFND> + DIFF.HRS
+                        XCMP<EFND> = "C"
+                        SDONE = MLT
+                     CASE XFLG<EFND> = "N" AND (RHRS + DHRS) >= CCTR.HRS    ;* REQUIRED HOURS AVAILABLE
+                        DIFF.HRS = CCTR.HRS - DHRS
+                        ALL.DATE<DD> = XDATE
+                        ALL.EQP<DD,EE> = MLT
+                        ALL.SFT<DD,EE,SCNT> = SS
+                        ALL.HRS<DD,EE,SCNT> = DIFF.HRS
+*                    XEQP<EFND> = MLT
+                        XHRS<EFND> = XHRS<EFND> + DIFF.HRS
+                        XCMP<EFND> = "C"
+                        SDONE = MLT
+                     CASE (THRS = 0 AND DHRS = 0) OR RHRS = PCCS.AVL.SHR<1,SS>    ;* FIRST OR AVAILABLE FOR ENTIRE SHIFT
+                        ALL.DATE<DD> = XDATE
+                        ALL.EQP<DD,EE> = MLT
+                        ALL.SFT<DD,EE,SCNT> = SS
+                        ALL.HRS<DD,EE,SCNT> = RHRS
+*                    XEQP<EFND> = MLT
+                        XHRS<EFND> = XHRS<EFND> + RHRS
+                     CASE 1                ;* NON-CONTIGUOUS RESOURCE
+                        ALL.DATE<DD> = XDATE
+                        ALL.EQP<DD,EE> = MLT
+                        ALL.SFT<DD,EE,SCNT> = SS
+                        ALL.HRS<DD,EE,SCNT> = RHRS
+                        XHRS<EFND> = XHRS<EFND> + RHRS
+                        XFLG<EFND> = "N"
+                        DD1=DD;DD2=DD;EQP=MLT;SS1=1;SS2=SS-1;GOSUB 19100
+                  END CASE
+*DEBUG.MSG="      SS=":SS:", MLT=":MLT;GOSUB 89500;GOSUB 89000
+               NEXT MLT
+            END
+*DEBUG.MSG="    SS=":SS;GOSUB 89500;GOSUB 89000
+         NEXT SS
+         XDONE = 1
+         XCNT = DCOUNT(XEQP,AM)
+         FOR XPTR = 1 TO XCNT WHILE XDONE
+            IF XFLG<XPTR> # "N" THEN XDONE = 0
+         NEXT XPTR
+         IF XDONE THEN
+            DD1=1;DD2=DD-1;EQP=0;SS1=1;SS2=3;GOSUB 19200
+            PREV.EQP = 0
+         END
+         BEST.EQP = 0
+         BEST.HRS = 0
+         BEST.CMP = ""
+         BDONE = 0
+         MCNT = DCOUNT(ALL.EQP<DD>,VM)
+         FOR MPTR = 1 TO MCNT UNTIL BDONE
+            CURR.EQP = ALL.EQP<DD,MPTR>
+            CURR.HRS = SUM(ALL.HRS<DD,MPTR>)
+            LOCATE CURR.EQP IN XEQP,1 SETTING XPTR ELSE NULL
+            CURR.CMP = XCMP<XPTR>
+            BEGIN CASE
+               CASE CURR.CMP = "C"
+                  BEGIN CASE
+                     CASE CURR.EQP = PREV.EQP
+                        BEST.EQP = CURR.EQP
+                        BEST.HRS = CURR.HRS
+                        BEST.CMP = CURR.CMP
+                        BDONE = 1
+                     CASE BEST.CMP = ""
+                        BEST.EQP = CURR.EQP
+                        BEST.HRS = CURR.HRS
+                        BEST.CMP = CURR.CMP
+                     CASE CURR.HRS < BEST.HRS
+                        BEST.EQP = CURR.EQP
+                        BEST.HRS = CURR.HRS
+                        BEST.CMP = CURR.CMP
+                  END CASE
+               CASE 1
+                  BEGIN CASE
+                     CASE CURR.HRS > BEST.HRS
+                        BEST.EQP = CURR.EQP
+                        BEST.HRS = CURR.HRS
+                        BEST.CMP = CURR.CMP
+                     CASE CURR.HRS = BEST.HRS AND CURR.EQP = PREV.EQP
+                        BEST.EQP = CURR.EQP
+                        BEST.HRS = CURR.HRS
+                        BEST.CMP = CURR.CMP
+                  END CASE
+            END CASE
+         NEXT MPTR
+         IF BEST.EQP > 0 THEN
+            DD1=DD;DD2=DD;EQP=BEST.EQP;SS1=1;SS2=3;GOSUB 19200
+            PREV.EQP = BEST.EQP
+         END
+         THRS = SUM(XHRS)
+*DEBUG.MSG="  XDATE=":OCONV(XDATE,"D2/");GOSUB 89500;GOSUB 89000
+         XFLG = ""
+         XCMP = ""
+         IF SDONE = 0 THEN
+            XDATE = XDATE - 1
+            SFT = 3
+            GOSUB 80000
+         END
+16589 REPEAT
+      RETURN
+*
+*---- DELETE USE OF SPECIFIED DAYS, RESOURCES AND SHIFTS
+*
+*    DD1 = Earliest day to check
+*    DD2 = Latest day to check
+*    EQP = Resource to delete
+*    SS1 = Earliest shift to delete
+*    SS2 = Latest shift to delete
+*
+19100 *
+      FOR DPTR = DD2 TO DD1 STEP -1
+         LOCATE EQP IN ALL.EQP<DPTR>,1 SETTING EPTR THEN
+            LOCATE EQP IN XEQP,1 SETTING XPTR THEN
+               IF SS1 = 1 AND SS2 = 3 THEN
+                  XHRS<XPTR> = XHRS<XPTR>-SUM(ALL.HRS<DPTR,EPTR>)
+                  ALL.EQP = DELETE(ALL.EQP,DPTR,EPTR,0)
+                  ALL.SFT = DELETE(ALL.SFT,DPTR,EPTR,0)
+                  ALL.HRS = DELETE(ALL.HRS,DPTR,EPTR,0)
+               END ELSE
+                  FOR SSP = SS2 TO SS1 STEP -1
+                     LOCATE SSP IN ALL.SFT<DPTR,EPTR>,1 SETTING SPTR THEN
+                        XHRS<XPTR> = XHRS<XPTR>-ALL.HRS<DPTR,EPTR,SPTR>
+                        ALL.SFT = DELETE(ALL.SFT,DPTR,EPTR,SPTR)
+                        ALL.HRS = DELETE(ALL.HRS,DPTR,EPTR,SPTR)
+                     END
+                  NEXT SSP
+                  IF ALL.SFT<DPTR,EPTR> = "" THEN
+                     ALL.EQP = DELETE(ALL.EQP,DPTR,EPTR,0)
+                     ALL.SFT = DELETE(ALL.SFT,DPTR,EPTR,0)
+                     ALL.HRS = DELETE(ALL.HRS,DPTR,EPTR,0)
+                  END
+               END
+            END
+         END
+         IF ALL.EQP<DPTR> = "" AND ALL.DATE<DPTR> # "" THEN
+            RELEASE PEND.CCTR.SCHED, CONO:CCTR:"*":ALL.DATE<DPTR>
+            ALL.DATE = DELETE(ALL.DATE,DPTR,0,0)
+            ALL.EQP = DELETE(ALL.EQP,DPTR,0,0)
+            ALL.SFT = DELETE(ALL.SFT,DPTR,0,0)
+            ALL.HRS = DELETE(ALL.HRS,DPTR,0,0)
+            LOCATE XDATE IN ALL.DATE,1 SETTING DD ELSE NULL
+            DCNT = DD - 1
+         END
+         SS2 = 3
+      NEXT DPTR
+      RETURN
+*
+*---- CLEAN UP UN-SELECTED EQUIPMENT
+*
+*    DD1 = Earliest day to check
+*    DD2 = Latest day to check
+*    EQP = Resource selected
+*
+19200 *
+      FOR DPTR = DD2 TO DD1 STEP -1
+         ECNT = DCOUNT(ALL.EQP<DPTR>,VM)
+         FOR EPTR = ECNT TO 1 STEP -1
+            IF ALL.EQP<DPTR,EPTR> # EQP THEN
+               DEQP = ALL.EQP<DPTR,EPTR>
+               LOCATE DEQP IN XEQP,1 SETTING XPTR THEN
+                  IF SS1 = 1 AND SS2 = 3 THEN
+                     XHRS<XPTR> = XHRS<XPTR>-SUM(ALL.HRS<DPTR,EPTR>)
+                     ALL.EQP = DELETE(ALL.EQP,DPTR,EPTR,0)
+                     ALL.SFT = DELETE(ALL.SFT,DPTR,EPTR,0)
+                     ALL.HRS = DELETE(ALL.HRS,DPTR,EPTR,0)
+                  END ELSE
+                     FOR SSP = SS2 TO SS1 STEP -1
+                        LOCATE SSP IN ALL.SFT<DPTR,EPTR>,1 SETTING SPTR THEN
+                           XHRS<XPTR> = XHRS<XPTR>-ALL.HRS<DPTR,EPTR,SPTR>
+                           ALL.SFT = DELETE(ALL.SFT,DPTR,EPTR,SPTR)
+                           ALL.HRS = DELETE(ALL.HRS,DPTR,EPTR,SPTR)
+                        END
+                     NEXT SSP
+                     IF ALL.SFT<DPTR,EPTR> = "" THEN
+                        ALL.EQP = DELETE(ALL.EQP,DPTR,EPTR,0)
+                        ALL.SFT = DELETE(ALL.SFT,DPTR,EPTR,0)
+                        ALL.HRS = DELETE(ALL.HRS,DPTR,EPTR,0)
+                     END
+                  END
+               END
+            END
+         NEXT EPTR
+         IF ALL.EQP<DPTR> = "" AND ALL.DATE<DPTR> # "" THEN
+            RELEASE PEND.CCTR.SCHED, CONO:CCTR:"*":ALL.DATE<DPTR>
+            ALL.DATE = DELETE(ALL.DATE,DPTR,0,0)
+            ALL.EQP = DELETE(ALL.EQP,DPTR,0,0)
+            ALL.SFT = DELETE(ALL.SFT,DPTR,0,0)
+            ALL.HRS = DELETE(ALL.HRS,DPTR,0,0)
+            LOCATE XDATE IN ALL.DATE,1 SETTING DD ELSE NULL
+            DCNT = DD - 1
+         END
+         SS2 = 3
+      NEXT DPTR
+      RETURN
+*
+*---- WRITE PEND.CCTR.SCHED REC (KEEP IT LOCKED) AND ADD DATE TO ALL.REC
+*
+20000 *
+***   MATWRITEU PEND.CCTR.SCHED.REC ON PEND.CCTR.SCHED, CONO : CCTR :"*": XDATE
+      TPFID = CONO:CCTR:"*":XDATE
+      MATBUILD TPREC FROM PEND.CCTR.SCHED.REC
+      CALL TRANSACTION.WRITE("WRITEU",CONO,TP.DIV,"PEND.CCTR.SCHED",TPFID,TPREC,PEND.CCTR.SCHED,PSS.JOURNAL,ERRMSG)
+**********************************************************************
+      DCNT = DCOUNT(ALL.DATE,AM)
+      DD = DCNT + 1
+      BEGIN CASE
+         CASE DD > 200
+            BLK = 1
+            ERRMSG = "Reached maximum record locks"
+         CASE DD = 100 OR DD = 150
+            TYP = 8
+            MAXL = 1
+            PMSG = "Record lock count is - ":DD:". Continue (Y/N)"
+            X = 0
+            Y = 23
+            IF WIN.MODE THEN
+               VALUE = "N"
+            END ELSE
+               CALL EDIT.SUB1 (MAT EDIT.COM)
+            END
+            P_VALUE = "Dept - ":DEPT "R#5"
+            P_VALUE := "   Cctr - ":CCTR "L#3"
+            P_VALUE := "     Date - ":OCONV(XDATE, "D2/") "L#8"
+            P_X = 3 ; P_Y = 23 ; P_OPT = "CL"
+*         PRINT @(0,23) : @(-4) : "Dept - " : DEPT "R#5" :
+*         PRINT @(15,23) : "Cctr - " : CCTR "L#3" :
+*         PRINT @(30,23) : "Date - " : OCONV(XDATE, "D2/") "L#8" :
+            IF DD > 150 THEN
+*            PRINT @(50,23) :"Cnt - " : DD "R#3" :
+               P_VALUE := " Cnt - " : DD "R#3"
+            END
+            CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            IF VALUE # "Y" THEN
+               BLK = 1
+               ERRMSG = "Reached maximum record locks"
+            END
+         CASE 1
+            P_X = 3 ; P_Y = 23 ; P_OPT = "CL"
+            P_VALUE = "Dept - ":DEPT "R#5"
+            P_VALUE := "   Cctr - ":CCTR "L#3"
+            P_VALUE := "     Date - ":OCONV(XDATE, "D2/") "L#8"
+            P_VALUE := " Cnt - " : DD "R#3"
+            CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+*            PRINT @(50,23) :"Cnt - " : DD "R#3" :
+      END CASE
+      RETURN
+*
+*---- RELEASE ALL LOCKED RECORDS
+*
+30000 *
+      FOR DD = DCNT TO 1 STEP - 1
+         GOSUB 31000
+      NEXT DD
+      DCNT = DCOUNT(ALL.DATE,AM) - 1
+      DD = DCNT + 1
+      RETURN
+*
+*---- RELEASE PEND.CCTR.SCHED FOR A GIVEN DATE
+*
+31000 *
+      RELEASE PEND.CCTR.SCHED, CONO : CCTR :"*": ALL.DATE<DD>
+      ALL.DATE = DELETE(ALL.DATE,DD,0,0)
+      ALL.EQP = DELETE(ALL.EQP,DD,0,0)
+      ALL.SFT = DELETE(ALL.SFT,DD,0,0)
+      ALL.HRS = DELETE(ALL.HRS,DD,0,0)
+      RETURN
+*
+*---- GET PEND.CCTR.SCHED.REC
+*
+80000 *
+      P_VALUE = "Dept - ":DEPT "R#5"
+      P_VALUE := "   Cctr - ":CCTR "L#3"
+      P_VALUE := "     Date - ":OCONV(XDATE, "D2/") "L#8"
+      P_X = 3 ; P_Y = 23 ; P_OPT = "CL"
+      CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+*      PRINT @(0,23) : @(-4) : "Dept - " : DEPT "R#5" :
+*      PRINT @(15,23) : "Cctr - " : CCTR "L#3" :
+*      PRINT @(30,23) : "Date - " : OCONV(XDATE, "D2/") "L#8" :
+      BEGIN CASE
+         CASE XDATE < CK.DATE
+            GOTO 80999
+         CASE H.CODE = "PO" AND XDATE < H.DATE
+         CASE H.CODE = "OPO" AND XDATE < H.DATE
+         CASE H.CODE = "H" AND XDATE < H.DATE
+         CASE H.CODE = "J" AND XDATE < TEMP.DATE
+         CASE H.CODE = "JN" AND XDATE < TEMP.DATE
+         CASE H.CODE = "JD" AND XDATE < TEMP.DATE
+         CASE 1
+            GOTO 80100
+      END CASE
+      BLK = 1
+      ERRMSG = "Can't Schedule Job Backward due to HOLD DATE"
+      GOTO 80999
+80100 *
+      MATREADU PEND.CCTR.SCHED.REC FROM PEND.CCTR.SCHED, CONO:CCTR:"*":XDATE ELSE
+         MAT PEND.CCTR.SCHED.REC = ""
+         PCCS.DEPT = DEPT
+         ERRMSG = ""
+         CALL PEN.CCTR.SCHED.SUB (CONO, CCTR, XDATE, ERRMSG)
+         IF ERRMSG # "" THEN
+            RELEASE PEND.CCTR.SCHED, CONO:CCTR:"*":XDATE
+            BLK = 1
+         END
+      END
+      IF NOT(BLK) AND PCCS.AVL.HRS <= 0 THEN
+***      MATWRITE PEND.CCTR.SCHED.REC ON PEND.CCTR.SCHED, CONO:CCTR:"*":XDATE
+         TPFID = CONO:CCTR:"*":XDATE
+         MATBUILD TPREC FROM PEND.CCTR.SCHED.REC
+         CALL TRANSACTION.WRITE("WRITE",CONO,TP.DIV,"PEND.CCTR.SCHED",TPFID,TPREC,PEND.CCTR.SCHED,PSS.JOURNAL,ERRMSG)
+**********************************************************************
+         XDATE = XDATE - 1
+         SFT = 3
+         GOTO 80000
+      END
+80999 RETURN
+*
+*---- PRINT DATA TO BE RETURNED
+*
+89000 *
+*X=ALL.DATE
+*X=CHANGE(X,AM,"^")
+*X=CHANGE(X,VM,"]")
+*X=CHANGE(X,SM,"\")
+*DEBUG.MSG="         ALL.DATE = ":X;GOSUB 89500
+*X=ALL.EQP
+*X=CHANGE(X,AM,"^")
+*X=CHANGE(X,VM,"]")
+*X=CHANGE(X,SM,"\")
+*DEBUG.MSG="         ALL.EQP  = ":X;GOSUB 89500
+*X=ALL.SFT
+*X=CHANGE(X,AM,"^")
+*X=CHANGE(X,VM,"]")
+*X=CHANGE(X,SM,"\")
+*DEBUG.MSG="         ALL.SFT  = ":X;GOSUB 89500
+*X=ALL.HRS
+*X=CHANGE(X,AM,"^")
+*X=CHANGE(X,VM,"]")
+*X=CHANGE(X,SM,"\")
+*DEBUG.MSG="         ALL.HRS  = ":X;GOSUB 89500
+*X=XEQP
+*X=CHANGE(X,AM,"^")
+*DEBUG.MSG="         XEQP     = ":X;GOSUB 89500
+*X=XHRS
+*X=CHANGE(X,AM,"^")
+*DEBUG.MSG="         XHRS     = ":X;GOSUB 89500
+*X=XFLG
+*X=CHANGE(X,AM,"^")
+*DEBUG.MSG="         XFLG     = ":X;GOSUB 89500
+*X=XCMP
+*X=CHANGE(X,AM,"^")
+*DEBUG.MSG="         XCMP     = ":X;GOSUB 89500
+      RETURN
+*
+*---- PRINT DEBUG MESSAGE ON PRINTER
+*
+89500 *
+      PRINTER ON
+      PRINT DEBUG.MSG
+      PRINTER OFF
+      RETURN
+*
+*---- ERROR ROUTINE
+*
+* 90000 *
+*       PRINT @(0,23) : @(-4) : ERRMSG :" Press <RETURN>":
+*       IF NOT(WIN.MODE) THEN
+*          INPUT REPLY,1 :
+*       END
+*       PRINT @(0,23) : @(-4) :
+*       RETURN
+90000*
+   IF WIN.MODE THEN
+      P_X  = 3 ; P_Y = 23 ; P_VALUE = ERRMSG:" Press <RETURN>" ; P_OPT = "CL"
+      CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      P_X  = 3 ; P_Y = 23 ; P_VALUE = "" ; P_OPT = "CL"
+      CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      RETURN
+   END ELSE
+      ERR.TYPE = 1
+      CALL SI_SYSCOM(MAT SYSCOM.REC)
+      RETURN
+   END
+99999 *
+      RETURN
+   END

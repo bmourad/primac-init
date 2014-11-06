@@ -1,0 +1,404 @@
+*COPY>CPYLIB>COM1
+*************************************************************
+* REVISION      - [10.2]
+* Copyright 1997 by Vercom Software, Inc.
+* SOURCE        - CBABP
+* PROGRAM       - SCREEN.DISPLAY
+* BY            - Stefanie A. Newton
+* DATE          - 12/16/97
+* DESCRIPTION   - This program displays a report to the terminal.
+*
+*T22426 stefanie 12/16/1997 * Create option to print all reports to the
+*                             screen or printer.
+*T23344 cindy 10/19/1998 * sr not working for reports printed to screen
+*T23505 duane 12/15/1998 * ADD OPTION TO DOWNLOAD REPORTS TO PC
+*T24431 edvard  10/04/99  * SET PTR TO MODE 1 IF 'E' OR NO DATA TO DISPLAY
+*T24786 edvard 01/31/2000 * IF USER VIEWS REPORT AND THEN TRIES TO PRINT
+*                           REPORT DOES NOT PRINT.
+*T24818 bilal 02/29/2000 * Allow Wintgrate users to download report to
+*                          client.
+*T25024 diane 05/02/2000 * Update with version
+*C36949 diane 09/05/2000 * Only work with current host version
+*T26206 ajibaly 10/05/2001 * Add report e-mailing capability (RTF)
+*T26257 ajibaly 10/15/2001 * Add report e-mailing capability (PDF)
+* PROGRAMS REQUIRED FOR MAIL FEATURE:
+*  -GHOSTSCRIPT, MPACK (UNIX)
+*  -GHOSTSCRIPT, BLAT  (WINDOWS)
+*CSF39372 ajibaly 01/09/2001 * One line per page is being skipped in view
+*T26761 cmykleb 08/15/2002 * Have process check what emulator user is
+*                            running and do not prompt for type when
+*                            download is chosen and emulator has been
+*                            determined.
+*************************************************************
+*
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>SYSCOM
+*COPY>PMC.CPYLIB>SECURITY
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>TCC
+*COPY>PMC.CPYLIB>COMPANY ;* T26206
+*COPY>CPYLIB>PORT.CONTROL ;* T26206
+   DEFFUN PMC_SEND_MAIL(ADDRESSES,SUBJECT,TEXT,ATTACH)
+*
+*---- Initialization
+*
+***
+   MAT EDIT.COM.DRIVER = ''
+   LN       = 26
+   OPTION   = ''
+   S.POS    = 1
+   E.POS    = 79
+   HS.POS   = 53
+   HE.POS   = 132
+   POS1     = 1
+   POS2     = 79
+   PAGE.LEN = 18
+   PC.PORT.TYPE.SAVE = 'STD'
+*
+*---- Setup system error messages
+*
+   SYS.TYPE = 1
+   CALL SYSCOM(MAT SYSCOM.REC)
+   SYSVAR = 'TTY'
+   CALL SYSVARS.SUB(SYSVAR)
+*
+*---- Open files
+*
+   OPEN '','PMC.SCREENS' TO M.SCREENS ELSE ERRMSG = 'CANNOT LOCATE THE PMC.SCREENS FILE!' ; GOTO 93000
+   OPEN '','_HOLD_' TO HOLD.FILE ELSE ERRMSG = 'CANNOT LOCATE THE _HOLD_ FILE!' ; GOTO 93000
+   OPEN '','CONTROL' TO CONTROL ELSE ERRMSG = 'CANNOT LOCATE THE CONTROL FILE!' ; GOTO 93000
+   OPEN '','SECURITY' TO SECURITY ELSE ERRMSG = 'CANNOT LOCATE THE SECURITY FILE!' ; GOTO 93000; *T26206
+   OPEN '','COMPANY' TO COMPANY ELSE ERRMSG = 'CANNOT LOCATE THE COMPANY FILE!' ; GOTO 93000; *T26206
+*
+*---- Read in hold file record
+*
+   HF.NAME = SYSVAR:"_":OCONV(@LOGNAME,'MCU')
+   READ CR FROM CONTROL,HF.NAME ELSE NULL
+   DEFAULT.PTR = CR<2>
+   DEFAULT.OPTION = CR<3> ;*T26206
+   READ HOLD.REC FROM HOLD.FILE, HF.NAME ELSE HOLD.REC = ''
+*
+*---- Get screen
+*
+   ECD.SCRN.CNT = 1
+   ECD.SCRN.NAME = 'SCREEN.DISPLAY'
+   ECD.ACTION = 1 ; CALL SCRN.EDIT
+   MAT SCV.REC = ''
+*---- Always display is ASCII mode
+   PC.PORT.TYPE.SAVE = PC.PORT.TYPE
+   PC.PORT.TYPE = "STD"
+   ECD.SCRN.NO = 1
+   ESN = ECD.SCRN.NO
+   ECD.ACTION = 2 ; CALL SCRN.EDIT
+*
+*---- Main processing
+*
+*T26206 v
+   CONO = ''
+   CALL GET.CONO(CONO,MAT COMP.REC)
+*T26206 ^
+   IF HOLD.REC # '' THEN
+      REC.CNT = DCOUNT(HOLD.REC,AM)
+      GOSUB CHECK.HEADER
+      FIRST.LINE = LN
+      FOR DLINE = 1 TO PAGE.LEN
+         HOLD.REC<FIRST.LINE + DLINE> = TRIM(HOLD.REC<FIRST.LINE + DLINE>,NEW.PAGE,"A")
+         SCV.REC(DLINE)<ESN> = HOLD.REC<FIRST.LINE + DLINE>[POS1,POS2]
+      NEXT DLINE
+      ECD.ACTION = 3 ; CALL SCRN.EDIT
+      LAST.LINE = FIRST.LINE + DLINE
+      GOTO 900
+   END ELSE
+*24431 v
+      STMT = 'SETPTR ,,,,,1,BRIEF,NOMESSAGE'
+      UDTEXECUTE STMT CAPTURING TEXT
+*24431 ^
+      ERRMSG = 'There is no data to display!  <RETURN> to Exit.'
+      GOTO 91000
+   END
+   GOTO 99999
+*
+CHECK.HEADER: 
+*
+   DAY   = OCONV(DATE(),'DWA')[1,3]
+   MONTH = OCONV(DATE(),'DMA')[1,3]
+   JUNK  = ''
+   IF HOLD.REC<9>[1,7] = DAY:' ':MONTH THEN
+      FOR CHK.LINE = 10 TO REC.CNT UNTIL JUNK # ''
+*          LOCATE NEW.PAGE IN HOLD.REC<CHK.LINE>,1 SETTING JUNK THEN
+         IF INDEX(HOLD.REC<CHK.LINE>,NEW.PAGE,1) THEN
+            JUNK = 1
+            LN = CHK.LINE - 1
+         END ELSE
+            JUNK = ''
+         END
+      NEXT CHK.LINE
+   END ELSE
+      LN = 0
+   END
+   RETURN
+*
+*
+900 *
+*T26206 v
+   IF DEFAULT.OPTION = 'M' THEN
+      OPTION = DEFAULT.OPTION
+      DEFAULT.OPTION = 'V'
+   END ELSE
+*T26206 ^
+      ECD.NUM = 20
+      ECD.ACTION = 4 ; CALL SCRN.EDIT
+      OPTION = ECD.RET.VALUE
+   END ;*T26206
+   BEGIN CASE
+*T26206v
+      CASE OPTION = 'M' ;* MAIL REPORT
+         READ REC FROM CONTROL, CONO:"EMAIL_FORMAT" ELSE REC = ''
+         BEGIN CASE
+           CASE REC<1> = "RTF"
+             EMAIL.FORMAT = 1
+           CASE REC<1> = "PDF"
+             EMAIL.FORMAT = 2
+           CASE REC<1> = "SLK"
+             EMAIL.FORMAT = 3
+           CASE 1
+             EMAIL.FORMAT = 2
+         END CASE
+         ECD.NUM = 22; ECD.ACTION = 4
+         ECD.O.R = 'R'
+         MATREAD SEC.REC FROM SECURITY, CONO:UPCASE(@LOGNAME) THEN
+            IF SEC.EMAIL # '' THEN
+               ECD.O.R = 'O'
+               ECD.DEFAULT = SEC.EMAIL
+            END
+         END
+         CALL SCRN.EDIT
+         IF ECD.RET.VALUE = "E" OR ECD.RET.VALUE = "END" THEN GOTO 900
+         FINDSTR '@' IN ECD.RET.VALUE SETTING JUNK ELSE
+            ERRMSG = "INVALID EMAIL ADDRESS ":ECD.RET.VALUE
+            GOSUB 91000; GOTO 900
+         END
+         EMAIL.ADDRESS = ECD.RET.VALUE
+         MATREAD USER.REC FROM SECURITY, "R.":SYSVAR THEN
+            SUBJECT = QUOTE(USER.V.DSP)
+         END ELSE
+            SUBJECT = "REPORT"
+         END
+         LINEFEED = CHAR(10)
+         EMAIL.DESC = "This email from " : CO.NAME
+         EMAIL.DESC:= " contains a report attachment in "
+         BEGIN CASE
+            CASE EMAIL.FORMAT = 1
+               EMAIL.ATTACH = "ASCII":@AM:"_HOLD_/":HF.NAME:".rtf"
+               FORMATSTR = ''
+               FORMATSTR<1,1> = "WIDE REPORT"
+               FORMATSTR<1,2> = "FONT SIZE"
+               FORMATSTR<2,2> = 9
+               CALL CONVERT.TO.RTF(CO.NAME,"_HOLD_",HF.NAME,SUBJECT,FORMATSTR)
+               EMAIL.DESC:= "rich-text (RTF) format. This can be opened "
+               EMAIL.DESC:= "by most word-processors, including Microsoft "
+               EMAIL.DESC:= "Word. You can download a Word viewer from "
+               EMAIL.DESC:= "http://office.microsoft.com"
+               EMAIL.DESC:= "/downloads/2000/wd97vwr32.aspx."
+            CASE EMAIL.FORMAT = 2 ; *T26257
+               EMAIL.ATTACH = "BIN":@AM:"_HOLD_/":HF.NAME:".pdf"
+               CALL CONVERT.TO.PDF("_HOLD_",HF.NAME,'')
+               EMAIL.DESC:= "Adobe PDF format. To open it, you must have "
+               EMAIL.DESC:= "Adobe Acrobat Reader, which can be downloaded "
+               EMAIL.DESC:= "at http://www.acrobat.com."
+            CASE EMAIL.FORMAT = 3
+               EMAIL.ATTACH = "ASCII":@AM:"_HOLD_/":HF.NAME:".slk"
+               CALL CONVERT.TO.SLK("_HOLD_",HF.NAME,'')
+               EMAIL.DESC:= "Symbolic-Link (SLK) format. This can be opened "
+               EMAIL.DESC:= "by most spreadsheets, including Microsoft "
+               EMAIL.DESC:= "Excel. You can download an Excel viewer from "
+               EMAIL.DESC:= "http://office.microsoft.com"
+               EMAIL.DESC:= "/downloads/2000/xlviewer.aspx."
+         END CASE
+         EMAIL.DESC := LINEFEED : LINEFEED
+         EMAIL.DESC := "Solutions by PRIMAC -- http://www.primacsystems.com"
+         TEXT.FILE = "./_HOLD_/":HF.NAME:".dsc"
+         OSWRITE EMAIL.DESC ON TEXT.FILE
+         EMAIL.ERROR = PMC_SEND_MAIL(EMAIL.ADDRESS,SUBJECT,TEXT.FILE,EMAIL.ATTACH)
+         IF EMAIL.ERROR THEN
+            ERRMSG = EMAIL.ERROR<2>
+            GOSUB 91000
+         END
+*T26206^
+      CASE OPTION = 'D' ;* Download Report
+1000     ECD.NUM = 19
+         ECD.ACTION = 4
+         CALL SCRN.EDIT
+         IF ECD.RET.VALUE = "E" OR ECD.RET.VALUE = "END" THEN
+            GOTO 900
+         END ELSE
+            PCFILE = ECD.RET.VALUE
+            GOODNAME = 'Y'
+            IF PCFILE[2,1] # ":" THEN
+               GOODNAME = 'N'
+            END
+            IF PCFILE[3,1] # "\" THEN
+               GOODNAME = "N"
+            END
+            LOCATE "." IN PCFILE<1> SETTING POS THEN
+               GOODNAME = 'N'
+            END
+            IF NUM(PCFILE[1,1]) THEN
+               GOODNAME = 'N'
+            END
+            IF GOODNAME = 'N' THEN
+               ERRMSG = 'Filename must be of format "drive:\[dir\]filename"'
+               GOSUB 91000
+               GOTO 1000
+            END
+*** T24818 v
+*T26761 v
+*           ECD.NUM = 21; ECD.ACTION = 4; CALL SCRN.EDIT
+*           IF ECD.RET.VALUE # "END" THEN
+*              XTYPE = ECD.RET.VALUE
+*           END ELSE
+*              GOTO 900
+*           END
+            STATUS = 0
+            SBVERSION = ""
+            CALL TU.GET.VERSION_454(SBVERSION, STATUS)
+            IF SBVERSION<1,1> = "" THEN
+               XTYPE = "W"
+               XLEN = LEN(ECD.RET.VALUE)
+               PRINT @(52+XLEN):@(-4)
+               PRINT @(0,22):STR('-',80)
+            END ELSE
+               XTYPE = "S"
+            END
+*T26761 ^
+            IF XTYPE = "S" THEN
+               HOSTFILE = "_HOLD_"
+               ITMLIST  = ""
+               SELCMDX  = '"':HF.NAME:'"'
+               PCFILE   = PCFILE:'.TXT'
+               SEPS     = ""
+               OPTSX    = "OHT"
+               DESCRIPT = "Hold File Transfer"
+               TSTATUS  = ""
+               TU_VERNO = ""      ;*T25024
+               TU_FUNC = "TU.PC.DOWNLOAD":TU_VERNO     ;*T25024
+               CALL @TU_FUNC(HOSTFILE,ITMLIST,SELCMDX,PCFILE,SEPS,OPTSX,DESCRIPT,TSTATUS)     ;*T25024
+            END ELSE
+               PC.FILE = PCFILE:'.TXT'
+               FILE = "_HOLD_"
+               ITEMS = HF.NAME
+               FIELDS = "*"
+               OPTS = ""
+               OPTS<3> = "capture"
+               OPTS<4> = "yes"
+               OPTS<7> = "\255,\r\n,\254,\r\n"
+               STATUS = ""
+               CALL WIN.IMPORT(PC.FILE,FILE,ITEMS,FIELDS,OPTS,STATUS)
+            END
+*** T24818 ^
+         END
+      CASE OPTION = 'S' OR OPTION = 'SF'
+*CSF39372 v
+    *FIRST.LINE = LAST.LINE
+         FIRST.LINE = LAST.LINE-1
+*CSF39372 ^
+         IF FIRST.LINE > REC.CNT THEN FIRST.LINE = LN
+         FOR DLINE = 1 TO PAGE.LEN
+            HOLD.REC<FIRST.LINE + DLINE> = TRIM(HOLD.REC<FIRST.LINE + DLINE>,NEW.PAGE,"A")
+            SCV.REC(DLINE)<ESN> = HOLD.REC<FIRST.LINE + DLINE>[POS1,POS2]
+         NEXT DLINE
+         ECD.ACTION = 6 ; CALL SCRN.EDIT
+         ECD.ACTION = 3 ; CALL SCRN.EDIT
+         LAST.LINE = FIRST.LINE + DLINE
+      CASE OPTION = 'SR'
+*T23344 v
+         FIRST.LINE = LAST.LINE - PAGE.LEN - 1
+         FIRST.LINE = FIRST.LINE - PAGE.LEN - 1
+*T23344 ^
+         FIRST.LINE = FIRST.LINE+1 ;* CSF39372
+         IF FIRST.LINE < LN THEN FIRST.LINE = LN
+         FOR DLINE = 1 TO PAGE.LEN
+            HOLD.REC<FIRST.LINE + DLINE> = TRIM(HOLD.REC<FIRST.LINE + DLINE>,NEW.PAGE,"A")
+            SCV.REC(DLINE)<ESN> = HOLD.REC<FIRST.LINE + DLINE>[POS1,POS2]
+         NEXT DLINE
+         ECD.ACTION = 6 ; CALL SCRN.EDIT
+         ECD.ACTION = 3 ; CALL SCRN.EDIT
+         LAST.LINE = FIRST.LINE + DLINE
+      CASE OPTION = 'ST'
+         FIRST.LINE = LN
+         FOR DLINE = 1 TO PAGE.LEN
+            HOLD.REC<FIRST.LINE + DLINE> = TRIM(HOLD.REC<FIRST.LINE + DLINE>,NEW.PAGE,"A")
+            SCV.REC(DLINE)<ESN> = HOLD.REC<FIRST.LINE + DLINE>[POS1,POS2]
+         NEXT DLINE
+         ECD.ACTION = 6 ; CALL SCRN.EDIT
+         ECD.ACTION = 3 ; CALL SCRN.EDIT
+         LAST.LINE = FIRST.LINE + DLINE
+      CASE OPTION = 'SB'
+         FIRST.LINE = REC.CNT - PAGE.LEN
+         FOR DLINE = 1 TO PAGE.LEN
+            HOLD.REC<FIRST.LINE + DLINE> = TRIM(HOLD.REC<FIRST.LINE + DLINE>,NEW.PAGE,"A")
+            SCV.REC(DLINE)<ESN> = HOLD.REC<FIRST.LINE + DLINE>[POS1,POS2]
+         NEXT DLINE
+         ECD.ACTION = 6 ; CALL SCRN.EDIT
+         ECD.ACTION = 3 ; CALL SCRN.EDIT
+         LAST.LINE = FIRST.LINE + DLINE
+      CASE OPTION = 'H'
+         IF POS1 = 1 THEN 
+            POS1 = HS.POS
+            POS2 = HE.POS
+         END ELSE
+            POS1 = S.POS
+            POS2 = E.POS
+         END
+         FOR DLINE = 1 TO PAGE.LEN
+            HOLD.REC<FIRST.LINE + DLINE> = TRIM(HOLD.REC<FIRST.LINE + DLINE>,NEW.PAGE,"A")
+            SCV.REC(DLINE)<ESN> = HOLD.REC<FIRST.LINE + DLINE>[POS1,POS2]
+         NEXT DLINE
+         ECD.ACTION = 6 ; CALL SCRN.EDIT
+         ECD.ACTION = 3 ; CALL SCRN.EDIT
+      CASE OPTION = 'P'
+*T24786 v
+         IF DEFAULT.PTR = "" THEN
+            STMT = 'SETPTR ,,,,,1,BRIEF,NOMESSAGE'
+         END ELSE
+*T24786 ^
+            STMT = 'SETPTR ,,,,,1,BRIEF,DEST ':DEFAULT.PTR:',NOMESSAGE'
+         END ; *T 24786
+         UDTEXECUTE STMT CAPTURING RESULT
+         CMD = 'SPOOL _HOLD_ ':HF.NAME:' -O'
+         UDTEXECUTE CMD CAPTURING JUNK
+         GOTO 99999
+      CASE OPTION = 'E'
+*24431 v                                   
+         STMT = 'SETPTR ,,,,,1,BRIEF,NOMESSAGE'
+         UDTEXECUTE STMT CAPTURING TEXT             
+*24431 ^
+         GOTO 99999
+      CASE 1
+         GOTO 900
+   END CASE
+   GOTO 900
+*
+*---- Calls for syscom
+*
+91000* 
+   ERR.TYPE = 1 ; CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+93000* 
+   ERR.TYPE = 3 ; CALL SYSCOM(MAT SYSCOM.REC)
+*
+99999 *
+   PC.PORT.TYPE = PC.PORT.TYPE.SAVE
+*
+   DELETE HOLD.FILE, HF.NAME
+   DELETE CONTROL, HF.NAME
+   DELETE HOLD.FILE, HF.NAME:".slk" ;* T26206
+   DELETE HOLD.FILE, HF.NAME:".rtf" ;* T26206
+   DELETE HOLD.FILE, HF.NAME:".dsc" ;* T26206
+   DELETE HOLD.FILE, HF.NAME:".pdf" ;* T26257
+   STMT = 'SETPTR ,,,,,1,BRIEF,DEST ':DEFAULT.PTR:',NOMESSAGE'
+   UDTEXECUTE STMT CAPTURING TEXT
+   ECD.ACTION = 99 ; CALL SCRN.EDIT
+   STOP

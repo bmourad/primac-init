@@ -1,0 +1,855 @@
+*COPY>CPYLIB>COM1
+*********************************************************************
+* REVISION    - [08.1]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+*
+* PROGRAM  - SEC.MENU.MAINT
+*
+* BY       - NICK AMENDOLA, COMPUTER BUSINESS ASSOCIATES
+*
+* DATE     - 08/02/84
+*
+* REVISION - A.1.0
+*
+* DESCRIPTION
+*
+* This program is used to maintain valid users of the system. Security
+* is provided at both the company and menu option levels.
+*
+*T21177 diane 11/06/1996 * REV11 UPG
+*T21859 diane 04/30/1997 * REMOVE UNNECESSARY MESSAGE
+*T21177 diane 01/06/1998 * DISALLOW ENTRY OF LOWER CASE USER ID
+*T23278 markt 09/18/1998 * Add user security at the division level
+*T23304 renee 11/06/1998 * Prompt for "G"UI, "A"SCII or "B"oth display
+*                          type for each user.
+*T24231 edvard 09/17/1999 * Add email address.
+*T24820 aron 02/17/2000 * Remove TIME OUT field. Make sure that new
+*                         screen is loaded with this program
+*T26135 gat 09/19/2001 * DROP LOGON AND LOGOFF TIMES USED ORIGINALLY ON
+*                        MICORDATA
+*T25978 adelgado 01/30/2002 * Add the use of prompts (SF,SR,SB,ST).
+*T26126 adelgado 02/26/2002 * Implement the LOCKED clause for READU.
+*T26556 cmykleb 07/15/2002 * Rev12 change.
+*T26784 adelgado 08/06/2002 * Add a new call subroutine to update the
+*                             file 'ACCESS_BY_USER'.
+*T28657 thompson 08/29/2005 * Fix duplicate to add screen type to copy
+*********************************************************************
+*
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>SECURITY
+*COPY>PMC.CPYLIB>PMC_PROCESS
+*COPY>PMC.CPYLIB>PMC_PROCESS_XREF
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+   MAT SYSCOM.REC =  ""; SYS.TYPE = 2
+*
+*---- DEFINE VARIABLES
+*
+   DIM MENU(40)
+*
+*---- OPEN ALL FILES
+*
+   OPEN "","COMPANY" TO COMPANY ELSE
+      ERRMSG = "CANNOT OPEN COMPANY FILE"
+      GOTO 93000
+   END
+   OPEN "","PMC.SCREENS" TO M.SCREENS ELSE
+      ERRMSG = "CANNOT OPEN PMC.SCREENS FILE"
+      GOTO 93000
+   END
+* T23304 v Open USER.MODE file
+   OPEN "","USER.MODE" TO USER.MODE ELSE
+      ERRMSG = "CANNOT OPEN USER.MODE FILE"
+      GOTO 93000
+   END
+* T23304 ^
+   OPEN "","SECURITY" TO SECURITY ELSE
+      ERRMSG = "CANNOT OPEN SECURITY FILE"
+      GOTO 93000
+   END
+   OPEN "","CONTROL" TO CONTROL ELSE
+      ERRMSG = "CANNOT OPEN CONTROL FILE"
+      GOTO 93000
+   END
+   OPEN "","EASY.MENUS" TO EASY.MENUS ELSE
+      ERRMSG = "CANNOT OPEN EASY.MENUS FILE"
+      GOTO 93000
+   END
+   PROCESS.ONFILE = 1
+   OPEN "","PMC_PROCESS" TO PMC_PROCESS ELSE
+      PROCESS.ONFILE = 0
+      ERRMSG = "CANNOT OPEN PMC_PROCESS FILE"
+      GOTO 93000
+   END
+   OPEN "","PMC_PROCESS_XREF" TO PMC_PROCESS_XREF ELSE
+      PROCESS.ONFILE = 0
+      ERRMSG = "CANNOT OPEN PMC_PROCESS_XREF FILE"
+      GOTO 93000
+   END
+* T26784 v
+   OPEN "","ACCESS_BY_USER" TO ACCESS_BY_USER ELSE
+      ERRMSG = "CANNOT OPEN ACCESS_BY_USER FILE"
+      GOTO 93000
+   END
+* T26784 ^
+*
+*---- INITIALIZATION
+*
+   MAT SEC.REC = ""
+   MAT SCV.REC = ""
+   KW.PW = "VERCOM"
+   READ CURR.PW FROM CONTROL, "SECURITY.PW" ELSE
+      NEW.PW = "PW"
+      CALL ENCODE.SUB("E",KW.PW,NEW.PW,CURR.PW)
+   END
+   CALL ENCODE.SUB("D",KW.PW,CURR.PW,SECURITY.PW)
+   READV CONO FROM CONTROL, "MASTER",1 THEN
+      MULTI.CO = 0
+   END ELSE
+      MULTI.CO = 1
+   END
+   SCREEN.TYPE = ""    ; * T23304
+   MAT EDIT.COM.DRIVER = ""
+   ECD.SCRN.CNT = 6   ;* T26784
+   ECD.SCRN.NAME<1> = "SEC.MENU.MAINT"
+   ECD.SCRN.NAME<2> = 'PRINT.QUEUE.ASSIGN'
+   ECD.SCRN.NAME<3> = 'PRINT.QUEUE.ASSIGN.FORMS'
+   ECD.SCRN.NAME<4> = 'SEC.PASSWORD'
+   ECD.SCRN.NAME<5> = 'DIVISION.ASSIGN';* T23278
+   ECD.SCRN.NAME<6> = 'LIST.ACCESS.BY.USER'      ;* T26784
+   ECD.ACTION=1;CALL SCRN.EDIT
+10*
+   ECD.ACTION = 1; CALL SCRN.EDIT ; * Need when entering 1 user after another
+   GOSUB 2100
+   IF ECD.RET.VALUE = "END" THEN GOTO 99999
+   CURR.PW = FIELD(ECD.RET.VALUE,"/",1)
+   NEW.PW = FIELD(ECD.RET.VALUE,"/",2)
+   BEGIN CASE
+      CASE CURR.PW # SECURITY.PW
+         ERRMSG = "** Illegal Password **"
+         GOSUB 90000
+         GOTO 99999
+      CASE CURR.PW = "PW" AND (NEW.PW = "" OR NEW.PW = CURR.PW)
+         ERRMSG = "** Please change the current password **"
+         GOSUB 90000; GOTO 10
+   END CASE
+   ESN = 1
+   ECD.SCRN.NO = 1
+   ECD.ACTION=2;CALL SCRN.EDIT
+   SCV.REC(8)<ESN> = DATE()
+   ECD.NUM = 8
+   ECD.ACTION=5;CALL SCRN.EDIT
+   CURR.REF.NO = ""
+* T23304 v Display 9 lines at a time instead of 10
+*LINE.COUNT = 10
+   LINE.COUNT = 9
+* T23304 ^
+   GOTO 110
+*
+*---- MAIN PROCESSING
+*
+100*
+   RELEASE
+   MAT SEC.REC = ""
+   MAT SCV.REC = ""
+   SCREEN.TYPE = "" ; * T27654
+*24231 v
+ *ACTION = 1 causes "Cannot create toolbar message to appear. Who ever put
+ *this here obviously did not test it.                                    
+*  ECD.ACTION = 1; CALL SCRN.EDIT ; * Need when entering 1 user after another
+   ECD.ACTION=6;CALL SCRN.EDIT
+110*
+   SCV.REC(8)<ESN> = DATE()
+   ECD.NUM = 8
+   ECD.ACTION=5;CALL SCRN.EDIT
+   GOSUB 1000
+   IF ECD.RET.VALUE = "END" THEN GOTO 99999
+   GOSUB 1010
+   IF ECD.RET.VALUE = "END" THEN
+      GOTO 99999
+   END
+***** T23278 v
+   REQ.NUM = 6
+   READ JUNK FROM CONTROL, CONO:"DIV.SECURITY" THEN REQ.NUM = 27; * T23278
+***** T23278 ^
+   SEC.KEY = CONO:USER.ID
+  * T26126 v
+   MATREADU SEC.REC FROM SECURITY, SEC.KEY LOCKED
+      ERRMSG = 'SECURITY record is locked by user - ':GETUSERNAME(STATUS())
+      GOSUB 90000;GOTO 100 
+   END THEN
+  * T26126 ^
+      S.PW = SEC.PASSWORD
+      TEMP = SEC.PASSWORD; SEC.PASSWORD = ""
+      CALL ENCODE.SUB("D",USER.ID,TEMP,SEC.PASSWORD)
+      S.M.L = SEC.MENU.LEVEL
+      IF SEC.MENU.LEVEL > 3 THEN SEC.MENU.LEVEL = 3
+      GOSUB 9000
+      ECD.ACTION=3;CALL SCRN.EDIT
+      CURR.REF.NO = 1
+      GOTO 500
+   END ELSE
+      MAT SEC.REC = ""
+      S.PW = ""; S.M.L = ""
+   END
+120*
+   ECD.NUM = 16
+   ECD.ACTION=4;CALL SCRN.EDIT
+   OPTION = ECD.RET.VALUE
+   BEGIN CASE
+      CASE OPTION = "A"
+*           FOR N = 1 TO 10
+*              ON N GOSUB 1020,1100,1700,1800,1300,1400,1500,1600,1150,1200
+* T23304 v Add 1140 to the list of field prompts (SCREEN TYPE)
+*   FOR N = 1 TO 8
+*     ON N GOSUB 1020,1100,1800,1400,1500,1600,1150,1200
+*T24820 v Removed 1600 from field prompts (Time Out)
+*         FOR N = 1 TO 9
+*             ON N GOSUB 1020,1100,1800,1400,1500,1600,1140,1150,1200
+*T26135          FOR N = 1 TO 8
+*T26135              ON N GOSUB 1020,1100,1800,1400,1500,1140,1150,1200
+*T26135*T24820 ^
+* T26135
+         FOR N = 1 TO 6
+            ON N GOSUB 1020,1100,1800,1140,1150,1200
+* T26135
+* T23304 ^
+            IF ECD.RET.VALUE = "END" THEN GOTO 100
+         NEXT N
+         REF.CNT = 0
+         IF SEC.MENU.LEVEL < 3 THEN
+            CURR.REF.NO = 1
+            DONE = 0
+            FOR REF.NO = 1 TO 999 UNTIL DONE
+               GOSUB 10000
+               GOSUB 6000
+               IF ECD.RET.VALUE = "END" THEN
+                  SEC.MENU.NAME = DELETE(SEC.MENU.NAME,1,REF.NO,0)
+                  SEC.MENU.PROC = DELETE(SEC.MENU.PROC,1,REF.NO,0)
+                  SEC.MENU.DESC = DELETE(SEC.MENU.DESC,1,REF.NO,0)
+                  SEC.MENU.DISP = DELETE(SEC.MENU.DISP,1,REF.NO,0)
+                  SCV.REC(13)<ESN> = DELETE(SCV.REC(13),1,REF.NO,0)
+                  SCV.REC(5)<ESN> = DELETE(SCV.REC(5),1,REF.NO,0)
+                  SCV.REC(26)<ESN> = DELETE(SCV.REC(26),1,REF.NO,0)
+                  REF.CNT = REF.NO - 1
+                  DONE = 1
+               END ELSE
+                  REF.CNT = REF.NO
+               END
+            NEXT N
+            REF.NO = REF.CNT
+            CURR.REF.NO = ""
+            GOSUB 10000
+         END
+      CASE OPTION = "D"
+         IF MULTI.CO THEN
+            ECD.NUM = 17
+            ECD.O.R = "O"; ECD.DEFAULT = CONO
+            ECD.ACTION=4;CALL SCRN.EDIT
+            IF ECD.RET.VALUE = "END" THEN GOTO 100
+            DUP.CONO = ECD.RET.VALUE
+         END ELSE
+            DUP.CONO = CONO
+         END
+         ECD.NUM = 18
+         ECD.O.R = "O"; ECD.DEFAULT = USER.ID
+         ECD.ACTION=4;CALL SCRN.EDIT
+         IF ECD.RET.VALUE = "END" THEN GOTO 100
+         DUP.USER.ID = ECD.RET.VALUE
+         MATREAD SEC.REC FROM SECURITY, DUP.CONO:DUP.USER.ID ELSE
+            ERRMSG = "User not on file"
+            GOSUB 90000
+            GOTO 120
+         END
+*T27654 v
+*  READV SCREEN.TYPE FROM USER.MODE,USER.ID,1 ELSE SCREEN.TYPE = ""
+   IF SCREEN.TYPE = "" THEN
+      READV SCREEN.TYPE FROM USER.MODE,DUP.USER.ID,1 ELSE SCREEN.TYPE = ""
+   END
+*T27654 ^
+         S.PW = ""
+         TEMP = SEC.PASSWORD; SEC.PASSWORD = ""
+         CALL ENCODE.SUB("D",USER.ID,TEMP,SEC.PASSWORD)
+         S.M.L = SEC.MENU.LEVEL
+         IF SEC.MENU.LEVEL > 3 THEN SEC.MENU.LEVEL = 3
+         GOSUB 9000
+         ECD.ACTION=3;CALL SCRN.EDIT
+         CURR.REF.NO = 1
+      CASE 1
+         GOTO 100
+   END CASE
+*
+*---- GET OPERATOR REQUEST
+*
+500*
+   GOSUB 5000
+   ACTION = ECD.RET.VALUE
+   BEGIN CASE
+      CASE ACTION = 'Q'
+         ECD.SCRN.NO = 2
+         ECD.ACTION = 2
+         CALL SCRN.EDIT
+         CALL PRINT.QUEUE.ASSIGN(CONO,MAT SEC.REC,USER.ID)
+         ECD.SCRN.NO = 1
+         ESN = 1
+         ECD.ACTION = 2
+         CALL SCRN.EDIT
+         GOSUB 9000
+         ECD.ACTION = 3 ; CALL SCRN.EDIT
+*T24820 v Removed 1600 (TIME OUT)
+* CASE NUM(ACTION) AND ACTION >= 1 AND ACTION <= 8; * T23304 commented out
+*     CASE NUM(ACTION) AND ACTION >= 1 AND ACTION <= 9; * T23304 Added instead
+      CASE NUM(ACTION) AND ACTION >= 1 AND ACTION <= 8   
+         N = ACTION
+*           ON N GOSUB 1020,1100,1700,1800,1300,1400,1500,1600,1150,1200
+* T23304 v Add 1140 to the list of field prompts (SCREEN TYPE)
+*   ON N GOSUB 1020,1100,1800,1400,1500,1600,1150,1200
+*         ON N GOSUB 1020,1100,1800,1400,1500,1600,1140,1150,1200; *T24820 commented
+*          ON N GOSUB 1020,1100,1800,1400,1500,1140,1150,1200; *T24820 ADDED
+         ON N GOSUB 1020,1100,1800,1140,1150,1200; *T24820 ADDED * T26135
+* T23304 ^
+*T24820 ^
+      CASE ACTION = "A"
+         DONE = 0
+         FOR REF.NO = REF.CNT + 1 TO 999 UNTIL DONE
+            GOSUB 10000
+            GOSUB 6000
+            IF ECD.RET.VALUE = "END" THEN
+               SEC.MENU.NAME = DELETE(SEC.MENU.NAME,1,REF.NO,0)
+               SEC.MENU.PROC = DELETE(SEC.MENU.PROC,1,REF.NO,0)
+               SEC.MENU.DESC = DELETE(SEC.MENU.DESC,1,REF.NO,0)
+               SEC.MENU.DISP = DELETE(SEC.MENU.DISP,1,REF.NO,0)
+               SCV.REC(13)<ESN> = DELETE(SCV.REC(13),1,REF.NO,0)
+               SCV.REC(5)<ESN> = DELETE(SCV.REC(5),1,REF.NO,0)
+               SCV.REC(26)<ESN> = DELETE(SCV.REC(26),1,REF.NO,0)
+               REF.CNT = REF.NO - 1
+               DONE = 1
+            END ELSE
+               REF.CNT = REF.NO
+            END
+         NEXT REF.NO
+         REF.NO = REF.CNT
+      * CURR.REF.NO = ""  ;* T25978
+         GOSUB 10000
+      CASE ACTION = "C" AND REF.CNT > 0
+         ECD.NUM = 9
+         SCV.REC(9)<ESN> = ""
+         ECD.MINV = CURR.REF.NO; ECD.MAXV = CURR.REF.NO + LINE.COUNT - 1
+         IF ECD.MAXV > REF.CNT THEN ECD.MAXV = REF.CNT
+         ECD.ACTION=4;CALL SCRN.EDIT
+         IF NUM(ECD.RET.VALUE) AND ECD.RET.VALUE # "" THEN
+            REF.NO = ECD.RET.VALUE
+            GOSUB 6000
+         END
+      CASE ACTION = "D" AND REF.CNT > 0
+         ECD.NUM = 9
+         SCV.REC(9)<ESN> = ""
+         ECD.MINV = CURR.REF.NO; ECD.MAXV = CURR.REF.NO + LINE.COUNT - 1
+         IF ECD.MAXV > REF.CNT THEN ECD.MAXV = REF.CNT
+         ECD.ACTION=4;CALL SCRN.EDIT
+         IF NUM(ECD.RET.VALUE) AND ECD.RET.VALUE # "" THEN
+            REF.NO = ECD.RET.VALUE
+            SEC.MENU.NAME = DELETE(SEC.MENU.NAME,1,REF.NO,0)
+            SEC.MENU.PROC = DELETE(SEC.MENU.PROC,1,REF.NO,0)
+            SEC.MENU.DESC = DELETE(SEC.MENU.DESC,1,REF.NO,0)
+            SEC.MENU.DISP = DELETE(SEC.MENU.DISP,1,REF.NO,0)
+            SCV.REC(13)<ESN> = DELETE(SCV.REC(13),1,REF.NO,0)
+            SCV.REC(5)<ESN> = DELETE(SCV.REC(5),1,REF.NO,0)
+            SCV.REC(26)<ESN> = DELETE(SCV.REC(26),1,REF.NO,0)
+            REF.CNT = REF.CNT - 1
+            IF REF.NO > 1 THEN REF.NO = REF.NO - 1
+            CURR.REF.NO = ""
+            GOSUB 10000
+         END
+***** T23278 v
+      CASE ACTION = "DIV"
+         IF JUNK<1> = "Y" OR JUNK<2> = "Y" THEN ; * T26556
+            ECD.SCRN.NO = 5
+            ECD.ACTION = 2
+            CALL SCRN.EDIT
+            CALL DIVISION.ASSIGN(CONO,MAT SEC.REC,USER.ID)
+            ECD.SCRN.NO = 1
+            ESN = 1
+            ECD.ACTION = 2
+            CALL SCRN.EDIT
+            GOSUB 9000
+            ECD.ACTION = 3 ; CALL SCRN.EDIT
+*T26556 v
+         END ELSE
+            ERRMSG = "Divisional Security is set to (N)o, so this option is invalid."
+            GOSUB 90000
+         END
+*T26556 ^
+***** T23278 ^
+      CASE ACTION = "E" OR ACTION = "END"
+         GOTO 100
+      CASE ACTION = "F"
+*           SEC.PASSWORD = SCV.REC(2)<ESN>
+         SEC.MENU.LEVEL = SCV.REC(12)<ESN>
+         IF SEC.MENU.LEVEL > 2 AND S.M.L > SEC.MENU.LEVEL THEN
+            SEC.MENU.LEVEL = S.M.L
+         END
+         SEC.MENU.FLAG = SCV.REC(3)<ESN>
+         TEMP = SEC.PASSWORD; SEC.PASSWORD = ""
+         CALL ENCODE.SUB("E",USER.ID,TEMP,SEC.PASSWORD)
+         IF S.PW # SEC.PASSWORD THEN
+            SEC.ROLL.DATE = DATE()
+         END
+         MATWRITE SEC.REC ON SECURITY, SEC.KEY
+         CALL BUILD.ACCESS.BY.USER(CONO, USER.ID, MAT SEC.REC, EASY.MENUS, ACCESS_BY_USER)      ;* T26784
+         WRITEV SCREEN.TYPE ON USER.MODE,USER.ID,1  ; * T23304 write record
+         IF NEW.PW # "" AND NEW.PW # CURR.PW THEN
+            CALL ENCODE.SUB("E",KW.PW,NEW.PW,SECURITY.PW)
+            WRITE SECURITY.PW ON CONTROL, "SECURITY.PW"
+            CURR.PW = NEW.PW
+         END
+         GOTO 100
+      CASE ACTION = "I" AND REF.CNT > 0
+         ECD.NUM = 9
+         ECD.MINV = CURR.REF.NO; ECD.MAXV = CURR.REF.NO + LINE.COUNT - 1
+         IF ECD.MAXV > REF.CNT THEN ECD.MAXV = REF.CNT
+         ECD.ACTION=4;CALL SCRN.EDIT
+         IF NUM(ECD.RET.VALUE) AND ECD.RET.VALUE # "" THEN
+            REF.NO = ECD.RET.VALUE
+            SEC.MENU.NAME = INSERT(SEC.MENU.NAME,1,REF.NO,0,"")
+            SEC.MENU.PROC = INSERT(SEC.MENU.PROC,1,REF.NO,0,"")
+            SEC.MENU.DESC = INSERT(SEC.MENU.DESC,1,REF.NO,0,"")
+            SEC.MENU.DISP = INSERT(SEC.MENU.DISP,1,REF.NO,0,"")
+            SCV.REC(13)<ESN> = INSERT(SCV.REC(13),1,REF.NO,0,"")
+            SCV.REC(5)<ESN> = INSERT(SCV.REC(5),1,REF.NO,0,"")
+            SCV.REC(26)<ESN> = INSERT(SCV.REC(26),1,REF.NO,0,"")
+            REF.CNT = REF.CNT + 1
+            CURR.REF.NO = ""
+            GOSUB 10000
+            GOSUB 6000
+            IF ECD.RET.VALUE = "END" THEN
+               SEC.MENU.NAME = DELETE(SEC.MENU.NAME,1,REF.NO,0)
+               SEC.MENU.PROC = DELETE(SEC.MENU.PROC,1,REF.NO,0)
+               SEC.MENU.DESC = DELETE(SEC.MENU.DESC,1,REF.NO,0)
+               SEC.MENU.DISP = DELETE(SEC.MENU.DISP,1,REF.NO,0)
+               SCV.REC(13)<ESN> = DELETE(SCV.REC(13),1,REF.NO,0)
+               SCV.REC(5)<ESN> = DELETE(SCV.REC(5),1,REF.NO,0)
+               SCV.REC(26)<ESN> = DELETE(SCV.REC(26),1,REF.NO,0)
+               REF.CNT = REF.CNT - 1
+               CURR.REF.NO = ""
+               GOSUB 10000
+            END
+         END
+      CASE ACTION = "P"
+         ECD.NUM = 10
+         SCV.REC(10)<ESN> = ""
+         ECD.ACTION=4;CALL SCRN.EDIT
+         IF ECD.RET.VALUE = "Y" THEN
+            DELETE SECURITY, SEC.KEY
+            DELETE ACCESS_BY_USER, SEC.KEY
+            GOTO 100
+         END
+      CASE ACTION = "S" AND REF.CNT > 0
+         REF.NO = CURR.REF.NO + LINE.COUNT
+         IF REF.NO > REF.CNT THEN REF.NO = 1
+         GOSUB 10000
+    * T25978 v
+      CASE ACTION = 'SR' AND REF.CNT > 0
+         REF.NO = CURR.REF.NO - LINE.COUNT
+         IF REF.NO < 1 THEN REF.NO = 1
+         GOSUB 10000
+      CASE ACTION = 'ST' AND REF.CNT > 0
+         REF.NO = 1
+         GOSUB 10000
+      CASE ACTION = 'SB' AND REF.CNT > 0
+         REF.NO = REF.CNT
+         GOSUB 10000
+    * T25978 ^
+    * T26784 v
+      CASE ACTION = 'L'
+         CALL LIST.ACCESS.BY.USER(CONO, MAT SEC.REC, USER.ID, ACCESS_BY_USER, EASY.MENUS)
+         ECD.SCRN.NO = 1
+         ESN = 1
+         ECD.ACTION = 2
+         CALL SCRN.EDIT
+         GOSUB 9000
+         ECD.ACTION = 3 ; CALL SCRN.EDIT
+    * T26784 ^
+   END CASE
+   GOTO 500
+*
+*---- GET COMPANY ID
+*
+1000*
+   IF MULTI.CO THEN
+      ECD.NUM = 14
+      ECD.ACTION=4;CALL SCRN.EDIT
+      IF ECD.RET.VALUE = "END" THEN RETURN
+      CONO = ECD.RET.VALUE
+   END ELSE
+      ECD.RET.VALUE = CONO
+      SCV.REC(14)<ESN> = CONO
+      ECD.NUM = 14
+      ECD.ACTION=5;CALL SCRN.EDIT
+   END
+   MATREAD COMP.REC FROM COMPANY, CONO ELSE
+      ERRMSG = "Company not on file"
+      GOSUB 90000
+      GOTO 1000
+   END
+   SCV.REC(15)<ESN> = CO.NAME
+   ECD.NUM = 15
+   ECD.ACTION=5;CALL SCRN.EDIT
+   RETURN
+*
+*---- GET USER ID
+*
+1010*
+   ECD.NUM = 1
+   ECD.ACTION=4;CALL SCRN.EDIT
+   IF ECD.RET.VALUE # "END" THEN
+      USER.ID = ECD.RET.VALUE
+      USER.ID = OCONV(USER.ID,"MCU")
+   END
+   RETURN
+*
+*---- GET EMPLOYEE NAME
+1020*
+   ECD.NUM = 25; ECD.ACTION = 4; CALL SCRN.EDIT
+   IF ECD.RET.VALUE # "END" THEN
+      SEC.NAME = ECD.RET.VALUE
+   END
+   RETURN
+*
+*---- GET PASSWORD
+*
+1100*
+   ECD.NUM = 2
+   ECD.ACTION=4;CALL SCRN.EDIT
+   IF ECD.RET.VALUE = "END" THEN RETURN
+   IF ECD.RET.VALUE # '' THEN
+      SEC.PASSWORD = ECD.RET.VALUE
+   END ELSE
+      SEC.PASSWORD = ''
+   END
+   RETURN
+* T23304 v Add SCREEN TYPE prompt - (G)UI, (A)SCII or (B)oth
+1140*
+   IF SCREEN.TYPE = "" THEN
+      READV SCREEN.TYPE FROM USER.MODE,USER.ID,1 ELSE SCREEN.TYPE = ""
+      ECD.DEFAULT = SCREEN.TYPE
+   END
+   ECD.NUM = 30
+   ECD.ACTION=4;CALL SCRN.EDIT
+   IF ECD.RET.VALUE = "END" THEN RETURN
+   SCREEN.TYPE = ECD.RET.VALUE
+   RETURN
+* T23304 ^
+1150*
+   ECD.NUM = 12
+   ECD.ACTION=4;CALL SCRN.EDIT
+   IF ECD.RET.VALUE = "END" THEN RETURN
+   SEC.MENU.LEVEL = ECD.RET.VALUE
+   RETURN
+*
+*---- GET ALLOW/PROTECT OPTION
+*
+1200*
+   ECD.NUM = 3
+   ECD.ACTION=4;CALL SCRN.EDIT
+   IF ECD.RET.VALUE = "END" THEN RETURN
+   SEC.MENU.FLAG = ECD.RET.VALUE
+   RETURN
+*
+*---- FORM QUEUE
+*
+1300*
+*     ECD.NUM = 21; ECD.ACTION = 4; CALL SCRN.EDIT
+*     IF ECD.RET.VALUE # "END" THEN
+*        SEC.FORM.QUEUE = ECD.RET.VALUE
+*     END
+   RETURN
+*
+*T26135*---- LOGIN TIME
+*T26135*
+*T261351400*
+*T26135  ECD.NUM = 22; ECD.ACTION = 4; CALL SCRN.EDIT
+*T26135  BEGIN CASE
+*T26135      CASE ECD.RET.VALUE = "END"
+*T26135      CASE ECD.RET.VALUE = ""
+*T26135          SEC.LOGIN = ""
+*T26135      CASE LEN(ECD.RET.VALUE) # 4 OR NOT(NUM(ECD.RET.VALUE))
+*T26135          ERRMSG = "** Invalid entry, try again !! **"
+*T26135          GOSUB 90000; GOTO 1400
+*T26135      CASE ECD.RET.VALUE[1,2] < 0 OR ECD.RET.VALUE[1,2] > 24
+*T26135          ERRMSG = "Invalid hours (":ECD.RET.VALUE[1,2]:"), range = 0-24"
+*T26135          GOSUB 90000; GOTO 1400
+*T26135      CASE ECD.RET.VALUE[3,2] < 0 OR ECD.RET.VALUE[3,2] > 59
+*T26135          ERRMSG = "Invalid minutes (":ECD.RET.VALUE[3,2]:"), range = 0-59"
+*T26135          GOSUB 90000; GOTO 1400
+*T26135      CASE ECD.RET.VALUE = SEC.LOGOUT AND SEC.LOGOUT > 0
+*T26135          ERRMSG = "Cannot have the same Login and logout times"
+*T26135          GOSUB 90000; GOTO 1400
+*T26135      CASE 1
+*T26135          SEC.LOGIN = ECD.RET.VALUE
+*T26135  END CASE
+*T26135  RETURN
+*T26135*
+*T26135*---- LOGOUT TIME
+*T26135*
+*T261351500*
+*T26135  ECD.NUM = 23; ECD.ACTION = 4; CALL SCRN.EDIT
+*T26135  BEGIN CASE
+*T26135      CASE ECD.RET.VALUE = "END"
+*T26135      CASE ECD.RET.VALUE = ""
+*T26135          SEC.LOGOUT = ""
+*T26135      CASE LEN(ECD.RET.VALUE) # 4 OR NOT(NUM(ECD.RET.VALUE))
+*T26135          ERRMSG = "** Invalid entry, try again !! **"
+*T26135          GOSUB 90000; GOTO 1500
+*T26135      CASE ECD.RET.VALUE[1,2] < 0 OR ECD.RET.VALUE[1,2] > 24
+*T26135          ERRMSG = "Invalid hours (":ECD.RET.VALUE[1,2]:"), range = 0-24"
+*T26135          GOSUB 90000; GOTO 1500
+*T26135      CASE ECD.RET.VALUE[3,2] < 0 OR ECD.RET.VALUE[3,2] > 59
+*T26135          ERRMSG = "Invalid minutes (":ECD.RET.VALUE[3,2]:"), range = 0-59"
+*T26135          GOSUB 90000; GOTO 1500
+*T26135      CASE ECD.RET.VALUE = SEC.LOGIN AND SEC.LOGIN > 0
+*T26135          ERRMSG = "Cannot have the same Login and logout times"
+*T26135          GOSUB 90000; GOTO 1500
+*T26135      CASE 1
+*T26135          SEC.LOGOUT = ECD.RET.VALUE
+*T26135  END CASE
+*T26135  RETURN
+*T24820 v
+*---- TIME OUT
+*
+1600*
+* ECD.NUM = 24; ECD.ACTION = 4; CALL SCRN.EDIT
+* IF ECD.RET.VALUE # "END" THEN
+*     SEC.TIME.OUT = ECD.RET.VALUE
+* END
+* RETURN
+*T24820 ^
+*
+*---- ROLLOVER DAYS
+*
+1700*
+*     ECD.NUM = 19; ECD.ACTION = 4; CALL SCRN.EDIT
+*     IF ECD.RET.VALUE # "END" THEN
+*        SEC.ROLLOVER = ECD.RET.VALUE
+*     END
+   SEC.ROLLOVER = ''
+   RETURN
+*
+*---- EMAIL ADDRESS
+*
+1800*
+   ECD.NUM = 31 ; ACTION = 4 ; CALL SCRN.EDIT
+   IF ECD.RET.VALUE = "END" THEN
+      NULL
+   END ELSE
+      SEC.EMAIL = DOWNCASE(ECD.RET.VALUE) 
+*SCV.REC(31)<1>=SEC.EMAIL;ECD.NUM=31;ACTION=5;CALL SCRN.EDIT
+   END
+   RETURN
+*24231 v
+*port number not used on Unidata. Replaced field with email address.
+*  ECD.NUM = 20; ECD.ACTION = 4; CALL SCRN.EDIT
+*  BEGIN CASE
+*      CASE ECD.RET.VALUE = "END"
+*          GOTO 1899
+*      CASE ECD.RET.VALUE = ""
+*          SEC.PORT = ""
+*          GOTO 1899
+*  END CASE
+*  STMT = ""; CNT = DCOUNT(ECD.RET.VALUE,",")
+*  FOR P = 1 TO CNT
+*      VAR = TRIM(FIELD(ECD.RET.VALUE,",",P))
+*      BEGIN CASE
+*          CASE VAR = ""
+*              ERRMSG = "INVALID PORT # (NULL)"
+*              CNT = 0
+**        CASE NOT(NUM(VAR))
+**           ERRMSG = "INVALID PORT # ":VAR
+**           CNT = 0
+*          CASE STMT = ""
+*              STMT = VAR
+*          CASE 1
+*              STMT = STMT:",":VAR
+*      END CASE
+*  NEXT P
+*  IF NOT(CNT) THEN
+*      GOSUB 90000; GOTO 1800
+*  END
+*  SEC.PORT = STMT
+*1899 RETURN
+*
+*---- GET PASSWORD
+*
+2100*
+*   ECD.NUM = 11
+*   ECD.ACTION=4;CALL SCRN.EDIT
+   ECD.SCRN.NO = 4
+   CALL SEC.PASSWORD(ERROR)
+* ECD.SCRN.NO = 1
+* ESN = 1
+* ECD.ACTION = 2
+* CALL SCRN.EDIT
+   ECD.RET.VALUE = ERROR
+   RETURN
+*
+*---- GET OPERATOR REQUEST
+*
+5000*
+***** T23278 v
+*ECD.NUM = 6
+   ECD.NUM = REQ.NUM
+***** T23278 ^
+   ECD.ACTION=4;CALL SCRN.EDIT
+   IF ECD.RET.VALUE = "END" THEN RETURN
+   RETURN
+*
+*---- GET MENU NAME
+*
+6000*
+   ECD.NUM = 13
+   ECD.SUB.NUM = REF.NO
+   ECD.ACTION=4;CALL SCRN.EDIT
+   IF ECD.RET.VALUE = "END" THEN RETURN
+   MATREAD MENU FROM EASY.MENUS, ECD.RET.VALUE ELSE
+      ERRMSG = "CANNOT LOCATE MENU - ":ECD.RET.VALUE
+      GOSUB 90000
+      GOTO 6000
+   END
+   MENU.NAME = ECD.RET.VALUE
+   SEC.MENU.NAME<1,REF.NO> = ECD.RET.VALUE
+*
+*---- GET PROCEDURE NAME
+*
+6010*
+   ECD.NUM = 5
+   ECD.SUB.NUM = REF.NO
+   ECD.DEFAULT = SCV.REC(13)<1,REF.NO>
+   ECD.ACTION=4;CALL SCRN.EDIT
+   IF ECD.RET.VALUE = "END" THEN RETURN
+   IF ECD.RET.VALUE = MENU.NAME THEN
+      SEC.MENU.DESC<1,REF.NO> = MENU(1)<1,3>
+   END ELSE
+      PROC.ERR = 1
+      FOR MP = 2 TO 40 WHILE PROC.ERR
+         IF MENU(MP) # "" THEN
+            IF MENU(MP)<1,1> = ECD.RET.VALUE THEN
+               PROC.ERR = 0
+               SEC.MENU.DESC<1,REF.NO> = MENU(MP)<1,3>
+            END
+         END
+      NEXT MP
+      IF PROC.ERR THEN
+         ERRMSG = "CANNOT LOCATE ENTRY ON SPECIFIED MENU"
+         GOSUB 90000
+         GOTO 6010
+      END
+   END
+   SEC.MENU.PROC<1,REF.NO> = ECD.RET.VALUE
+*
+*---- GET ZOOM DISPLAY
+*
+6020 *
+   IF PROCESS.ONFILE THEN
+      ECD.NUM = 26
+      ECD.SUB.NUM = REF.NO
+      MATREAD PPSX.REC FROM PMC_PROCESS_XREF, ECD.RET.VALUE THEN
+         MATREAD PPS.REC FROM PMC_PROCESS, PPSX.PROCESS.ID THEN
+            IF PPS.SEC = 'Y' THEN
+               IF SCV.REC(26)<1,REF.NO> = '' THEN
+                  SCV.REC(26)<1,REF.NO> = 'Y'
+               END
+               ECD.DEFAULT = SCV.REC(26)<1,REF.NO>
+               ECD.ACTION=4;CALL SCRN.EDIT
+               IF ECD.RET.VALUE # "END" THEN
+                  SEC.MENU.DISP<1,REF.NO> = ECD.RET.VALUE
+               END
+            END ELSE
+               SCV.REC(26)<1,REF.NO> = 'N'
+               ECD.ACTION = 5 ; CALL SCRN.EDIT
+               SEC.MENU.DISP<1,REF.NO> = 'N'
+            END
+         END ELSE
+            IF ECD.RET.VALUE[1,2] # "M." THEN          ;* T21859
+               ERRMSG = "CANNOT LOCATE PROCESS - ":ECD.RET.VALUE
+               GOSUB 90000
+            END
+            SCV.REC(26)<1,REF.NO> = 'N'
+            ECD.ACTION = 5 ; CALL SCRN.EDIT
+            SEC.MENU.DISP<1,REF.NO> = 'N'
+         END
+      END ELSE
+         IF ECD.RET.VALUE[1,2] # "M." THEN          ;* T21859
+            ERRMSG = "CANNOT LOCATE PROCESS - ":ECD.RET.VALUE
+            GOSUB 90000
+         END
+         SCV.REC(26)<1,REF.NO> = 'N'
+         ECD.ACTION = 5 ; CALL SCRN.EDIT
+         SEC.MENU.DISP<1,REF.NO> = 'N'
+      END
+   END
+   RETURN
+*
+*---- SET SCREEN VALUES
+*
+9000*
+   SCV.REC(2)<ESN> = SEC.PASSWORD
+   SCV.REC(12)<ESN> = SEC.MENU.LEVEL
+   SCV.REC(3)<ESN> = SEC.MENU.FLAG
+   SCV.REC(21)<ESN> = SEC.DFLT.QUEUE
+*T26135  SCV.REC(22)<ESN> = SEC.LOGIN
+*T26135  SCV.REC(23)<ESN> = SEC.LOGOUT
+*T24820  SCV.REC(24)<ESN> = SEC.TIME.OUT
+*     SCV.REC(19)<ESN> = SEC.ROLLOVER
+   SCV.REC(20)<ESN> = SEC.PORT
+   SCV.REC(25)<ESN> = SEC.NAME
+* T23304 v Check USER.MODE file for screen type then display
+*T27654 v
+*  READV SCREEN.TYPE FROM USER.MODE,USER.ID,1 ELSE SCREEN.TYPE = ""
+   IF SCREEN.TYPE = "" THEN
+      READV SCREEN.TYPE FROM USER.MODE,USER.ID,1 ELSE SCREEN.TYPE = ""
+   END
+*T27654 ^
+   SCV.REC(30)<ESN> = SCREEN.TYPE
+* T23304 ^
+*24231 v
+   SCV.REC(31)<ESN> = SEC.EMAIL
+   REF.CNT = COUNT(SEC.MENU.NAME,VM) + (SEC.MENU.NAME # "")
+   FOR N = 1 TO REF.CNT
+      SCV.REC(13)<1,N> = SEC.MENU.NAME<1,N>
+      SCV.REC(5)<1,N> = SEC.MENU.PROC<1,N>
+      SCV.REC(26)<1,N> = SEC.MENU.DISP<1,N>
+   NEXT N
+   RETURN
+*
+*---- DISPLAY MULTI-LINE FIELDS
+*
+10000*
+   START.REF.NO = 1 + INT((REF.NO-1)/LINE.COUNT)*LINE.COUNT
+   IF START.REF.NO = CURR.REF.NO THEN RETURN
+   CURR.REF.NO = START.REF.NO
+   ECD.NUM = 4
+   ECD.SUB.NUM = START.REF.NO
+   ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM = 13
+   ECD.SUB.NUM = START.REF.NO
+   ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM = 5
+   ECD.SUB.NUM = START.REF.NO
+   ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM = 26
+   ECD.SUB.NUM = START.REF.NO
+   ECD.ACTION=7;CALL SCRN.EDIT
+   RETURN
+*
+*---- ERROR ROUTINE
+*
+90000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+93000 ERR.TYPE=3;CALL SYSCOM(MAT SYSCOM.REC)
+*
+*---- END OF PROGRAM
+*
+99999*
+   RELEASE     ;* T26126
+END

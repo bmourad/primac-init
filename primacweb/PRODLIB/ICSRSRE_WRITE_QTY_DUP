@@ -1,0 +1,234 @@
+SUBROUTINE ICSRSRE_WRITE_QTY
+********************************************************************************
+*   Program name :- ICSRSRE_WRITE_QTY
+*   Created:- 5/17/2004 RAZI MOHIUDDIN
+*------------------------------------------------------------------------------*
+* In Properties:
+* --------------
+* Out Properties:
+* ---------------
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB INV_SERIAL
+$INCLUDE ICS.CPYLIB INV.CNV
+$INCLUDE PMC.CPYLIB PO
+
+OPEN '','INVENTORY' TO INVENTORY ELSE 
+	ERRMSG = 'INVENTORY FILE IS MISSING'; GOTO 93000
+END
+OPEN '','CONTROL' TO CONTROL ELSE 
+	ERRMSG = 'CONTROL FILE IS MISSING'; GOTO 93000
+END
+
+* Insert method code here
+STATUS = RBO.getProperty('','Qty',Qty)
+STATUS = RBO.getProperty('','UOM',UOM)
+STATUS = RBO.getProperty('','GRIDCNT',GRIDCNT)
+STATUS=RBO.getProperty('','Prod',Prod)
+
+STATUS = RBO.getProperty('','ID',ID)
+STATUS = RBO.getProperty('','PostDate',PostDate)
+STATUS = RBO.getProperty('','PoLine',PoLine)
+STATUS = RBO.getProperty('','Whse',Whse)
+STATUS=RBO.getProperty('','ManualEntry',MANUAL.ENTRY)
+
+POS = INDEX(ID,"!",1)
+PO_NO = ID[1,POS-1]
+MAN_NO =ID[POS+1,99]
+CONO = ID[1,3]
+S.POST.DATE=PostDate
+S.PO.LINE.NO=PoLine
+S.PROD=Prod
+S.WHSE=Whse
+TEMP.STK.QTY = ''
+TEMP.ROLL.WEIGHT = ''
+ERRMSG =''
+OPEN "","PO" TO PO ELSE
+  ERRMSG = "CANNOT OPEN PO FILE"; GOTO 93000
+END
+
+S.QTY.ENTERED=Qty
+S.UNIT=UOM
+GRIDCOUNT=GRIDCNT
+DIFF.UM=''
+STOREQTY=""
+NEW.OPEN=""
+NEW.ALLOC=""
+TTTTT=""
+TEMPPROD=""
+TEMP.QTY.ENTERED=0
+S.INV.UNIT=""
+FOR SS=1 TO GRIDCOUNT
+
+
+MATREAD INV.REC FROM INVENTORY,CONO:S.PROD<1,SS> THEN
+  INV.PRESENT = 1
+      S.INV.M.WT = INV.M.WT
+      S.INV.PAP.WIDTH<1,SS> = INV.PAP.WIDTH 
+     FOR I = 1 TO 4                          
+        S.INV.UNIT<1,SS,-1>=INV.UNIT<1,I>
+      NEXT I  
+      QTYLEN=LEN(S.QTY.ENTERED<1,SS>)-2
+      IF S.QTY.ENTERED<1,SS>[QTYLEN,1]="." THEN
+          S.QTY.ENTERED<1,SS>=S.QTY.ENTERED<1,SS>*100
+      END
+      S$VALUE = S.QTY.ENTERED<1,SS>        
+    *  S$VALUE = DSR.QTY<1,SS,Y>                                
+      GOSUB GET.CONV
+
+** START OF CALC S.QTY AND S.STK.QTY
+      IF DIFF.UM<SS> = "Y" THEN
+	 TEMP.ROLL.WEIGHT = S$VALUE
+        IF ICR.CNV<SS,2> = "MD0" THEN
+          S$VALUE = INT(((S$VALUE/ICR.MT1<SS,2>)*ICR.DV1<SS,2>)*ICR.DV2<SS,2> + .5)
+        END
+       IF ICR.CNV<SS,1> = "MD0" THEN
+          IF ICR.CNV<SS,2> # "MD0" THEN
+            S$VALUE = S$VALUE * 10
+          END
+          S$VALUE = INT(((S$VALUE/ICR.DV1<SS,1>)*ICR.MT1<SS,1>)/ICR.DV2<SS,1> + .5)
+          TEMP.STK.QTY = S$VALUE
+          S$VALUE = INT(((S$VALUE/ICR.MT1<SS,1>)*ICR.DV1<SS,1>)*ICR.DV2<SS,1> + .5)
+        END ELSE
+          S$VALUE = S$VALUE * ICR.MT1<SS,1> * 10
+          TEMP.STK.QTY = ""
+        END
+      END ELSE
+
+        IF ICR.CNV<SS,1> = "MD0" THEN
+          TEMP.STK.QTY = S$VALUE
+          S$VALUE = INT(((S$VALUE/ICR.MT1<SS,1>)*ICR.DV1<SS,1>)*ICR.DV2<SS,1> + .5)
+        END ELSE
+          S$VALUE = S$VALUE * 10
+          TEMP.STK.QTY = ""
+        END
+      END
+     TEMP.ROLL.WEIGHT = S$VALUE
+     S.QTY<1,SS> = TEMP.ROLL.WEIGHT
+     S.STK.QTY<1,SS> = TEMP.STK.QTY
+
+** END OF S.QTY AND S.STK.QTY
+	*DSR.DIAM<1,SS> = CALC_DIAM(S.QTY<1,SS>,S.STK.QTY<1,SS>, MAT INV.REC)
+    END ELSE
+      MAT INV.REC=''
+    END
+
+  TEMP.ROLL.WEIGHT = S.QTY<1,SS>
+  STOREQTY<1,SS> =S.QTY<1,SS>
+
+*STATUS = RBO.setProperty('','CALCQTY',ICR.CNV<SS,1>:"$$$":ICR.CNV<SS,2>:S.INV.UNIT<1,SS,2>:"&&":S.INV.UNIT<1,SS,3>)
+
+NEXT SS
+STATUS = RBO.setProperty('','CALCQTY',S.QTY)
+STATUS= RBO.setProperty('','CALCSTKQTY',S.STK.QTY)
+
+*************WARNING MSGS**********************
+WARNMSG=''
+MATREAD PO.REC FROM PO,PO_NO ELSE
+    ERRMSG = "P/O record cannot be found"
+    GOTO 93000
+END
+   PROB = 0
+   TOT = ""; SUM = ""
+   S.QTY=STOREQTY
+*STATUS = RBO.setProperty('','MTEST2',S.QTY)
+   LINE.CNT = GRIDCOUNT 
+   FOR LPTR = 1 TO LINE.CNT
+      IF S.POST.DATE<1,LPTR> = "" THEN
+        POLINE = S.PO.LINE.NO<1,LPTR>
+
+        TOT<1,POLINE> = TOT<1,POLINE> + S.QTY<1,LPTR>
+
+        IF S.WHSE<1,LPTR> = PO.WHSE<1,POLINE> THEN 
+          SUM<1,POLINE> = SUM<1,POLINE> + S.QTY<1,LPTR>
+        END
+      END
+    NEXT LPTR
+
+    PLCNT = DCOUNT(PO.PROD.NUM,@VM)
+    FOR I = 1 TO PLCNT
+
+
+   *   IF PO.QTY.OPEN<1,I> <> "" THEN
+      
+        NEW.OPEN = PO.QTY.OPEN<1,I> - TOT<1,I>
+
+*  T28054 v
+*      IF NEW.OPEN < 0 AND PO.QTY.OPEN<1,I> > 0 THEN
+*        IF INT(NEW.OPEN / PO.QTY.OPEN<1,I>) = 0 THEN
+*          NEW.OPEN = 0
+*        END
+*      END
+* T28054 ^
+      *IF NEW.OPEN < 0 AND MANUAL.ENTRY=0 THEN
+    IF (TOT<1,I> + PO.TOT.RECEVED<1,I>) > PO.TOT.ONORD<1,I> THEN
+
+      *  NEW.OPEN<1,I> = 0
+       *WARNMSG<1,I> = "Warning! Received more than ordered for P/O line #":I
+	 WARNMSG<1,I> = "Warning! Received more than ordered for P/O line #":I
+      END
+    *  END
+       NEW.ALLOC = SUM(PO.JB.OPEN<1,I>) - SUM<1,I>
+    IF NEW.ALLOC < 0 THEN NEW.ALLOC = 0
+     IF NEW.OPEN < NEW.ALLOC THEN
+        ERRMSG = "Remaining allocation exceeds P/O open for P/O line #":I
+	 LINE.STATUS<1,I> = ERRMSG
+        ERRMSG=""
+	 GOSUB 93000
+      END 
+    NEXT I
+
+ STATUS = RBO.setProperty('','WarnMsg',WARNMSG)
+***********************************************
+RETURN
+
+
+***********
+GET.CONV: 
+***********
+*
+IF NOT(INV.PRESENT) THEN
+  RETURN
+END
+BEGIN CASE
+  CASE S.INV.UNIT<1,SS,2> = "SHT" AND S.INV.UNIT<1,SS,3> = "LBS"
+    ICR.CNV<SS,1> = "MD0"; ICR.DV2<SS,1> = 1
+    ICR.DV1<SS,1> = S.INV.M.WT<1,SS>; ICR.MT1<SS,1> = 1
+  CASE S.INV.UNIT<1,SS,2> = "PC" AND S.INV.UNIT<1,SS,3> = "MSI"
+    ICR.CNV<SS,1> = "MD0"; ICR.DV2<SS,1> = 1
+    ICR.DV1<SS,1>=S.INV.PAP.WIDTH<1,SS>/100;ICR.MT1<SS,1>=10
+  CASE S.INV.UNIT<1,SS,2> = "FT" AND S.INV.UNIT<1,SS,3> = "MSI"
+    ICR.CNV<SS,1> = "MD0"; ICR.DV2<SS,1> = 12
+    ICR.DV1<SS,1>=S.INV.PAP.WIDTH<1,SS>/100;ICR.MT1<SS,1>=100
+  CASE 1
+    ICR.CNV<SS,1> = "MD2"; ICR.DV2<SS,1> = 1
+    ICR.DV1<SS,1> = 10; ICR.MT1<SS,1> = INV.SBR
+END CASE
+BEGIN CASE
+  CASE S.UNIT<1,SS>="SHT" AND S.INV.UNIT<1,SS,3>="LBS"
+    ICR.CNV<SS,2> = "MD0"; ICR.DV2<SS,2> = 1
+    ICR.DV1<SS,2> = S.INV.M.WT<1,SS>; ICR.MT1<SS,2> = 1
+  CASE S.UNIT<1,SS>="PC" AND S.INV.UNIT<1,SS,3>="MSI"
+    ICR.CNV<SS,2> = "MD0"; ICR.DV2<SS,2> = 1
+    ICR.DV1<SS,2>=S.INV.PAP.WIDTH<1,SS>/100;ICR.MT1<SS,2>=10
+  CASE S.UNIT<1,SS>="FT" AND S.INV.UNIT<1,SS,3>="MSI"
+    ICR.CNV<SS,2> = "MD0"; ICR.DV2<SS,2> = 12
+    ICR.DV1<SS,2>=S.INV.PAP.WIDTH<1,SS>/100;ICR.MT1<SS,2>=100
+  CASE 1
+    ICR.CNV<SS,2> = "MD2"; ICR.DV2<SS,2> = 1
+    ICR.DV1<SS,2> = 10; ICR.MT1<SS,2> = 1
+END CASE
+IF S.UNIT<1,SS> # S.INV.UNIT<1,SS,2> THEN 
+  DIFF.UM<SS> = "Y" 
+END ELSE
+  DIFF.UM<SS> = "N"
+END
+*
+RETURN
+
+93000
+STATUS = RBO.setProperty('','ServerStatus',1)
+STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+ *STATUS = RBO.setProperty('','WarnMsg',WARNMSG)
+RETURN

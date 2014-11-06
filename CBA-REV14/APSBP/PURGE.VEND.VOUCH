@@ -1,0 +1,160 @@
+******************************************************
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - APSBP
+* PROGRAM     - PURGE.VEND.VOUCH
+* BY          - WALID YAMOUT,COMPUTER BUSINESS ASSOCIATES 
+* DATE        - 02/27/86
+* DESCRIPTION - This program purge items from VEND.VOUCH.STATS file.
+*T25669 lanny 03/05/2001 * May be multilple PO's for given record and
+*                          VSTAT.PO.VOU field not cleared.
+*T25755 cm 04/19/2001 * Modify pgm to recognize new OUTSIDE.PO format
+*                       with seq numbers.
+*ENDDOC
+******************************************************
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>APS.CPYLIB>VEND.VOUCH.STATS
+*COPY>APS.CPYLIB>VEND.PROD.STATS
+*COPY>APS.CPYLIB>VEND.STATS ;*T25669
+*COPY>CPYLIB>CHAR
+*
+**** READ PROC VALUES
+*
+10*
+   PROCREAD LINE ELSE
+      PRINT @(0,23):"THIS PROGRAM MUST RUN FROM A PROC":;INPUT X,1:
+      GOTO 99999
+   END
+   CONO = LINE<1>
+   PO.TYPE = LINE<7> ;*T25669
+*
+**** OPEN FILE
+*
+   OPEN "","VEND.VOUCH.STATS" TO VEND.VOUCH.STATS ELSE 
+      ERRMSG = "VEND.VOUCH.STATS FILE IS MISSING"
+      GOTO 88888
+   END
+   OPEN "","VEND.PROD.STATS" TO VEND.PROD.STATS ELSE 
+      ERRMSG = "VEND.PROD.STATS FILE IS MISSING"
+      GOTO 88888
+   END
+*T25669 v
+   OPEN "","VEND.STATS" TO VEND.STATS ELSE 
+      ERRMSG = "VEND.STATS FILE IS MISSING"
+      GOTO 88888
+   END
+*T25669 ^
+   OPEN "","COMPANY" TO COMPANY ELSE 
+      ERRMSG = "COMPANY FILE IS MISSING"
+      GOTO 88888
+   END
+   MATREAD COMP.REC FROM COMPANY, CONO ELSE
+      ERRMSG = "COMPANY RECORD IS MISSING"
+      GOTO 88888
+   END
+*
+   DEL.PO='' ; NODEL.PO='' ;*T25669
+*
+**** MAIN PROCESS
+*
+   DATA = 1
+   LOOP
+      READNEXT ID ELSE DATA = 0
+   WHILE DATA = 1 DO
+      IF CONO # ID[1,3] THEN GOTO 1999
+      MATREADU VVOS.REC FROM VEND.VOUCH.STATS, ID ELSE GOTO 1888
+      VEND.NO = FIELD(ID,"!",1)[4,8]
+      VOUCH.NO = FIELD(ID,"!",2)
+      MATREADU VSTAT.REC FROM VEND.STATS,CONO:VEND.NO:"!":PO.TYPE ELSE MAT VSTAT.REC = '' ;*T25669
+      BLK = 0
+      CNT = COUNT(VVOS.PO.NO,VM) + (VVOS.PO.NO # "")
+*T25669 FOR TR = 1 TO CNT UNTIL BLK
+      FOR TR = CNT TO 1 STEP -1 ;*T25669
+         BLK = 0
+*     VPDS.KEY = CONO : VEND.NO : "!" : VVOS.PO.TYPE<1,1> : "!" : VVOS.PO.NO<1,TR> : "!"
+         VPDS.KEY = CONO : VEND.NO : "!" : PO.TYPE : "!" : VVOS.PO.NO<1,TR> : "!"
+*     IF VVOS.PO.TYPE<1,1> = "M" THEN
+         IF PO.TYPE = "M" THEN
+            VPDS.KEY = VPDS.KEY : VVOS.SEQ.NO<1,TR>
+         END ELSE
+            VPDS.KEY = VPDS.KEY : VVOS.PROD<1,TR>
+         END
+*T25755 v
+*        VPDS.KEY = VPDS.KEY : "!" : VVOS.WHSE<1,TR>
+         IF VVOS.PO.TYPE<1,1> = 'O' THEN
+            VPDS.KEY = VPDS.KEY:'!':VVOS.WHSE<1,TR>:'@':VVOS.PO.SEQ<1,TR>
+         END ELSE
+            VPDS.KEY = VPDS.KEY : "!" : VVOS.WHSE<1,TR>
+         END
+*T25755 ^
+         MATREAD VPDS.REC FROM VEND.PROD.STATS, VPDS.KEY ELSE MAT VPDS.REC = ""
+         LOCATE VOUCH.NO IN VPDS.VOU.NO<1>,1 SETTING BLK ELSE BLK = 0
+*T25669 v
+         IF BLK = 0 THEN
+            LOCATE VVOS.PO.NO<1,TR> IN DEL.PO<1>,1 SETTING DP ELSE
+               DEL.PO<1,DP> = VVOS.PO.NO<1,TR>
+            END
+            VVOS.TOT.COST -= VVOS.PROD.COST<1,TR>
+            DEL VVOS.PO.NO<1,TR>
+            DEL VVOS.PO.TYPE<1,TR>
+            DEL VVOS.PROD<1,TR>
+            DEL VVOS.PROD.DESC<1,TR>
+            DEL VVOS.U.M<1,TR>
+            DEL VVOS.WHSE<1,TR>
+            DEL VVOS.VOU.QTY<1,TR>
+            DEL VVOS.VOU.UN.COST<1,TR>
+            DEL VVOS.PROD.COST<1,TR>
+            DEL VVOS.SEQ.NO<1,TR>
+            DEL VVOS.MISC.CATG<1,TR>
+            DEL VVOS.PO.SEQ<1,TR>
+         END ELSE
+            LOCATE VVOS.PO.NO<1,TR> IN NODEL.PO<1>,1 SETTING DP ELSE
+               NODEL.PO<1,DP> = VVOS.PO.NO<1,TR>
+            END
+         END
+*T25669 ^
+      NEXT TR
+*T25669 v
+*  IF BLK THEN GOTO 1888
+*  DELETE VEND.VOUCH.STATS, ID
+      IF VVOS.PO.NO = '' THEN
+         DELETE VEND.VOUCH.STATS, ID
+      END ELSE
+         MATWRITE VVOS.REC ON VEND.VOUCH.STATS, ID
+      END
+      IF NODEL.PO # '' THEN
+         FOR I = DCOUNT(NODEL.PO,VM) TO 1 STEP -1
+            LOCATE NODEL.PO<1,I> IN DEL.PO<1>,1 SETTING FND THEN
+               DEL DEL.PO<1,FND>
+            END
+         NEXT I
+      END
+      IF DEL.PO # '' THEN
+         FOR I = DCOUNT(DEL.PO,VM) TO 1 STEP -1
+            LOCATE DEL.PO<1,I> IN VSTAT.PO<1>,1 SETTING POFND THEN
+               LOCATE VOUCH.NO IN VSTAT.VOUCH.NOS<1,POFND>,1 SETTING VFND THEN
+                  DEL VSTAT.VOUCH.NOS<1,POFND,VFND>
+               END
+            END
+         NEXT I
+      END
+      IF VSTAT.PO # '' THEN MATWRITE VSTAT.REC ON VEND.STATS, CONO:VEND.NO:"!":PO.TYPE ELSE RELEASE VEND.STATS,CONO:VEND.NO:"!":PO.TYPE
+*T25669 ^
+      GOTO 1999
+1888*
+      RELEASE VEND.VOUCH.STATS, ID
+1999*
+   REPEAT
+   GOTO 99999
+*
+**** END OF JOB
+*
+88888*
+   PRINT @(0,23) : CL : ERRMSG :
+   INPUT X,1 :
+   PRINT @(0,23) : CL :
+   LINE = "END"
+   PROCWRITE LINE
+99999*
+END

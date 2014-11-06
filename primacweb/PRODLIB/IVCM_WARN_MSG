@@ -1,0 +1,150 @@
+SUBROUTINE IVCM_WARN_MSG
+********************************************************************************
+*   Program name :- IVCM_WARN_MSG
+*   Created:- 5/6/2004 by Zubair
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE JCS.CPYLIB JOB
+$INCLUDE JCS.CPYLIB JOB.SHIP
+$INCLUDE CPYLIB CHAR
+* Insert method code here
+OPEN "","JOB" TO JOB ELSE ERRMSG = "CANNOT OPEN JOB.REC FILE" ; GOTO 1000
+OPEN "","JOB.SHIP" TO JOB.SHIP ELSE ERRMSG="JOB.SHIP FILE IS MISSING"; GOTO 1000
+
+*IVC.CHG.CODE AND IVC.CHG.CAT CAN BE COLLECTED FROM GRID (FROM HIDDEN FIELDS)
+*IVC.TAX.JURS HAS TO BE COLLECTED.
+
+STATUS = RBO.getProperty('','DI_AMOUNT',IVC.AMOUNT) ; * SHIP AMOUNT -(THE VALUES SHI (CODEVALUE) FROM GRID) 
+STATUS = RBO.getProperty('','DI_CHG_CODE',IVC.CHG.CODE) ; * (GRID CODE VALUE)
+STATUS = RBO.getProperty('','DI_CHG_CAT',IVC.CHG.CAT) ; * (CATEOGRY ) CATEGORY OF GRID CODE VALUE
+
+* FROM GRID EACH CODE VALUE HAS ONE IVC.TAX.JURS FOR TAX AND SHIP ETC. FOR JOB AND JOB1 IT IS ''))
+STATUS = RBO.getProperty('','CUST_TAX_JURIS',IVC.TAX.JURS) 
+STATUS = RBO.getProperty('','JOB_NO',JOB.NO) ; * JOB NO
+STATUS = RBO.getProperty('','PMCProperty',PMCProperty)
+CONO = PMCProperty<1,4>
+
+   JJURS=""; JSHIP=""; JCOST=""; JSALE=""
+   JJCNT=0; JSCNT=0
+
+   MATREAD JOB.REC FROM JOB , CONO : JOB.NO ELSE
+   END
+   SAVE.JOB.SUBS = JOB.SUBS  ; * SUB JOBS FOR JOB
+
+   IF SAVE.JOB.SUBS="" THEN JJOBS=JOB.NO ELSE JJOBS=SAVE.JOB.SUBS:VM:JOB.NO ; * sub jobs related to JOB
+   PRE.BILL.BAL=""
+   SHIP.WIP=0  ; *COLLECTING FROM JOB FILE(INCLUDES SUBJOBS)SUMMATION OF JOB.SP.WIP FIELD
+   JCNT=COUNT(JJOBS,VM) + (JJOBS # "")
+
+
+   FOR J=1 TO JCNT
+      JB=JJOBS<1,J>
+      CURR.JOB.NO=JB
+      MATREAD JOB.REC FROM JOB, CONO:JB ELSE GOTO 21080
+			ICNT=COUNT(JOB.INV.NO,VM) + (JOB.INV.NO # "")
+			FOR IP=1 TO ICNT
+				IF JOB.INV.NO<1,IP>[7,2]="PB" THEN
+					PRE.BILL.BAL<1,J>="Y"
+				END
+			NEXT IP
+			SHIP.WIP=SHIP.WIP + JOB.SP.WIP<1,2,1>
+			DCNT=COUNT(JOB.SP.DEPT,VM) + (JOB.SP.DEPT # "")
+			FOR D=1 TO DCNT
+				SP.ID = CONO:JB:"!":JOB.SP.DEPT<1,D>:"!":JOB.SP.CCTR<1,D>:"!"		
+				FOR DS=1 TO JOB.SP.SEQ<1,D>
+					MATREAD JSP.REC FROM JOB.SHIP, SP.ID:DS ELSE GOTO 21070
+						LOCATE JSP.JURS IN JJURS<1>,1 SETTING FND ELSE FND=0
+						IF FND=0 THEN
+							JJCNT=JJCNT + 1
+							JJURS<1,JJCNT>=JSP.JURS
+						END
+						LOCATE JSP.VIA IN JSHIP<1>,1 SETTING FND ELSE FND=0
+						IF FND=0 THEN
+							JSCNT=JSCNT + 1
+							JSHIP<1,JSCNT>=JSP.VIA
+							JCOST<1,JSCNT>=JSP.COST
+							JSALE<1,JSCNT>=JSP.SALE
+						END ELSE
+							JCOST<1,FND>=JCOST<1,FND> + JSP.COST
+							JSALE<1,FND>=JSALE<1,FND> + JSP.SALE
+						END
+				21070 NEXT DS
+			NEXT D
+21080 NEXT J
+*STATUS = RBO.setProperty('','ServerMessage','SRV MSG -- ' : JJCNT :"!" : JSCNT :"!" : SHIP.AMT :"!" : SHIP.WIP )
+*RETURN
+*STATUS = RBO.setProperty('','ServerMessage','SRV MSG -- ' : JJCNT :"!": JJMAT :"!": JSCNT :"!": JSMAT :"!":SHIP.AMT :"!" : SHIP.WIP )
+*RETURN
+
+*
+*---- MATCH TAX JURISDICTIONS
+*
+
+   SHIP.AMT = 0
+   JJMAT=""; JSMAT=""
+   LCNT=COUNT(IVC.CHG.CODE,VM) + (IVC.CHG.CODE # "")
+
+   FOR L=1 TO LCNT
+      CATG=IVC.CHG.CAT<1,L>
+      BEGIN CASE
+         CASE CATG="TAX"
+            J=IVC.TAX.JURS<1,L>
+            LOCATE J IN JJURS<1>,1 SETTING FND ELSE FND=0
+            IF FND > 0 THEN JJMAT<1,FND>="X"
+         CASE CATG="SHP"
+            *SHIP.AMT=SHIP.AMT + IVC.AMOUNT<1,L>
+		SHIP.AMT = IVC.AMOUNT
+            S=IVC.TAX.JURS<1,L>
+            LOCATE S IN JSHIP<1>,1 SETTING FND ELSE FND=0
+            IF FND > 0 THEN JSMAT<1,FND>="X"
+      END CASE
+   NEXT L
+*
+
+
+   ERR=0
+   FOR J=1 TO JJCNT UNTIL ERR
+      IF JJMAT<1,J>="" THEN
+	  ERR=1     
+         WARN_MSG<1,1>="Taxes not entered for all tax jurisdictions on job"
+      END
+   NEXT J
+   ERR=0
+   FOR S=1 TO JSCNT UNTIL ERR
+      IF JSMAT<1,S>="" THEN
+	  ERR=1
+         WARN_MSG<1,2>="Shipping charges not entered for all carriers used on job"
+      END
+   NEXT S
+   ERR=0
+   IF SHIP.AMT > SHIP.WIP THEN
+      ERR=1
+      WARN_MSG<1,3>="Shipping charges entered exceeds WIP by ":OCONV((SHIP.AMT-SHIP.WIP),"MD2,$")
+   END
+   ERR=0
+   IF SHIP.WIP > SHIP.AMT THEN
+      ERR=1
+      WARN_MSG<1,4>="WIP exceeds shipping charges entered by ":OCONV((SHIP.WIP-SHIP.AMT),"MD2,$")
+   END
+
+* collect the ERRMSG
+
+STATUS = RBO.setProperty('','WARN_MSG',WARN_MSG)
+RETURN
+
+* End of method code
+1000*
+STATUS = RBO.setProperty('','ServerStatus',1)
+STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+
+

@@ -1,0 +1,759 @@
+      SUBROUTINE GEN.JOB.SCHED.FWD(CONO,ACTION,JOB.NUM,LAST.DATE,TODAY,DUE.DATE,ST.PTR,EN.PTR,BCK.FLG)
+*********************************************************************
+* REVISION - [08.1]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM   - PRIMAC
+* SOURCE   - PSSBP
+* PROGRAM  - GEN.JOB.SCHED.FWD
+* AUTHOR   - WALID YAMOUT, COMPUTER BUSINESS ASSOCIATES
+* DATE     - 05/04/86
+* DESCRIPTION
+* This program will schedule all operations forward from JOB.SCHED
+* record and update CCTR.SCHED file.
+*T20004 rick 01/11/1996 * Bug fix where large cctr entry cannot find
+*                         space to sched when continuous flag is set to
+*                         "N"
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>CPYLIB>SCOMMON1
+*COPY>PSS.CPYLIB>COM.PSS.FILE.VARS
+*COPY>PSS.CPYLIB>COM.CCTR.SCHED
+*COPY>PSS.CPYLIB>COM.JOB.SCHED
+*COPY>PSS.CPYLIB>JOB.SCHED
+*COPY>PSS.CPYLIB>CCTR.SCHED
+*COPY>PSS.CPYLIB>CCTR.AVAIL
+*COPY>PSS.CPYLIB>PSS.FILE.VARS
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>CHAR
+*
+*---- LINE ITEM DIM
+*
+      DIM HOLD.REC(15)
+      EQU DEPT         TO HOLD.REC(1)
+      EQU CCTR         TO HOLD.REC(2)
+      EQU H.CODE       TO HOLD.REC(3)
+      EQU H.SHIFT      TO HOLD.REC(4)
+      EQU H.EQUIP      TO HOLD.REC(5)
+      EQU H.LOAD       TO HOLD.REC(6)
+      EQU H.DATE       TO HOLD.REC(7)
+      EQU H.PO         TO HOLD.REC(8)
+      EQU H.DC         TO HOLD.REC(9)
+      EQU H.DAYS       TO HOLD.REC(10)
+      EQU H.CONT.SCH   TO HOLD.REC(11)
+      EQU H.SAME.EQUIP TO HOLD.REC(12)
+      EQU CCTR.HRS     TO HOLD.REC(13)
+*
+*---- ALL DIM
+*
+      DIM ALL.REC(5)
+      EQU ALL.DATE TO ALL.REC(1)
+      EQU ALL.EQP  TO ALL.REC(2)
+      EQU ALL.SFT  TO ALL.REC(3)
+      EQU ALL.HRS  TO ALL.REC(4)
+*
+*---- INITIALIZATION
+*
+      IF ACTION = "W" THEN WIN.MODE = 1 ELSE WIN.MODE = 0
+      ACTION = ""
+      MAT HOLD.REC = ""
+      MAT ALL.REC = ""
+      MAT EDIT.COM = ""
+      TYP = 0
+      CALL EDIT.SUB1 (MAT EDIT.COM)
+      ERRMSG = ""
+      REQ.DATE = LAST.DATE
+      LAST.DATE = ""
+      LAST.PTR = 0
+      FRST.PTR = 0
+      IF REQ.DATE < TODAY THEN REQ.DATE = TODAY
+*
+*---- MAIN PROCESSING
+*
+      TR.CNT = DCOUNT(JBS.DEPT,VM)
+*
+*---- GET CDATE
+*
+      IF EN.PTR + 0 = 0 THEN EN.PTR = TR.CNT
+      IF ST.PTR + 0 = 0 THEN ST.PTR = 1
+      SFT = 1
+      XDATE = REQ.DATE
+      BEGIN CASE
+      CASE BCK.FLG = "Y"
+      CASE BCK.FLG = "M"
+      CASE 1
+         ST.PTR = 0
+         CDATE = ""
+         FOR TR = 1 TO TR.CNT UNTIL ST.PTR
+            BEGIN CASE
+            CASE JBS.DEPT.STATUS<1,TR> # ""
+            CASE JBS.USD.HRS<1,TR> < JBS.SCH.HRS<1,TR>
+               ST.PTR = TR
+            END CASE
+         NEXT TR
+         BEGIN CASE
+         CASE ST.PTR = 0
+            GOTO 99999
+         CASE ST.PTR > TR.CNT
+            GOTO 99999
+         CASE ST.PTR > 1
+            ST.PTR = ST.PTR - 1
+         END CASE
+      END CASE
+*
+*---- SCHEDULE JOB FROM TODAY FORWARD
+*
+1000*
+      BLK = 0
+      FOR TR = ST.PTR TO EN.PTR UNTIL BLK
+         DEPT = JBS.DEPT<1,TR>
+         CCTR = JBS.CCTR<1,TR>
+         H.CODE = JBS.HOLD.CODE<1,TR>
+         BEGIN CASE
+         CASE JBS.DEPT.STATUS<1,TR> = "C"
+            IF JBS.CMP.DATE<1,TR> > XDATE THEN
+               XDATE = JBS.CMP.DATE<1,TR>
+               SFT = 3
+            END
+            GOTO 1899
+         CASE JBS.DEPT.STATUS<1,TR> = "I"
+            BEGIN CASE
+            CASE JBS.EXP.DATE<1,TR> > XDATE
+               XDATE = JBS.EXP.DATE<1,TR>
+               SFT = JBS.EXP.SHIFT<1,TR>
+            CASE JBS.EXP.DATE<1,TR> < XDATE
+            CASE JBS.EXP.SHIFT<1,TR> > SFT
+               SFT = JBS.EXP.SHIFT<1,TR>
+            END CASE
+            GOTO 1899
+         CASE JBS.USD.HRS<1,TR> >= JBS.SCH.HRS<1,TR>
+            BEGIN CASE
+            CASE JBS.EXP.DATE<1,TR> > XDATE
+               XDATE = JBS.EXP.DATE<1,TR>
+               SFT = JBS.EXP.SHIFT<1,TR>
+            CASE JBS.EXP.DATE<1,TR> < XDATE
+            CASE JBS.EXP.SHIFT<1,TR> > SFT
+               SFT = JBS.EXP.SHIFT<1,TR>
+            END CASE
+            GOTO 1899
+         CASE JBS.USD.HRS<1,TR> > 0 AND H.CODE = "L"
+            GOSUB 4000
+         CASE JBS.USD.HRS<1,TR> > 0 AND H.CODE = "SC"
+            GOSUB 4000
+         CASE JBS.USD.HRS<1,TR> > 0 AND H.CODE = "SCN"
+            GOSUB 4000
+         CASE JBS.USD.HRS<1,TR> > 0 AND H.CODE = "SA"
+            GOSUB 4000
+         CASE JBS.USD.HRS<1,TR> > 0 AND H.CODE = "SAN"
+            GOSUB 4000
+         CASE JBS.USD.HRS<1,TR> > 0
+            BEGIN CASE
+            CASE JBS.EXP.DATE<1,TR> > XDATE
+               XDATE = JBS.EXP.DATE<1,TR>
+               SFT = JBS.EXP.SHIFT<1,TR>
+            CASE JBS.EXP.DATE<1,TR> < XDATE
+               XDATE = XDATE - 1
+               SFT = 3
+            CASE JBS.EXP.SHIFT<1,TR> > SFT
+               SFT = JBS.EXP.SHIFT<1,TR>
+            END CASE
+            IF SFT > 2 THEN
+               XDATE = XDATE + 1
+               SFT = 1
+            END ELSE
+               SFT = SFT + 1
+            END
+         CASE 1
+         END CASE
+         CCTR.HRS = JBS.SCH.HRS<1,TR> - JBS.USD.HRS<1,TR>
+         BGN.HRS = CCTR.HRS
+*
+*---- CHECK FOR HOLD
+*
+         H.SHIFT = JBS.SHIFT<1,TR>
+         H.EQUIP = JBS.EQUIP<1,TR>
+         H.LOAD = JBS.OVER.LOAD<1,TR>
+         H.DATE = JBS.HOLD.DATE<1,TR>
+         H.PO = JBS.HOLD.PO<1,TR>
+         H.DC = JBS.HOLD.DP.CC<1,TR>
+         H.DAYS = JBS.HOLD.DAYS<1,TR>
+         H.CONT.SCH = JBS.CONT.SCH<1,TR>
+         H.SAME.EQUIP = JBS.SAME.EQUIP<1,TR>
+         IF H.LOAD = "Y" AND H.CONT.SCH # "Y" THEN H.CONT.SCH = "Y"
+         IF H.EQUIP # "" AND H.SAME.EQUIP # "Y" THEN H.SAME.EQUIP = "Y"
+*
+*---- CHECK THE SHIFT
+*
+         BEGIN CASE
+         CASE H.SHIFT = ""
+         CASE NOT(NUM(H.SHIFT))
+            BLK = 1
+            ERRMSG = "INVALID SHIFT - ":H.SHIFT:" FOR CCTR ":CCTR
+            GOTO 1899
+         END CASE
+*
+*---- CHECK THE RESOURCE
+*
+         BEGIN CASE
+         CASE H.EQUIP = ""
+         CASE NOT(NUM(H.EQUIP))
+            BLK = 1
+            ERRMSG = "INVALID RESOURCE NUMBER - ":H.EQUIP:" FOR CCTR ":CCTR
+         CASE 1
+            GOSUB 3000
+         END CASE
+         IF BLK THEN GOTO 1899
+*
+*---- ALGORITHIM TO ADJUST START DATE
+*
+         BEGIN CASE
+         CASE JBS.USD.HRS<1,TR> > 0
+         CASE BCK.FLG = "M" AND TR = ST.PTR
+         CASE 1
+            IF WIN.MODE THEN ACTION = "W" ELSE ACTION = ""
+            CALL GEN.JOB.SCHED.FWD.DATE(CONO,ACTION,JOB.NUM,XDATE,SFT,TODAY,BLK,ERRMSG,MAT HOLD.REC,REQ.DATE,TR,ST.PTR)
+         END CASE
+         IF BLK THEN GOTO 1899
+         IF XDATE < REQ.DATE THEN
+            XDATE = REQ.DATE
+            SFT = 1
+         END
+*
+*---- SCHEDULE HOURS
+*
+1100*
+*ERRMSG="(1100) XDATE=":OCONV(XDATE,"D2-");GOSUB 90000
+         GOSUB 80000
+1105*
+*ERRMSG="(1105) XDATE=":OCONV(XDATE,"D2-");GOSUB 90000
+         BEGIN CASE
+         CASE BLK
+            GOTO 1899
+         CASE H.CODE = "L"                ;***TEST NA 07/18/91 ***
+            BEGIN CASE
+            CASE TR = 1
+            CASE XDATE > JBS.EXP.DATE<1,TR-1>
+            CASE XDATE = JBS.EXP.DATE<1,TR-1> AND SFT >= JBS.EXP.SHIFT<1,TR-1>
+            CASE 1
+               BLK = 1
+               ERRMSG = "Cannot schedule within defined date for cost center ":CCTR
+               GOTO 1899
+            END CASE
+         CASE CCS.AVL.SHR<1,SFT> < 1
+            IF SFT > 2 THEN
+               MATWRITE CCTR.SCHED.REC ON CCTR.SCHED, CONO:CCTR:"*":XDATE
+               XDATE = XDATE + 1
+               SFT = 1
+               GOTO 1100
+            END ELSE
+               SFT = SFT + 1
+               GOTO 1105
+            END
+         CASE CCS.REM.HRS < 1 AND H.LOAD # "Y"
+            MATWRITE CCTR.SCHED.REC ON CCTR.SCHED, CONO:CCTR:"*":XDATE
+            XDATE = XDATE + 1
+            SFT = 1
+            GOTO 1100
+         END CASE
+         SDATE = XDATE
+         SSFT = SFT
+         GOSUB 10000
+         IF BLK THEN GOTO 1899
+         GOSUB 70000
+1899*
+         MAT HOLD.REC = ""
+      NEXT TR
+P_X  = 0 ; P_Y = 23 ; P_VALUE = @(-4) ; P_OPT = ""
+CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+*
+*---- CHECK IF JOB IS SCHED AND SET ACTION
+*
+      BEGIN CASE
+      CASE BLK
+         GOSUB 90000
+         ACTION = "E"
+      CASE 1
+         DUE.DATE = XDATE
+      END CASE
+      EN.PTR = LAST.PTR
+      ST.PTR = FRST.PTR
+      GOTO 99999
+*
+*---------------------*
+*---  SUBROUTINES  ---*
+*---------------------*
+*
+*---- CHECK FOR RESOURCE AVAILABLITY
+*
+3000*
+      MATREAD CCTR.AVAIL.REC FROM CCTR.AVAIL, CONO:DEPT:"*":CCTR ELSE
+         MATREAD CCTR.AVAIL.REC FROM CCTR.AVAIL, CONO:DEPT ELSE
+            BLK = 1
+            ERRMSG = "Cannot locate availability for cost center ":CCTR
+         END
+      END
+      IF BLK THEN GOTO 3099
+      SBLK = 0
+      FOR MM = 1 TO 7 UNTIL SBLK
+         FOR SS = 1 TO 3 UNTIL SBLK
+            IF CCA.MULT<1,MM,SS> > H.EQUIP THEN SBLK = 1
+         NEXT SS
+      NEXT MM
+      IF SBLK = 0 THEN
+         X = 0
+         Y = 23
+         PMSG = "RESOURCE ":H.EQUIP:" IS NOT DEFINED FOR CCTR ":CCTR:". CONTINUE (Y/N)"
+         TYP = 8
+         IF WIN.MODE THEN
+            VALUE = "N"
+         END ELSE
+            CALL EDIT.SUB1 (MAT EDIT.COM)
+         END
+P_X  = 0 ; P_Y = 23 ; P_VALUE = @(-4) ; P_OPT = ""
+CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         IF VALUE # "Y" THEN
+            BLK = 1
+            ERRMSG = "YOU NEED TO DEFINE RESOURCE ":H.EQUIP:" ON CCTR ":CCTR
+         END
+      END
+3099*
+      RETURN
+*
+*---- GET START DATE AND SHIFT FOR PARTIALLY SCHEDULE CCTR WITH
+*---- OVERLAP CODES.
+*
+4000*
+      BEGIN CASE
+      CASE JBS.EXP.DATE<1,TR> > REQ.DATE
+         XDATE = JBS.EXP.DATE<1,TR>
+         SFT = JBS.EXP.SHIFT<1,TR>
+      CASE JBS.EXP.DATE<1,TR> < REQ.DATE
+         XDATE = REQ.DATE - 1
+         SFT = 3
+      CASE 1
+         SFT = JBS.EXP.SHIFT<1,TR>
+      END CASE
+*
+*---- ADVANCE TO THE NEXT SHIFT
+*
+      IF SFT > 2 THEN
+         XDATE = XDATE + 1
+         SFT = 1
+      END ELSE
+         SFT = SFT + 1
+      END
+      RETURN
+*
+*---- CHECK CCTR.SCHED FOR AVAIL HRS
+*
+10000*
+*ERRMSG="(10000) XDATE=":OCONV(XDATE,"D2-");GOSUB 90000
+      MLT.CNT = CCS.MULT<1,SFT>
+      IF MLT.CNT < 1 THEN MLT.CNT = 1
+      BEGIN CASE
+      CASE H.CODE = "L" AND H.EQUIP # ""  ;***TEST NA 07/18/91 ***
+         MLT = H.EQUIP
+         MPTR = MLT
+      CASE H.CODE = "L"                   ;***TEST NA 07/18/91 ***
+         MLT = 1
+         MPTR = MLT
+      CASE H.LOAD = "Y" AND H.EQUIP # ""
+10100*
+         MLT = H.EQUIP
+         MPTR = MLT
+      CASE H.LOAD = "Y"
+10200*
+         MLT = 0
+         MPTR = 1
+         XPTR = 0
+         FOR MM = 1 TO MLT.CNT UNTIL MLT
+            BEGIN CASE
+            CASE CCS.REM.SM.HRS<1,SFT,MM> = CCTR.HRS
+               MLT = MM
+            CASE CCS.REM.SM.HRS<1,SFT,MM> > CCTR.HRS
+               IF XPTR = 0 THEN
+                  XPTR = MM
+               END ELSE
+                  IF CCS.REM.SM.HRS<1,SFT,MM> < CCS.REM.SM.HRS<1,SFT,XPTR> THEN
+                     XPTR = MM
+                  END
+               END
+            CASE CCS.REM.SM.HRS<1,SFT,MM> = CCS.AVL.SHR<1,SFT> AND XPTR = 0
+               MLT = MM
+            CASE CCS.REM.SM.HRS<1,SFT,MM> > CCS.REM.SM.HRS<1,SFT,MPTR>
+               MPTR = MM
+            END CASE
+         NEXT MM
+         IF MLT = 0 AND XPTR > 0 THEN MLT = XPTR
+      CASE H.CONT.SCH = "Y"
+10300*
+         IF WIN.MODE THEN ACTION = "W" ELSE ACTION = ""
+         CALL GEN.JOB.SCHED.FWD.SUB(CONO,ACTION,BLK,ERRMSG,MAT ALL.REC,MAT HOLD.REC,XDATE,SFT,MLT.CNT,MAT EDIT.COM)
+         IF BLK THEN GOTO 10389
+         D.CNT = DCOUNT(ALL.DATE,AM)
+         FOR DD = 1 TO D.CNT
+            XDATE = ALL.DATE<1>
+            MATREADU CCTR.SCHED.REC FROM CCTR.SCHED, CONO:CCTR:"*":XDATE ELSE
+               MAT CCTR.SCHED.REC = ""
+               CCS.DEPT = DEPT
+               ERRMSG = ""
+               CALL GEN.CCTR.SCHED.SUB (CONO, CCTR, XDATE, ERRMSG)
+               ERRMSG = ""
+            END
+            E.CNT = DCOUNT(ALL.EQP<1>,VM)
+            FOR EE = 1 TO E.CNT
+               MLT = ALL.EQP<1,EE>
+               S.CNT = DCOUNT(ALL.SFT<1,EE>,SVM)
+               FOR SS = 1 TO S.CNT
+                  SFT = ALL.SFT<1,EE,SS>
+                  OPER.HRS = ALL.HRS<1,EE,SS>
+                  GOSUB 30000
+               NEXT SS
+            NEXT EE
+            GOSUB 70000
+            ALL.DATE = DELETE(ALL.DATE,1,0,0)
+            ALL.EQP = DELETE(ALL.EQP,1,0,0)
+            ALL.SFT = DELETE(ALL.SFT,1,0,0)
+            ALL.HRS = DELETE(ALL.HRS,1,0,0)
+         NEXT DD
+10389*
+         CCTR.HRS = 0
+         GOTO 19999
+      CASE H.EQUIP # ""
+10600*
+         MLT = H.EQUIP
+         MPTR = MLT
+      CASE H.SAME.EQUIP = "Y"
+10700*
+         MLT = 0
+         MPTR = 0
+         XPTR = 0
+         FOR MM = 1 TO MLT.CNT UNTIL MLT
+            BEGIN CASE
+            CASE CCS.REM.SM.HRS<1,SFT,MM> = CCTR.HRS
+               MLT = MM
+            CASE CCS.REM.SM.HRS<1,SFT,MM> > CCTR.HRS
+               IF XPTR = 0 THEN
+                  XPTR = MM
+               END ELSE
+                  IF CCS.REM.SM.HRS<1,SFT,MM> < CCS.REM.SM.HRS<1,SFT,XPTR> THEN
+                     XPTR = MM
+                  END
+               END
+            CASE CCS.REM.SM.HRS<1,SFT,MM> = CCS.AVL.SHR<1,SFT> AND XPTR = 0
+               MLT = MM
+            CASE MPTR = 0
+               IF CCS.REM.SM.HRS<1,SFT,MM> > 0 THEN MPTR = MM
+            CASE CCS.REM.SM.HRS<1,SFT,MM> > CCS.REM.SM.HRS<1,SFT,MPTR>
+               MPTR = MM
+            END CASE
+         NEXT MM
+         BEGIN CASE
+         CASE MLT
+         CASE XPTR
+            MLT = XPTR
+         CASE MPTR
+            MLT = MPTR
+         CASE 1
+10750*
+            IF SFT > 2 THEN
+               MATWRITE CCTR.SCHED.REC ON CCTR.SCHED, CONO:CCTR:"*":XDATE
+               XDATE = XDATE + 1
+               GOSUB 80000
+               IF BLK THEN GOTO 19999
+               SFT = 1
+            END ELSE
+               SFT = SFT + 1
+            END
+            BEGIN CASE
+            CASE CCS.AVL.SHR<1,SFT> < 1
+               GOTO 10750
+            CASE CCS.REM.HRS < 1
+               SFT = 3
+               GOTO 10750
+            CASE 1
+               GOTO 10700
+            END CASE
+         END CASE
+      CASE 1
+10800*
+         MLT = 0
+         MPTR = 0
+         XPTR = 0
+         FOR MM = 1 TO MLT.CNT UNTIL MLT
+            BEGIN CASE
+            CASE CCS.REM.SM.HRS<1,SFT,MM> = CCTR.HRS
+               MLT = MM
+            CASE CCS.REM.SM.HRS<1,SFT,MM> > CCTR.HRS
+               IF XPTR = 0 THEN
+                  XPTR = MM
+               END ELSE
+                  IF CCS.REM.SM.HRS<1,SFT,MM> < CCS.REM.SM.HRS<1,SFT,XPTR> THEN
+                     XPTR = MM
+                  END
+               END
+            CASE CCS.REM.SM.HRS<1,SFT,MM> = CCS.AVL.SHR<1,SFT> AND XPTR = 0
+               MLT = MM
+            CASE MPTR = 0
+               IF CCS.REM.SM.HRS<1,SFT,MM> > 0 THEN MPTR = MM
+            CASE CCS.REM.SM.HRS<1,SFT,MM> > CCS.REM.SM.HRS<1,SFT,MPTR>
+               MPTR = MM
+            END CASE
+         NEXT MM
+         BEGIN CASE
+         CASE MLT
+         CASE XPTR
+            MLT = XPTR
+         CASE MPTR
+            MLT = MPTR
+         CASE 1
+10850*
+            IF SFT > 2 THEN
+               MATWRITE CCTR.SCHED.REC ON CCTR.SCHED, CONO:CCTR:"*":XDATE
+               XDATE = XDATE + 1
+               GOSUB 80000
+               IF BLK THEN GOTO 19999
+               SFT = 1
+            END ELSE
+               SFT = SFT + 1
+            END
+            BEGIN CASE
+            CASE CCS.AVL.SHR<1,SFT> < 1
+               GOTO 10850
+            CASE CCS.REM.HRS < 1
+               SFT = 3
+               GOTO 10850
+            CASE 1
+               GOTO 10800
+            END CASE
+         END CASE
+      END CASE
+*
+*---- SCHEDULE CCTR.HRS
+*
+*ERRMSG="(10900) XDATE=":OCONV(XDATE,"D2-"):", SFT=":SFT:", MLT=":MLT:", MPTR=":MPTR;GOSUB 90000
+      LOOP
+      UNTIL CCTR.HRS = 0 OR BLK DO
+         IF CCS.AVL.SHR<1,SFT> < 1 THEN
+*           GOTO 10999                      ;*** TEST NA 07/18/91 ***
+            IF H.CODE # "L" THEN GOTO 10999 ;*** TEST NA 07/18/91 ***
+         END
+         MLT.CNT = CCS.MULT<1,SFT>
+         IF MLT.CNT < 1 THEN MLT.CNT = 1
+         BEGIN CASE
+         CASE H.LOAD = "Y"
+**          IF CCTR.HRS > CCS.AVL.SHR<1,SFT> THEN    ;** NA 1-9-90 **
+**             OPER.HRS = CCS.AVL.SHR<1,SFT>         ;** NA 1-9-90 **
+**          END ELSE                                 ;** NA 1-9-90 **
+               OPER.HRS = CCTR.HRS
+**          END                                      ;** NA 1-9-90 **
+            IF MLT = 0 THEN
+               MPTR = 1                              ;** NA 1-9-90 **
+               BEGIN CASE
+               CASE CCS.REM.SM.HRS<1,SFT,MPTR> >= OPER.HRS
+                  MLT = MPTR
+               CASE CCS.REM.SM.HRS<1,SFT,MPTR> = CCS.AVL.SHR<1,SFT>
+                  MLT = MPTR
+               END CASE
+               FOR MM = 1 TO MLT.CNT UNTIL MLT
+                  BEGIN CASE
+                  CASE CCS.REM.SM.HRS<1,SFT,MM> >= OPER.HRS
+                     MLT = MM
+                  CASE CCS.REM.SM.HRS<1,SFT,MM> > CCS.REM.SM.HRS<1,SFT,MPTR>
+                     MPTR = MM
+                  END CASE
+               NEXT MM
+               IF MLT = 0 THEN MLT = MPTR
+            END
+         CASE MLT
+            BEGIN CASE
+            CASE CCS.REM.SM.HRS<1,SFT,MLT> >= CCTR.HRS
+               OPER.HRS = CCTR.HRS
+            CASE CCS.REM.SM.HRS<1,SFT,MLT> > 0
+               OPER.HRS = CCS.REM.SM.HRS<1,SFT,MLT>
+            CASE 1
+               GOTO 10999
+            END CASE
+         CASE 1
+            OPER.HRS = CCTR.HRS
+         END CASE
+         IF MLT = 0 THEN
+            FOR MM = 1 TO MLT.CNT UNTIL MLT
+               BEGIN CASE
+               CASE CCS.REM.SM.HRS<1,SFT,MM> > CCTR.HRS
+                  MLT = MM
+               CASE CCS.REM.SM.HRS<1,SFT,MM> > CCS.REM.SM.HRS<1,SFT,MPTR>
+                  MPTR = MM
+               END CASE
+            NEXT MM
+         END
+         BEGIN CASE
+         CASE MLT
+            GOSUB 30000
+         CASE CCS.REM.SM.HRS<1,SFT,MPTR> > 0
+            MLT = MPTR
+            OPER.HRS = CCS.REM.SM.HRS<1,SFT,MLT>
+            GOSUB 30000
+         CASE 1
+            GOSUB 70000
+*20004 v
+            IF JBS.CONT.SCH<1,TR> = "Y" THEN
+              GOSUB 71000
+            END
+*20004 ^
+*20004            GOSUB 71000
+            CCTR.HRS = JBS.SCH.HRS<1,TR> - JBS.USD.HRS<1,TR>
+            BGN.HRS = CCTR.HRS
+            IF SFT > 2 THEN
+               XDATE = XDATE + 1
+               SFT = 1
+            END ELSE
+               SFT = SFT + 1
+            END
+            GOSUB 80000
+            GOTO 18999
+         END CASE
+10999*
+         IF CCTR.HRS # 0 THEN
+            IF SFT > 2 THEN
+               GOSUB 70000
+               XDATE = XDATE + 1
+               GOSUB 80000
+               IF BLK THEN GOTO 18999
+               SFT = 1
+               BEGIN CASE
+               CASE H.SAME.EQUIP = "Y"
+*              CASE 1                               ;** NA 9-10-92 **
+               CASE MLT > 0                         ;** NA 9-10-92 **
+                  MPTR = MLT
+                  MLT = 0
+               END CASE
+            END ELSE
+               SFT = SFT + 1
+               BEGIN CASE
+               CASE H.SAME.EQUIP = "Y"
+               CASE H.SAME.EQUIP = "D"              ;** NA 9-10-92 **
+*              CASE 1                               ;** NA 9-10-92 **
+               CASE MLT > 0                         ;** NA 9-10-92 **
+                  MPTR = MLT
+                  MLT = 0
+               END CASE
+            END
+         END
+18999*
+      REPEAT
+19999*
+      MAT ALL.REC = ""
+      RETURN
+*
+*---- ADD OPERATION TO CCTR.SCHED
+*
+30000*
+      TF = DCOUNT(CCS.TRAN,VM) + 1
+      IF JBS.TRAN<1,TR> # "" THEN
+         TRAN = JBS.TRAN<1,TR>
+      END ELSE
+         TRAN = JBS.LAST.TRAN + 1
+         JBS.LAST.TRAN = TRAN
+      END
+      CCS.TRAN = INSERT(CCS.TRAN,1,TF,0,TRAN)
+      CCS.JOB = INSERT(CCS.JOB,1,TF,0,JOB.NUM)
+      CCS.JOB.HRS = INSERT(CCS.JOB.HRS,1,TF,0,OPER.HRS)
+      CCS.JOB.SHIFT = INSERT(CCS.JOB.SHIFT,1,TF,0,SFT)
+      CCS.JOB.EQUIP = INSERT(CCS.JOB.EQUIP,1,TF,0,MLT)
+      CCS.OPER = INSERT(CCS.OPER,1,TF,0,"ALL")
+      CCS.OPER.STATUS = INSERT(CCS.OPER.STATUS,1,TF,0,"")
+      CCS.OPER.HRS = INSERT(CCS.OPER.HRS,1,TF,0,OPER.HRS)
+      CCS.OPER.SHIFT = INSERT(CCS.OPER.SHIFT,1,TF,0,SFT)
+      CCS.OPER.EQUIP = INSERT(CCS.OPER.EQUIP,1,TF,0,MLT)
+      CCS.SCH.HRS = CCS.SCH.HRS + OPER.HRS
+      CCS.REM.HRS = CCS.AVL.HRS - CCS.SCH.HRS
+      CCS.SCH.SM.HRS<1,SFT,MLT> = CCS.SCH.SM.HRS<1,SFT,MLT> + OPER.HRS
+      CCS.REM.SM.HRS<1,SFT,MLT> = CCS.REM.SM.HRS<1,SFT,MLT> - OPER.HRS
+      JBS.TRAN<1,TR> = TRAN
+      IF JBS.SCH.DATE<1,TR> = "" THEN JBS.SCH.DATE<1,TR> = XDATE
+      IF JBS.SCH.SHIFT<1,TR> = "" THEN JBS.SCH.SHIFT<1,TR> = SFT
+      JBS.EXP.DATE<1,TR> = XDATE
+      JBS.EXP.SHIFT<1,TR> = SFT
+      JBS.USD.HRS<1,TR> = JBS.USD.HRS<1,TR> + OPER.HRS
+      CCTR.HRS = CCTR.HRS - OPER.HRS
+      OPER.HRS = 0
+      IF TR > LAST.PTR THEN LAST.PTR = TR
+      BEGIN CASE
+      CASE FRST.PTR = 0
+         LAST.DATE = XDATE
+         FRST.PTR = TR
+      CASE TR < FRST.PTR
+         LAST.DATE = XDATE
+         FRST.PTR = TR
+      CASE TR = FRST.PTR AND XDATE < LAST.DATE
+         LAST.DATE = XDATE
+      END CASE
+      RETURN
+*
+*---- UPDATE JOB.SCHED AND CCTR.SCHED
+*
+70000*
+      MATWRITE CCTR.SCHED.REC ON CCTR.SCHED, CONO : CCTR :"*": XDATE
+      MATWRITEU JBS.REC ON JOB.SCHED, CONO : JOB.NUM
+      RETURN
+*
+*---- UNSCHED JOB.SCHED AND CCTR.SCHED FOR A CCTR
+*
+71000*
+      IF JBS.TRAN<1,TR> = "" THEN RETURN
+      ALL.FLG = 0
+      IF WIN.MODE THEN ACTION = "W" ELSE ACTION = ""
+      CALL UNSCHED.JOB.SUB(CONO,ACTION,JOB.NUM,SDATE,TR,TR,SDATE,ALL.FLG)
+      RETURN
+*
+*---- GET CCTR.SCHED.REC
+*
+80000*
+*ERRMSG="(80000) XDATE=":OCONV(XDATE,"D2-");GOSUB 90000
+P_X  = 0 ; P_Y = 23 ; P_VALUE = @(-4):"Dept - ":DEPT "R#5" ; P_OPT = ""
+P_X  := AM:15 ; P_Y := AM:23 ; P_VALUE := AM:"Cctr - ":CCTR "L#3"
+P_X  := AM:30 ; P_Y := AM:23 ; P_VALUE := AM:"Date - ":OCONV(XDATE, "D2/") "L#8"
+CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      MATREADU CCTR.SCHED.REC FROM CCTR.SCHED, CONO:CCTR:"*":XDATE ELSE
+         MAT CCTR.SCHED.REC = ""
+         CCS.DEPT = DEPT
+         ERRMSG = ""
+         CALL GEN.CCTR.SCHED.SUB (CONO, CCTR, XDATE, ERRMSG)
+         IF ERRMSG # "" THEN
+            RELEASE CCTR.SCHED, CONO:CCTR:"*":XDATE
+            BLK = 1
+         END
+      END
+      IF BLK THEN GOTO 80999
+      IF H.CODE = "L" THEN GOTO 80999     ;***TEST NA 07/18/91 ***
+      IF CCS.AVL.HRS > 0 THEN GOTO 80999
+      MATWRITE CCTR.SCHED.REC ON CCTR.SCHED, CONO : CCTR :"*": XDATE
+      XDATE = XDATE + 1
+      SFT = 1
+      GOTO 80000
+80999*
+*ERRMSG="(80999) XDATE=":OCONV(XDATE,"D2-");GOSUB 90000
+      RETURN
+*
+*---- FIND WHICH DAY OF THE WEEK
+*
+85000*
+      DPTR = OCONV(XDATE, "DW")
+      RETURN
+*
+*---- ERROR ROUTINE
+*
+90000*
+P_X  = 0 ; P_Y = 23 ; P_VALUE = @(-4):ERRMSG:" INPUT" ; P_OPT = ""
+CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      IF NOT(WIN.MODE) THEN
+         INPUT REPLY,1 :
+      END
+P_X  = 0 ; P_Y = 23 ; P_VALUE = @(-4) ; P_OPT = ""
+CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      RETURN
+99999*
+      RETURN
+   END

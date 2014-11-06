@@ -1,0 +1,182 @@
+*********************************************************************
+* REVISION - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM   - PRIMAC
+* SOURCE   - PSSBP
+* PROGRAM  - JOB.SCHED.EXP.RPT
+* AUTHOR   - ANN POWLEY, C.B.A.
+* DATE     - 09/01/87
+* MODIFIED - 11/09/95 TERRY NORTHCUTT TASK 19407 DIVISIONALIZATION
+* DESCRIPTION
+* This program will print Overdue Jobs Report.
+*T26493 cmykleb 03/22/2002 * Change report to use rpt # from proc.
+*********************************************************************
+*
+*---- FILE COPY STATEMENTS
+*
+*COPY>PSS.CPYLIB>JOB.SCHED
+*COPY>PSS.CPYLIB>CCTR.SCHED
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>JCS.CPYLIB>JOB
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+*
+*---- SET UP SYSCOM
+*
+      SYS.TYPE = 1
+      CALL SI_SYSCOM(MAT SYSCOM.REC)
+*
+*---- OPEN FILES
+*
+      OPEN "","CONTROL" TO CONTROL ELSE ERRMSG = "CONTROL FILE IS MISSING"; GOSUB 90000; GOTO 99999
+      OPEN "","JOB.SCHED" TO JOB.SCHED ELSE ERRMSG = "JOB.SCHED FILE IS MISSING"; GOSUB 90000; GOTO 99999
+      OPEN "","CCTR.SCHED" TO CCTR.SCHED ELSE ERRMSG = "CCTR.SCHED FILE IS MISSING"; GOSUB 90000; GOTO 99999
+      OPEN "","PEND.CCTR.SCHED" TO PEND.CCTR.SCHED ELSE ERRMSG = "PEND.CCTR.SCHED FILE IS MISSING"; GOSUB 90000; GOTO 99999
+      OPEN "","PEND.JOB.SCHED" TO PEND.JOB.SCHED ELSE ERRMSG = "PEND.JOB.SCHED FILE IS MISSING"; GOSUB 90000; GOTO 99999
+      OPEN "","JOB" TO JOB ELSE ERRMSG = "JOB FILE IS MISSING"; GOSUB 90000; GOTO 99999
+OPEN "","PSS.JOURNAL" TO PSS.JOURNAL ELSE
+   ERRMSG = "CANNOT OPEN PSS.JOURNAL FILE"
+   GOSUB 90000
+   GOTO 99999
+END
+OPEN "","PSS.LOCK" TO PSS.LOCK ELSE
+   ERRMSG = "CANNOT OPEN PSS.LOCK FILE"
+   GOSUB 90000
+   GOTO 99999
+END
+*
+*---- PERFORM PROCREAD
+*
+      PROCREAD BUFFER ELSE ERRMSG = "MUST RUN FROM A PROC"; GOSUB 90000; GOTO 99999
+      CONO = BUFFER<1>
+      DIV.OWNER = BUFFER<4>                           ;*---- TASK 19407
+*T26493 v
+*     CO.NAME = BUFFER<2>
+*     REPORT.NAME = "JOB SCHEDULE EXCEPTION REPORT"
+*     REPORT.NUMBER = "XXXX"
+      CO.NAME = ""
+      REPORT.NAME = ""
+      REPORT.NUMBER = BUFFER<2>
+*T26493 ^
+      READ DEMODATE FROM CONTROL,"DEMODATE" THEN REPORT.DATE=ICONV(DEMODATE,"D") ELSE REPORT.DATE=DATE()
+      HD1 = "";HD2 = "";PG.NO = 0
+      CALL GET.PROG.HEAD(CONO,CO.NAME,REPORT.NAME,REPORT.NUMBER,REPORT.DATE,HD1,HD2)
+*
+*---- INTIALIZATION
+*
+      LINE.CNT = 99
+      SP = SPACE(1)
+      HD3 = "                                                                        REQ   SCHED   REM              LAST  "
+      HD4 = "JOB NUM           DESCRIPTION                   CUSTOMER NAME          HOURS  HOURS  HOURS  DUE DATE SCH DATE"
+      HD5 = "-------- ------------------------------ ------------------------------ ------ ------ ------ -------- --------"
+      HD6 = "DIVISION : ":DIV.OWNER
+*
+*---- MAIN PROCESSING
+*
+      DATA = 1
+      PRINTER ON
+      LOOP
+         READNEXT ID ELSE DATA = 0
+      WHILE DATA DO
+         MATREAD JBS.REC FROM JOB.SCHED, ID ELSE MAT JBS.REC = ""
+         MATREAD JOB.REC FROM JOB, ID ELSE
+            MAT JOB.REC = ""
+            JOB.DESC = "???????????????"
+         END
+         JOBNO = ID[4,8]
+         GOSUB 200
+      REPEAT
+      GOTO 99999
+*
+*---- PROCESS THE JOB
+*
+200 *
+      DTE.CNT = COUNT(JBS.DEPT,VM) + (JBS.DEPT # '')
+      SCH.HRS = 0; REQ.HRS = 0; LATE.HRS = 0
+      SCHED.DATE = JBS.SCH.DATE<1,1>
+      FOR I = 1 TO DTE.CNT
+         IF JBS.DEPT.STATUS<1,I> # 'C' THEN
+            IF JBS.SCH.HRS<1,I> > JBS.ACT.HRS<1,I> THEN
+               RHRS = JBS.SCH.HRS<1,I> - JBS.ACT.HRS<1,I>
+               SHRS = JBS.USD.HRS<1,I> - JBS.ACT.HRS<1,I>
+               IF SHRS < 0 THEN SHRS = 0
+               REQ.HRS = REQ.HRS + RHRS
+               SCH.HRS = SCH.HRS + SHRS
+               IF JBS.EXP.DATE<1,I>+0 > JBS.DUE.DATE THEN
+                  CCTR  = JBS.CCTR<1,I>
+                  SDATE = JBS.DUE.DATE+1
+                  EDATE = JBS.EXP.DATE<1,I>
+                  GOSUB 5000
+                  IF XHRS > RHRS THEN XHRS = RHRS
+                  LATE.HRS = LATE.HRS + XHRS
+               END
+               IF JBS.EXP.DATE<1,I> > SCHED.DATE THEN
+                  SCHED.DATE = JBS.EXP.DATE<1,I>
+               END
+            END
+         END
+      NEXT I
+      IF LATE.HRS > 0 THEN
+         IF LINE.CNT > 55 THEN GOSUB 300
+         H.LINE = JOBNO "L#8" : SP
+         H.LINE = H.LINE : JOB.DESC "L#30" : SP
+         H.LINE = H.LINE : JBS.CUST.NAME "L#30" : SP
+         H.LINE = H.LINE : OCONV(REQ.HRS, "MD2") "R#6" : SP
+         H.LINE = H.LINE : OCONV(SCH.HRS, "MD2") "R#6" : SP
+         H.LINE = H.LINE : OCONV(LATE.HRS, "MD2") "R#6" : SP
+         H.LINE = H.LINE : OCONV(JBS.DUE.DATE, "D2/") "R#8" : SP
+         H.LINE = H.LINE : OCONV(SCHED.DATE, "D2/") "R#8"
+         PRINT H.LINE
+         LINE.CNT = LINE.CNT + 1
+      END
+      RETURN
+*
+*---- PRINT HEADINGS
+*
+300 *
+      PG.NO = PG.NO + 1
+      PRINT CHAR(12)
+      PRINT HD1 : PG.NO "R#4"
+      PRINT HD2
+      PRINT HD6                                       ;*--- TASK 19407
+      PRINT
+      PRINT HD3
+      PRINT HD4
+      PRINT HD5
+      LINE.CNT = 7                                    ;*---- TASK 19407
+      RETURN
+*
+*---- COMPUTE SCHEDULED HOURS AFTER DUE DATE
+*
+5000 *
+IF @LOGNAME = 'cmykleb' THEN DEBUG
+      XHRS = 0
+      FOR CDATE = SDATE TO EDATE
+         MATREAD CCTR.SCHED.REC FROM CCTR.SCHED, CONO:CCTR:"*":CDATE ELSE GOTO 5090
+         LOCATE JOBNO IN CCS.JOB<1>,1 SETTING JP1 ELSE GOTO 5090
+         JCNT = DCOUNT(CCS.JOB,VM)
+         FOR JPTR = JP1 TO JCNT
+            IF CCS.JOB<1,JPTR> = JOBNO THEN
+               XHRS = XHRS + CCS.JOB.HRS<1,JPTR>
+            END
+         NEXT JPTR
+5090  NEXT CDATE
+      RETURN
+*
+*---- ERROR ROUTINE
+90000 *
+91000*
+      ERR.TYPE = 1
+      CALL SI_SYSCOM(MAT SYSCOM.REC)
+      RETURN
+*      PRINT @(0,23):CL:ERRMSG:
+*      INPUT REPLY:
+*      PRINT @(0,23):CL:
+*      RETURN
+*
+*---- END OF PROGRAM
+99999 *
+      PRINTER OFF
+*      PRINT @(-1):
+      END

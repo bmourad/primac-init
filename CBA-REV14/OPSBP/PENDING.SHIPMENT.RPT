@@ -1,0 +1,421 @@
+*COPY>CPYLIB>COM1
+**************************************************************************
+* REVISION    - [00.0]
+* COPYRIGHT   - 1993 Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - OPS
+* PROGRAM     - PENDING.SHIPMENT.RPT
+* AUTHOR      - S.L.Fritz
+* DATE        - 05/11/93
+* DESCRIPTION - Print the pending shipment report.  The source of the
+*               reports data can be thr order file or the release file.
+*               Which file to use is determained by a switch in the
+*               company control record for the OPS module.  The field is
+*               named OPCO.SHP.FRM.  It can be R for release, O for order,
+*               of B for both.  At this time, the program utilized only
+*               R or O.
+*
+*               The major diference between this report and the open order
+*               status report is that this report is sorted by date so as
+*               to show what is need to provide for current and future
+*               scheduled shipments.
+*
+*               A minor diference between the open order report and this
+*               one is this one is driven by the ORDER DETAIL file rather
+*               then the ORDER header file.  This allows for a break-out
+*               of shipments to each SHIP-TO if they each have diferent
+*               due dates.  At this time, all the SHIP-TO's are bound by
+*               a single due date held in the header record.
+*T25377 alex 08/09/2000 * Fix to print Pick Ticket # if the Order has
+*                         multiple Pick Tickets.
+*T26493 cmykleb 04/01/2002 * Change pgm to get the rpt # from the proc.
+*C43171 cmykleb 03/04/2004 * Correct error message problem.
+**************************************************************************
+*
+*---- DATA Structure Libraries
+*
+*COPY>PMC.CPYLIB>COMP.OPS
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>OPS.CPYLIB>ORDER
+*COPY>OPS.CPYLIB>ORDER.DETAIL
+*COPY>OPS.CPYLIB>ORDER.RELEASE
+*COPY>OPS.CPYLIB>PICK.TICKET             ;*T25379
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*
+*---- File open
+*
+   OPEN '','CONTROL' TO CONTROL ELSE ERRMSG = 'CONTROL';GOTO 999000
+   OPEN '','CUSTOMER' TO CUSTOMER ELSE ERRMSG = 'CUSTOMER';GOTO 999000
+   OPEN '','ORDER' TO ORDER ELSE ERRMSG = 'ORDER';GOTO 999000
+   OPEN '','ORDER.DETAIL' TO ORDER.DETAIL ELSE ERRMSG = 'ORDER.DETAIL';GOTO 999000
+   OPEN '','ORDER.RELEASE' TO ORDER.RELEASE ELSE ERRMSG = 'ORDER.RELEASE';GOTO 999000
+   OPEN '','INVENTORY' TO INVENTORY ELSE ERRMSG = 'INVENTORY';GOTO 999000
+  *T25379 v
+   OPEN '','PICK.TICKET' TO PICK.TICKET ELSE ERRMSG = 'PICK.TICKET';GOTO 999000
+  *T25379 ^
+*
+*---- Initialize variables
+*
+   TRUE = 1
+   OTHERS = 1
+   VOID = ''
+   NULL = ''
+   FALSE = 0
+   PAGE.NO = 0
+   TOP.OF.NEW.PAGE = CHAR(12)
+   PAGE.NO = 0
+   LINES.THIS.PAGE = 0
+   PAGE.HEADING.SIZE = 6
+   PAGE.SIZE = 55
+   LAST.DATE = ''
+   DATE.PRINT = '' ; * C43171
+*
+   EQU CONO         TO BUFFER<1>
+   EQU COMPANY.NAME TO BUFFER<2>
+   EQU WAREHOUSE.NO TO BUFFER<3>
+   EQU CUSTOMER.NUM TO BUFFER<4>
+   EQU START.DATE   TO BUFFER<5>
+   EQU END.DATE     TO BUFFER<6>
+*
+   SHD1 = 'ORDER   '
+   SHD1 = SHD1:'CUST   '
+   SHD1 = SHD1:'SHIP '
+   SHD1 = SHD1:'PICKING    '
+   SHD1 = SHD1:'RELEASE    '
+   SHD1 = SHD1:'                '
+   SHD1 = SHD1:'                           '
+   SHD1 = SHD1:'    '
+   SHD1 = SHD1:'   ORDERED '
+   SHD1 = SHD1:'  RESERVED '
+   SHD1 = SHD1:'  PRODUCED '
+   SHD1 = SHD1:'   SHIPPED'
+*
+   SHD2 = 'NUMBER  '
+   SHD2 = SHD2:'NUMBER '
+   SHD2 = SHD2:'TO   '
+   SHD2 = SHD2:'TICKET     '
+   SHD2 = SHD2:'NUMBER     '
+   SHD2 = SHD2:'PRODUCT NUMBER  '
+   SHD2 = SHD2:'PRODUCT DESCRIPTION        '
+   SHD2 = SHD2:'UOM '
+   SHD2 = SHD2:'  QUANTITY '
+   SHD2 = SHD2:'  QUANTITY '
+   SHD2 = SHD2:'  QUANTITY '
+   SHD2 = SHD2:'  QUANTITY'
+*
+   SHD3 = STR('-',7):SPACE(1)
+   SHD3 = SHD3:STR('-',6):SPACE(1)
+   SHD3 = SHD3:STR('-',4):SPACE(1)
+   SHD3 = SHD3:STR('-',10):SPACE(1)
+   SHD3 = SHD3:STR('-',10):SPACE(1)
+   SHD3 = SHD3:STR('-',15):SPACE(1)
+   SHD3 = SHD3:STR('-',26):SPACE(1)
+   SHD3 = SHD3:STR('-',3):SPACE(1)
+   SHD3 = SHD3:STR('-',10):SPACE(1)
+   SHD3 = SHD3:STR('-',10):SPACE(1)
+   SHD3 = SHD3:STR('-',10):SPACE(1)
+   SHD3 = SHD3:STR('-',10)
+*
+   PRINTER ON
+*
+   PROCREAD BUFFER ELSE
+      ERRMSG = 'Must run this program from a REPORT.SCRN PROC.'
+      GOTO 999000
+   END
+   MATREAD OPCO.REC FROM CONTROL, CONO:"OPS" ELSE GOTO 999999
+*
+* Develop the report heading.  If there is a due date range, include it.
+*
+*T26493 v
+* RPT.NAME = 'PENDING SHIPMENT REPORT'
+* IF START.DATE # 'ALL' THEN
+*   RPT.NAME = RPT.NAME:' FROM ':OCONV(START.DATE,'D2/')
+*   RPT.NAME = RPT.NAME:' TO ':OCONV(END.DATE,'D2/')
+* END ELSE
+*   RPT.NAME = RPT.NAME:' FOR ALL DATES'
+* END
+* RPT.NUM = 'XXXX'
+   RPT.NAME = ""
+   RPT.NUM = BUFFER<2>
+   IF START.DATE # "ALL" THEN
+      HD3 = SPACE(60):"FROM ":OCONV(START.DATE,"D2/"):" TO ":OCONV(END.DATE,"D2/")
+   END ELSE
+      HD3 = SPACE(65):"FOR ALL DATES"
+   END
+*T26493 ^
+   RPT.DATE = DATE()
+   HD1 = ''
+   HD2 = ''
+   CALL GET.PROG.HEAD(CONO,VOID,RPT.NAME,RPT.NUM,RPT.DATE,HD1,HD2)
+*
+   GOSUB 60000
+*
+*---- MAIN Function ------------------------------------------------------
+*
+*          This function prepares the report headings and gets ready to
+*          read thru the list of qualified records from the order file.
+*
+*          This function reads the list passed to it from the PROC.
+*
+*          The KEY from the list is used to read the order file.  The
+*          support files are read, and data is prepared, and printed.
+*
+10000 *-------------------------------------------------------------------
+*
+   READNEXT ORDER.DETAIL.KEY ELSE
+      GOTO 999999;* Exit the program
+   END
+*
+* If the flag in the control record is set to R for release, get the
+* oredered and released quantities from the order release file.
+*
+   BEGIN CASE
+      CASE OPCO.SHP.FRM = "B"
+         FILE.FLAG = FIELD(ORDER.DETAIL.KEY,"*",2)
+         ORDER.DETAIL.KEY = FIELD(ORDER.DETAIL.KEY,"*",1)
+      CASE OPCO.SHP.FRM = "R"
+         FILE.FLAG = "R"
+      CASE 1
+         FILE.FLAG = "O"
+   END CASE
+   IF FILE.FLAG = 'R' THEN
+      MATREAD ORR.REC FROM ORDER.RELEASE, ORDER.DETAIL.KEY ELSE
+         MAT ORR.REC = ''
+         ERRMSG = 'Can not read the ':ORDER.DETAIL.KEY:' record from the ORDER RELEASE file.'
+         GOTO 10000
+      END
+   *
+   * The release number is printed ONLY if the file flag is pointing
+   * to the RELEASE file.
+   *
+   * This explains why this column is void of data if the flag is 'O'.
+   *
+      RELEASE.NUMBER = ORDER.DETAIL.KEY[4,99]
+   *
+   * Because the order detail has some information needed for the report,
+   * the file key is remodeled to read the order detail file.
+   *
+      ORDER.DETAIL.KEY = CONO:ORR.ORD:'!':ORR.SHIP.TO
+   *
+   END ELSE
+      RELEASE.NUMBER = ''
+   END
+*
+   MATREAD ORD.DET.REC FROM ORDER.DETAIL, ORDER.DETAIL.KEY ELSE
+      MAT ORD.DET.REC = ''
+      ERRMSG = 'Can not read the ':ORDER.DETAIL.KEY:' record from the ORDER DETAIL file.'
+      GOTO 10000
+   END
+*
+   ORDER.NUMBER = OCONV(ORDER.DETAIL.KEY[4,10],'G!1')
+   ORDER.KEY = OCONV(ORDER.DETAIL.KEY,'G!1')
+   ORDER.SHIP.TO = OCONV(ORDER.DETAIL.KEY,'G1!1')
+*
+   MATREAD ORD.REC FROM ORDER, ORDER.KEY ELSE
+      MAT ORD.REC = ''
+      ERRMSG = 'Can not read the ':ORDER.KEY:' record from the ORDER file.'
+      GOTO 10000
+   END
+*
+* If the file flag points to the RELEASE file, substitute the order
+* quantity list in the order detail file with the one in the release file.
+*
+* Also setup for DUE DATE checking.
+*
+   IF FILE.FLAG = 'R' THEN
+      ORDERED.QTY.LIST = ORR.QTY
+      CHK.DUE = ORR.DUE.DATE
+   END ELSE
+      ORDERED.QTY.LIST = OSD.G.QTY
+      CHK.DUE = ORD.DUE
+   END
+*
+* Check to see if there has been a change in the DUE DATE.
+*
+   IF CHK.DUE # LAST.DATE THEN
+      DATE.PRINT = 'THE FOLLOWING SHIPMENTS ARE DUE ON ':OCONV(CHK.DUE,'D2/')
+   END
+*
+* Hold the current DUE DATE for comparison with the next record.
+*
+   LAST.DATE = CHK.DUE
+*
+* Get and hold the last PICK TICKET number from the order headers MV list.
+*
+  *T25377 v
+  * ORDER.PICK.TICK = ORD.PICK.NO<1,DCOUNT(ORD.PICK.NO,VM)>
+   ORDER.PICK.TICK = ''
+   PICK.CNT = DCOUNT(ORD.PICK.NO,VM)    
+   FOR PC = 1 TO PICK.CNT
+      MATREAD PKT.REC FROM PICK.TICKET, CONO:ORD.PICK.NO<1,PC> THEN
+         IF PKT.SHIP.TO = ORDER.SHIP.TO THEN
+            ORDER.PICK.TICK<1,-1> = ORD.PICK.NO<1,PC>
+         END
+      END
+   NEXT PC
+  *T25377 ^
+*
+   DETAIL.CNTR = DCOUNT(OSD.PROD,VM)
+   FOR D = 1 TO DETAIL.CNTR
+   *
+   * If the reports file points to the RELEASE file, loop through the
+   * release number attribute in the ORDER DETAIL file, check to see if
+   * the number matches the release currently being printed, and get the
+   * associated release quantity in the OSD.FI.QTY attribute.
+   *
+      RESERVE.QTY = 0
+      FOR R = 1 TO DCOUNT(OSD.FI.QTY<1,D>,SVM)
+         IF RELEASE.NUMBER = OSD.REL.NO<1,D,R> THEN
+            RESERVE.QTY = RESERVE.QTY + OSD.FI.QTY<1,D,R>
+         END
+      NEXT R
+   *
+      ORDERED.QTY = ORDERED.QTY.LIST<1,D> + 0
+      IF FILE.FLAG = "R" THEN
+         OSD.S = 0
+         OSD.P = ORDERED.QTY - RESERVE.QTY
+      END ELSE
+         OSD.S = OSD.S.QTY<1,D> + 0
+         IF OSD.S >= ORDERED.QTY THEN
+            GOTO 10100
+         END
+         OSD.P = ORDERED.QTY - OSD.R.QTY<1,D>
+      END
+      IF OSD.P < 0 THEN OSD.P = 0
+   *
+   * Get the master products description if needed.
+   *
+      INV.KEY = CONO:OSD.PROD<1,D>
+      MATREAD INV.REC FROM INVENTORY, INV.KEY ELSE
+         INV.FULL.DESC = 'Inventory record description missing'
+      END
+      IF INV.BASE.SKU # '' THEN
+         READV DESCRIPTION.ONE FROM INVENTORY, CONO:INV.BASE.SKU, 2 ELSE
+            DESCRIPTION.ONE = 'Inventory description missing'
+         END
+         DESCRIPTION.TWO = INV.FULL.DESC
+      END ELSE
+         DESCRIPTION.ONE = INV.FULL.DESC
+         DESCRIPTION.TWO = ''
+      END
+   *
+   * Check to see if the date subheading line needs printing.
+   * It is only printed if there is a surviving shipable line.
+   *
+      IF DATE.PRINT # '' THEN
+         LINES.THIS.PAGE = LINES.THIS.PAGE + 3
+         IF LINES.THIS.PAGE > PAGE.SIZE THEN
+            GOSUB 60000
+            LINES.THIS.PAGE = LINES.THIS.PAGE + 3
+         END
+      *
+         PRINT
+         PRINT DATE.PRINT
+         PRINT
+      *
+         DATE.PRINT = ''
+      *
+      END
+   *
+   * Check to see if the product line will fit BEFORE printing it.
+   *
+      LINES.THIS.PAGE = LINES.THIS.PAGE + 1
+      IF LINES.THIS.PAGE > PAGE.SIZE THEN
+         GOSUB 60000
+         LINES.THIS.PAGE = LINES.THIS.PAGE + 1
+      END
+   *
+      PROD.LINE = ORDER.NUMBER'L#7':SPACE(1)
+      PROD.LINE = PROD.LINE:ORD.CUST'R#6':SPACE(1)
+      PROD.LINE = PROD.LINE:ORDER.SHIP.TO'R#4':SPACE(1)
+    *T25379 v
+    * PROD.LINE = PROD.LINE:ORDER.PICK.TICK'L#10':SPACE(1)
+      PROD.LINE = PROD.LINE:ORDER.PICK.TICK<1,1>'L#10':SPACE(1)
+    *T25379 ^
+      PROD.LINE = PROD.LINE:RELEASE.NUMBER'R#10':SPACE(1)
+      PROD.LINE = PROD.LINE:OSD.PROD<1,D>'L#15':SPACE(1)
+      PROD.LINE = PROD.LINE:DESCRIPTION.ONE'L#26':SPACE(1)
+      PROD.LINE = PROD.LINE:INV.UNIT<1,2>'L#3':SPACE(1)
+      PROD.LINE = PROD.LINE:OCONV(ORDERED.QTY/1000,'MD0,')'R#10':SPACE(1)
+      PROD.LINE = PROD.LINE:OCONV(RESERVE.QTY/1000,'MD0,')'R#10':SPACE(1)
+      PROD.LINE = PROD.LINE:OCONV(OSD.P/1000,'MD0,')'R#10':SPACE(1)
+      PROD.LINE = PROD.LINE:OCONV(OSD.S/1000,'MD0,')'R#10'
+   *
+      PRINT PROD.LINE
+   *
+   * Print the second product description if there is one.
+   *
+      START.PCNT = 2
+      IF DESCRIPTION.TWO # '' THEN
+         LINES.THIS.PAGE = LINES.THIS.PAGE + 1
+         IF LINES.THIS.PAGE > PAGE.SIZE THEN
+            GOSUB 60000
+            LINES.THIS.PAGE = LINES.THIS.PAGE + 1
+         END
+      *T25377 v
+      * PRINT SPACE(58):DESCRIPTION.TWO'L#27'
+         PRINT SPACE(20):ORDER.PICK.TICK<1,2>'L#10':SPACE(28):DESCRIPTION.TWO'L#27'
+         START.PCNT = 3
+      *T25377
+      END
+    *T25377 v
+      PICK.CNT = DCOUNT(ORDER.PICK.TICK<1>,@VM)
+      FOR XPX = START.PCNT TO PICK.CNT
+         LINES.THIS.PAGE = LINES.THIS.PAGE + 1
+         IF LINES.THIS.PAGE > PAGE.SIZE THEN
+            GOSUB 60000
+            LINES.THIS.PAGE = LINES.THIS.PAGE + 1
+         END
+         PRINT SPACE(20):ORDER.PICK.TICK<1,XPX>'L#10'
+      NEXT XPX
+    *T25377 ^
+*
+10100 *
+*
+   NEXT D
+*
+   GOTO 10000
+*
+*
+*---- HEADING Function ---------------------------------------------------
+*
+*             This function assembles and prints the report heading
+*             information.  A variable tracks the page number.
+*
+60000 *-------------------------------------------------------------------
+*
+   PRINT TOP.OF.NEW.PAGE
+   PAGE.NO = PAGE.NO + 1
+   PRINT HD1:PAGE.NO
+   PRINT HD2
+   PRINT HD3 ; * T26493
+   PRINT
+   PRINT SHD1
+   PRINT SHD2
+   PRINT SHD3
+   LINES.THIS.PAGE = PAGE.HEADING.SIZE
+*
+   RETURN
+*
+*
+*---- ERROR Function -----------------------------------------------------
+*
+*           This function manages the display of any program
+*           processing errors.
+*
+999000 *------------------------------------------------------------------
+*
+   CRT ERRMSG
+   INPUT ANS
+*
+*---- EXIT Function ------------------------------------------------------
+*
+*          This function manages the wrap-up and exit from the program.
+*
+999999 *------------------------------------------------------------------
+*
+   PRINTER OFF
+*
+END

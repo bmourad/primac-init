@@ -1,0 +1,827 @@
+   SUBROUTINE COA.BAL.MAINT
+*COPY>CPYLIB>COM1
+*COPY>PMC.CPYLIB>COM.COA
+***************************************************************************
+* REVISION     - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM       - PRIMAC
+* SOURCE       - PMCBP
+* PROGRAM      - COA.BAL.MAINT
+* BY           - JIHAD YAMOUT ,C.B.A
+* DATE         - 08/19/85
+* DESCRIPTION  - This program create and update detail entries for chart of
+*                account file (CA).
+*T21177 diane 11/06/1996 * REV11 UPG
+*T21211 lanny 11/14/1996 * YEAR-END BUDGET INCORRECT.
+*T22300 lanny 10/17/1997 * Budgets using 'P' & annual amt yields
+*                          incorrect amt for last period.
+*T23278 markt 09/28/1998 * Add user security at the division level
+*T23457 lanny/cr 11/23/98 * YE figure stored in wrong field
+*T25179 cm 05/19/2000 * Budget YE figure storing in wrong field
+*T25978 adelgado 01/28/2002 * Add the use of prompts (S,SR,SB,ST).
+*************************************************************************
+*COPY>PMC.CPYLIB>COA
+*COPY>GLS.CPYLIB>COA.BAL
+*COPY>CPYLIB>EDIT.COM
+*COPY>PMC.CPYLIB>DIVISION
+*COPY>PMC.CPYLIB>DEPARTMENT
+*COPY>PMC.CPYLIB>COST.CNTR
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>COA.FILE.VARS
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+   MAT SYSCOM.REC =  ""; SYS.TYPE = 2
+*
+   DIM OLD.CB(300)
+   DIM NEW.CB(300)
+   DIM OCOA.REC(20)
+   ERRMSG = ""
+   READ PER.DATES FROM CONTROL , CONO:"OPENDATES" ELSE
+      ERRMSG = "CONTROL RECORD OPENDATES IS MISSING" ; GOSUB 91000; GOTO 99999
+   END
+   READ PERIOD.REC FROM CONTROL , CONO:"ACCT.PERIODS" ELSE
+      PERIOD.REC = ""
+      PERIOD.REC<1> = 12
+   END
+   NUM.PERIODS = PERIOD.REC<1>
+*
+***** INT
+   IN.ACCT.LEN = LEN(CO.ACCT.PIC)
+   GEN.DIV = "00"
+   GEN.DEPT = "00"
+   GEN.CCTR = "000"
+   ECD.SCRN.NO = 2
+   BEGIN.PAGE = 10
+   PAGE.SIZE = 10
+   LINE.COUNT = 13
+   REF.CNT    = 0
+   REF.NO     = ""
+   CURR.REF.NO = ""
+   LINE.SPACE = 1
+   ACCT.NUM = ACCT.NO
+   MAT OCOA.REC = MAT COA.REC
+   READV ALL.DIV FROM CONTROL , CONO:"DIVISIONS" , 1 ELSE ALL.DIV = "01"
+   DIV.CNT = COUNT(ALL.DIV,VM) + (ALL.DIV # "")
+   DIVSN.CODE = '';* T23278
+*
+*--- SETUP SCREEN
+*
+   SCV.REC(1)<ECD.SCRN.NO> = ACCT.NUM CO.ACCT.MASK
+   SCV.REC(2)<ECD.SCRN.NO> = COA.DESC
+   SCV.REC(14)<ECD.SCRN.NO> = COA.NORM
+   NUM.PERIODS = PERIOD.REC<1>  + 1
+   REF.CNT = NUM.PERIODS + 1
+   FOR I = 1 TO NUM.PERIODS
+      SCV.REC(9)<ECD.SCRN.NO,I> = PER.DATES<I>
+      IF I =  NUM.PERIODS  THEN
+         SCV.REC(16)<ECD.SCRN.NO,I> = "YE"
+         SCV.REC(17)<ECD.SCRN.NO,I> = "YE"
+         SCV.REC(18)<ECD.SCRN.NO,I> = "YE"
+      END ELSE
+         SCV.REC(16)<ECD.SCRN.NO,I> = I"R%2"
+         SCV.REC(17)<ECD.SCRN.NO,I> = I"R%2"
+         SCV.REC(18)<ECD.SCRN.NO,I> = I"R%2"
+      END
+   NEXT I
+   ECD.ACTION = 3; CALL SCRN.EDIT
+*
+**** PRINT SCREEN
+10*
+   MAT CB.REC = ""
+   MAT OLD.CB = ""
+   MAT NEW.CB = ""
+   GOSUB 102
+   IF ECD.RET.VALUE = "END" THEN GOTO 99999
+   GOSUB 200
+**
+******ENTER OPTION
+**
+50*
+   ECD.NUM = 6; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ""
+   ECD.ACTION = 4; CALL SCRN.EDIT
+   OPTION = ECD.RET.VALUE
+   BEGIN CASE
+      CASE OPTION = "E" OR OPTION = "END"
+         GOTO 99999
+      CASE NUM(OPTION) AND OPTION = 1 AND COA.LEVEL > 0
+         GOSUB 102
+         IF ECD.RET.VALUE # "END" THEN GOSUB 200
+      CASE NUM(OPTION) AND OPTION = 2 AND COA.LEVEL > 1
+         IF DIVSN.CODE = "" OR DIVSN.CODE = GEN.DIV THEN GOSUB 102 ELSE GOSUB 104
+         IF ECD.RET.VALUE # "END" THEN GOSUB 200
+      CASE NUM(OPTION) AND OPTION = 3 AND COA.LEVEL = 3
+         IF DIVSN.CODE = "" OR DIVSN.CODE = GEN.DIV THEN
+            GOSUB 102
+         END ELSE
+            IF DEPT.CODE = "" OR DEPT.CODE = GEN.DEPT THEN GOSUB 104 ELSE GOSUB 106
+         END
+         IF ECD.RET.VALUE # "END" THEN GOSUB 200
+      CASE NUM(OPTION) AND OPTION = 4 AND CCTR.CODE # "" AND TAPE.FLG = "N" AND CURR = "01"
+         PR.LN = 1; GOSUB 4000
+      CASE NUM(OPTION) AND OPTION = 5 AND CCTR.CODE # "" AND TAPE.FLG = "N"
+         GOSUB 2000
+         IF PR THEN
+            FOR PR.LN = PR TO NUM.PERIODS UNTIL ECD.RET.VALUE = "END"
+** T23457 11/23/98 v
+               REF.NO = PR.LN
+** T23457 ^
+               REF.CNT = PR.LN
+               IF REF.CNT > 0 THEN GOSUB 10000
+               GOSUB 5000
+               REF.CNT = PR.LN
+            NEXT PR.LN
+         END
+      CASE NUM(OPTION) AND OPTION = 6 AND CCTR.CODE # ""
+         ECD.NUM = 15; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ""
+         ECD.ACTION = 4; CALL SCRN.EDIT
+         IF ECD.RET.VALUE = "END" THEN GOTO 50
+         IF ECD.RET.VALUE = "P" THEN
+            ECD.NUM = 12
+            FOR PR = 1 TO PERIOD.REC<1>
+*T21211 v
+               IF PR = PERIOD.REC<1> THEN
+                  TEMP = CB.REC(161) - CB.REC(CB.BUD+PR)
+               END ELSE
+                  TEMP = CB.REC(CB.BUD+PR+1) - CB.REC(CB.BUD+PR)
+               END
+*T21211 ^
+               IF TEMP <> 0 THEN
+                  IF COA.NORM = "CR" THEN TEMP = TEMP * (-1)
+               END ELSE
+                  TEMP = ""
+               END
+               SCV.REC(ECD.NUM)<ECD.SCRN.NO,PR> = TEMP
+            NEXT PR
+            SCV.REC(ECD.NUM)<ECD.SCRN.NO,PR> = ""
+            ECD.SUB.NUM = 1; ECD.ACTION = 7; CALL SCRN.EDIT
+            ECD.NUM = 13; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ""
+            ECD.ACTION = 4; CALL SCRN.EDIT
+            IF ECD.RET.VALUE = "END" THEN GOTO 50
+            IF ECD.RET.VALUE = 0 OR ECD.RET.VALUE = "" THEN
+               GOSUB 2000
+               IF PR THEN
+***T23457 11/23/98 v
+*                 FOR PR.LN = PR TO PERIOD.REC<1> UNTIL ECD.RET.VALUE = "END"
+                  FOR PR.LN = PR TO PERIOD.REC<1>+1 UNTIL ECD.RET.VALUE = "END"
+** T23457 ^
+                     REF.NO = PR.LN
+                     IF REF.CNT > 0 THEN GOSUB 10000
+                     GOSUB 7000
+                     REF.CNT = PR.LN
+                  NEXT PR.LN
+               END
+            END ELSE
+               IF COA.NORM = "CR" THEN ECD.RET.VALUE = ECD.RET.VALUE * (-1)
+               TEMP = INT(ECD.RET.VALUE/PERIOD.REC<1>)
+               ECD.NUM = 12
+*T21211 FOR PR = 1 TO NUM.PERIODS - 1
+               FOR PR = 1 TO NUM.PERIODS
+                  IF PR = 1 THEN
+                     CB.REC(CB.BUD+1) = 0
+                  END ELSE
+*T21211 v
+                     IF PR = NUM.PERIODS THEN
+                        CB.REC(161) = CB.REC(CB.BUD+PR-1) + TEMP
+                        CB.REC(CB.BUD+PR) = CB.REC(161)  ;*T22300
+                     END ELSE
+                        CB.REC(CB.BUD+PR) = CB.REC(CB.BUD+PR-1) + TEMP
+                     END
+*T21211 ^
+                  END
+               NEXT PR
+*T21211 IF CB.REC(CB.BUD+NUM.PERIODS) # ECD.RET.VALUE THEN
+               IF CB.REC(161) # ECD.RET.VALUE THEN
+*T21211    TEMP = ECD.RET.VALUE - CB.REC(CB.BUD+NUM.PERIODS)
+                  TEMP = ECD.RET.VALUE - CB.REC(161)
+                  ST.PR = ABS(TEMP)
+                  IF ST.PR < PERIOD.REC<1> THEN
+                     PR.PTR = NUM.PERIODS - ST.PR
+                     FOR PR = ST.PR TO 1 STEP -1 UNTIL TEMP = 0
+*T21211 v
+                        IF PR = ST.PR THEN
+                           CB.REC(161) = CB.REC(161) + TEMP
+                        END ELSE
+                           CB.REC(CB.BUD+PR+PR.PTR) = CB.REC(CB.BUD+PR+PR.PTR) + TEMP
+                        END
+*T21211 ^
+                        IF TEMP < 0 THEN
+                           TEMP = TEMP + 1
+                        END ELSE
+                           TEMP = TEMP - 1
+                        END
+                     NEXT PR
+                  END ELSE
+                     CB.REC(161) = ECD.RET.VALUE ;* T21102
+                  END
+               END
+               ECD.NUM = 12
+               FOR PR = 1 TO PERIOD.REC<1>
+                  TEMP = CB.REC(CB.BUD+PR+1) - CB.REC(CB.BUD+PR)
+                  IF TEMP <> 0 THEN
+                     IF COA.NORM = "CR" THEN TEMP = TEMP * (-1)
+                  END ELSE
+                     TEMP = ""
+                  END
+                  SCV.REC(ECD.NUM)<ECD.SCRN.NO,PR> = TEMP
+               NEXT PR
+               SCV.REC(ECD.NUM)<ECD.SCRN.NO,PR> = ""
+               ECD.SUB.NUM = 1; ECD.ACTION = 7; CALL SCRN.EDIT
+            END
+         END ELSE
+            ECD.NUM = 12
+*T21211 v
+            FOR PR.LN = 1 TO NUM.PERIODS
+               TEMP = CB.REC(CB.BUD+PR.LN) + 0
+               IF PR.LN = (PERIOD.REC<1> + 1) THEN
+                  TEMP = CB.REC(161) + 0
+               END
+               IF TEMP <> 0 THEN
+                  IF COA.NORM = "CR" THEN TEMP = TEMP * (-1)
+                  SCV.REC(ECD.NUM)<ECD.SCRN.NO,PR.LN> = TEMP
+               END ELSE
+                  SCV.REC(ECD.NUM)<ECD.SCRN.NO,PR.LN> = ""
+                  CB.REC(CB.BUD+PR.LN) = ""
+               END
+            NEXT PR.LN
+*T21211 ^
+            ECD.SUB.NUM = 1; ECD.ACTION = 7; CALL SCRN.EDIT
+            ECD.NUM = 13; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ""
+            ECD.ACTION = 4; CALL SCRN.EDIT
+            IF ECD.RET.VALUE = "END" THEN GOTO 50
+            IF ECD.RET.VALUE = 0 OR ECD.RET.VALUE = "" THEN
+               GOSUB 2000
+               IF PR THEN
+                  REF.NO = PR
+                  LN.NO  = PR
+                  FOR PR.LN = PR TO NUM.PERIODS UNTIL ECD.RET.VALUE = "END"
+                     REF.NO = PR.LN
+                     IF REF.NO > 0 THEN GOSUB 10000
+                     GOSUB 6000
+                     REF.CNT = PR.LN
+                  NEXT PR.LN
+               END
+            END ELSE
+               IF COA.NORM = "CR" THEN ECD.RET.VALUE = ECD.RET.VALUE * (-1)
+               TEMP = INT(ECD.RET.VALUE/PERIOD.REC<1>)
+               ECD.NUM = 12
+*T21211 FOR PR = 1 TO NUM.PERIODS - 1
+               FOR PR = 1 TO NUM.PERIODS
+                  IF PR = 1 THEN
+                     CB.REC(CB.BUD+1) = 0
+                  END ELSE
+*T21211 v
+                     IF PR = NUM.PERIODS THEN
+                        CB.REC(161) = CB.REC(CB.BUD+PR-1) + TEMP
+                     END ELSE
+                        CB.REC(CB.BUD+PR) = CB.REC(CB.BUD+PR-1) + TEMP
+                     END
+*T21211 ^
+                  END
+               NEXT PR
+*T21211 IF CB.REC(CB.BUD+NUM.PERIODS) # ECD.RET.VALUE THEN
+               IF CB.REC(161) # ECD.RET.VALUE THEN
+*T21211   TEMP = ECD.RET.VALUE - CB.REC(CB.BUD+NUM.PERIODS)
+                  TEMP = ECD.RET.VALUE - CB.REC(161)
+                  ST.PR = ABS(TEMP)
+                  IF ST.PR < PERIOD.REC<1> THEN
+                     PR.PTR = NUM.PERIODS - ST.PR
+                     FOR PR = ST.PR TO 1 STEP -1 UNTIL TEMP = 0
+*T21211 v
+                        IF PR = ST.PR THEN
+                           CB.REC(161) = CB.REC(161) + TEMP
+                        END ELSE
+                           CB.REC(CB.BUD+PR+PR.PTR) = CB.REC(CB.BUD+PR+PR.PTR) + TEMP
+                        END
+*T21211 ^
+                        IF TEMP < 0 THEN
+                           TEMP = TEMP + 1
+                        END ELSE
+                           TEMP = TEMP - 1
+                        END
+                     NEXT PR
+                  END ELSE
+*T21211     CB.REC(CB.BUD+NUM.PERIODS) = ECD.RET.VALUE
+                     CB.REC(161) = ECD.RET.VALUE
+                  END
+               END
+               ECD.NUM = 12
+               FOR PR.LN = 1 TO NUM.PERIODS
+                  TEMP = CB.REC(CB.BUD+PR.LN) + 0
+                  IF PR.LN = (PERIOD.REC<1> + 1) THEN
+                     TEMP = CB.REC(161) + 0
+                  END
+                  IF TEMP <> 0 THEN
+                     IF COA.NORM = "CR" THEN TEMP = TEMP * (-1)
+                     SCV.REC(ECD.NUM)<ECD.SCRN.NO,PR.LN> = TEMP
+                  END ELSE
+                     SCV.REC(ECD.NUM)<ECD.SCRN.NO,PR.LN> = ""
+                     CB.REC(CB.BUD+PR.LN) = ""
+                  END
+               NEXT PR.LN
+               ECD.SUB.NUM = 1; ECD.ACTION = 7; CALL SCRN.EDIT
+            END
+         END
+      CASE OPTION = "F" AND CCTR.CODE # ""
+         BLK = 0
+         FOR I = 3 TO 161 UNTIL BLK
+            IF CB.REC(I) # OLD.CB(I) THEN BLK = 1
+         NEXT I
+         IF BLK THEN
+            MAT NEW.CB = MAT CB.REC
+            MATWRITE CB.REC ON CC.COA.BAL, CONO:DIVSN.CODE:DEPT.CODE:CCTR.CODE:ACCT.NUM
+            MATREAD CB.REC FROM DP.COA.BAL, CONO:DIVSN.CODE:DEPT.CODE:ACCT.NUM ELSE MAT CB.REC = ""
+            FOR I = 3 TO 161
+               CB.REC(I) = CB.REC(I) - OLD.CB(I) + NEW.CB(I)
+               IF CB.REC(I) = 0 THEN CB.REC(I) = ""
+            NEXT I
+            MATWRITE CB.REC ON DP.COA.BAL, CONO:DIVSN.CODE:DEPT.CODE:ACCT.NUM
+            MATREAD CB.REC FROM DV.COA.BAL, CONO:DIVSN.CODE:ACCT.NUM ELSE MAT CB.REC = ""
+            FOR I = 3 TO 161
+               CB.REC(I) = CB.REC(I) - OLD.CB(I) + NEW.CB(I)
+               IF CB.REC(I) = 0 THEN CB.REC(I) = ""
+            NEXT I
+            MATWRITE CB.REC ON DV.COA.BAL, CONO:DIVSN.CODE:ACCT.NUM
+            MATREAD CB.REC FROM CO.COA.BAL, CONO:ACCT.NUM ELSE MAT CB.REC = ""
+            FOR I = 3 TO 161
+               CB.REC(I) = CB.REC(I) - OLD.CB(I) + NEW.CB(I)
+               IF CB.REC(I) = 0 THEN CB.REC(I) = ""
+            NEXT I
+            MATWRITE CB.REC ON CO.COA.BAL, CONO:ACCT.NUM
+            MATWRITE COA.REC ON COA, CONO : ACCT.NUM
+         END
+         IF ACCT.NUM # ACCT.NO THEN
+            ACCT.NUM = ACCT.NO
+            MAT COA.REC = MAT OCOA.REC
+            ECD.NUM = 1; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ACCT.NUM CO.ACCT.MASK
+            ECD.ACTION = 5; CALL SCRN.EDIT
+            ECD.NUM = 2; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = COA.DESC
+            ECD.ACTION = 5; CALL SCRN.EDIT
+         END
+         IF COA.LEVEL = 0 THEN GOTO 99999
+         ECD.NUM = 3; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ""
+         ECD.ACTION = 5; CALL SCRN.EDIT
+         ECD.NUM = 4; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ""
+         ECD.ACTION = 5; CALL SCRN.EDIT
+         ECD.NUM = 5; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ""
+         ECD.ACTION = 5; CALL SCRN.EDIT
+         GOSUB 1000
+         GOTO 10
+      CASE OPTION = "S" AND REF.CNT > 0
+         REF.NO = CURR.REF.NO + LINE.COUNT
+         IF REF.NO > REF.CNT THEN REF.NO =1
+         GOSUB 10000
+      CASE OPTION="S" AND REF.CNT > 0
+         REF.NO=CURR.REF.NO + LINE.COUNT
+         IF REF.NO > REF.CNT THEN REF.NO=1
+         GOSUB 10000
+      CASE OPTION="SF" AND REF.CNT > 0
+         REF.NO=CURR.REF.NO + LINE.COUNT
+         IF REF.NO > REF.CNT THEN REF.NO=1
+         GOSUB 10000
+      CASE OPTION="ST" AND REF.CNT > 0
+         REF.NO=1
+         GOSUB 10000
+      CASE OPTION="SR" AND REF.CNT > 0
+         REF.NO=CURR.REF.NO - LINE.COUNT
+         IF REF.NO < 1 THEN REF.NO=1
+         GOSUB 10000
+      CASE OPTION="SB" AND REF.CNT > 0
+         REF.NO=REF.CNT
+         GOSUB 10000
+   END CASE
+   GOTO 50
+**** ENTER DIVISION
+102*
+   IF COA.LEVEL = 0 THEN
+      DIVSN.CODE = GEN.DIV
+      DEPT.CODE = GEN.DEPT
+      CCTR.CODE = GEN.CCTR
+      GOTO 199
+   END
+   SCV.REC(3)<ECD.SCRN.NO> = DIVSN.CODE; ECD.DEFAULT = DIVSN.CODE;* T23278
+   ECD.NUM = 3; ECD.ACTION = 4; CALL SCRN.EDIT
+   IF ECD.RET.VALUE = "END" THEN GOTO 199
+   IF ECD.RET.VALUE = "S" THEN
+      DIVSN.CODE = ECD.RET.VALUE
+      GOTO 199
+   END
+   IF ECD.RET.VALUE = "" THEN
+      IF DIV.CNT < 1 THEN GOTO 102
+      P_X  = 65 ; P_Y = 8 ; P_VALUE = "Ln# Division" ; P_OPT = ""
+      P_X  := AM:65 ; P_Y := AM:9 ; P_VALUE := AM:"--- --------"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      DESC = ALL.DIV
+      LINES = DIV.CNT
+      LN = 1
+      OLD.START = 0
+      GOSUB 85000
+      GOSUB 50000
+      IF ECD.RET.VALUE = "END" OR ECD.RET.VALUE = "N" THEN GOTO 102
+      ECD.RET.VALUE = DESC<1,ECD.RET.VALUE>
+      ECD.NUM = 3; SCV.REC(3)<ECD.SCRN.NO> = ECD.RET.VALUE
+      ECD.ACTION = 5; CALL SCRN.EDIT
+   END
+   IF ECD.RET.VALUE = GEN.DIV THEN
+*T23278 v
+      DIV.CODE = ECD.RET.VALUE; USER.ID = UPCASE(@LOGNAME); ERRMSG = ''
+      CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+      IF ERRMSG # '' THEN
+         GOSUB 91000; GOTO 102
+      END
+*T23278 ^
+      DIVSN.CODE = GEN.DIV
+      DEPT.CODE = GEN.DEPT
+      CCTR.CODE = GEN.CCTR
+      GOTO 199
+   END
+   MATREAD DIV.REC FROM DIVISION, CONO:ECD.RET.VALUE ELSE
+      ERRMSG = "DIVISION ":ECD.RET.VALUE:" IS NOT ON FILE"; GOSUB 91000; GOTO 102
+   END
+*T23278 v
+   DIV.CODE = ECD.RET.VALUE; USER.ID = UPCASE(@LOGNAME); ERRMSG = ''
+   CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+   IF ERRMSG # '' THEN
+      GOSUB 91000; GOTO 102
+   END
+*T23278 ^
+   DIVSN.CODE = ECD.RET.VALUE
+**** ENTER DEPARTMENT
+104*
+   IF COA.LEVEL = 1 THEN
+      DEPT.CODE = GEN.DEPT
+      CCTR.CODE = GEN.CCTR
+      GOTO 199
+   END
+   ECD.NUM = 4; ECD.ACTION = 4; CALL SCRN.EDIT
+   IF ECD.RET.VALUE = "END" THEN GOTO 199
+   IF ECD.RET.VALUE = "S" THEN
+      DEPT.CODE = ECD.RET.VALUE
+      GOTO 199
+   END
+   IF ECD.RET.VALUE = "" THEN
+      LINES = COUNT(DIV.DEPT,VM) + (DIV.DEPT # "")
+      IF LINES < 1 THEN GOTO 104
+      DESC = ""
+      FOR I = 1 TO LINES
+         IF LEN(DIV.DEPT<1,I>) = 2 THEN
+            DESC<1,-1> = DIV.DEPT<1,I>
+         END
+      NEXT I
+      LINES = COUNT(DESC,VM) + (DESC # "")
+      IF LINES < 1 THEN GOTO 104
+      P_X  = 65 ; P_Y = 8 ; P_VALUE = "Ln# Department" ; P_OPT = ""
+      P_X  := AM:65 ; P_Y := AM:9 ; P_VALUE := AM:"--- ----------"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      LN = 1
+      OLD.START = 0
+      GOSUB 85000
+      GOSUB 50000
+      IF ECD.RET.VALUE = "END" OR ECD.RET.VALUE = "N" THEN GOTO 104
+      ECD.RET.VALUE = DESC<1,ECD.RET.VALUE>
+      ECD.NUM = 4; SCV.REC(4)<ECD.SCRN.NO> = ECD.RET.VALUE
+      ECD.ACTION = 5; CALL SCRN.EDIT
+   END
+   IF ECD.RET.VALUE = GEN.DEPT THEN
+      DEPT.CODE = GEN.DEPT
+      CCTR.CODE = GEN.CCTR
+      GOTO 199
+   END
+   LOCATE ECD.RET.VALUE IN DIV.DEPT<1>,1 SETTING FND ELSE
+      ERRMSG = "DEPARTMENT ":ECD.RET.VALUE:" IS NOT FOR THIS DIVISION"; GOSUB 91000; GOTO 104
+   END
+   MATREAD DEPT.REC FROM DEPARTMENT, CONO:ECD.RET.VALUE ELSE
+      ERRMSG = "DEPARTMENT ":ECD.RET.VALUE:" IS NOT ON FILE"; GOSUB 91000; GOTO 104
+   END
+   DEPT.CODE = ECD.RET.VALUE
+**** ENTER COST CENTER
+106*
+   IF COA.LEVEL = 2 THEN
+      CCTR.CODE = GEN.CCTR
+      GOTO 199
+   END
+   ECD.NUM = 5; ECD.ACTION = 4; CALL SCRN.EDIT
+   IF ECD.RET.VALUE = "END" THEN GOTO 199
+   IF ECD.RET.VALUE = "S" THEN
+      CCTR.CODE = ECD.RET.VALUE
+      GOTO 199
+   END
+   IF ECD.RET.VALUE = "" THEN
+      LINES = COUNT(DEPT.CCTRS,VM) + (DEPT.CCTRS # "")
+      IF LINES < 1 THEN GOTO 106
+      DESC = DEPT.CCTRS
+      P_X  = 65 ; P_Y = 8 ; P_VALUE = "Ln# Cost Center" ; P_OPT = ""
+      P_X  := AM:65 ; P_Y := AM:9 ; P_VALUE := AM:"--- -----------"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      LN = 1
+      OLD.START = 0
+      GOSUB 85000
+      GOSUB 50000
+      IF ECD.RET.VALUE = "END" OR ECD.RET.VALUE = "N" THEN GOTO 106
+      ECD.RET.VALUE = DESC<1,ECD.RET.VALUE>
+      ECD.NUM = 5; SCV.REC(5)<ECD.SCRN.NO> = ECD.RET.VALUE
+      ECD.ACTION = 5; CALL SCRN.EDIT
+   END
+   IF ECD.RET.VALUE = GEN.CCTR THEN
+      CCTR.CODE = GEN.CCTR
+      GOTO 199
+   END
+   LOCATE ECD.RET.VALUE IN DEPT.CCTRS<1>,1 SETTING FND ELSE
+      ERRMSG = "COST CENTER ":ECD.RET.VALUE:" IS NOT FOR THIS DEPARTMENT"; GOSUB 91000; GOTO 106
+   END
+   MATREAD CCTR.REC FROM COST.CNTR, CONO:ECD.RET.VALUE ELSE
+      ERRMSG = "COST CENTER ":ECD.RET.VALUE:" IS NOT ON FILE"; GOSUB 91000; GOTO 106
+   END
+   CCTR.CODE = ECD.RET.VALUE
+199*
+   RETURN
+*
+*--- READ COA.BAL FROM THE RIGHT FILE
+*
+200*
+   NEW.REC = 0
+   BEGIN CASE
+      CASE DIVSN.CODE = "S"
+         MATREAD CB.REC FROM CO.COA.BAL, CONO:ACCT.NUM ELSE MAT CB.REC = ""
+         DIVSN.CODE = ""
+         DEPT.CODE = ""
+         CCTR.CODE = ""
+      CASE DEPT.CODE = "S"
+         MATREAD CB.REC FROM DV.COA.BAL, CONO:DIVSN.CODE:ACCT.NUM ELSE MAT CB.REC = ""
+         DEPT.CODE = ""
+         CCTR.CODE = ""
+      CASE CCTR.CODE = "S"
+         MATREAD CB.REC FROM DP.COA.BAL, CONO:DIVSN.CODE:DEPT.CODE:ACCT.NUM ELSE MAT CB.REC = ""
+         CCTR.CODE = ""
+      CASE 1
+         IF EQV.FLG THEN
+            READ ACCT.NUM FROM COA.EQUIV, CONO:DIVSN.CODE:DEPT.CODE:CCTR.CODE:ACCT.NUM ELSE
+               ACCT.NUM = ACCT.NO
+            END
+            IF ACCT.NUM # ACCT.NO THEN
+               MATREAD COA.REC FROM COA, CONO : ACCT.NUM[11,IN.ACCT.LEN] ELSE
+                  ACCT.NUM = ACCT.NO
+                  MAT COA.REC = MAT OCOA.REC
+               END
+               IF ACCT.NUM # ACCT.NO THEN
+                  DIVSN.CODE = ACCT.NUM[4,2]
+                  DEPT.CODE = ACCT.NUM[6,2]
+                  CCTR.CODE = ACCT.NUM[8,3]
+                  ACCT.NUM = ACCT.NUM[11,IN.ACCT.LEN]
+               END
+            END
+            ECD.NUM = 1; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ACCT.NUM CO.ACCT.MASK
+            ECD.ACTION = 5; CALL SCRN.EDIT
+            ECD.NUM = 2; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = COA.DESC
+            ECD.ACTION = 5; CALL SCRN.EDIT
+         END
+         MATREAD CB.REC FROM CC.COA.BAL, CONO:DIVSN.CODE:DEPT.CODE:CCTR.CODE:ACCT.NUM ELSE NEW.REC = 1
+   END CASE
+   ECD.NUM = 3; SCV.REC(3)<ECD.SCRN.NO> = DIVSN.CODE
+   ECD.ACTION = 5; CALL SCRN.EDIT
+   ECD.NUM = 4; SCV.REC(4)<ECD.SCRN.NO> = DEPT.CODE
+   ECD.ACTION = 5; CALL SCRN.EDIT
+   ECD.NUM = 5; SCV.REC(5)<ECD.SCRN.NO> = CCTR.CODE
+   ECD.ACTION = 5; CALL SCRN.EDIT
+   IF NEW.REC THEN
+      MAT CB.REC = ""
+      MAT OLD.CB = ""
+      GOSUB 1000
+      IF TAPE.FLG = "N" AND CURR = "01" THEN
+         PR.LN = 1
+         GOSUB 4000
+      END
+   END ELSE
+      MAT OLD.CB = MAT CB.REC
+      ECD.NUM = 10
+      FOR PR.LN = 1 TO NUM.PERIODS
+         TEMP = CB.REC(CB.OPN+PR.LN) + 0
+         IF PR.LN = (PERIOD.REC<1> + 1) THEN
+            TEMP = CB.REC(55) + 0
+         END
+         IF TEMP <> 0 THEN
+            IF COA.NORM = "CR" THEN TEMP = TEMP * (-1)
+            SCV.REC(ECD.NUM)<ECD.SCRN.NO,PR.LN> = TEMP
+         END ELSE
+            SCV.REC(ECD.NUM)<ECD.SCRN.NO,PR.LN> = ""
+         END
+      NEXT PR.LN
+      ECD.NUM = 11
+      FOR PR.LN = 1 TO NUM.PERIODS
+         TEMP = CB.REC(CB.LYR+PR.LN) + 0
+         IF PR.LN = (PERIOD.REC<1> + 1) THEN
+            TEMP = CB.REC(108) + 0
+         END
+         IF TEMP <> 0 THEN
+            IF COA.NORM = "CR" THEN TEMP = TEMP * (-1)
+            SCV.REC(ECD.NUM)<ECD.SCRN.NO,PR.LN> = TEMP
+         END ELSE
+            SCV.REC(ECD.NUM)<ECD.SCRN.NO,PR.LN> = ""
+         END
+      NEXT PR.LN
+      ECD.NUM = 12
+      FOR PR.LN = 1 TO NUM.PERIODS
+         TEMP = CB.REC(CB.BUD+PR.LN) + 0
+         IF PR.LN = (PERIOD.REC<1> + 1) THEN
+            TEMP = CB.REC(161) + 0
+         END
+         IF TEMP <> 0 THEN
+            IF COA.NORM = "CR" THEN TEMP = TEMP * (-1)
+            SCV.REC(ECD.NUM)<ECD.SCRN.NO,PR.LN> = TEMP
+         END ELSE
+            SCV.REC(ECD.NUM)<ECD.SCRN.NO,PR.LN> = ""
+         END
+      NEXT PR.LN
+   END
+   REF.CNT = PERIOD.REC<1> + 1; CURR.REF.NO = ""; REF.NO = 1; GOSUB 10000
+299 RETURN
+*
+*--- CLEAR OPEN LYR BUDGET FIGURS
+*
+1000*
+   ECD.NUM = 10; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ""
+   ECD.NUM = 11; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ""
+   ECD.NUM = 12; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ""
+   REF.CNT = PERIOD.REC<1> + 1; CURR.REF.NO = ""; REF.NO = 1; GOSUB 10000
+   RETURN
+*
+*--- GET STARTING PERIOD NUMBER
+*
+2000*
+   ECD.NUM = 7; ECD.ACTION = 4; CALL SCRN.EDIT
+   BEGIN CASE
+      CASE ECD.RET.VALUE = "YE"
+         PR = NUM.PERIODS
+      CASE NUM(ECD.RET.VALUE) AND ECD.RET.VALUE > 0 AND ECD.RET.VALUE < NUM.PERIODS + 1
+         PR = ECD.RET.VALUE
+      CASE 1
+         PR = 0
+   END CASE
+   RETURN
+*
+*--- GET OPEN BAL
+*
+4000*
+   ECD.NUM = 10; ECD.SUB.NUM = PR.LN; ECD.ACTION = 4; CALL SCRN.EDIT
+   IF ECD.RET.VALUE = "END" THEN GOTO 4999
+   IF ECD.RET.VALUE + 0 <> 0 THEN
+      IF COA.NORM = "CR" THEN ECD.RET.VALUE = ECD.RET.VALUE * (-1)
+   END ELSE
+      ECD.RET.VALUE = ""
+   END
+   CB.REC(CB.OPN+PR.LN) = ECD.RET.VALUE
+4999*
+   RETURN
+*
+*--- GET LAST YEAR BAL
+*
+5000*
+   ECD.NUM = 11; ECD.SUB.NUM = PR.LN; ECD.ACTION = 4; CALL SCRN.EDIT
+   IF ECD.RET.VALUE = "END" THEN GOTO 5999
+   IF ECD.RET.VALUE + 0 <> 0 THEN
+      IF COA.NORM = "CR" THEN ECD.RET.VALUE = ECD.RET.VALUE * (-1)
+   END ELSE
+      ECD.RET.VALUE = ""
+   END
+*** T23457 v
+   IF PR.LN = NUM.PERIODS THEN
+      CB.REC(108) = ECD.RET.VALUE
+   END ELSE
+      CB.REC(CB.LYR+PR.LN) = ECD.RET.VALUE
+   END
+** T23457 ^
+5999*
+   RETURN
+*
+*--- GET BUDGET BAL
+*
+6000*
+   ECD.NUM = 12; ECD.SUB.NUM = PR.LN; ECD.ACTION = 4; CALL SCRN.EDIT
+   IF ECD.RET.VALUE = "END" THEN GOTO 6999
+   IF ECD.RET.VALUE + 0 <> 0 THEN
+      IF COA.NORM = "CR" THEN ECD.RET.VALUE = ECD.RET.VALUE * (-1)
+   END ELSE
+      ECD.RET.VALUE = ""
+   END
+*T25179 v
+   IF PR.LN = NUM.PERIODS THEN
+      CB.REC(161) = ECD.RET.VALUE
+   END ELSE
+      CB.REC(CB.BUD+PR.LN) = ECD.RET.VALUE
+   END
+* CB.REC(CB.BUD+PR.LN) = ECD.RET.VALUE
+*T25179 ^
+6999*
+   RETURN
+*
+*--- GET BUDGET BAL (MONTHLY)
+*
+7000*
+   ECD.NUM = 12; ECD.SUB.NUM = PR.LN; ECD.ACTION = 4; CALL SCRN.EDIT
+   IF ECD.RET.VALUE = "END" THEN GOTO 7999
+   IF ECD.RET.VALUE + 0 <> 0 THEN
+      IF COA.NORM = "CR" THEN ECD.RET.VALUE = ECD.RET.VALUE * (-1)
+   END ELSE
+      ECD.RET.VALUE = ""
+   END
+   IF PR.LN = 1 THEN
+      CB.REC(CB.BUD+PR.LN) = ""
+   END
+*T21211 v
+   IF PR.LN = PERIOD.REC<1> THEN
+      CB.REC(161) = ECD.RET.VALUE + CB.REC(CB.BUD+PR.LN)
+   END ELSE
+      CB.REC(CB.BUD+PR.LN+1) = ECD.RET.VALUE + CB.REC(CB.BUD+PR.LN)
+   END
+*T21211 ^
+7999*
+   RETURN
+*
+*--- SCROLL SCREEN BALANCES
+*    DISPLAY MULTI-LINE FIELDS
+*
+10000*
+   START.REF.NO=1 + INT((REF.NO-1)/LINE.COUNT)*LINE.COUNT
+   IF START.REF.NO =CURR.REF.NO THEN RETURN
+   CURR.REF.NO = START.REF.NO
+   ECD.NUM = 9;  ECD.SUB.NUM=START.REF.NO; ECD.ACTION = 7;CALL SCRN.EDIT
+   ECD.NUM = 16; ECD.SUB.NUM=START.REF.NO; ECD.ACTION = 7;CALL SCRN.EDIT
+   ECD.NUM = 10; ECD.SUB.NUM=START.REF.NO; ECD.ACTION = 7;CALL SCRN.EDIT
+   ECD.NUM = 17; ECD.SUB.NUM=START.REF.NO; ECD.ACTION = 7;CALL SCRN.EDIT
+   ECD.NUM = 11; ECD.SUB.NUM=START.REF.NO; ECD.ACTION = 7;CALL SCRN.EDIT
+   ECD.NUM = 18; ECD.SUB.NUM=START.REF.NO; ECD.ACTION = 7;CALL SCRN.EDIT
+   ECD.NUM = 12; ECD.SUB.NUM=START.REF.NO; ECD.ACTION = 7;CALL SCRN.EDIT
+   RETURN
+*
+*--- GET XREF SELECTION
+*
+50000*
+   ECD.NUM = 8
+   SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ""
+   ECD.ACTION = 4
+   CALL SCRN.EDIT
+   BEGIN CASE
+      CASE ECD.RET.VALUE = "END" OR ECD.RET.VALUE = "N"
+         GOTO 59999
+      CASE NUM(ECD.RET.VALUE)
+         IF ECD.RET.VALUE < ST.LINE OR ECD.RET.VALUE > LST.LINE THEN
+            ERRMSG = "* * * OUT OF RANGE * * *"
+            GOSUB 91000
+         END ELSE
+            GOTO 59999
+         END
+      CASE ECD.RET.VALUE = "S"
+         LN = LN + PAGE.SIZE
+         IF LN > LINES THEN LN = 1
+         GOSUB 85000
+    * T25978 v
+      CASE ECD.RET.VALUE = "SR"
+         LN -= PAGE.SIZE
+         IF LN < 1 THEN LN = 1
+         GOSUB 85000
+      CASE ECD.RET.VALUE = "SB"
+         LN = LINES
+         GOSUB 85000
+      CASE ECD.RET.VALUE = "ST"
+         LN = 1
+         GOSUB 85000
+    * T25978 ^
+   END CASE
+   GOTO 50000
+59999*
+   FOR SLN = 8 TO 19
+      P_X  = 65 ; P_Y = SLN ; P_VALUE = "" ; P_OPT = "CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   NEXT SLN
+   RETURN
+*
+*
+*--- SCROLL XREF
+*
+85000*
+   ST.LINE = 1 + INT((LN-1)/PAGE.SIZE) * PAGE.SIZE
+   IF ST.LINE = OLD.START THEN RETURN
+   OLD.START = ST.LINE
+   LST.LINE = ST.LINE + PAGE.SIZE - 1
+   IF LST.LINE > LINES THEN LST.LINE = LINES
+   CNT = 1
+   FOR N = ST.LINE TO LST.LINE
+      SLN = BEGIN.PAGE + LINE.SPACE * MOD(N-1,PAGE.SIZE)
+      P_X  = 65 ; P_Y = SLN ; P_VALUE = N "R#3" ; P_OPT = "CL"
+      P_X  := AM:69 ; P_Y := AM:SLN ; P_VALUE := AM:DESC<1,N> "L#3"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      CNT = CNT + 1
+   NEXT N
+   FOR N = CNT TO PAGE.SIZE
+      SLN = BEGIN.PAGE + LINE.SPACE * MOD(N-1,PAGE.SIZE)
+      P_X  = 65 ; P_Y = SLN ; P_VALUE = "" ; P_OPT = "CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   NEXT N
+   RETURN   
+**** ERROR ROUTINE
+91000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+99999*
+   ECD.ACTION=99;CALL SCRN.EDIT
+   RETURN
+END

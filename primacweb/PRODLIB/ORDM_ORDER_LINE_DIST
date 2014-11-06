@@ -1,0 +1,227 @@
+SUBROUTINE ORDM_ORDER_LINE_DIST
+********************************************************************************
+*   Program name :- ORDM_ORDER_LINE_DIST
+*   Created:- 2/10/2006
+*   Programmer :- Suhail Hussain S
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB INV.WHSE
+$INCLUDE OPS.CPYLIB ORDER.DETAIL
+$INCLUDE ICS.CPYLIB INV.CNV
+$INCLUDE CPYLIB CHAR
+
+   OPEN "","INVENTORY" TO INVENTORY ELSE ERRMSG = "CANNOT OPEN INVENTORY FILE";GOTO 91000
+   OPEN "","INV.WHSE" TO INV.WHSE ELSE ERRMSG = "CANNOT OPEN INV.WHSE FILE";GOTO 91000
+   OPEN "","ORDER.DETAIL" TO ORDER.DETAIL ELSE ERRMSG = "CANNOT OPEN ORDER.DETAIL FILE";GOTO 91000
+
+   STATUS = RBO.getProperty("","DISPARR",tempOSDRec)
+   STAUTS = RBO.getProperty("","INARR",INARR)
+   STAUTS = RBO.getProperty("","PMCProperty",PMCProperty)
+
+   CONO    = PMCProperty<1,4>
+   ORD.SHIP.TO   = INARR<1,1>
+   SHPNO   = INARR<1,2>
+   PROD_ID = INARR<1,3>
+   WHSE_N0 = INARR<1,4>
+   LINE_NO = INARR<1,5>
+   MODE    = INARR<1,6>
+   DELIM   = "ð"
+   SWAP "#" WITH VM IN ORD.SHIP.TO
+   MATPARSE ORD.DET.REC FROM tempOSDRec,DELIM
+
+   LN.NO = LINE_NO
+   TEMP.INDX = LN.NO
+   ORG.QTY = ""
+   DISP_VAL = ""
+PDNO      = OSD.PROD<1,TEMP.INDX>
+WHNO      = OSD.WHSE<1,LN.NO>
+UNPRC     = OSD.PRICE<1,TEMP.INDX>
+PROD.SEQ  = OSD.PROD.SEQ<1,TEMP.INDX>
+PROD.KIT  = OSD.KIT<1,LN.NO>
+  IF MODE = "ORDER" THEN
+     ERR.MSG = 0
+     IF OSD.KIT<1,TEMP.INDX> = "M" THEN
+        ERRMSG = "Cannot change a Product that is a member of a Kit"
+        GOTO 91000
+     END
+     IF OSD.KIT<1,TEMP.INDX> = "N" THEN
+        MATREAD INV.REC FROM INVENTORY, CONO:PROD_ID THEN
+           IF INV.SUBS = "" THEN
+              ERRMSG = "This product has no sub products to distribute to"; GOTO 91000
+           END ELSE
+              GOTO ORDER_LINE_DIST
+           END
+        END ELSE
+           ERRMSG = "Cannot locate product # ":PROD_ID;GOTO 91000
+        END     
+     END ELSE
+        ERRMSG = "Cannot Distribute a Kitted Item"; GOTO 91000
+     END
+   END ELSE
+      IF MODE = "RELEASE" THEN GOTO ORDER_LINE_DIST
+   END
+RETURN
+
+ORDER_LINE_DIST:
+*SUBROUTINE ORDER.LINE.DIST(CONO,ORDNO,SHPNO,PDNO,WHNO,UNPRC,PROD.SEQ,PROD.KIT)
+  OLD.SHPNO = SHPNO
+  GEN.SHPNO = "000"
+  TODAY = DATE()
+  LINE.SPACE = 2
+  PAGE.SIZE = 5
+  BEGIN.PAGE = 8
+  GXR.CO = CONO
+*
+  LOCATE OLD.SHPNO IN ORD.SHIP.TO<1>,1 SETTING S ELSE GOTO 91000
+  SHPNO = OLD.SHPNO
+  STATUS = "D"
+  MCNT = DCOUNT(OSD.PROD,VM)
+  PCNT = 0; BREF = ""; PROD.SUBS = ""
+  FOR P = 1 TO MCNT
+    MATREAD INV.REC FROM INVENTORY, CONO:OSD.PROD<1,P> THEN
+      IF INV.SUBS # "" THEN
+        PCNT = PCNT + 1
+        BREF<1,PCNT> = P
+        PROD.SUBS<PCNT> = INV.SUBS
+      END
+    END
+  NEXT P
+
+  IF PCNT < 1 THEN
+    ERRMSG = "Cannot locate any base products to distribute for this order"
+    GOTO 91000
+  END
+*
+  LOCATE GEN.SHPNO IN ORD.SHIP.TO<1>,1 SETTING SPTR ELSE
+    ERRMSG = "Cannot locate the general Ship To for this order"
+    GOTO 91000
+  END
+*
+  REFNO = ""; PDNOS = ""; WHNOS = ""
+  FOR M = 1 TO PCNT
+    P = BREF<1,M>
+    LOCATE OSD.PROD<1,P> IN PDNOS<1>,1 SETTING PLOC ELSE
+      PDNOS<1,PLOC> = OSD.PROD<1,P>
+    END
+    LOCATE OSD.WHSE<1,P> IN WHNOS<PLOC>,1 SETTING WLOC ELSE
+      WHNOS<PLOC,WLOC> = OSD.WHSE<1,P>
+    END
+    REFNO<PLOC,WLOC> = P
+  NEXT M
+
+  DST.SUBS = ""; DST.WHSE = ""
+  DST.QTY = ""; ORG.QTY = ""; ORD.QTY = ""
+*
+  IF PDNO # "" THEN
+    ECD.RET.VALUE = PDNO; GOTO 110
+  END ELSE
+    PPTR = 1; WHNO = ""
+    ERRMSG = "PDNO IS EMPTY....INPUT IS REQUIRED";GOTO 91000
+  END
+*
+*---- Product Number
+110*
+  LN = 1; LINES = 0; OLD.START.LINE = 0
+  PDNO = ECD.RET.VALUE
+  LOCATE PDNO IN PDNOS<1>,1 SETTING PLOC ELSE
+    ERRMSG = "Cannot locate product (":PDNO:") for this order."
+    GOTO 91000
+  END
+  MATREAD INV.REC FROM INVENTORY, CONO:PDNO ELSE
+    ERRMSG = "Cannot locate Product # ":PDNO
+    GOTO 91000
+  END
+$INCLUDE ICSBP INV.UM.CNV
+ *
+  WCNT = DCOUNT(WHNOS<PLOC>,VM)
+  BEGIN CASE
+    CASE WCNT = 1
+      ECD.RET.VALUE = WHNOS<PLOC,1>
+      GOTO 210
+    CASE WHNO # ""
+      ECD.RET.VALUE = WHNO
+      GOTO 210
+  END CASE
+*
+*---- Warehouse Number
+200*
+   ERRMSG = "WAREHOUSE NUMBER IS REQUIRED.........GET INPUT";GOTO 91000
+210*
+  WHNO = ECD.RET.VALUE
+  LOCATE WHNO IN WHNOS<PLOC>,1 SETTING WLOC ELSE
+    ERRMSG = "Warehouse (":WHNO:") is not valid for product (":PDNO:") on this order"
+    GOTO 91000
+  END
+  MATREAD IWH.REC FROM INV.WHSE, CONO:PDNO:"!":WHNO ELSE
+    ERRMSG = "Cannot locate warehouse (":WHNO:") for product # ":PDNO
+    GOTO 91000
+  END
+  PPTR = REFNO<PLOC,WLOC>
+  LOCATE PPTR IN BREF,1 SETTING BPTR ELSE BPTR = 1
+*
+  DST.SUBS<PPTR> = ""; DST.WHSE<PPTR> = ""
+  DST.QTY<PPTR> = ""; ORG.QTY<PPTR> = ""; ORD.QTY<PPTR> = ""
+
+  FOR M = 1 TO MCNT
+    LOCATE M IN BREF<1>,1 SETTING X ELSE
+      LIMIT = PCNT
+      FOR P = 1 TO LIMIT
+        LOCATE OSD.PROD<1,M> IN PROD.SUBS<P>,1 SETTING X THEN
+          PTR = 1
+          LOOP
+            LOCATE OSD.PROD<1,M> IN DST.SUBS<PPTR>,PTR SETTING SLOC THEN
+              IF OSD.WHSE<1,M> = DST.WHSE<PPTR,SLOC> THEN
+                DST.QTY<1,PPTR,SLOC> = DST.QTY<PPTR,SLOC> + OSD.G.QTY<1,M>
+                ORD.QTY<1,PPTR,SLOC> = ORD.QTY<PPTR,SLOC> + OSD.O.QTY<1,M>
+                PTR = 0
+              END
+            END ELSE
+              DST.SUBS<PPTR,SLOC> = OSD.PROD<1,M>
+              DST.WHSE<PPTR,SLOC> = OSD.WHSE<1,M>
+              DST.QTY<PPTR,SLOC> = OSD.G.QTY<1,M>
+              ORD.QTY<PPTR,SLOC> = OSD.O.QTY<1,M>
+              PTR = 0
+            END
+          WHILE PTR DO
+            PTR = SLOC + 1
+          REPEAT
+          LIMIT = 0
+        END
+      NEXT P
+    END
+  NEXT M
+  ALL.G.QTY = OSD.G.QTY<1,PPTR> + SUM(DST.QTY)
+  ALL.O.QTY = OSD.O.QTY<1,PPTR> + SUM(ORD.QTY)
+  DISP_VAL<1,1> = OCONV(INT(ALL.G.QTY / ICR.DV1 * ICR.MT1 / ICR.DV2 + .5),ICR.CNV1)
+  LINES = DCOUNT(DST.SUBS<PPTR>,VM)
+  ULINES = LINES + 1
+  IF LINES THEN
+    ORG.QTY = DST.QTY
+    DISP_VAL<1,2> = OCONV(INT(SUM(DST.QTY<1,PPTR>) / ICR.DV1 * ICR.MT1 / ICR.DV2 + .5),ICR.CNV1)
+    ERRMSG = ""
+  END
+
+  FOR N = 1 TO LINES 
+    RET_VAL<1,N,1> = DST.SUBS<PPTR,N>
+    RET_VAL<1,N,2> = DST.WHSE<PPTR,N>    
+    MATREAD INV.REC FROM INVENTORY, CONO:DST.SUBS<PPTR,N> ELSE
+      INV.FULL.DESC = STR("?",45)
+    END
+    RET_VAL<1,N,3> = INV.FULL.DESC
+    $INCLUDE ICSBP INV.UM.CNV
+    RET_VAL<1,N,4> = OCONV(INT(ORG.QTY<PPTR,N> / ICR.DV1 * ICR.MT1 / ICR.DV2 + .5),ICR.CNV1)
+    RET_VAL<1,N,5> = OCONV(INT(DST.QTY<PPTR,N> / ICR.DV1 * ICR.MT1 / ICR.DV2 + .5),ICR.CNV1)
+  NEXT N
+93000*
+SWAP @AM WITH "#" IN ORG.QTY
+SWAP @VM WITH "!" IN ORG.QTY
+   STATUS = RBO.setProperty("","RETARR",DISP_VAL)
+   STATUS = RBO.setProperty("","GRIDARR",RET_VAL)
+   STATUS = RBO.setProperty("","DISPARR",ORG.QTY)
+RETURN
+
+91000*
+   STATUS = RBO.setProperty("","ServerStatus",1)
+   STATUS = RBO.setProperty("","ServerMessage",ERRMSG)
+RETURN

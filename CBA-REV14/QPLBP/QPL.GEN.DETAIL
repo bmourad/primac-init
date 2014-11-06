@@ -1,0 +1,236 @@
+      SUBROUTINE QPL.GEN.DETAIL (CONO, ACTION, EST.KEY, STATUS)
+**************************************************************************
+*
+* PROGRAM   - QPL.GEN.DETAIL
+*
+* AUTHOR    - NICK AMENDOLA, NASTech, Inc.
+*
+* DATE      - 11/11/93
+*
+* DESCRIPTION
+*
+* This subroutine is used to generate estimate detail data based upon
+* groups specified on the Quick Plan definition screen.
+*
+*T27716 cmykleb 10/09/2003 * Add Pre-pres inclusive functionality.
+**************************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>JES.CPYLIB>SCOMMON.ESTIMATE.QP
+*COPY>JES.CPYLIB>ESTIMATE
+*COPY>JES.CPYLIB>ESTIMATE.QP
+*COPY>JES.CPYLIB>ESTIMATE.DEPT
+*COPY>JES.CPYLIB>ESTIMATE.TEMP
+*COPY>JES.CPYLIB>ESTIMATE.GRP
+*COPY>JES.CPYLIB>ESTIMATE.MGRP
+*COPY>JES.CPYLIB>QPL.PARAM
+*COPY>PMC.CPYLIB>DEPARTMENT
+*COPY>JCS.CPYLIB>CATEGORY.OSP
+*COPY>JES.CPYLIB>JES.FILE.VARS
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+*
+*--- SETUP SYSTEM ERROR MESSAGES
+*
+      SYS.TYPE = 1
+      CALL SI_SYSCOM(MAT SYSCOM.REC)
+*
+*
+*---- OPEN ALL FILES
+*
+      OPEN "","ESTIMATE.MGRP" TO ESTIMATE.MGRP ELSE
+         ERRMSG = "CANNOT OPEN ESTIMATE.MGRP FILE"
+         GOSUB 91000
+         GOTO 99999
+      END
+*
+*---- INITIALIZATION
+*
+      DCNT = DCOUNT(EST.DEPT.COMP,VM)
+      FOR DPTR = 1 TO DCNT
+         DELETE ESTIMATE.DEPT, CONO:EST.KEY:"!":EST.DEPT.COMP<1,DPTR>
+      NEXT DPTR
+      EST.DEPT = ""
+      EST.DEPT.TYPE = ""
+      EST.DEPT.DESC = ""
+      EST.COMP.FLAG = ""
+      EST.DEPT.COMP = ""
+      EST.DEPT.COMP.HRS = ""
+      EST.DEPT.COMP.DCOST = ""
+      EST.DEPT.COMP.COST = ""
+      EST.DEPT.COMP.SALE = ""
+      EST.DEPT.COMP.TSALE = ""
+      EST.DEPT.OSP = ""
+      EST.DEPT.OSP.ID = ""
+      EST.DEPT.OSP.UM = ""
+      EST.DEPT.OSP.QTY = ""
+      EST.DEPT.OSP.PRICE = ""
+      IF QPLPAR.COMBINE.COMP = "Y" THEN
+         EST.COMPONENT.CNT = 1
+      END ELSE
+         EST.COMPONENT.CNT = DCOUNT(EST.PROD.DESC,VM)
+      END
+*
+*---- MAIN PROCESSING
+*
+100*
+      EQTY = EST.QTY<1,1>
+      GRPS = EST.PROD.MGROUP
+      CCNT = DCOUNT(GRPS,VM)
+      FOR CP = 1 TO CCNT
+         COMP = CP
+         FVAR3 = COMP
+         MGRP = GRPS<1,CP>
+         IF MGRP # "" THEN
+P_X  = 3 ; P_Y = 23 ; P_VALUE = "Processing Component #":COMP ; P_OPT = "CL"
+CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            GOSUB 200
+         END
+      NEXT CP
+P_X  = 3 ; P_Y = 23 ; P_VALUE = "" ; P_OPT = "CL"
+CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      GOTO 99999
+*
+*---- PROCESS MASTER GROUP
+*
+200*
+      MATREAD MGRP.REC FROM ESTIMATE.MGRP, CONO:MGRP ELSE
+         ERRMSG = "INVALID MASTER GROUP - ":MGRP
+         GOSUB 91000
+         GOTO 290
+      END
+      MGCNT = DCOUNT(MGRP.DEPT,VM)
+      FOR MGP = 1 TO MGCNT
+         GRP = MGRP.DEPT<1,MGP>:"!":MGRP.GRP<1,MGP>
+         MATREAD ESTG.REC FROM ESTIMATE.GRP, CONO:GRP ELSE
+            ERRMSG = "CANNOT LOCATE GROUP - ":GRP
+            GOSUB 91000
+            GOTO 280
+         END
+         DEPT = FIELD(GRP,"!",1)
+         GOSUB 400
+         MAT ESTD.TEMP = ""
+         TEMP.GRP.ID = GRP
+         TEMP.QTY = 1
+         TEMP.FCTR = 1000
+         TEMP.FVAR3 = FVAR3
+         CALL QPL.INSERT.GROUP(CONO,EQTY,DPTR,COMP,REF.NO,MAT ESTG.REC)
+         GOSUB 600
+280   NEXT MGP
+290   RETURN
+*
+*---- GET ESTIMATE.DEPT RECORD
+*
+400*
+      LOCATE DEPT IN EST.DEPT<1>,1 SETTING DPTR ELSE
+         MATREAD DEPT.REC FROM DEPARTMENT, CONO:DEPT ELSE
+            MAT DEPT.REC = ""
+            DEPT.TYPE = "M"
+            DEPT.DESC = "??????????"
+         END
+      END
+      IF QPLPAR.COMBINE.COMP = "Y" THEN
+         ESTD.ID = DPTR:"!":"1":"!":EQTY
+      END ELSE
+         ESTD.ID = DPTR:"!":COMP:"!":EQTY
+      END
+      MATREADU ESTD.REC FROM ESTIMATE.DEPT, CONO:EST.KEY:"!":ESTD.ID ELSE
+         MAT ESTD.REC = ""
+         ESTD.DEPT = DEPT
+         ESTD.DEPT.TYPE = EST.DEPT.TYPE<1,DPTR>
+      END
+      REF.NO = DCOUNT(ESTD.TYPE,VM)
+      RETURN
+*
+*---- UPDATE ESTIMATE.DEPT RECORD
+*
+500*
+*T27716 v
+*     CALL EST.CALC.COST (CONO)
+      CALL EST.CALC.COST (CONO,DEPT)
+*T27716 ^
+      REF.NO = REF.NO + 1
+      FOR A = ESTD.FIRST.MV TO ESTD.LAST.MV
+         ESTD.REC(A) = INSERT(ESTD.REC(A),1,REF.NO,0,ESTD.TEMP(A))
+      NEXT A
+      ESTD.QTY<1,REF.NO> = TEMP.QTY * 100
+      ESTD.STD<1,REF.NO> = TEMP.STD * 100
+      RETURN
+*
+*---- CALCULATE TOTALS
+*
+600*
+      IF REF.NO = 0 THEN
+         RELEASE ESTIMATE.DEPT, CONO:EST.KEY:"!":ESTD.ID
+      END ELSE
+         IF EST.DEPT<1,DPTR> = "" THEN
+            EST.DEPT<1,DPTR> = DEPT
+            EST.DEPT.TYPE<1,DPTR> = DEPT.TYPE
+            EST.DEPT.DESC<1,DPTR> = DEPT.DESC
+         END
+         IF QPLPAR.COMBINE.COMP = "Y" THEN
+            EST.COMP.FLAG<1,DPTR,1> = "Y"
+         END ELSE
+            EST.COMP.FLAG<1,DPTR,COMP> = "Y"
+         END
+         LOCATE ESTD.ID IN EST.DEPT.COMP<1>,1 SETTING P ELSE
+            EST.DEPT.COMP<1,P> = ESTD.ID
+         END
+         TOTAL.HRS = ""
+         TOTAL.DCOST = ""
+         TOTAL.COST = ""
+         TOTAL.SALE = ""
+         TOTAL.TSALE = ""
+         TOTAL.VSALE = ""
+         TOTAL.VCOST = ""
+         EDC = DCOUNT(ESTD.TYPE,VM)
+         FOR EDP = 1 TO EDC
+            TOTAL.HRS = TOTAL.HRS + ESTD.HRS<1,EDP>
+            TOTAL.DCOST = TOTAL.DCOST + ESTD.DCOST<1,EDP>
+            TOTAL.COST = TOTAL.COST + ESTD.COST<1,EDP>
+            TOTAL.SALE = TOTAL.SALE + ESTD.SALE<1,EDP>
+            TOTAL.TSALE = TOTAL.TSALE + ESTD.TSALE<1,EDP>
+            BEGIN CASE
+            CASE ESTD.VSALE<1,EDP> = "Y"
+               TOTAL.VSALE = TOTAL.VSALE + ESTD.TSALE<1,EDP>
+               TOTAL.VCOST = TOTAL.VCOST + ESTD.COST<1,EDP>
+            CASE ESTD.VSALE<1,EDP> = ""
+               NULL
+            CASE NUM(ESTD.VSALE<1,EDP>)
+               PCT = ESTD.VSALE<1,EDP>/100
+               TOTAL.VSALE = TOTAL.VSALE + INT(ESTD.TSALE<1,EDP>*PCT/100+0.5)
+               TOTAL.VCOST = TOTAL.VCOST + INT(ESTD.COST<1,EDP>*PCT/100+0.5)
+            END CASE
+         NEXT EDP
+         EST.DEPT.COMP.HRS<1,P> = TOTAL.HRS
+         EST.DEPT.COMP.DCOST<1,P> = TOTAL.DCOST
+         EST.DEPT.COMP.COST<1,P> = TOTAL.COST
+         EST.DEPT.COMP.SALE<1,P> = TOTAL.SALE
+         EST.DEPT.COMP.TSALE<1,P> = TOTAL.TSALE
+         EST.DEPT.COMP.VSALE<1,P> = TOTAL.VSALE
+         EST.DEPT.COMP.VCOST<1,P> = TOTAL.VCOST
+         MATWRITE ESTD.REC ON ESTIMATE.DEPT, CONO:EST.KEY:"!":ESTD.ID
+      END
+      RETURN
+*
+*---- ERROR ROUTINE
+*
+* 90000*
+*       PRINT @(0,23):@(-4):ERRMSG:
+*       INPUT REPLY:
+*       PRINT @(0,23):@(-4):
+*       RETURN
+91000 *
+      ERR.TYPE = 1;CALL SI_SYSCOM(MAT SYSCOM.REC); RETURN
+92000 *
+      ERR.TYPE = 2;CALL SI_SYSCOM(MAT SYSCOM.REC); RETURN
+93000 *
+      ERR.TYPE = 3;CALL SI_SYSCOM(MAT SYSCOM.REC)
+*
+*---- END OF PROGRAM
+*
+99999*
+      RETURN
+   END

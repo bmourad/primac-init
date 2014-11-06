@@ -1,0 +1,622 @@
+   SUBROUTINE SHIFT.SUM.RPT(TRN.CONO,TRN.EMP,DTE,SHIFT,REPORT.NUMBER)
+*********************************************************************
+* REVISION    - [08.1]
+* Copyright 1993 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - JCSBP
+* PROGRAM     - DAILY.TIME.MATL.PRT
+* DATE        - 08/03/93
+* BY          - DUANE GREEN, COMPUTER BUSINESS ASSOCIATES
+* DESCRIPTION -
+* This report is used for reporting DAILY.TIME.MATL records.
+*CSF25715 RKB 5/10/96 fix problem with the logoff time of midnight
+*T21343 cls 12/30/1996 * INCREASE DESC BY 9 CHARS
+*T21571 lanny 02/06/1997 * Lunch needs to classify based on work shift
+*                          schedule.
+*T22562 lanny 01/30/1998 * Lunch showing in MULTI/CONCUR HRS
+*T24089 bilal 07/15/1999 * Change Inventory UOM to display stock UOM
+*                          instead of the cost UOM
+*T26493 cmykleb 03/22/2002 * Change report to use rpt # from proc.
+*T26614 cmykleb 05/31/2002 * Idle time should be included in the paid
+*                            hours per documentation.
+*T28148 thompson 05/27/2004 * Fix problem with concurrent and idle
+*T28270 lross 09/23/2004 * STOP TIME incorrect and CONC TIME in some
+*                          cases not correct.
+*T28270 lross 10/14/2004 * Additional fixes due to Courier csf 43933.
+*********************************************************************
+*----   INSERT EQUATE FROM CPYLIB
+*COPY>JCS.CPYLIB>DAILY.TIME.MATL
+*COPY>CPYLIB>SYSCOM
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>PMC.CPYLIB>EMPLOYEE
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PRS.CPYLIB>WORK.SHIFT
+*COPY>CPYLIB>CHAR
+*COPY>JCS.CPYLIB>OPERATION
+*
+*----   INITIALIZATION
+*
+   LINE.COUNT = 99
+   PAGE.NO = 0
+   PREV.TDATE = "";PREV.SHIFT = "";PREV.EMP = ""
+   TOT.TD = ""
+   TOT.S = ""
+   TOT.E = ""
+   GRD.TOT = ""
+   BILL.HRS = 0
+   NC.HRS = 0
+   SP.HRS = 0
+   TOT.HRS = 0
+   UPD.HRS = 0
+   LUN.TIME = 0
+   LUN.PAID = 0
+   TOT.LUN = 0
+   CNC.HRS = 0
+   UOM = ''
+   PRSFLAG = 'E'
+   SP1 = SPACE(1)
+   SP2 = SPACE(2)
+   SP3 = SPACE(3)
+   SP4 = SPACE(4)
+*
+*---- SET UP THE ERRMSG ROUTINE FOR SYSCOM
+*
+   SYS.TYPE = 1
+   CALL SYSCOM(MAT SYSCOM.REC)
+*
+*---- OPEN THE FILES
+*
+   OPEN '','INVENTORY' TO INVENTORY ELSE
+      ERRMSG = 'INVENTORY FILE IS MISSING'
+      GOTO 93000
+   END
+*
+   OPEN '','OPERATION' TO OPERATION ELSE
+      ERRMSG = 'OPERATION FILE MISSING'
+      GOTO 93000
+   END
+*
+   OPEN '','COMPANY' TO COMPANY ELSE
+      ERRMSG = 'COMPANY FILE IS MISSING'
+      GOTO 93000
+   END
+*
+   OPEN '','CUSTOMER' TO CUSTOMER ELSE
+      ERRMSG = 'CUSTOMER FILE IS MISSING'
+      GOTO 93000
+   END
+*
+   OPEN '','EMPLOYEE' TO EMPLOYEE ELSE
+      ERRMSG = 'EMPLOYEE FILE IS MISSING'
+      GOTO 93000
+   END
+*
+   OPEN '','DAILY.TIME.MATL' TO DAILY.TIME.MATL ELSE
+      ERRMSG = 'DAILY.TIME.MATL FILE IS MISSING'
+      GOTO 93000
+   END
+*
+*
+   CONO = TRN.CONO
+   READV CONO.NAME FROM COMPANY,TRN.CONO,1 ELSE CONO.NAME = 'Invalid'
+   ST.DATE = DTE
+   ED.DATE = DTE
+   MATREAD COMP.REC FROM COMPANY,CONO ELSE
+      ERRMSG = 'CANNOT READ COMPANY FILE'
+      GOTO 93000
+   END
+*T21571 v
+IF CO.PRS.INTERFACE = "Y" AND CO.PRS = "E" THEN
+  OPEN "","WORK.SHIFT" TO WORK.SHIFT ELSE
+    ERRMSG = "CANNOT LOCATE WORK.SHIFT FILE"; GOTO 93000
+  END
+END
+PRSFLAG = CO.PRS
+*T21571 ^
+*     PRSFLAG = CO.PRS
+*T26493 v
+*  REPORT.NAME = 'SHIFT SUMMARY REPORT'
+*  REPORT.NUMBER = "XXXX"
+   REPORT.NAME = ""
+   CONO.NAME = ""
+*T26493 ^
+   REPORT.DATE = DATE()
+   HD1 = "" ; HD2 = ""
+   CALL GET.PROG.HEAD(CONO,CONO.NAME,REPORT.NAME,REPORT.NUMBER,REPORT.DATE,HD1,HD2)
+*---- SET THE HEADING LINES
+*T21343v
+*   HH.LINE1 = "                      CUSTOMER NAME      OPER DESCRIPTION"
+   HH.LINE1 = "                      CUSTOMER NAME      OPER DESCRIPTION         "
+*   HH.LINE = "TT STRT STOP   JOB #  PRODUCT ID #       PRODUCT DESCRIPTION CTR OPER T C HOURS  QUANTITY  U/M  SPOIL #     MEMO ENTRY"
+   HH.LINE = "TT STRT STOP   JOB #  PRODUCT ID #       PRODUCT DESCRIPTION          CTR OPER T C HOURS  QUANTITY  U/M  SPOIL #     MEMO ENTRY"
+*   DH.LINE  = "-- ---- ---- -------- ------------------ ------------------- --- ---- - - ----- ---------- ---- -------- ------------------"
+   DH.LINE  = "-- ---- ---- -------- ------------------ ---------------------------- --- ---- - - ----- ---------- ---- -------- ------------------"
+*T21343^
+*
+   PRINTER ON
+*
+100*
+   KEY = TRN.CONO:TRN.EMP:"*":DTE:"*":SHIFT
+   MATREAD DTM.REC FROM DAILY.TIME.MATL,KEY ELSE GOTO 999999
+   STA = '' ; STP = ''
+   FOR XXX = 1 TO DCOUNT(DTM.TYPE,VM)
+      IF DTM.TYPE<1,XXX>[1,1] = 'T' OR DTM.TYPE<1,XXX> = 'C' THEN
+         IF DTM.TIME.ST<1,XXX> = '' THEN DTM.TIME.ST<1,XXX> = 0
+*CSF25715 v
+         STOP.FLAG = 1
+         IF DTM.TIME<1,XXX> = '' THEN
+           STOP.FLAG = 0
+           DTM.TIME<1,XXX> = 0
+         END
+*CSF25715 ^
+*T28270  IF STA = '' AND DTM.TIME.ST<1,XXX> # 0 THEN
+         IF STA = '' THEN
+            STA = DTM.TIME.ST<1,XXX>
+*T28270 v
+*T28270     IF STP = '' AND DTM.TIME<1,XXX> # 0 THEN STP = DTM.TIME<1,XXX>
+            IF STP = '' THEN STP = DTM.TIME<1,XXX>
+         END ELSE
+*T28270     IF SHIFT = '1' AND DTM.TIME.ST<1,XXX> LT STA THEN
+            IF SHIFT < 3 AND DTM.TIME.ST<1,XXX> < STA THEN
+               STA = DTM.TIME.ST<1,XXX>
+            END
+         END
+*CSF25715 fix line below to enter below check if 0 time or if time is 0
+*        then skip if set to 0 by this pgm.
+         IF (DTM.TIME<1,XXX> = 0 AND STOP.FLAG) OR DTM.TIME<1,XXX> # 0 THEN
+* Below "IF" is inane.
+*           IF SHIFT = '1' AND DTM.TIME<1,XXX> GT STP THEN
+*              STP = DTM.TIME<1,XXX>
+*           END ELSE
+*              STP = DTM.TIME<1,XXX>
+*           END
+***
+*           IF STP > STA AND SHIFT = 1 THEN
+*             IF DTM.TIME<1,XXX> > STP THEN STP = DTM.TIME<1,XXX>
+*           END ELSE
+*             IF SHIFT > 1 THEN
+*               IF STP < STA THEN
+*                 IF DTM.TIME<1,XXX> > STP THEN STP = DTM.TIME<1,XXX>
+*               END ELSE
+*                 IF DTM.TIME<1,XXX> < 1200 THEN
+*                   IF DTM.TIME<1,XXX> + 2400 > STP THEN STP = DTM.TIME<1,XXX>
+*                 END ELSE
+*                   IF DTM.TIME<1,XXX> > STP THEN STP = DTM.TIME<1,XXX>
+*                 END
+*               END
+*             END
+*           END
+*T28270*^
+            IF STA < 1600 THEN
+              IF DTM.TIME<1,XXX> > STP THEN STP = DTM.TIME<1,XXX>
+            END ELSE
+              IF DTM.TIME.ST<1,XXX> < STA AND (DTM.TIME.ST<1,XXX>+2400 - STA) > 1600 THEN STA = DTM.TIME.ST<1,XXX>
+              IF DTM.TIME<1,XXX> < STP AND (DTM.TIME<1,XXX>+2400 - STP) < 1600 THEN STP = DTM.TIME<1,XXX>
+            END
+*T28270 ^
+         END
+      END
+   NEXT XXX
+   MATREAD EMP.REC FROM EMPLOYEE, CONO:TRN.EMP ELSE
+      EMP.LAST.NAME = '??????????'
+      EMP.FRST.NAME = '??????????'
+   END
+   EMP.NAME = EMP.LAST.NAME:', ':EMP.FRST.NAME
+*
+   EMP.KEY = TRN.CONO:TRN.EMP
+   EMP = TRN.EMP
+   TDATE = DTE
+*T21571 v
+   MAT WSS.REC = ''
+   IF CO.PRS.INTERFACE = "Y" AND CO.PRS = "E" THEN
+*  IF PRSFLAG = 'E' THEN
+      MATREAD WSS.REC FROM WORK.SHIFT,CONO:"!":EMP.WRK.SCHD<1,SHIFT> ELSE NULL
+   END
+*T21571 ^
+*
+*---- SET THE PREVIOUS VALUES
+*
+   PREV.TDATE = TDATE
+   PREV.SHIFT = SHIFT
+   PREV.EMP = EMP
+*
+*---- PROCESS THE RECORD
+*
+   GOSUB 1000
+*
+*---- PRINT THE TOTAL 
+*
+   GOSUB 27000
+*
+*---- END OF JOB
+*
+   GOTO 999999
+*
+*
+*---- PROCESS THE RECORD
+*
+1000 *
+   LUNCH = 1
+1050*
+   S.PR.TIME = ""
+   ESTAT = ""
+   CALL CALC.PRS.TIME(DTM.TYPE,DTM.TIME.ST,DTM.TIME,S.PR.TIME,ESTAT,PRSFLAG)
+   IF DTM.PRT.DATE = "" THEN CALL ADJUST.EMP.TIME(MAT DTM.REC)
+   GOSUB 80000
+   T.CNT = COUNT(DTM.TYPE,VM) + (DTM.TYPE # "")
+   FOR TT = 1 TO T.CNT
+      GOSUB 10000
+      GOSUB 20000
+   NEXT TT
+   RETURN
+*
+*---- READ FILES & INV.CNV
+*
+10000 MATREAD CUST.REC FROM CUSTOMER,CONO:DTM.CUST<1,TT> ELSE CUST.NAME = "CUSTOMER UNKNOWN"
+   IF DTM.CUST<1,TT> = "" THEN CUST.NAME = ""
+   MATREAD INV.REC FROM INVENTORY,CONO:DTM.PROD<1,TT> ELSE MAT INV.REC = ""
+   IF INV.COST.WT *1 = 0 THEN INV.COST.WT = 100
+   MAT INV.CNV.REC = ""
+   BEGIN CASE
+   CASE INV.UNIT<1,2> = "SHT" AND INV.UNIT<1,3> = "LBS"
+      ICR.CNV = "MD0"; ICR.DV2 = 1
+      ICR.MT1 = 1; ICR.DV1 = INV.M.WT
+   CASE INV.UNIT<1,2> = "PC" AND INV.UNIT<1,3> = "MSI"
+      ICR.CNV = "MD0"; ICR.DV2 = 1
+      ICR.MT1 = 10; ICR.DV1 = INV.PAP.WIDTH/100
+   CASE INV.UNIT<1,2> = "FT" AND INV.UNIT<1,3> = "MSI"
+      ICR.CNV = "MD0"; ICR.DV2 = 12
+      ICR.MT1 = 100; ICR.DV1 = INV.PAP.WIDTH/100
+   CASE 1
+      ICR.CNV = "MD2"; ICR.DV2 = 1
+      ICR.MT1 = 1; ICR.DV1 = 10
+   END CASE
+   RETURN
+*
+*---- ROUTINE TO PRINT THE RECORD
+*
+20000 IF LINE.COUNT + 2 >= 54 THEN GOSUB 80000
+   LINE.COUNT = LINE.COUNT + 1
+   IF (DTM.TYPE<1,TT>[1,1] = 'T' OR DTM.TYPE<1,TT>[1,1] = 'C') AND ( (DTM.LAPS.TIME<1,TT> - 1) GT S.PR.TIME<1,TT>) THEN
+      H.LINE = 'T2':SP1
+   END ELSE
+      H.LINE = DTM.TYPE<1,TT>'L#2':SP1
+   END
+   H.LINE = H.LINE:DTM.TIME.ST<1,TT>'R#4':SP1:DTM.TIME<1,TT>'R#4':SP1
+   H.LINE = H.LINE:DTM.JOB<1,TT>'L#8':SP1
+   IF DTM.TYPE<1,TT> = 'T' OR DTM.TYPE<1,TT> = 'C' THEN
+      H.LINE = H.LINE:CUST.NAME'L#18':SP1
+      READV DESC FROM OPERATION,CONO:DTM.OPER<1,TT>,1 ELSE
+         DESC = STR(' ',19)
+      END
+   END ELSE
+      IF DTM.TYPE<1,TT> = 'L' THEN
+         H.LINE = H.LINE:'LUNCH':STR(' ',14)
+         WORK.TIME = (DTM.TIME<1,TT> - DTM.TIME.ST<1,TT>)
+         GOSUB 55555
+*               LUN.TIME = (DTM.TIME<1,TT> - DTM.TIME.ST<1,TT>) * 100 / 60
+*               TOT.LUN = TOT.LUN + LUN.TIME
+*T21571 v
+         LUN.PAID=0
+         IF PRSFLAG = 'E' THEN
+           DAY=''
+           DD=MOD(DTE,7)
+           BEGIN CASE
+           CASE DD=0
+             DAY='SUN'
+           CASE DD=1
+             DAY='MON'
+           CASE DD=2
+             DAY='TUE'
+           CASE DD=3
+             DAY='WED'
+           CASE DD=4
+             DAY='THU'
+           CASE DD=5
+             DAY='FRI'
+           CASE DD=6
+             DAY='SAT'
+           END CASE
+           LOCATE DAY IN WSS.DAY<1> SETTING POS ELSE GO 20100
+           IF WSS.LUN.PD<1,POS> # "Y" THEN GO 20300
+           GOTO 20200
+20100 *
+           BEGIN CASE
+           CASE DAY='SAT'
+             IF WSS.USH.LUN<1,2> # "Y" THEN GO 20300
+           CASE DAY='SUN'
+             IF WSS.USH.LUN<1,3> # "Y" THEN GO 20300
+           CASE 1
+             IF WSS.USH.LUN<1,1> # "Y" THEN GO 20300
+           END CASE
+20200 *
+           LUN.PAID = CTIME
+*          BILL.HRS = BILL.HRS + CTIME
+           TOT.HRS = TOT.HRS + CTIME
+           GOTO 20400
+         END
+20300 *
+         TOT.LUN = TOT.LUN + CTIME
+         LUN.TIME = CTIME
+20400 *
+*T21571 ^
+         DESC = ''
+      END ELSE
+         IF DTM.TYPE<1,TT> = 'I' THEN
+            H.LINE = H.LINE:'IDLE':STR(' ',15)
+            WORK.TIME = (DTM.TIME<1,TT> - DTM.TIME.ST<1,TT>)
+            GOSUB 55555
+*                    IDL.TIME = (DTM.TIME<1,TT> - DTM.TIME.ST<1,TT>) * 100 / 60
+*                    UPD.HRS = UPD.HRS + IDL.TIME
+            UPD.HRS = UPD.HRS + CTIME
+            IDL.TIME = CTIME
+            DESC = ''
+         END ELSE
+            H.LINE = H.LINE:DTM.PROD<1,TT>'L#18':SP1
+            READV DESC FROM INVENTORY,CONO:DTM.PROD<1,TT>,1 ELSE
+               DESC = STR(' ',28)
+            END
+         END
+      END
+   END
+*T21343v
+*   H.LINE = H.LINE:DESC'L#19':SP1
+   H.LINE = H.LINE:DESC'L#28':SP1
+*T21343^
+   H.LINE = H.LINE:DTM.CCTR<1,TT>"L#3":SP1:DTM.OPER<1,TT> "L#4":SP1
+   H.LINE = H.LINE:DTM.JOB.TYPE<1,TT> "L#1":SP1
+   H.LINE = H.LINE:DTM.OPER.COMPLETE<1,TT>'L#1':SP1
+*
+   IF DTM.TYPE<1,TT> = 'L' THEN
+*T21571 v
+      IF LUN.PAID THEN
+        H.LINE = H.LINE:OCONV(LUN.PAID,'MD2')'R#5':SP1
+      END ELSE
+        H.LINE = H.LINE:OCONV(LUN.TIME,'MD2')'R#5':SP1
+      END
+*T21571 ^
+      GO 21000
+   END
+   IF DTM.TYPE<1,TT> = 'I' THEN
+      H.LINE = H.LINE:OCONV(IDL.TIME,'MD2')'R#5':SP1
+      GO 21000
+   END
+*
+*CSF 23467
+    IF DTM.REG.TIME<1,TT>+0 = 0 AND DTM.LAPS.TIME<1,TT>+0 # 0 THEN
+       DTM.REG.TIME<1,TT> = DTM.LAPS.TIME<1,TT>
+    END
+*
+   IF DTM.REG.TIME<1,TT> GT 0 THEN
+      IF OCONV(DTM.REG.TIME<1,TT>,'MD2') = 0 THEN
+         H.LINE = H.LINE:STR(' ',6)'R#6'
+      END ELSE
+         H.LINE = H.LINE:OCONV(DTM.REG.TIME<1,TT>,"MD2") "R#5":SP1
+      END
+   END ELSE
+      IF DTM.LAPS.TIME<1,TT> > 0 THEN
+         IF OCONV(DTM.LAPS.TIME<1,TT>,'MD2') = 0 THEN
+            H.LINE = H.LINE:STR(' ',6)
+         END ELSE
+            H.LINE = H.LINE:OCONV(DTM.LAPS.TIME<1,TT>,'MD2')'R#5':SP1
+         END
+      END ELSE
+         H.LINE = H.LINE:STR(' ',6)'R#6'
+      END
+   END
+*
+   IF DTM.JOB.TYPE<1,TT> = 'R' OR DTM.JOB.TYPE<1,TT> = 'C' THEN
+      BILL.HRS = BILL.HRS + DTM.REG.TIME<1,TT>
+   END
+   IF DTM.JOB.TYPE<1,TT> = 'N' THEN
+      NC.HRS = NC.HRS + DTM.REG.TIME<1,TT>
+   END
+   IF DTM.JOB.TYPE<1,TT> = 'S' THEN
+      SP.HRS = SP.HRS + DTM.REG.TIME<1,TT>
+   END
+   TOT.HRS = TOT.HRS + DTM.REG.TIME<1,TT>
+*T28148 v
+*  CNC.HRS = CNC.HRS + DTM.LAPS.TIME<1,TT>
+*  IF DTM.TYPE<1,TT> # 'L' AND DTM.TYPE<1,TT> # 'I' THEN
+*    IF DTM.LAPS.TIME<1,TT> > 0 AND S.PR.TIME<1,TT>+0 = 0 THEN CNC.HRS+=DTM.LAPS.TIME<1,TT>
+*  END
+*T28270 v
+*  IF (DTM.TYPE<1,TT>[1,1] = 'T' OR DTM.TYPE<1,TT>[1,1] = 'C') AND ( (DTM.LAPS.TIME<1,TT> - 1) GT S.PR.TIME<1,TT>) THEN CNC.HRS+=DTM.LAPS.TIME<1,TT>
+   IF (DTM.TYPE<1,TT>[1,1] = 'T' OR DTM.TYPE<1,TT>[1,1] = 'C') THEN
+     IF DTM.LAPS.TIME<1,TT> > 0 AND DTM.LAPS.TIME<1,TT> > S.PR.TIME<1,TT> THEN
+       CNC.HRS += (DTM.LAPS.TIME<1,TT> - S.PR.TIME<1,TT>)
+     END
+   END
+*T28270 ^
+*T28148 ^
+   IF DTM.IMP<1,TT> > 0 THEN
+      H.LINE = H.LINE:OCONV(DTM.IMP<1,TT>,'MD2')'R#10':SP1
+   END ELSE
+      IF DTM.QTY<1,TT> + 0 = 0 AND DTM.PROD<1,TT> = "" THEN
+         QTY = ""
+      END ELSE
+         QTY = INT(((DTM.QTY<1,TT>/ICR.DV1)*ICR.MT1)/ICR.DV2 + .5)
+      END
+      IF QTY = "" THEN
+         H.LINE = H.LINE:SPACE(11)
+      END ELSE
+         H.LINE = H.LINE:OCONV(QTY,ICR.CNV) "R#10":SP1
+      END
+   END
+*
+21000 *
+   IF DTM.TYPE<1,TT>[1,1] = 'T' OR DTM.TYPE<1,TT> = 'C' THEN
+      SAVE.UOM = UOM
+      UOM = '   '
+   END ELSE
+      IF DTM.TYPE<1,TT> # 'L' THEN
+**** T24089 v
+*         UOM = INV.UNIT<1,3>
+         UOM = INV.UNIT<1,2>
+**** T24089 ^
+      END ELSE
+         UOM = ''
+      END
+   END
+   H.LINE = H.LINE:UOM'L#4':SP1
+   H.LINE = H.LINE:DTM.SPOIL.CODE<1,TT>
+*     IF DTM.TYPE<1,TT> = "L" AND LUNCH # 1 THEN S.PR.TIME<1,TT> = ''
+   PRINT H.LINE
+   IF (DTM.TYPE<1,TT>[1,1] = 'T' OR DTM.TYPE<1,TT>[1,1] = 'C') AND DTM.PROD<1,TT> # '' THEN
+      PRINT 'M ':SPACE(11):DTM.JOB<1,TT>'L#8':SPACE(1):DTM.PROD<1,TT>'L#18':SPACE(1):
+      MATREAD INV.REC FROM INVENTORY,CONO:DTM.PROD<1,TT> ELSE MAT INV.REC = ''
+**** T24089 v
+*      PRINT INV.DESC'L#28':SPACE(1):DTM.CCTR<1,TT>:SPACE(6):DTM.JOB.TYPE<1,TT>:SPACE(9):OCONV((DTM.QTY<1,TT>/10),'MR2')'R#10':SPACE(1):INV.UNIT<1,3>
+      PRINT INV.DESC'L#28':SPACE(1):DTM.CCTR<1,TT>:SPACE(6):DTM.JOB.TYPE<1,TT>:SPACE(9):OCONV((DTM.QTY<1,TT>/10),'MR2')'R#10':SPACE(1):INV.UNIT<1,2>
+**** T34089 ^
+      LINE.COUNT = LINE.COUNT + 1
+   END
+   TOT.E<1,1> = TOT.E<1,1> + DTM.REG.TIME<1,TT>
+   TOT.E<1,2> = TOT.E<1,2> + DTM.OVR.TIME<1,TT>
+   TOT.E<1,3> = TOT.E<1,3> + DTM.DUB.TIME<1,TT>
+   TOT.E<1,4> = TOT.E<1,4> + S.PR.TIME<1,TT>
+   TOT.E<1,5> = TOT.E<1,5> + DTM.LAPS.TIME<1,TT>
+   RETURN
+*
+*---- PRINT TOTAL FOR EMPLOYEE
+*
+27000 IF LINE.COUNT + 9 >= 54 THEN GOSUB 80000 
+   IF TOT.E<1,4> > 0 THEN TOT.E<1,4> = (TOT.E<1,4> * (-1))
+*  MC.HRS = CNC.HRS + TOT.E<1,4> - UPD.HRS
+*T22562 v
+*   MC.HRS = CNC.HRS + TOT.LUN + UPD.HRS + TOT.E<1,4>
+    MC.HRS = CNC.HRS + TOT.E<1,4> - UPD.HRS
+   IF MC.HRS < 0 THEN MC.HRS = 0
+   PRINT SPACE(3):STR('-',4):SPACE(1):STR('-',4):
+   PRINT SPACE(71):STR('-',5)
+*T28148 v
+*T28270 v
+*  IF STP < STA THEN STP = STP + 2400
+   IF STP < STA THEN TMP = STP + 2400 ELSE TMP = STP
+*  TOT.LAPSED = (INT(STP/100)*60+MOD(STP,100))-(INT(STA/100)*60+MOD(STA,100))
+   TOT.LAPSED = (INT(TMP/100)*60+MOD(TMP,100))-(INT(STA/100)*60+MOD(STA,100))
+*T28270 ^
+   TOT.LAPSED = INT(TOT.LAPSED * 100 / 60 + .5)
+   PRINT SPACE(3):STA'R#4':SPACE(1):STP'R#4':'  Shift: ':SHIFT'L#1':
+*  PRINT SPACE(3):OCONV((TOT.HRS + TOT.LUN + UPD.HRS - MC.HRS),'MR2')'R#5':' Hours':SPACE(1):
+   PRINT SPACE(3):OCONV(TOT.LAPSED,'MD2')'R#5':' Hours':SPACE(1):
+*T28148 ^
+   PRINT SPACE(46):OCONV((TOT.HRS + TOT.LUN + UPD.HRS),'MR2')'R#5'
+   PRINT
+   PRINT "BILLABLE HOURS    : ":OCONV(BILL.HRS,"MD2")"R#6"
+*  IF CNC.HRS + TOT.E<1,4> = 0 OR (CNC.HRS + TOT.E<1,4>) < 0 THEN
+*T22562 v
+*  IF MC.HRS <= 0 THEN
+*  IF CNC.HRS + TOT.E<1,4> <= 0 THEN
+*T28148 V
+*  IF CNC.HRS + TOT.E<1,4> - UPD.HRS <= 0 THEN  ;*T22562
+   IF CNC.HRS+0 <= 0 THEN
+      PRINT "MULTI/CONCUR HOURS:   0.00"
+   END ELSE
+*    PRINT "MULTI/CONCUR HOURS: ":(OCONV(CNC.HRS,"MD2") + OCONV(TOT.E<1,4>,"MD2"))'R#6'
+*T22562 v
+*      PRINT "MULTI/CONCUR HOURS: ":
+*      MCHRS = "<":OCONV(MC.HRS,"MD2"):">"
+*      PRINT MCHRS 'R#7'
+*      PRINT "MULTI/CONCUR HOURS: <":(OCONV(CNC.HRS,"MD2") + OCONV(TOT.E<1,4>,"MD2"))'R#5':">"
+*T28148 v  PRINT "MULTI/CONCUR HOURS: <":(OCONV(CNC.HRS,"MD2") + OCONV(TOT.E<1,4>,"MD2") - OCONV(UPD.HRS,'MD2'))'R#5':">"  ;*T22562
+       PRINT "MULTI/CONCUR HOURS: <":OCONV(CNC.HRS,"MD2")'R#5':">"
+   END
+   PRINT "NON-CHARGEABLE HRS: ":OCONV(NC.HRS,"MD2")"R#6"
+   PRINT "SPOILAGE HOURS    : ":OCONV(SP.HRS,"MD2")"R#6":
+   PRINT SPACE(21):"EMPLOYEE: ":STR("_",74)
+*T26614 v
+*  PRINT "** PAID HOURS **  : ":OCONV((TOT.HRS - MC.HRS),"MD2")"R#6"
+*  IF TOT.LUN + UPD.HRS = 0 THEN
+*T28148 v   PRINT "** PAID HOURS **  : ":OCONV((TOT.HRS - MC.HRS + UPD.HRS),"MD2")"R#6"
+   PAID.HRS=BILL.HRS-CNC.HRS+NC.HRS+SP.HRS
+   PRINT "** PAID HOURS **  : ":OCONV(PAID.HRS,"MD2")'R#6'
+*T28148 v   IF TOT.LUN = 0 THEN
+   IF TOT.LUN+UPD.HRS = 0 THEN
+*T26614 ^
+      PRINT 'NON-PAID HOURS    :   0.00'
+   END ELSE
+*T26614 v
+      PRINT "NON-PAID HOURS    : ":OCONV(ICONV((OCONV(TOT.LUN,'MD2') + OCONV(UPD.HRS,'MD2')),'MD2'),'MD2')'R#6'
+*T28148 ^ reinstate line above PRINT "NON-PAID HOURS    : ":OCONV(TOT.LUN,'MD2')'R#6'
+*T26614 ^
+   END
+*T28148 v
+*  PRINT 'TOTAL SHIFT HOURS : ':OCONV((TOT.HRS + TOT.LUN + UPD.HRS - MC.HRS),'MD2')'R#6':
+   PRINT 'TOTAL SHIFT HOURS : ':OCONV((PAID.HRS + TOT.LUN + UPD.HRS),'MD2')'R#6':
+   PRINT SPACE(21):"SUPERVISOR: ":STR("_",72)
+   PREV.EMP = EMP
+   FOR XX = 1 TO 5
+      GRD.TOT<1,XX> = GRD.TOT<1,XX> + TOT.TD<1,XX>
+   NEXT XX
+   TOT.TD = ""
+   RETURN
+*
+55555 * Calculate Lunch/Idle Hours
+   ET = DTM.TIME<1,TT>
+   ST = DTM.TIME.ST<1,TT>
+   IF ET < ST THEN ET = ET + 2400
+   LUNCH.TIME = (INT(ET/100)*60+MOD(ET,100))-(INT(ST/100)*60+MOD(ST,100))
+   LUNCH.TIME = INT(LUNCH.TIME * 100 / 60 + .5)
+   CTIME = LUNCH.TIME
+*     IF WORK.TIME < 100 THEN
+*          IF DTM.TIME.ST<1,TT>[1,2] # DTM.TIME<1,TT>[1,2] THEN
+*            WORK.TIME = (60 - DTM.TIME.ST<1,TT>[3,2]) + DTM.TIME<1,TT>[3,2]
+*          END
+*          CTIME = WORK.TIME * 100 / 60
+*          RETURN
+*     END
+*     CNTR = 0
+*     FOR A = 1 TO 24
+*          IF WORK.TIME = 0 THEN
+*               CTIME = CNTR:'00'
+*               RETURN
+*          END
+*          IF WORK.TIME < 100 THEN
+*               IF DTM.TIME.ST<1,TT>[1,2] # DTM.TIME<1,TT>[1,2] THEN
+*                 WORK.TIME = (60 - DTM.TIME.ST<1,TT>[3,2]) + DTM.TIME<1,TT>[3,2]
+*               END
+*               CTIME = WORK.TIME * 100 / 60
+*               CTIME = CNTR:CTIME
+*               RETURN
+*          END
+*          WORK.TIME = WORK.TIME - 100
+*          CNTR += 1
+*     NEXT A
+   RETURN
+*
+*
+*---- ROUTINE TO PRINT HEADINGS
+*
+80000 
+   IF PAGE.NO # 0 THEN PRINT CHAR(12)
+   PAGE.NO = PAGE.NO + 1
+   PRINT HD1:PAGE.NO
+   PRINT HD2
+   PRINT
+   PRINT "TRANS DATE : ":OCONV(PREV.TDATE,"D2/"):SPACE(4):"EMP#  : ":PREV.EMP:SPACE(5):EMP.NAME
+   PRINT
+   PRINT HH.LINE1
+   PRINT HH.LINE
+   PRINT DH.LINE
+   LINE.COUNT = 8
+   RETURN
+*
+*---- CALLS FOR SYSCOM
+*
+91000 ERR.TYPE = 1
+   CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+*
+92000 ERR.TYPE = 2
+   CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+*
+93000 ERR.TYPE = 3
+   CALL SYSCOM(MAT SYSCOM.REC)
+999999*
+   PRINTER CLOSE
+   PRINTER OFF
+END

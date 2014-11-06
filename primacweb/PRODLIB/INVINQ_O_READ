@@ -1,0 +1,220 @@
+  SUBROUTINE INVINQ_O_READ
+*********************************************************************
+*
+* REVISION - [12.0]
+*
+* PROGRAM  - INVINQ_O_READ
+*
+* AUTHOR   - ALEJANDRO DELGADO
+*
+* DATE     - 09/30/2002
+*
+* DESCRIPTION
+*
+* This program builds the data from INVENTORY file to load into 
+* Order Reserved / In Process Inquiry screen.
+*
+*********************************************************************
+*
+*---- FILE COPY STATEMENTS
+*
+  $INCLUDE WWINSERT RBO.H
+  $INCLUDE PMC.CPYLIB CUSTOMER
+  $INCLUDE ICS.CPYLIB INVENTORY
+  $INCLUDE ICS.CPYLIB FNGD.STATS
+  $INCLUDE ICS.CPYLIB FNGD.ORDER.STATS
+  $INCLUDE OPS.CPYLIB ORDER
+  $INCLUDE OPS.CPYLIB ORDER.DETAIL
+  $INCLUDE ICS.CPYLIB INV.CNV
+  $INCLUDE CPYLIB>FILE.VARS
+  $INCLUDE CPYLIB CHAR
+*
+*---- INITIALIZATION
+*
+  ERRMSG = RBO.getProperty('','ID',PRODUCT.ID)
+  ERRMSG = RBO.getProperty('','WHSE_ID',WHSE.ID)
+  CONO = PRODUCT.ID[1,3]
+  PRODUCT.ID = PRODUCT.ID[4,99]
+
+  
+
+  *
+  ERRMSG = "" ; IN_PARAM = "" ; OUT_PARAM = ""
+  IN_PARAM<1,1> = 'ORDER'
+  IN_PARAM<1,2> = 'CUSTOMER'
+  IN_PARAM<1,3> = 'ORDER.DETAIL'
+  IN_PARAM<1,4> = 'INVENTORY'
+  IN_PARAM<1,5> = 'FNGD.STATS'
+  IN_PARAM<1,6> = 'FNGD.ORDER.STATS'
+  CALL GetInvOpenFiles(ERRMSG,IN_PARAM,OUT_PARAM,MAT FILE.VARS)
+  IF ERRMSG # '' THEN GOTO SET.ERROR
+  MATREAD INV.REC FROM INVENTORY, CONO:PRODUCT.ID THEN
+     $INCLUDE ICSBP INV.UM.CNV
+  END ELSE
+    ERRMSG = 'Inventory is not on file.  Try again'
+    GOTO SET.ERROR
+  END
+  IWH.ID = CONO:PRODUCT.ID:'!':WHSE.ID
+  MATREAD FGS.REC FROM FNGD.STATS, IWH.ID ELSE MAT FGS.REC = ''
+  ERRMSG = "" ; IN_PARAM = "" ; OUT_PARAM = "" ; MAT INV.CNV.REC = ""
+  CALL GetInvUMCnv(ERRMSG,IN_PARAM,OUT_PARAM,MAT INV.CNV.REC,MAT INV.REC)
+*
+*---- PROCESSING
+*
+  GTOT.BQTY=0
+  GTOT.OQTY=0
+  GTOT.RQTY=0
+  GTOT.AQTY=0
+  LN.CNT = DCOUNT(FGS.ORDER,VM)
+  FOR I = 1 TO LN.CNT
+    MATREAD ORD.REC FROM ORDER,CONO:FGS.ORDER<1,I> ELSE
+      MAT ORD.REC = ""
+    END
+    ST.CNT = DCOUNT(ORD.SHIP.TO,VM)
+    TOT.O.QTY = ""
+    TOT.R.QTY = ""
+    TOT.A.QTY = ""
+    TOT.S.QTY = ""
+    TOT.RECP.NO = ""
+    FOR S = 2 TO ST.CNT
+      TOT.SHIP.O.QTY = ""
+      TOT.SHIP.R.QTY = ""
+      TOT.SHIP.A.QTY = ""
+      TOT.SHIP.S.QTY = ""
+      TOT.SHIP.RECP.NO = ""
+      TOT.SHIP.SHIP.S.QTY=""
+      MATREAD ORD.DET.REC FROM ORDER.DETAIL,CONO:FGS.ORDER<1,I>:"!":ORD.SHIP.TO<1,S> ELSE
+        MAT ORD.DET.REC = ""
+      END
+      IF OSD.PROD.SEQ = "" THEN
+        FOS.ID = IWH.ID:"!":FGS.ORDER<1,I>:"!":FGS.SEQ<1,I>:"!":FGS.KIT<1,I>
+        MATREAD FOS.REC FROM FNGD.ORDER.STATS, FOS.ID ELSE
+          MAT FOS.REC = ""
+          MATREAD ORD.REC FROM ORDER, CONO:FGS.ORDER<1,I> THEN
+            FOS.CUST = ORD.CUST
+            FOS.DATE = ORD.DATE
+          END
+        END
+        FNGD.CUST<1,I> = FOS.CUST
+        MATREAD CUST.REC FROM CUSTOMER,CONO:FOS.CUST THEN
+          FNGD.CUST.NAME<1,I> = CUST.NAME
+        END
+        FNGD.DATE<1,I> = OCONV(FOS.DATE,"D2/")
+        FNGD.O.QTY<1,I>=OCONV(INT(((FOS.O.QTY/ICR.DV1)*ICR.MT1)/ICR.DV2+.5),ICR.CNV1)
+        FNGD.R.QTY<1,I>=OCONV(INT(((FOS.R.QTY/ICR.DV1)*ICR.MT1)/ICR.DV2+.5),ICR.CNV1)
+        FNGD.A.QTY<1,I>=OCONV(INT(((FOS.A.QTY/ICR.DV1)*ICR.MT1)/ICR.DV2+.5),ICR.CNV1)
+        IF FOS.JOB<1,2> = "" THEN
+          FNGD.JOB<1,I> = FOS.JOB
+        END ELSE
+          FNGD.JOB<1,I> = "MULTI"
+        END
+        FNGD.RECP.NO<1,I> = FOS.RECP.NO
+        B.QTY = FOS.O.QTY-FOS.R.QTY-FOS.A.QTY-FOS.S.QTY
+        IF B.QTY < 0 THEN B.QTY = 0
+        FNGD.B.QTY<1,I>=OCONV(INT(((B.QTY/ICR.DV1)*ICR.MT1)/ICR.DV2+.5),ICR.CNV1)
+*
+        GTOT.BQTY +=B.QTY
+        GTOT.OQTY +=FOS.O.QTY
+        GTOT.RQTY +=FOS.R.QTY
+        GTOT.AQTY +=GTOT.AQTY
+      END ELSE
+        KIT.PRINT = ""
+        PTR = 1
+        LOOP
+          LOCATE PRODUCT.ID IN OSD.PROD<1>,PTR SETTING IX THEN
+
+            IF (WHSE.ID=OSD.WHSE<1,IX>) AND (FGS.SEQ<1,I>=OSD.PROD.SEQ<1,IX>) AND (FGS.KIT<1,I>=OSD.KIT<1,IX>) THEN
+              IF FGS.KIT<1,I> = "M" THEN
+                KIT.PRINT = '*'
+              END ELSE
+                KIT.PRINT = ""
+              END
+              TEXT.DISPLAY<I> = KIT.PRINT
+              FOS.ID = CONO:PRODUCT.ID:"!":WHSE.ID:"!":FGS.ORDER<1,I>:"!":OSD.PROD.SEQ<1,IX>:"!":OSD.KIT<1,IX>
+              MATREAD FOS.REC FROM FNGD.ORDER.STATS, FOS.ID ELSE
+                MAT FOS.REC = ""
+                MATREAD ORD.REC FROM ORDER, CONO:FGS.ORDER<1,I> THEN
+                  FOS.CUST = ORD.CUST
+                  FOS.DATE = ORD.DATE
+                END
+              END
+              TOT.O.QTY += OSD.O.QTY<1,IX>
+              TOT.R.QTY += OSD.R.QTY<1,IX>
+              TOT.A.QTY += OSD.A.QTY<1,IX>
+              TOT.S.QTY += OSD.S.QTY<1,IX>
+              TOT.SHIP.O.QTY += OSD.O.QTY<1,IX>
+              TOT.SHIP.R.QTY += OSD.R.QTY<1,IX>
+              TOT.SHIP.A.QTY += OSD.A.QTY<1,IX>
+              TOT.SHIP.SHIP.S.QTY += OSD.S.QTY<1,IX>
+              IF TOT.RECP.NO = "" THEN
+                TOT.RECP.NO = FOS.RECP.NO
+              END ELSE
+                TOT.RECP.NO = TOT.RECP.NO:VM:FOS.RECP.NO
+              END
+              PTR = 0
+            END
+          END ELSE
+            PTR = 0
+          END
+        WHILE PTR DO
+          PTR = IX+1
+        REPEAT
+        FNGD.CUST<1,I> = FOS.CUST
+        MATREAD CUST.REC FROM CUSTOMER,CONO:FOS.CUST THEN
+          FNGD.CUST.NAME<1,I>=CUST.NAME
+        END
+        FNGD.DATE<1,I> = OCONV(FOS.DATE,"D2/")
+        FNGD.O.QTY<1,I>=OCONV(INT(((TOT.O.QTY/ICR.DV1)*ICR.MT1)/ICR.DV2+.5),ICR.CNV1)
+        FNGD.R.QTY<1,I>=OCONV(INT(((TOT.R.QTY/ICR.DV1)*ICR.MT1)/ICR.DV2+.5),ICR.CNV1)
+        FNGD.A.QTY<1,I>=OCONV(INT(((TOT.A.QTY/ICR.DV1)*ICR.MT1)/ICR.DV2+.5),ICR.CNV1)
+        FNGD.RECP.NO<1,I>  = TOT.RECP.NO
+        IF FOS.JOB<1,2> = "" THEN
+          FNGD.JOB<1,I> = FOS.JOB
+        END ELSE
+          FNGD.JOB<1,I> = "MULTI"
+        END
+        B.QTY = TOT.O.QTY-TOT.R.QTY-TOT.A.QTY-TOT.S.QTY
+        SHIP.B.QTY = TOT.SHIP.O.QTY-TOT.SHIP.R.QTY-TOT.SHIP.A.QTY-TOT.SHIP.SHIP.S.QTY
+        IF B.QTY < 0 THEN B.QTY = 0
+        IF SHIP.B.QTY < 0 THEN SHIP.B.QTY = 0
+        FNGD.B.QTY<1,I>=OCONV(INT(((B.QTY/ICR.DV1)*ICR.MT1)/ICR.DV2+.5),ICR.CNV1)
+*
+        GTOT.BQTY +=SHIP.B.QTY
+        GTOT.OQTY +=TOT.SHIP.O.QTY
+        GTOT.RQTY +=TOT.SHIP.R.QTY
+        GTOT.AQTY +=TOT.SHIP.A.QTY
+      END
+    NEXT S
+  NEXT I
+  GTOT.BQTY = OCONV(INT(((GTOT.BQTY/ICR.DV1) * ICR.MT1) / ICR.DV2 +.5),ICR.CNV1)
+  GTOT.OQTY = OCONV(INT(((GTOT.OQTY/ICR.DV1) * ICR.MT1) / ICR.DV2 +.5),ICR.CNV1)
+  GTOT.RQTY = OCONV(INT(((GTOT.RQTY/ICR.DV1) * ICR.MT1) / ICR.DV2 +.5),ICR.CNV1)
+  GTOT.AQTY = OCONV(INT(((GTOT.AQTY/ICR.DV1) * ICR.MT1) / ICR.DV2 +.5),ICR.CNV1)
+  FNGD.ORDER = FGS.ORDER
+*
+*---- BUILD RBO RECORD
+*
+  STATUS = RBO.setProperty('','O_KIT',TEXT.DISPLAY)
+  STATUS = RBO.setProperty('','O_JOB',FNGD.JOB)
+  STATUS = RBO.setProperty('','O_CUST',FNGD.CUST)
+  STATUS = RBO.setProperty('','O_DATE',FNGD.DATE)
+  STATUS = RBO.setProperty('','O_ORDER',FNGD.ORDER)
+  STATUS = RBO.setProperty('','O_CUST_NAME',FNGD.CUST.NAME)
+  STATUS = RBO.setProperty('','O_RECP_NO',FNGD.RECP.NO)
+  STATUS = RBO.setProperty('','O_BACK_ORD_QTY',FNGD.B.QTY)
+  STATUS = RBO.setProperty('','O_ORDER_QTY',FNGD.O.QTY)
+  STATUS = RBO.setProperty('','O_ALLOC_QTY',FNGD.A.QTY)
+  STATUS = RBO.setProperty('','O_RESV_QTY',FNGD.R.QTY)
+  STATUS = RBO.setProperty('','O_TOT_BACK_ORD_QTY',GTOT.BQTY)
+  STATUS = RBO.setProperty('','O_TOT_ORDER_QTY',GTOT.OQTY)
+  STATUS = RBO.setProperty('','O_TOT_RESV_QTY',GTOT.RQTY)
+  STATUS = RBO.setProperty('','O_TOT_ALLOC_QTY',GTOT.AQTY)
+  RETURN
+*
+SET.ERROR: 
+*
+  STATUS = RBO.setProperty('','ServerStatus',1)
+  STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+  RETURN
+END
+

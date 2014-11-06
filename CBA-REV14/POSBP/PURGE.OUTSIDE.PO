@@ -1,0 +1,99 @@
+*COPY>CPYLIB>COM1
+*********************************************************************
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* PROGRAM     - PURGE.OUTSIDE.PO
+* BY          - JIHAD YAMOUT , CBA
+* DATE        - 08/22/84
+* DESCRIPTION - THIS PROGRAM RUN FROM A PROC THAT SELECT PO FILE AND
+*               THEN DELETE ALL ITEMS SELECTED.
+* MOD         - TASK14974 RWW 2.14.90 PER CK
+*T25755 cm 04/19/2001 * Modify pgm to make sure OPO.PROD.SEQ is used
+*                       when matching up detail lines
+*ENDDOC
+*********************************************************************
+*** INSERT FILES EQUETES
+*COPY>POS.CPYLIB>OUTSIDE.PO
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>FILE.VARS
+*COPY>JCS.CPYLIB>JOB.STATS
+*COPY>CPYLIB>CHAR
+*** SETUP FOR SYSTEM ERRMSG
+   SYS.TYPE = 1
+   CALL SYSCOM(MAT SYSCOM.REC)
+*** OPEN ALL FILES
+   OPEN '','OUTSIDE.PO' TO OUTSIDE.PO ELSE ERRMSG = 'OUTSIDE.PO FILE IS MISSING' ; GOTO 93000
+   OPEN '','JOB.STATS' TO JOB.STATS ELSE ERRMSG = 'JOB.STATS FILE IS MISSING' ; GOTO 93000
+*** GET CONO FROM PROC
+   PROCREAD KEY ELSE
+      ERRMSG = 'THIS PROCESS SHOULD BE RUN FROM A PROC' ; GOTO 93000
+   END
+   CONO = KEY<1>
+*** MAIN PROCESS
+   DATA = 0
+   LOOP
+      READNEXT ID ELSE DATA = 1
+   WHILE DATA = 0 DO
+      MATREADU OPO.REC FROM OUTSIDE.PO , ID ELSE
+         RELEASE OUTSIDE.PO, ID
+         MAT OPO.REC = '' ; GOTO 111
+      END
+      PO.NO = ID[4,99]
+* T19013
+      JCNT = DCOUNT(OPO.JOB.NO,VM)
+      FOR J = 1 TO JCNT
+         MATREADU JSTAT.REC FROM JOB.STATS,CONO:OPO.JOB.NO<1,J> ELSE
+            RELEASE JOB.STATS,CONO:OPO.JOB.NO<1,J>; GOTO 99
+         END
+         FND = 0
+         PTR = 1
+         LOOP
+            LOCATE PO.NO IN JSTAT.OPO.NO<1>,PTR SETTING FND ELSE FND = 0
+            IF FND THEN
+*T25755 v
+*              IF JSTAT.PROD.LINE<1,FND> # OPO.PROD.LINE<1,J> THEN
+               IF JSTAT.PROD.LINE<1,FND> # OPO.PROD.LINE<1,J>:"@":OPO.PROD.SEQ<1,J> THEN
+*T25755 ^
+                  PTR = FND + 1
+               END ELSE
+                  PTR = 0
+               END
+            END ELSE PTR = 0
+         WHILE PTR DO REPEAT
+         IF FND THEN
+            JSTAT.OPO.NO = DELETE(JSTAT.OPO.NO,1,FND,0)
+            JSTAT.OPO.DATE = DELETE(JSTAT.OPO.DATE,1,FND,0)
+            JSTAT.OPO.AMT = DELETE(JSTAT.OPO.AMT,1,FND,0)
+            JSTAT.OPO.QTY = DELETE(JSTAT.OPO.QTY,1,FND,0)
+            JSTAT.PROD.LINE = DELETE(JSTAT.PROD.LINE,1,FND,0)
+*TASK14974
+* the check lines have been inserted for the benefit of the NCR, since
+* it can not interrogate a matriced fld as a whole
+            CHECK = 1
+            FOR AA = 1 TO JSTAT.REC.SIZE
+               IF JSTAT.REC(AA) # "" THEN CHECK = 0
+            NEXT AA
+            IF CHECK = 1 THEN
+               DELETE JOB.STATS, CONO:OPO.JOB.NO<1,J>
+            END ELSE
+               MATWRITE JSTAT.REC ON JOB.STATS,CONO:OPO.JOB.NO<1,J>
+            END
+*
+         END ELSE
+            RELEASE JOB.STATS, CONO : OPO.JOB.NO<1,J>
+         END
+99 *
+      NEXT J
+      DELETE OUTSIDE.PO ,ID
+111*
+   REPEAT
+   GOTO 99999
+*** PRINT ERRMSG
+91000 ERR.TYPE = 1; CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+92000 ERR.TYPE = 2; CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+93000 ERR.TYPE = 3; CALL SYSCOM(MAT SYSCOM.REC)
+99999 * PRINT * @(-1) * :
+END

@@ -1,0 +1,198 @@
+      SUBROUTINE HNP.UPDATE(CONO, FID, FNAME, FVAR, STATUS)
+*********************************************************************
+*
+* PROGRAM  - HNP.UPDATE
+*
+* AUTHOR   - NICK AMENDOLA, COMPUTER BUSINESS ASSOCIATES
+*
+* DATE     - 04/23/94
+*
+* DESCRIPTION
+*
+* This subroutine is used to add or update a record on the NDC-Plus
+* shop-floor data collection system.
+*
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+$INCLUDE PMC.CPYLIB COMPANY
+$INCLUDE PMC.CPYLIB DIVISION
+$INCLUDE PMC.CPYLIB DEPARTMENT
+$INCLUDE PMC.CPYLIB COST.CNTR
+$INCLUDE JCS.CPYLIB OPERATION
+$INCLUDE PMC.CPYLIB EMPLOYEE
+$INCLUDE JCS.CPYLIB JOB
+$INCLUDE PMC.CPYLIB CUSTOMER
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE JCS.CPYLIB SF.PROMPT
+$INCLUDE NDC.CPYLIB DOWNLOAD
+$INCLUDE CPYLIB FILE.VARS
+$INCLUDE CPYLIB CHAR
+*
+*---- INITIALIZATION
+*
+      STATUS = ""
+      OPEN "","CONTROL" TO CONTROL ELSE RETURN
+      READ NETREC FROM CONTROL, "HNP.NET.IDS" ELSE
+         NETREC = ""
+         OPEN "","DOWNLOAD" TO DOWNLOAD ELSE RETURN
+         SELECT DOWNLOAD
+         DONE = 0
+         LOOP
+            READNEXT NETID ELSE DONE = 1
+         UNTIL DONE DO
+            MATREAD DLOAD.REC FROM DOWNLOAD, NETID THEN
+               LOCATE NETID IN NETREC<1>,1 BY "AR" SETTING P ELSE
+                  NETREC = INSERT(NETREC,1,P,0,NETID)
+                  NETREC = INSERT(NETREC,2,P,0,DLOAD.CONO)
+                  NETREC = INSERT(NETREC,3,P,0,DLOAD.PORT)
+               END
+            END
+         REPEAT
+         WRITE NETREC ON CONTROL, "HNP.NET.IDS"
+      END
+      LOCATE CONO IN NETREC<2>,1 SETTING NPTR ELSE RETURN
+*
+*---- MAIN PROCESSING
+*
+      RMAX = 100
+      DIM REC(RMAX)
+      MAT REC=""
+      RCNT = 0
+      GOSUB 1000
+      IF RCNT > 0 THEN
+         OPEN "","OUT.QUEUE" TO OUT.QUEUE THEN
+            FOR RPTR = 1 TO RCNT
+               REC(RPTR) = CHANGE(REC(RPTR),"\","_")
+               FCNT = DCOUNT(REC(RPTR),AM)
+               MREC = REC(RPTR)<1>
+               FOR FPTR = 2 TO FCNT
+                  MREC = MREC:"\":REC(RPTR)<FPTR>
+               NEXT FPTR
+               MSG = "PUT-KEY^":"!":FNAME:"^":MREC
+               SPTR = 1
+               LOOP
+                  LOCATE CONO IN NETREC<2>,SPTR SETTING NPTR ELSE NPTR=0
+               WHILE NPTR > 0 DO
+                  NETID = NETREC<1,NPTR>
+                  CALL HNP.ADDQUEUE(NETID,MSG,OUT.QUEUE,QPTR,STATUS)
+                  SPTR = NPTR + 1
+               REPEAT
+            NEXT RPTR
+         END
+      END
+      GOTO 99999
+*
+*---- GET FILE DATA
+*
+1000 *
+      BEGIN CASE
+      CASE FNAME = "DIV"
+         MATREAD DIV.REC FROM FVAR, FID ELSE RETURN
+         RCNT += 1
+         REC(RCNT)<1> = FID[4,99]
+         REC(RCNT)<2> = DIV.DESC[1,30]
+      CASE FNAME = "DEP"
+         MATREAD DEPT.REC FROM FVAR, FID ELSE RETURN
+         MCNT = DCOUNT(DEPT.DIV,VM)
+         FOR MPTR = 1 TO MCNT UNTIL RCNT = RMAX
+            RCNT += 1
+            REC(RCNT)<1> = DEPT.DIV<1,MPTR>:FID[4,99]
+            REC(RCNT)<2> = DEPT.DESC[1,20]
+         NEXT MPTR
+      CASE FNAME = "CTR"
+         MATREAD CCTR.REC FROM FVAR, FID ELSE RETURN
+         IF CCTR.TYPE = "F" THEN RETURN
+         RCNT += 1
+         REC(RCNT)<1> = FID[4,99]
+         REC(RCNT)<2> = CCTR.DESC[1,30]
+         REC(RCNT)<3> = CCTR.DEPT
+      CASE FNAME = "OPR"
+         MATREAD OPER.REC FROM FVAR, FID ELSE RETURN
+         RCNT += 1
+         REC(RCNT)<1> = FID[4,99]
+         REC(RCNT)<2> = OPER.DESC[1,30]
+         REC(RCNT)<3> = OPER.MATL.REQ
+         REC(RCNT)<4> = OPER.CTYPE
+         REC(RCNT)<5> = OPER.PROMPT[1,15]
+         REC(RCNT)<6> = ""
+         IF NUM(OPER.SF.PROMPT<1,1>) THEN
+            REC(RCNT)<7> = OPER.SF.PROMPT<1,1>
+            PCNT = DCOUNT(OPER.SF.PROMPT,VM)
+            FOR PPTR = 2 TO PCNT
+               REC(RCNT)<7> = REC(RCNT)<7>:",":OPER.SF.PROMPT<1,PPTR>
+            NEXT PPTR
+         END
+      CASE FNAME = "COP"
+         MATREAD CCTR.REC FROM COST.CNTR, ID ELSE RETURN
+         MCNT = DCOUNT(CCTR.OPER,VM)
+         FOR MPTR = 1 TO MCNT UNTIL RCNT = RMAX
+            RCNT += 1
+            REC(RCNT)<1> = ID[4,99]:CCTR.OPER<1,MPTR>
+            REC(RCNT)<2> = CCTR.OPER.TYPE<1,MPTR>
+            BEGIN CASE
+            CASE CCTR.OPER.STD.IMP<1,MPTR>+0 > 0
+               REC(RCNT)<3> = "OPH"
+               REC(RCNT)<4> = CCTR.OPER.STD.IMP<1,MPTR>+0
+            CASE CCTR.OPER.STD.HRS<1,MPTR>+0 > 0
+               REC(RCNT)<3> = "SEC"
+               REC(RCNT)<4> = CCTR.OPER.STD.HRS<1,MPTR>*36
+            END CASE
+         NEXT MPTR
+      CASE FNAME = "EMP"
+         MATREAD EMP.REC FROM FVAR, FID ELSE RETURN
+         IF EMP.TERM.DATE # "" THEN RETURN
+         RCNT += 1
+         REC(RCNT)<1> = FID[4,99]
+         REC(RCNT)<2> = (TRIM(EMP.FRST.NAME:" ":EMP.LAST.NAME))[1,30]
+         REC(RCNT)<3> = EMP.DEPT
+         REC(RCNT)<4> = ""                 ;* (M)ale, (F)emale
+         REC(RCNT)<5> = ""                 ;* (P)rimary or (S)econdary language
+      CASE FNAME = "JOB"
+         MATREAD JOB.REC FROM FVAR, FID ELSE RETURN
+         IF JOB.STATUS<1,1> > "5" THEN RETURN
+         OPEN "","COMPANY" TO COMPANY ELSE RETURN
+         MATREAD COMP.REC FROM COMPANY, CONO ELSE RETURN
+         IF CO.JOB.CUST.FLG = "C" THEN
+            OPEN "","CUSTOMER" TO CUSTOMER ELSE RETURN
+            MATREAD CUST.REC FROM CUSTOMER, CONO:JOB.CUST ELSE RETURN
+            JDESC = CUST.NAME
+         END ELSE
+            JDESC = JOB.DESC<1,1>
+         END
+         IF JDESC = "" THEN JDESC = FID[4,99]
+         RCNT += 1
+         REC(RCNT)<1> = FID[4,99]
+         REC(RCNT)<2> = JDESC[1,40]
+         REC(RCNT)<3> = JOB.DIV
+         REC(RCNT)<4> = JOB.TYPE
+      CASE FNAME = "INV"
+         MATREAD INV.REC FROM FVAR, FID ELSE RETURN
+         RCNT += 1
+         REC(RCNT)<1> = FID[4,99]
+         REC(RCNT)<2> = INV.DESC[1,30]
+         REC(RCNT)<3> = INV.PAP.TYPE
+      CASE FNAME = "SPL"
+         READ SPL.DESC FROM FVAR, FID ELSE RETURN
+         RCNT += 1
+         REC(RCNT)<1> = FID[4,99]
+         REC(RCNT)<2> = SPL.DESC[1,30]
+      CASE FNAME = "PMT"
+         MATREAD SFP.REC FROM FVAR, FID ELSE RETURN
+         RCNT += 1
+         REC(RCNT)<1> = FID[4,99]
+         REC(RCNT)<2> = SFP.PROMPT[1,20]
+         REC(RCNT)<3> = ""                 ;* Prompt in secondary language
+         REC(RCNT)<4> = SFP.RESP.TYPE
+         REC(RCNT)<5> = SFP.RESP.LEN
+         REC(RCNT)<6> = SFP.RESP.SCALER
+         REC(RCNT)<7> = SFP.VALDAT
+      END CASE
+      RETURN
+*
+*---- END OF PROGRAM
+*
+99999 *
+      RETURN
+   END

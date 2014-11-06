@@ -1,0 +1,269 @@
+********************************************************************
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - POSBP
+* PROGRAM     - OPEN.PO.RPT.3
+* BY          - JIHAD YAMOUT ,C.B.A
+* DATE        - 04/09/87
+* DESCRIPTION - LIST ALL OPEN PO
+* TASK 20080 JR ADD DIVISION TO LISTING
+*T25850 edwin * Add warehouse to report heading.
+*T25901 cmykleb 03/08/2002 * Change heading to use GET.PROG.HEAD pgm.
+*T26493 cmykleb 03/22/2002 * Change report to use rpt # from proc.
+*T112009 UPrice Changes by Naresh
+********************************************************************
+*
+*COPY>PMC.CPYLIB>PO
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>PMC.CPYLIB>VEND
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>CHAR
+*
+   LINE.COUNT = 99
+   PAGE.NO = 0
+   PREV.PROD = ''
+   TOT.AMT = 0
+*T112009 v
+*   HD1 = "                                                                                                   ORDERED       OPEN"
+*   HD2 = "PO NUM   VEND NO  VEND NAME      PRODUCT NUMBER       PRODUCT DESCRIPTION           DUE DATE U/M   QUANTITY    QUANTITY  OPEN AMOUNT" 
+*   HD3 = "-------- -------- -------------- --------------- ---------------------------------- -------- --- ----------- ----------- -----------"
+   HD1 = "                                                                                                ORDERED       OPEN"
+   HD2 = "PO NUM   VEND NO  VEND NAME      PRODUCT NUMBER       PRODUCT DESCRIPTION        DUE DATE U/M   QUANTITY    QUANTITY    OPEN AMOUNT" 
+   HD3 = "-------- -------- -------------- --------------- ------------------------------- -------- --- ----------- ----------- --------------"
+*T112009 ^
+**** SET UP FOR SYSCOM
+   SYS.TYPE = 1; CALL SYSCOM(MAT SYSCOM.REC)
+**** READ COMPANY NAME FROM PROC
+   PROCREAD ID ELSE
+      ERRMSG = "MUST RUN FROM A PROC"
+      GOTO 93000
+   END
+*T26493 v
+*  CONO = ID<1> ; CONO.NAME = ID<2>
+   CONO = ID<1> ; REPORT.NUMBER = ID<2>
+   CONO.NAME = ""
+*T26493 ^
+   DIV.OWNER = ID<3> ; *T20080
+*T25901 v
+   REPORT.NAME = ""
+   HEAD1 = "" ; HEAD2 = ""
+   CALL GET.PROG.HEAD(CONO,CONO.NAME,REPORT.NAME,REPORT.NUMBER,"",HEAD1,HEAD2)
+*T25901 ^
+*T25850 v
+   START.DELIVER.DATE.RANGE = ICONV(ID<4>,'D2')
+   END.DELIVER.DATE.RANGE = ICONV(ID<5>,'D2')
+*T25850 ^
+   POS = 50 - INT(LEN(CONO.NAME) /2)
+   POS2 = 70 - POS
+**** OPEN FILES
+   OPEN '','PO' TO PO ELSE
+      ERRMSG = 'PO FILE IS MISSING'
+      GOSUB 93000
+   END
+   OPEN '','INVENTORY' TO INVENTORY ELSE
+      ERRMSG = 'INVENTORY FILE IS MISSING'
+      GOSUB 93000
+   END
+   OPEN '','VEND' TO VEND ELSE
+      ERRMSG = 'VEND FILE IS MISSING'
+      GOSUB 93000
+   END
+*
+***** MAIN PROCESS
+*
+   PRINTER ON
+**** READ FIRST RECORD
+10*
+   READNEXT PO.CODE,MV.NUM,MV.NUM1 ELSE
+      ERRMSG = "NO ITEMS SELECTED"
+      GOTO 93000
+   END
+   MV.NUM = MV.NUM<1,1,1>
+   MATREAD PO.REC FROM PO , PO.CODE ELSE
+      MAT PO.REC = ''
+      GOTO 10
+   END
+   MATREAD VEND.REC FROM VEND, CONO:PO.VEND.NO ELSE
+      VEND.DESC = "??????????"
+   END
+      IF START.DELIVER.DATE.RANGE THEN        ; * T25850 v
+IF PO.DEL.DATE<1,MV.NUM> < START.DELIVER.DATE.RANGE OR PO.DEL.DATE<1,MV.NUM> > END.DELIVER.DATE.RANGE THEN CONTINUE
+      END                                     ; * T25850 ^
+   IF PO.QTY.OPEN<1,MV.NUM> + 0 > 0 THEN
+      MATREAD INV.REC FROM INVENTORY, CONO:PO.PROD.NUM<1,MV.NUM> ELSE
+         MAT INV.REC = ""
+         INV.DESC = "??????????????????????????"
+      END
+      GOSUB 300
+   END ELSE
+      GOTO 10
+   END
+   PREV.DEL.DATE = PO.DEL.DATE<1,MV.NUM>
+   GOSUB 200
+   DATA = 0
+   LOOP
+      READNEXT PO.CODE,MV.NUM,MV.NUM1 ELSE DATA = 1
+   WHILE DATA = 0 DO
+      MV.NUM = MV.NUM<1,1,1>
+      MATREAD PO.REC FROM PO , PO.CODE ELSE
+         MAT PO.REC = ''
+         GOTO 111
+      END
+      IF START.DELIVER.DATE.RANGE THEN        ; * T25850 v
+IF PO.DEL.DATE<1,MV.NUM> < START.DELIVER.DATE.RANGE OR PO.DEL.DATE<1,MV.NUM> > END.DELIVER.DATE.RANGE THEN CONTINUE
+      END                                     ; * T25850 ^
+      IF PO.QTY.OPEN<1,MV.NUM> + 0 > 0 THEN
+         MATREAD INV.REC FROM INVENTORY, CONO:PO.PROD.NUM<1,MV.NUM> ELSE
+            MAT INV.REC = ""
+            INV.DESC = "??????????????????????????"
+         END
+         GOSUB 300
+      END ELSE
+         GOTO 111
+      END
+      MATREAD VEND.REC FROM VEND , CONO: PO.VEND.NO ELSE
+         VEND.DESC = "??????????"
+      END
+      BEGIN CASE
+         CASE PO.DEL.DATE<1,MV.NUM> # PREV.DEL.DATE
+            GOSUB 400
+            GOSUB 9000
+      END CASE
+      GOSUB 1000
+      PREV.DEL.DATE = PO.DEL.DATE<1,MV.NUM>
+111 REPEAT
+   GOSUB 400
+   GOTO 99999
+***** PRINT PO LINES
+200*
+   IF PO.QTY.OPEN<1,MV.NUM> + 0 > 0 THEN
+      MATREAD INV.REC FROM INVENTORY ,CONO:PO.PROD.NUM<1,MV.NUM> ELSE
+         INV.DESC = "??????????????????????????"
+      END
+      GOSUB 300
+      GOSUB 1000
+   END
+   RETURN
+***** CONVERT QUANTITY
+300*
+   IF INV.SBR + 0 = 0 THEN INV.SBR = 1
+   MAT INV.CNV.REC = ''
+   BEGIN CASE
+      CASE PO.UNIT.FLG<1,MV.NUM> = 'SHT' AND INV.UNIT<1,3> = 'LBS'
+         ICR.CNV = "MD0"
+         ICR.DV1 = INV.M.WT; ICR.MT1 = 1; ICR.DV2 = 1
+      CASE PO.UNIT.FLG<1,MV.NUM> = 'PC' AND INV.UNIT<1,3> = 'MSI'
+         ICR.CNV = "MD0"
+         ICR.DV1 = INV.PAP.WIDTH/100; ICR.MT1 = 10; ICR.DV2 = 1
+      CASE PO.UNIT.FLG<1,MV.NUM> = 'FT' AND INV.UNIT<1,3> = 'MSI'
+         ICR.CNV = "MD0"
+         ICR.DV1 = INV.PAP.WIDTH/100; ICR.MT1 = 100; ICR.DV2 = 12
+      CASE 1
+         ICR.CNV = "MD2"
+         ICR.DV1 = INV.SBR; ICR.MT1 = 1; ICR.DV2 = 1
+   END CASE
+   IF PO.UNIT.FLG<1,MV.NUM> # INV.UNIT<1,2> THEN DIFF.UM = "Y" ELSE DIFF.UM = "N"
+   RETURN
+**** PRINT TOTALS
+400*
+   PRINT
+   LINE.COUNT = LINE.COUNT + 1
+   IF TOT.AMT # 0 THEN
+      T.LINE = ''
+*T112009 v
+*      T.LINE = SPACE(99):"EXPECTED DATE TOTAL  ":OCONV(TOT.AMT, "MD2") "R#12"
+      T.LINE = SPACE(97):"EXPECTED DATE TOTAL  ":OCONV(TOT.AMT, "MD2") "R#14"
+*T112009 ^
+      PRINT T.LINE
+      PRINT
+      LINE.COUNT  = LINE.COUNT + 2
+      TOT.AMT = 0
+   END
+   RETURN
+***** PRINT LINE
+1000*
+   IF LINE.COUNT > 45 THEN
+      GOSUB 9000
+   END
+   D.LINE = ''
+   D.LINE = D.LINE :PO.CODE[4,LEN(PO.CODE)] "L#8":' ':PO.VEND.NO "L#8":' ':VEND.DESC "L#14":' '
+*T112009 v
+*   D.LINE = D.LINE :PO.PROD.NUM<1,MV.NUM> "L#15":' ':INV.DESC "L#34":' '
+   D.LINE = D.LINE :PO.PROD.NUM<1,MV.NUM> "L#15":' ':INV.DESC "L#31":' '
+*T112009 ^
+   D.LINE = D.LINE :OCONV(PO.DEL.DATE<1,MV.NUM>, "D2/") "L#8":' '
+   D.LINE = D.LINE :PO.UNIT.FLG<1,MV.NUM> "L#3":' '
+   IF DIFF.UM = "Y" THEN
+      IF ICR.CNV = "MD0" THEN
+         TEMP = INT(((PO.TOT.ONORD<1,MV.NUM> / ICR.DV1) * ICR.MT1) / ICR.DV2 + .5)
+         TEMP1 = INT(((PO.QTY.OPEN<1,MV.NUM> / ICR.DV1) * ICR.MT1) / ICR.DV2 + .5)
+      END ELSE
+         TEMP = INT((PO.TOT.ONORD<1,MV.NUM> / 10) / ICR.DV1)
+         TEMP1 = INT((PO.QTY.OPEN<1,MV.NUM> / 10) / ICR.DV1)
+      END
+   END ELSE
+      IF ICR.CNV = "MD0" THEN
+         TEMP = INT(((PO.TOT.ONORD<1,MV.NUM> / ICR.DV1) * ICR.MT1)/ICR.DV2 +.5)
+         TEMP1 = INT(((PO.QTY.OPEN<1,MV.NUM> / ICR.DV1) * ICR.MT1)/ICR.DV2 +.5)
+      END ELSE
+         TEMP = INT(PO.TOT.ONORD<1,MV.NUM> / 10)
+         TEMP1 = INT(PO.QTY.OPEN<1,MV.NUM> / 10)
+      END
+   END
+   D.LINE = D.LINE:OCONV(TEMP, ICR.CNV) "R#11":' '
+   D.LINE = D.LINE:OCONV(TEMP1, ICR.CNV) "R#11":' '
+   DESC.PRICE = INT((PO.GROS.PRICE<1,MV.NUM> * (1- (PO.DISCOUNT<1,MV.NUM>/10000))) / INV.SBR +.5)
+   IF INV.COST.WT * 1 = 0 THEN INV.COST.WT = 100
+   OPEN.PRICE = INT((DESC.PRICE / 10000) * ((PO.QTY.OPEN<1,MV.NUM> /10) / (INV.COST.WT / 100)))
+*T112009 v
+*   D.LINE = D.LINE : OCONV(OPEN.PRICE , "MD2") "R#11"
+   D.LINE = D.LINE : OCONV(OPEN.PRICE , "MD2") "R#14"
+*T112009 ^
+   TOT.AMT = TOT.AMT + OPEN.PRICE
+   PRINT D.LINE
+   LINE.COUNT = LINE.COUNT + 1
+   RETURN
+**** PRINT HEADING
+9000*
+   PRINT CHAR(12):
+   PAGE.NO = PAGE.NO + 1
+*T25901 v
+*  H.LINE = ''
+*  H.LINE = H.LINE : "DATE : " :OCONV(DATE(),"D2/") "L#8"
+*  H.LINE = H.LINE : SPACE(POS) : CONO.NAME "L#30"
+*  H.LINE = H.LINE : SPACE(POS2) : 'PAGE ' : PAGE.NO "R#3"
+*  PRINT H.LINE
+*  H.LINE = ''
+*  H.LINE = H.LINE : SPACE(51) : 'OPEN PURCHASE ORDER REPORT'
+*  PRINT H.LINE
+*  H.LINE = ''
+*  H.LINE = H.LINE:"DIVISION : ":DIV.OWNER"L#3"
+*  H.LINE = H.LINE : SPACE(37) : '     BY EXPECTED DATE   '
+*  PRINT H.LINE
+   HEAD3 = "DIVISION : ":DIV.OWNER"L#3"
+   HEAD3 = HEAD3 : SPACE(49):OCONV(START.DELIVER.DATE.RANGE,'D2/')
+   HEAD3 = HEAD3 : " THRU ":OCONV(END.DELIVER.DATE.RANGE,'D2/')
+   PRINT HEAD1:PAGE.NO"R#3"
+   PRINT HEAD2
+   PRINT HEAD3
+*T25901 ^
+   PRINT
+   PRINT "MAJOR LINE   - ":INV.M.LINE
+   PRINT "PRODUCT LINE - ":INV.LINE
+   PRINT "WAREHOUSE    - ":PO.SHIP.WHSE   ; * T25850
+   PRINT
+   PRINT HD1
+   PRINT HD2
+   PRINT HD3
+   LINE.COUNT = 11
+   RETURN
+***** CALLS FOR SYSCOM
+91000 ERR.TYPE = 1 ; CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+92000 ERR.TYPE = 2 ; CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+93000 ERR.TYPE = 3 ; CALL SYSCOM(MAT SYSCOM.REC)
+99999 PRINTER OFF
+END

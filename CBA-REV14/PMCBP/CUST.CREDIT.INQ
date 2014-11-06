@@ -1,0 +1,362 @@
+   SUBROUTINE CUST.CREDIT.INQ(CONO,PER,EXIT.FLAG,CO.ARS)
+*COPY>CPYLIB>COM1
+*COPY>PMC.CPYLIB>COM.CUST
+*************************************************************
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* PROGRAM       - CUST.CREDIT.INQ
+* SYSTEM        - JCSBP
+* BY            - RHONDA PERRIN, COMPUTER BUSINESS ASSOCIATES
+* DATE          - 09/19/84
+* DESCRIPTION   -
+* This program is a subroutine to CUST.MAINT and 
+* gives the Customer's credit history.
+*
+* LAST COMPILE - 634
+*
+*T22023 lanny 06/19/1997 * Credit screen reads OPEN.RECV regardless of
+*                          CO.ARS flag.
+*T25763 renee 06/06/2001 * Put in logic to split invoice inquiry to
+*                          either (O)pen active or (P)urged invoices.
+*T26633 cmykleb 05/30/2002 * Not displaying the current period sales $$$.
+*T28408 bmourad 01/19/2005 * ADD CM OPTION TO OPEN CUST COMMENT SCREEN
+*ENDDOC
+*************************************************************
+*
+*---- FILE EQUATES
+*
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>CPYLIB>GEN.XREF.SUB
+*COPY>ARS.CPYLIB>OPEN.RECV
+*T25763 v
+*COPY>ARS.CPYLIB>PURGED.OPEN.RECV
+*T25763 ^
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*
+*---- SETUP SYSTEM ERROR MESSAGES
+*
+   SYS.TYPE=1
+   CALL SYSCOM(MAT SYSCOM.REC)
+*T25763 v
+   OPEN "","PURGED.OPEN.RECV" TO PURGED.OPEN.RECV ELSE ERRMSG = "Cannot open purged receivable file.";GOTO 93000
+   OPEN "","PURGED.OR.XREF" TO PURGED.OR.XREF ELSE ERRMSG = "Cannot open purged cross reference file.";GOTO 93000
+*T25763 ^
+*
+*---- INITIALIZATION
+*
+   ESN = ECD.SCRN.NO
+   TODAY = DATE()
+   MAT GEN.XREF.REC = ""
+   GXR.CO = CONO
+*
+*---- MAIN PROCESSING
+*
+   JOB.BALANCE = SUM(CUST.JOB.BAL)
+   ORD.BALANCE = SUM(CUST.ORD.BAL)
+*    IF CUST.CREDIT = "E" OR CUST.CREDIT = "AE" THEN
+   CREDIT.LIMIT = CUST.CR.LIMIT
+*    END ELSE
+*       CREDIT.LIMIT = 0
+*    END
+   IF CUST.CREDIT = "E" OR CUST.CREDIT = "AE" THEN
+      CREDIT.AVAIL = CREDIT.LIMIT * 100 - CUST.AR.BAL - ORD.BALANCE - JOB.BALANCE
+   END ELSE
+      CREDIT.AVAIL = 0
+   END
+   IF CUST.INVOICE.CNT<1,1> + 0 = 0 THEN
+      AVG.INV = 0
+   END ELSE
+      AVG.INV = INT((CUST.TOT.AMT / CUST.INVOICE.CNT<1,1>) + .5)
+   END
+   IF CUST.INVOICE.CNT<1,2> + 0 = 0 THEN
+      DAYS.TO.PAY = 0
+   END ELSE
+      DAYS.TO.PAY = INT(CUST.DAYS.TO.PAY / CUST.INVOICE.CNT<1,2>)
+   END
+   ICNT = COUNT(CUST.INVOICE,VM) + (CUST.INVOICE # "")
+   BAL.CR = 0; BAL.30 = 0; BAL.60 = 0; BAL.90 = 0; BAL.OVER = 0
+   FOR I = 1 TO ICNT
+*T22023 v
+      IF CO.ARS = 'Y' THEN
+         MATREAD OR.REC FROM OPEN.RECV, CONO : CUST.INVOICE<1,I> ELSE GOTO 99
+         DAYS.DUE = TODAY - OR.INV.DATE
+         BEGIN CASE
+            CASE OR.BAL < 0
+               BAL.CR = BAL.CR + OR.BAL
+            CASE DAYS.DUE < 31
+               BAL.30 = BAL.30 + OR.BAL
+            CASE DAYS.DUE < 61
+               BAL.60 = BAL.60 + OR.BAL
+            CASE DAYS.DUE < 91
+               BAL.90 = BAL.90 + OR.BAL
+            CASE 1
+               BAL.OVER = BAL.OVER + OR.BAL
+         END CASE
+      END
+*T22023 ^
+99 NEXT I
+   HCNT = COUNT(CUST.HIGH.BAL,VM) + (CUST.HIGH.BAL # "")
+   HIGH.BAL = 0
+   FOR H = 1 TO HCNT
+      IF (TODAY - CUST.HIGH.BAL.DATE<1,H>) < 366 THEN
+         IF CUST.HIGH.BAL<1,H> > HIGH.BAL THEN
+            HIGH.BAL = CUST.HIGH.BAL<1,H>
+         END
+      END
+   NEXT H
+   SCV.REC(2)<ESN>=CUST.NAME
+   SCV.REC(3)<ESN>=CUST.START.DATE
+   SCV.REC(4)<ESN>=CUST.CREDIT
+   SCV.REC(5)<ESN>=OCONV(CREDIT.LIMIT,"MD0Z,")
+   SCV.REC(6)<ESN>=OCONV(HIGH.BAL,"MD2Z,")
+   SCV.REC(7)<ESN>=OCONV(CUST.AR.BAL,"MD2,<")
+   SCV.REC(8)<ESN>=OCONV(AVG.INV,"MD2,")
+   SCV.REC(9)<ESN>=DAYS.TO.PAY
+   SCV.REC(10)<ESN>=OCONV(BAL.30,"MD2Z,")
+   SCV.REC(11)<ESN>=OCONV(BAL.60,"MD2Z,")
+   SCV.REC(12)<ESN>=OCONV(BAL.90,"MD2Z,")
+   SCV.REC(13)<ESN>=OCONV(BAL.OVER,"MD2Z,")
+   SCV.REC(36)<ESN>=OCONV(ORD.BALANCE,"MD2Z,")
+   SCV.REC(14)<ESN>=OCONV(JOB.BALANCE,"MD2Z,")
+   SCV.REC(15)<ESN>=OCONV(ORD.BALANCE+JOB.BALANCE+CUST.AR.BAL,"MD2Z,<")
+   SCV.REC(16)<ESN>=OCONV(BAL.CR,"MD2Z,<")
+   SCV.REC(20)<ESN>=OCONV(FIELD(CUST.LAST.PMT,":",2),"MD2Z,")
+   SCV.REC(21)<ESN>=CUST.TERMS
+   SCV.REC(22)<ESN>=CUST.LAST.SALE
+   SCV.REC(23)<ESN>=FIELD(CUST.LAST.PMT,":",1)
+*T26633 v
+*  SCV.REC(32)<ESN>=PER
+*  LOCATE PER IN CUST.SALES.PER<1>,1 SETTING TFND ELSE TFND = 0
+   BPER = MAXIMUM(PER<1>)
+   SCV.REC(32)<ESN>=BPER
+   LOCATE BPER IN CUST.SALES.PER<1>,1 SETTING TFND ELSE TFND = 0
+*T26633 ^
+   IF TFND THEN
+      SCV.REC(24)<ESN>=OCONV(CUST.SALES<1,TFND>, "MD2Z,")
+   END
+*T26633 v
+*  LY.PER = PER[1,4] - 1:PER[5,2]
+   LY.PER = BPER[1,4] - 1:BPER[5,2]
+*T26633 ^
+   SCV.REC(33)<ESN>=LY.PER
+   LOCATE LY.PER IN CUST.SALES.PER<1>,1 SETTING LFND ELSE LFND = 0
+   IF LFND THEN
+      SCV.REC(31)<ESN>=OCONV(CUST.SALES<1,LFND>, "MD2Z,")
+   END
+*T26633 v
+*  SCV.REC(34)<ESN>=PER[1,4]
+   SCV.REC(34)<ESN>=BPER[1,4]
+*T26633 ^
+   SCV.REC(35)<ESN>=LY.PER[1,4]
+   SALES.CNT = COUNT(CUST.SALES.PER, VM) + (CUST.SALES.PER # "")
+   Y.SALES = 0 ; LY.SALES = 0
+   FOR SAL = 1 TO SALES.CNT
+      BEGIN CASE
+*T26633 v
+*        CASE PER[1,4] = CUST.SALES.PER<1,SAL>[1,4]
+         CASE BPER[1,4] = CUST.SALES.PER<1,SAL>[1,4]
+*T26633 ^
+            Y.SALES = Y.SALES + CUST.SALES<1,SAL>
+         CASE LY.PER[1,4] = CUST.SALES.PER<1,SAL>[1,4]
+            LY.SALES = LY.SALES + CUST.SALES<1,SAL>
+      END CASE
+   NEXT SAL
+   SCV.REC(25)<ESN>=OCONV(Y.SALES,"MD2Z,")
+   SCV.REC(26)<ESN>=OCONV(LY.SALES,"MD2Z,")
+   SCV.REC(27)<ESN>=OCONV(CREDIT.AVAIL,"MD2Z,<")
+   SCV.REC(30)<ESN>=TODAY
+   ECD.ACTION=3;CALL SCRN.EDIT
+   MORE = 1
+   LOOP
+      ECD.NUM = 19; SCV.REC(ECD.NUM)<ESN> = ""
+      ECD.ACTION = 4; CALL SCRN.EDIT
+      ACTION = ECD.RET.VALUE
+      BEGIN CASE
+         CASE ACTION = "" OR ACTION = "E" OR ACTION = "END"
+            MORE = 0
+* T28408 v
+         CASE ACTION = "CM" AND CUST.COMMENT = ""
+            ERRMSG = "Customer Comments Screen is Empty"
+            GOSUB 91000
+         CASE ACTION = "CM"
+            ECD.SCRN.NO = 11
+            SCV.REC(2)<ECD.SCRN.NO> = SCV.REC(1)<ESN>
+            SCV.REC(3)<ECD.SCRN.NO> = CUST.NAME
+            ECD.ACTION = 3; CALL SCRN.EDIT
+            MODE = "I"; CALL CUST.CMNT(CONO,MODE)
+            ECD.SCRN.NO = ESN
+            ECD.ACTION = 2; CALL SCRN.EDIT
+            ECD.ACTION = 3; CALL SCRN.EDIT
+* T28408 ^
+         CASE ACTION = "I" AND CUST.INVOICE = ""
+*T25763 v
+200         ECD.NUM = 40; SCV.REC(ECD.NUM)<ESN> = ""
+            ECD.ACTION = 4; CALL SCRN.EDIT
+            I.OPT.ACTION = ECD.RET.VALUE
+            BEGIN CASE
+               CASE I.OPT.ACTION = "O"
+*T25763 ^
+                  ERRMSG="Cannot locate any Invoices for this customer"
+                  GOSUB 91000
+*T25763 v
+                  GOTO 200
+               CASE I.OPT.ACTION = "P"
+                  ECD.NUM = 41; SCV.REC(ECD.NUM)<ESN> = ""
+                  ECD.ACTION = 4; CALL SCRN.EDIT
+                  BEG.PURGE.DATE = ECD.RET.VALUE
+                  IF BEG.PURGE.DATE = "" OR BEG.PURGE.DATE = "E" THEN
+                     BEG.PURGE.DATE = "END"
+                  END
+                  IF BEG.PURGE.DATE # "END" THEN
+                     ECD.NUM = 42;SCV.REC(ECD.NUM)<ESN> = ""
+                     ECD.ACTION = 4; CALL SCRN.EDIT
+                     END.PURGE.DATE = ECD.RET.VALUE
+                     IF END.PURGE.DATE = "" OR END.PURGE.DATE = "E" THEN
+                        END.PURGE.DATE = "END"
+                     END
+                     IF END.PURGE.DATE # "END" THEN
+                        IF END.PURGE.DATE GE BEG.PURGE.DATE THEN
+                           READ TEST.VAL FROM PURGED.OR.XREF,CONO:SCV.REC(1)<ESN> THEN
+                              VALID.PURGED.IDS = ""
+                              GOSUB 2700 ; * DETERMINE VALID IDS
+                              IF VALID.PURGED.IDS # "" THEN
+                                 ECD.SCRN.NO = 9
+                                 SCV.REC(1)<ECD.SCRN.NO>=SCV.REC(1)<ESN>
+                                  * SET UP ANY OTHER FIELDS HERE
+                                 ECD.ACTION = 2 ; CALL SCRN.EDIT
+                                 CALL CUST.PURGED.INV.INQ(CONO,BEG.PURGE.DATE,END.PURGE.DATE,VALID.PURGED.IDS)
+                                 ECD.SCRN.NO = ESN
+                                 ECD.ACTION = 2; CALL SCRN.EDIT
+                                 ECD.ACTION = 3; CALL SCRN.EDIT
+                              END ELSE
+                                 ERRMSG = "No purged items for entered date range"
+                                 GOSUB 91000
+                              END
+                           END ELSE
+                              ERRMSG="Cannot locate any purged invoices for this customer."
+                              GOSUB 91000
+                           END
+                        END
+                     END
+                  END
+                  GOTO 200
+            END CASE
+*T25763 ^
+         CASE ACTION = "I"
+*T25763 v
+210         ECD.NUM = 40; SCV.REC(ECD.NUM)<ESN> = ""
+            ECD.ACTION = 4; CALL SCRN.EDIT
+            I.OPT.ACTION = ECD.RET.VALUE
+            BEGIN CASE
+               CASE I.OPT.ACTION = "O"
+*T25763 ^
+                  ECD.SCRN.NO = ESN + 1
+                  ECD.ACTION = 2; CALL SCRN.EDIT
+                  SCV.REC(1)<ECD.SCRN.NO>=SCV.REC(1)<ESN>
+                  CALL CUST.INV.INQ(CONO)
+                  ECD.SCRN.NO = ESN
+                  ECD.ACTION = 2; CALL SCRN.EDIT
+                  ECD.ACTION = 3; CALL SCRN.EDIT
+*T25763 v
+                  GOTO 210
+               CASE I.OPT.ACTION = "P"
+                  ECD.NUM = 41; SCV.REC(ECD.NUM)<ESN> = ""
+                  ECD.ACTION = 4; CALL SCRN.EDIT
+                  BEG.PURGE.DATE = ECD.RET.VALUE
+                  IF BEG.PURGE.DATE = "" OR BEG.PURGE.DATE = "E" THEN
+                     BEG.PURGE.DATE = "END"
+                  END
+                  IF BEG.PURGE.DATE # "END" THEN
+                     ECD.NUM = 42;SCV.REC(ECD.NUM)<ESN> = ""
+                     ECD.ACTION = 4; CALL SCRN.EDIT
+                     END.PURGE.DATE = ECD.RET.VALUE
+                     IF END.PURGE.DATE = "" OR END.PURGE.DATE = "E" THEN
+                        END.PURGE.DATE = "END"
+                     END
+                     IF END.PURGE.DATE # "END" THEN
+                        IF END.PURGE.DATE GE BEG.PURGE.DATE THEN
+                           READ TEST.VAL FROM PURGED.OR.XREF,CONO:SCV.REC(1)<ESN> THEN
+                              VALID.PURGED.IDS = ""
+                              GOSUB 2700 ; * DETERMINE VALID IDS
+                              IF VALID.PURGED.IDS # "" THEN
+                                 ECD.SCRN.NO = 9
+                                 SCV.REC(1)<ECD.SCRN.NO>=SCV.REC(1)<ESN>
+                                  * SET UP ANY OTHER FIELDS HERE
+                                 ECD.ACTION = 2 ; CALL SCRN.EDIT
+                                 CALL CUST.PURGED.INV.INQ(CONO,BEG.PURGE.DATE,END.PURGE.DATE,VALID.PURGED.IDS)
+                                 ECD.SCRN.NO = ESN
+                                 ECD.ACTION = 2; CALL SCRN.EDIT
+                                 ECD.ACTION = 3; CALL SCRN.EDIT
+                              END ELSE
+                                 ERRMSG = "No purged items for entered date range"
+                                 GOSUB 91000
+                              END
+                           END ELSE
+                              ERRMSG="Cannot locate any purged invoices for this customer."
+                              GOSUB 91000
+                           END
+                        END
+                     END
+                  END
+                  GOTO 210
+            END CASE
+*T25763 ^
+         CASE ACTION = "O" AND CUST.ORD.NUM = ""
+            ERRMSG="Cannot locate any Orders for this customer"
+            GOSUB 91000
+         CASE ACTION = "O"
+            GXR.NAME = "CUST.ORD.INQ"
+            GXR.FILE = ORDER
+            GXR.SRCH.ID = CUST.ORD.NUM
+            CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+            ECD.ACTION = 2; CALL SCRN.EDIT
+            ECD.ACTION = 3; CALL SCRN.EDIT
+         CASE ACTION = "J" AND CUST.JOB = ""
+            ERRMSG="Cannot locate any Jobs for this customer"
+            GOSUB 91000
+         CASE ACTION = "J"
+            ECD.SCRN.NO = ESN + 2
+            ECD.ACTION = 2; CALL SCRN.EDIT
+            SCV.REC(1)<ECD.SCRN.NO>=SCV.REC(1)<ESN>
+            CALL CUST.JOB.INQ(CONO)
+            ECD.SCRN.NO = ESN
+            ECD.ACTION = 2; CALL SCRN.EDIT
+            ECD.ACTION = 3; CALL SCRN.EDIT
+      END CASE
+   WHILE MORE DO REPEAT
+   GOTO 99999
+* T25763 v
+2700 * SUBROUTINE TO DETERMINE IF ANY VALID IDS EXIST WITHIN DATE RANGE
+   LAST.ITEM = DCOUNT(TEST.VAL,AM)
+   FOR IC2700 = 1 TO LAST.ITEM
+      READV TEST.DATE FROM PURGED.OPEN.RECV,TEST.VAL<IC2700>,5 THEN
+         IF TEST.DATE GE BEG.PURGE.DATE AND TEST.DATE LE END.PURGE.DATE THEN
+            IF VALID.PURGED.IDS = "" THEN
+               VALID.PURGED.IDS = TEST.VAL<IC2700>
+            END ELSE
+               VALID.PURGED.IDS<-1,0,0> = TEST.VAL<IC2700>
+            END
+         END
+      END
+   NEXT IC2700
+   RETURN
+* T25763 ^
+*
+*---- CALLS FOR SYSCOM
+*
+91000*
+   ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+92000*
+   ERR.TYPE=2;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+93000*
+   ERR.TYPE=3;CALL SYSCOM(MAT SYSCOM.REC)
+99999*
+   IF EXIT.FLAG THEN
+      ECD.ACTION=99;CALL SCRN.EDIT
+   END
+   RETURN
+END

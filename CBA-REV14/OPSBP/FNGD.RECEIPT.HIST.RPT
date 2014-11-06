@@ -1,0 +1,282 @@
+*COPY>CPYLIB>COM1
+**************************************************************************
+* REVISION    - [00.0]
+* COPYRIGHT   - 1993 Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - OPS
+* PROGRAM     - FNGD.RECEIPT.HIST.RPT
+* AUTHOR      - S.L.Fritz
+* DATE        - 05/10/93
+* DESCRIPTION - Print the history report for the FNGD.RECEIPT.HIST file with a status
+*               of SHIP anywhere in the status field.
+*T26190 ajibaly 03/11/2002 * CONVERT TO REV12, USE INV_RECEIPTS FILE
+*T27341 lross 03/18/2002 * INVR.AUDIT.NO is Multi-Valued.
+*T27343 adelgado 03/21/2003 * Add a dollar amount column, with total at
+*                             the bottom.
+*T27357 adelgado 03/28/2003 * Add to the header date and period
+*                             selection.
+**************************************************************************
+*
+*---- DATA Structure Libraries
+*
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>ICS.CPYLIB>INV_RECEIPTS
+*COPY>ICS.CPYLIB>INV_AUDIT_HIST
+*
+  DEFFUN CENTER.ON.STRING(STR1,STR2)
+*
+*---- File open
+*
+  OPEN '','INV_RECEIPTS' TO INV_RECEIPTS ELSE ERRMSG = 'INV_RECEIPTS FILE NOT FOUND';GOTO 999000
+  OPEN '','INV_AUDIT_HIST' TO INV_AUDIT_HIST ELSE ERRMSG = 'INV_AUDIT_HIST FILE NOT FOUND';GOTO 999000
+  OPEN '','INVENTORY' TO INVENTORY ELSE ERRMSG = 'INVENTORY';GOTO 999000
+*
+*---- Initialize variables
+*
+  TOT.DOLLARS = 0           ;* T27343
+  ONE.PRINTED = 0           ;* T27343
+  TRUE = 1
+  OTHERS = 1
+  VOID = ''
+  NULL = ''
+  FALSE = 0
+  PAGE.NO = 0
+  TOP.OF.NEW.PAGE = CHAR(12)
+  PAGE.NO = 0
+  LINES.THIS.PAGE = 0
+*T26190> PAGE.HEADING.SIZE = 5
+  PAGE.HEADING.SIZE = 7        ;* T27357
+  PAGE.SIZE = 55
+*
+  EQU CONO         TO BUFFER<1>
+  EQU COMPANY.NAME TO BUFFER<2>
+  EQU WAREHOUSE.NO TO BUFFER<3>
+  EQU CUSTOMER.FRO TO BUFFER<4>
+  EQU CUSTOMER.TO  TO BUFFER<5>
+  EQU JOB.FROM     TO BUFFER<6>
+  EQU JOB.TO       TO BUFFER<7>
+  EQU STAT.DATE.FR TO BUFFER<8>
+  EQU STAT.DATE.TO TO BUFFER<9>
+  EQU BEGIN.PERIOD TO BUFFER<10>        ;* T27357
+  EQU END.PERIOD TO BUFFER<11>          ;* T27357
+*
+  SHD1 = 'SEQ #   '
+  SHD1 = SHD1:'JOB#     '
+  SHD1 = SHD1:'CUST-# '
+  SHD1 = SHD1:'SHIP '
+  SHD1 = SHD1:'WHSE '
+  SHD1 = SHD1:'LOCAT '
+  SHD1 = SHD1:'ORDER#  '
+  SHD1 = SHD1:'PRODUCT         '
+  SHD1 = SHD1:'DESCRIPTION                    '
+* SHD1 = SHD1:'BOL      '
+  SHD1 = SHD1:'  TOT-QUANT '
+* SHD1 = SHD1:'TOT-SK-QTY'
+  SHD1 := '   TOTAL AMT'        ;* T27343
+  SHD2 = STR('-',7):SPACE(1)
+  SHD2 = SHD2:STR('-',8):SPACE(1)
+  SHD2 = SHD2:STR('-',6):SPACE(1)
+  SHD2 = SHD2:STR('-',4):SPACE(1)
+  SHD2 = SHD2:STR('-',4):SPACE(1)
+  SHD2 = SHD2:STR('-',5):SPACE(1)
+  SHD2 = SHD2:STR('-',7):SPACE(1)
+  SHD2 = SHD2:STR('-',15):SPACE(1)
+  SHD2 = SHD2:STR('-',30):SPACE(1)
+* SHD2 = SHD2:STR('-',8):SPACE(1)
+  SHD2 = SHD2:STR('-',11):SPACE(1)   ;* T27343
+  SHD2 = SHD2:STR('-',12)         ;* T27343
+* SHD2 = SHD2:STR('-',10)
+*
+  PRINTER ON
+*
+  PROCREAD BUFFER ELSE
+    ERRMSG = 'Must run this program from a REPORT.SCRN PROC.'
+    GOTO 999000
+  END
+*
+*T26190 v
+*RPT.NAME = 'FNGD RECEIPT HISTORY REPORT'
+  RPT.NAME = ''
+* T27357 v
+* IF STAT.DATE.FR # 'ALL' THEN
+  RPT.NAME = RPT.NAME:' DATES FROM ':OCONV(STAT.DATE.FR,'D2/')
+  RPT.NAME = RPT.NAME:' TO ':OCONV(STAT.DATE.TO,'D2/')
+* END
+  TMP.NAME  = ' PERIOD FROM ':BEGIN.PERIOD:' TO ':END.PERIOD
+* T27357 ^
+  RPT.NUM = BUFFER<2>
+  RPT.DATE = DATE()
+  HD1 = ''
+  HD2 = ''
+  HD3 = SPACE(33):CENTER.ON.STRING(RPT.NAME,SPACE(85))
+  HD4 = SPACE(32):CENTER.ON.STRING(TMP.NAME,SPACE(85))        ;* T27357
+  RPT.NAME = ''
+  CALL GET.PROG.HEAD(CONO,VOID,RPT.NAME,RPT.NUM,RPT.DATE,HD1,HD2)
+*T26190 ^
+*
+  GOSUB 60000
+*
+*---- MAIN Function ------------------------------------------------------
+*
+*          This function prepares the report headings and gets ready to
+*          read thru the list of qualified records from the pallet file.
+*
+*          The data in the pallet file is then used to read to the order
+*          file.
+*
+10000 *-------------------------------------------------------------------
+*
+  READNEXT INVR.ID ELSE
+    GOTO 999999;* Exit the program
+  END
+*
+  MATREAD INVR.REC FROM INV_RECEIPTS, INVR.ID THEN
+*T27341 INAH.ID = CONO:INVR.AUDIT.NO<1>
+    INAH.ID = CONO:INVR.AUDIT.NO<1,1>
+    MATREAD INAH.REC FROM INV_AUDIT_HIST, INAH.ID ELSE
+      ERRMSG = 'No entry found for the ':INVR.ID:' record in the INV_AUDIT_HIST file.'
+    *PRINT ERRMSG
+      GOTO 10000
+    END
+    IF INAH.TYPE # 'R' THEN
+      ERRMSG = 'Invalid type found for the ':INVR.ID:' record in the INV_AUDIT_HIST file.'
+    *PRINT ERRMSG
+      GOTO 10000
+    END
+  END ELSE
+    MAT INVR.REC = ''
+    ERRMSG = 'Can not read the ':INVR.ID:' record from the INV_RECEIPTS file.'
+  *PRINT ERRMSG
+    GOTO 10000;* Record disappeared, get next record key from list.
+  END
+*
+* Print the pallet record detail line.
+*
+  GOSUB 30000
+*
+* Go up and get the next record
+*
+  GOTO 10000
+*---- PRINT Function -----------------------------------------------------
+*
+*           This function develops and prints each pallet records data.
+*
+30000 *-------------------------------------------------------------------
+*
+* If the record just read is not for the warehouse desired, skip it.
+* If the warehouse indicated is ALL, proceed.
+*
+  IF WAREHOUSE.NO # 'ALL' AND INAH.WHSE # WAREHOUSE.NO THEN
+    GOTO 30200
+  END
+*
+30100 *
+*
+  INV.KEY = CONO:INAH.PROD
+  MATREAD INV.REC FROM INVENTORY, INV.KEY ELSE
+    INV.FULL.DESC = 'Inventory record description missing'
+  END
+  IF INV.BASE.SKU # '' THEN
+    READV DESCRIPTION.ONE FROM INVENTORY, CONO:INV.BASE.SKU, 2 ELSE
+      DESCRIPTION.ONE = "Inventory description missing from file!"
+    END
+    DESCRIPTION.TWO = INV.FULL.DESC
+  END ELSE
+    DESCRIPTION.ONE = INV.FULL.DESC
+    DESCRIPTION.TWO = ''
+  END
+*
+* Check to see if the product line will fit BEFORE printing it.
+*
+  LINES.THIS.PAGE = LINES.THIS.PAGE + 1
+  IF LINES.THIS.PAGE > PAGE.SIZE THEN
+    GOSUB 60000
+    LINES.THIS.PAGE = LINES.THIS.PAGE + 1
+  END
+*
+  LCNT = DCOUNT(INVR.ORDER,VM)
+  PROD.LINE = INAH.ID[4,7]'L#7':SPACE(1)
+  PROD.LINE = PROD.LINE:INVR.JOB'L#8':SPACE(1)
+  PROD.LINE = PROD.LINE:INVR.CUST'R#6':SPACE(1)
+  PROD.LINE = PROD.LINE:INVR.SHIP.TO<1,1>'R#4':SPACE(1)
+  PROD.LINE = PROD.LINE:INAH.WHSE'L#4':SPACE(1)
+  PROD.LINE = PROD.LINE:INAH.LOC'L#5':SPACE(1)
+  PROD.LINE = PROD.LINE:INVR.ORDER<1,1>'R#7':SPACE(1)
+  PROD.LINE = PROD.LINE:INVR.PROD'L#15':SPACE(1)
+  PROD.LINE = PROD.LINE:DESCRIPTION.ONE'L#30':SPACE(1)
+  PROD.LINE = PROD.LINE:OCONV(INAH.NEW.STK.QTY,'MD0,')'R#11'   ;* T27343
+  PROD.LINE := SPACE(1):OCONV(INAH.EXT.COST,'MD2,')'R#12'      ;* T27343
+  TOT.DOLLARS += INAH.EXT.COST                                 ;* T27343
+  ONE.PRINTED = 1                                              ;* T27343
+*
+* Print the variable which is the product print line.
+*
+  PRINT PROD.LINE
+*
+  IF DESCRIPTION.TWO # '' THEN
+    LINES.THIS.PAGE = LINES.THIS.PAGE + 1
+    IF LINES.THIS.PAGE > PAGE.SIZE THEN
+      GOSUB 60000
+      LINES.THIS.PAGE = LINES.THIS.PAGE + 1
+    END
+    PRINT SPACE(57):DESCRIPTION.TWO'L#30'
+  END
+*
+30200 *
+*
+  RETURN
+*
+*
+*---- HEADING Function ---------------------------------------------------
+*
+*             This function assembles and prints the report heading
+*             information.  A variable tracks the page number.
+*
+60000 *-------------------------------------------------------------------
+*
+  PRINT TOP.OF.NEW.PAGE
+  PAGE.NO = PAGE.NO + 1
+  PRINT HD1:PAGE.NO
+  PRINT HD2
+  PRINT HD3
+  PRINT HD4        ;* T27357
+  PRINT
+  PRINT SHD1
+  PRINT SHD2
+  LINES.THIS.PAGE = PAGE.HEADING.SIZE
+*
+  RETURN
+*
+*
+*---- ERROR Function -----------------------------------------------------
+*
+*           This function manages the display of any program
+*           processing errors.
+*
+999000 *------------------------------------------------------------------
+*
+  CRT ERRMSG
+  INPUT ANS
+*
+*---- EXIT Function ------------------------------------------------------
+*
+*          This function manages the wrap-up and exit from the program.
+*
+999999 *------------------------------------------------------------------
+*
+* T27343 v
+  IF ONE.PRINTED THEN
+    IF LINES.THIS.PAGE+2 > PAGE.SIZE THEN
+      GOSUB 60000
+      LINES.THIS.PAGE = LINES.THIS.PAGE + 1
+    END
+    PRINT SPACE(106):'-------------'
+    PRINT SPACE(86):'GRAND TOTAL :':SPACE(7):
+    PRINT OCONV(TOT.DOLLARS, 'MD2,')'R#13'
+  END
+* T27343 ^
+  PRINTER OFF
+*
+END

@@ -1,0 +1,250 @@
+*COPY>CPYLIB>COM1
+*COPY>POS.CPYLIB>COM.PO      
+*COPY>POS.CPYLIB>COM.PO.INTRF
+*
+*
+**********************************************
+* REVISION    - [XX.X]
+* Copyright 1995 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - POSBP
+* PROGRAM     - PO.REQ.LOG.INQ
+* BY          - edvard; CBA
+* DATE        - 08/18/1999
+* DESCRIPTION -
+*
+*T24955 edvard  03/21/2000 * REQUSITION INQ 
+*T25978 adelgado 02/07/2002 * Add the use of prompts (S,SR,SB,ST).
+*ENDDOC
+**********************************************
+*
+*COPY>PMC.CPYLIB>COMP.OPS
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>POS.CPYLIB>APP.REQ
+*COPY>PMC.CPYLIB>PO
+*COPY>PMC.CPYLIB>VEND 
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*
+ **** SETUP FOR SYSTEM ERRMSGS 
+  SYS.TYPE = 1                  
+  CALL SYSCOM(MAT SYSCOM.REC)   
+*
+*---- OPEN FILES
+*
+  OPEN '','COMPANY' TO COMPANY ELSE ERRMSG = 'COMPANY FILE IS MISSING'; GOTO 93000
+  OPEN '','CONTROL' TO CONTROL ELSE ERRMSG = 'CONTROL FILE IS MISSING'; GOTO 93000
+  OPEN '','PO' TO PO ELSE ERRMSG = 'PO FILE IS MISSING'; GOTO 93000
+  OPEN '','POS.SCREENS' TO M.SCREENS ELSE ERRMSG = 'POS.SCREENS FILE IS MISSING'; GOTO 93000
+  OPEN '','DIVISION' TO DIVISION ELSE ERRMSG = 'DIVISION FILE IS MISSING'; GOTO 93000
+  OPEN '','REG.REQ' TO REG.REQ ELSE ERRMSG = 'REG.REQ FILE IS MISSING'; GOTO 93000
+  OPEN '','APP.REQ' TO APP.REQ ELSE ERRMSG = 'APP.REQ FILE IS MISSING'; GOTO 93000
+  OPEN '','VEND' TO VEND ELSE ERRMSG = 'VENDOR FILE IS MISSING'; GOTO 93000
+*
+*
+  MAT COMP.REC = ''                 
+  CONO = ''                         
+  CALL GET.CONO(CONO,MAT COMP.REC)  
+  BUFFER = ""
+  DIM HOLD.SCV.REC(75)
+  MAT HOLD.SCV.REC = ""
+*
+  MAT EDIT.COM.DRIVER = ""
+  ECD.SCRN.CNT = 1
+  ECD.SCRN.NAME<6>= "REQ.INQ"
+  ECD.SCRN.NO = 6
+  GOSUB ACTION.1
+*
+*---- INITIALIZE
+  START.LINE = 1
+  PAGE.SIZE = 16
+  CNT = 0
+  FIELD.POS = 1:VM:2:VM:3:VM:4:VM:5:VM:6:VM:7:VM:10
+*
+*
+*---- GET SCREEN
+*
+  ESN = ECD.SCRN.NO
+*
+  GOSUB GET.DATA
+*
+100 
+  ECD.SCRN.NO = 6
+  ECD.SCRN.NAME<6> = "REQ.INQ"
+  GOSUB ACTION.3 ; * PRINT THE DATA
+*
+  GOSUB MAIN.OPT.PROMPT
+  GOTO 99999
+*
+*****************
+MAIN.OPT.PROMPT: 
+*****************
+*
+  DONE=0
+  LOOP
+    ECD.NUM = 9
+    GOSUB ACTION.4
+    OPTION=ECD.RET.VALUE
+    BEGIN CASE
+      CASE OPTION="E" OR OPTION="END"
+        DONE=1
+      CASE OPTION='S'
+        IF CNT > PAGE.SIZE THEN
+          START.LINE = START.LINE + PAGE.SIZE
+          IF START.LINE > CNT THEN START.LINE = 1
+          GOSUB SHOW.LINES
+        END
+      * T25978 v
+      CASE OPTION = 'SR'
+        START.LINE -= PAGE.SIZE
+        IF START.LINE < 1 THEN START.LINE = 1
+        GOSUB SHOW.LINES
+      CASE OPTION = 'ST'
+        START.LINE = 1
+        GOSUB SHOW.LINES
+      CASE OPTION = 'SB'
+        START.LINE = CNT
+        GOSUB SHOW.LINES
+      * T25978 ^
+      CASE 1
+* check if the user if allowed to pull this req. up. Only users that are
+* written by or approvers can pull it up. Exception is user in level 1.
+        SKIP = 1
+        USER.ID = UPCASE(@LOGNAME)
+        MATREAD PO.REC FROM REG.REQ,CONO:REQ.NBR<1,OPTION> ELSE MAT PO.REC = ""
+        IF (USER.ID # PO.APPROVER AND USER.ID # PO.PREV.APP<1,1>)  THEN
+          MATREAD APP.REQ.REC FROM APP.REQ, CONO:USER.ID:"!ALL"  THEN
+            IF APP.STATUS = "N" THEN 
+              MATREAD APP.REQ.REC FROM APP.REQ, CONO:USER.ID:"!":PO.DIV.OWNER ELSE MAT APP.REQ.REC = ""
+            END
+          END ELSE
+            MATREAD APP.REQ.REC FROM APP.REQ, CONO:USER.ID:"!":PO.DIV.OWNER ELSE MAT APP.REQ.REC = ""
+          END
+          IF APP.PO.LEVEL =  1 THEN
+            SKIP = 0
+          END 
+        END ELSE
+          SKIP = 0
+        END
+        IF NOT(SKIP) THEN
+          BUFFER<1> = 'R'
+          BUFFER<3> = 'INQ'
+          BUFFER<4> = REQ.NBR<1,OPTION>
+          PROCWRITE BUFFER
+*        DATA  REQ.NBR<1,OPTION>
+*        MAT HOLD.SCV.REC= MAT SCV.REC
+          ECD.ACTION = 99 ; CALL SCRN.EDIT
+          CALL PO.MAINT
+*        MAT SCV.REC= MAT HOLD.SCV.REC
+          GOTO 100
+        END ELSE
+          ERRMSG = "You are neither Written By nor Approver on this requisition."
+          GOSUB 91000
+        END
+    END CASE
+  UNTIL DONE DO REPEAT
+  RETURN
+**
+***********
+SHOW.LINES: 
+***********
+*
+  FOR FLD.NUM = 1 TO 8
+    ECD.SUB.NUM = START.LINE
+    ECD.NUM = FIELD.POS<1,FLD.NUM> ; GOSUB ACTION.7
+  NEXT FLD.NUM
+  RETURN
+**
+*
+**************
+CLEAR.SCREEN: 
+**************
+*
+  MAT SCV.REC = ""
+  ECD.ACTION=6;CALL SCRN.EDIT
+  RETURN
+*
+****************
+GET.DATA: 
+****************
+*
+  LN = ""
+  REQ.NBR = ""
+  ENT.BY = ""
+  APPROVER = ""
+  ENT.DATE = ""
+  STATUS = ""
+  VENDOR = ""
+  VENDOR.NAME = ""
+  DONE = 0
+  LOOP
+    READNEXT ID ELSE DONE = 1
+  UNTIL DONE DO
+    CNT +=1
+    MATREAD PO.REC FROM REG.REQ, ID ELSE 
+      MAT PO.REC = ""
+    END
+    LN<1,-1> = CNT
+    REQ.NBR<1,-1> = ID[4,99]
+    ENT.BY<1,-1> = PO.WRIT.BY
+*C38245 v
+    IF PO.APPROVER = '' THEN PO.APPROVER = '!@#$'
+*C38245 ^
+    APPROVER<1,-1> = PO.APPROVER
+    ENT.DATE<1,-1> = PO.DATE
+    LAST.POS = DCOUNT(PO.STATUS,VM)
+    STATUS<1,-1> = PO.STATUS<1,LAST.POS>
+    VENDOR<1,-1> = PO.VEND.NO 
+    MATREAD VEND.REC FROM VEND, CONO:PO.VEND.NO ELSE MAT  VEND.REC = ""
+    VENDOR.NAME<1,-1> = VEND.PO.DESC[1,14]
+  REPEAT
+*C38245 v
+  FOR I = 1 TO DCOUNT(APPROVER,VM)
+    IF APPROVER<1,I> = '!@#$' THEN APPROVER<1,I> = ''
+  NEXT I
+*C38245 ^
+  SCV.REC(1)<ESN> = LN
+  SCV.REC(2)<ESN> = REQ.NBR
+  SCV.REC(3)<ESN> = ENT.BY
+  SCV.REC(4)<ESN> = APPROVER
+  SCV.REC(5)<ESN> = ENT.DATE
+  SCV.REC(6)<ESN> = STATUS
+  SCV.REC(7)<ESN> = VENDOR
+  SCV.REC(10)<ESN> = VENDOR.NAME
+  RETURN
+*
+**
+*************
+ACTION.1: 
+*************
+  ECD.ACTION = 1 ; CALL SCRN.EDIT ; RETURN
+*************
+ACTION.2: 
+*************
+  ECD.ACTION = 2 ; CALL SCRN.EDIT ; RETURN
+*************
+ACTION.3: 
+*************
+  ECD.ACTION = 3 ; CALL SCRN.EDIT ; RETURN
+*************
+ACTION.4: 
+*************
+  ECD.ACTION = 4 ; CALL SCRN.EDIT ; RETURN
+*************
+ACTION.5: 
+*************
+  ECD.ACTION = 5 ; CALL SCRN.EDIT ; RETURN
+*************
+ACTION.7: 
+*************
+  ECD.ACTION = 7 ; CALL SCRN.EDIT ; RETURN
+**
+*---- CALLS FOR SYSCOM
+91000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+93000 ERR.TYPE=3;CALL SYSCOM(MAT SYSCOM.REC)
+99999*
+  ECD.ACTION = 99 ; CALL SCRN.EDIT
+END

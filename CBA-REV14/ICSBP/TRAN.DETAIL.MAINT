@@ -1,0 +1,799 @@
+  SUBROUTINE TRAN.DETAIL.MAINT(WLN,CONO,CATG.TRK.LVL,PGM.MODE)
+*COPY>CPYLIB>COM1
+*COPY>ICS.CPYLIB>COM.INV.MAIN  
+*COPY>ICS.CPYLIB>COM.INV.SERIAL
+*COPY>ICS.CPYLIB>COM.INV.LINK  
+*********************************************************************
+* REVISION   -[12.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM     -PRIMAC
+* SOURCE     -ICSBP
+* PROGRAM    -TRAN.DETAIL.MAINT
+* DATE       -08/06/2001
+* DESCRIPTION
+* This program is used to enter all detail transfer information.
+*
+* TASK
+*T25740 edvard 08/06/2001  Rev12
+*T25978 adelgado 02/18/2002 * Add the use of prompts (S,SR,SB,ST).
+*C40170 ajibaly 06/12/2002 * Remove default qty for general tracked prod
+*C40142 cmykleb 06/13/2002 * When changing amt on 1 line all lines are
+*                            changing and (A)dd does not always work.
+*T25740 epitka 10/03/2002 * ASDF
+*T27340 adelgado 03/17/2003 * EXPAND THE QTY FIELD FOR FNGD PROCESSING.
+*T27396 lross 05/15/2003 * Eliminate future qty from transfers-in.
+*********************************************************************
+*
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>ICS.CPYLIB>TRANSFER
+*COPY>ICS.CPYLIB>DAILY_TRANSFER
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>INV_SERIAL
+*COPY>ICS.CPYLIB>INV_RECP_WHSE
+*COPY>ICS.CPYLIB>INV_AUDIT_HIST ;*T27396
+*COPY>ICS.CPYLIB>INV.WHSE.LOC
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>JCS.CPYLIB>JOB.STATS
+*COPY>ICS.CPYLIB>WAREHOUSE
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>ICS.CPYLIB>INV.CNV
+*
+  EQU INV.UOM.STK TO INV.UNIT<1,2>
+  EQU INV.UOM.CST TO INV.UNIT<1,3>
+*
+  DEFFUN CALC.STK.QTY(COST.QTY, MAT INV.CNV.REC,ROND,LN)
+  DEFFUN CALC.COST.QTY(STK.QTY,MAT INV.CNV.REC,ROND,LN)
+*
+*
+*   MAT EDIT.COM=''
+  SYS.TYPE=1
+  CALL SYSCOM(MAT SYSCOM.REC)
+  ;*
+  ;*
+  LOC.QTY.LIST=""
+  GOSUB CALC.QTY.ENTERED
+  CURR.QTY=0;R.RVBLE=0
+  S.CURR.QTY=0
+  G.RSVBLE=0
+  MATREAD COMP.REC FROM COMPANY,CONO ELSE 
+    MAT COMP.REC=""
+  END
+  FROM.WHSE=D.TRAN.FROM.WHSE;TO.WHSE=D.TRAN.TO.WHSE<1,WLN>
+  ;*XFROM. and XTO. are used for comparison. If 
+  ;*values are prefixed with zeros unidata disregardes
+  ;*zeros.
+  XFROM.WHSE="X":FROM.WHSE;XTO.WHSE="X":TO.WHSE
+  IWH.ID=CONO:D.TRAN.PROD.NO<1,WLN>:'!':TO.WHSE
+  MATREAD IWH.REC FROM INV.WHSE, IWH.ID ELSE
+    ERRMSG='CANNOT LOCATE INV.WHSE RECORD ':IWH.ID
+    GOSUB 91000;GOTO 99999
+  END
+  TO.QOH=IWH.ON.HAND
+  IF XFROM.WHSE#XTO.WHSE THEN
+    IWH.ID=CONO:D.TRAN.PROD.NO<1,WLN>:'!':FROM.WHSE
+    MATREAD IWH.REC FROM INV.WHSE, IWH.ID ELSE
+      ERRMSG='CANNOT LOCATE INV.WHSE RECORD ':IWH.ID
+      GOSUB 91000;GOTO 99999
+    END
+    IF PGM.MODE="M" THEN
+      IF IWH.ON.HAND-IWH.RESV < 1 THEN
+        ERRMSG='ZERO AVAILABLE QTY FOR WAREHOUSE'
+        GOSUB 91000;GOTO 99999
+      END
+    END
+  END
+  IF PGM.MODE="M" THEN
+    FCNT=DCOUNT(IWH.LOC,VM)
+    BEGIN CASE
+      CASE FCNT > 1
+        PTR=1
+        FHMSG='LOCATION-':IWH.LOC<1,1>
+        FVALDAT=IWH.LOC<1,1>
+        FOR L=2 TO FCNT
+          IF LEN(FHMSG<1,PTR>) > 60 THEN
+            PTR=PTR+1
+            FHMSG<1,PTR>='LOCATION-':IWH.LOC<1,L>
+          END ELSE
+            FHMSG<1,PTR>=FHMSG<1,PTR>: ', ':IWH.LOC<1,L>
+          END
+          FVALDAT=FVALDAT:VM:IWH.LOC<1,L>
+        NEXT L
+      CASE FCNT < 1
+        ERRMSG='CANNOT LOCATE ANY LOCATIONS FOR WAREHOUSE ':FROM.WHSE
+        GOSUB 91000;GOTO 99999
+      CASE 1
+        FHMSG='LOCATION-':IWH.LOC<1,1>;FVALDAT=IWH.LOC<1,1>
+    END CASE
+  END
+  MATREAD WHSE.REC FROM WAREHOUSE , CONO:TO.WHSE ELSE
+    MAT WHSE.REC=''
+  END
+  TCNT=DCOUNT(WHS.LOC,VM)
+  BEGIN CASE
+    CASE TCNT > 0
+      PTR=1
+      THMSG='LOCATION-':WHS.LOC<1,1>
+      TVALDAT=WHS.LOC<1,1>
+      FOR L=2 TO TCNT
+        IF LEN(THMSG<1,PTR>) > 60 THEN
+          PTR=PTR+1
+          THMSG<1,PTR>='LOCATION-':WHS.LOC<1,L>
+        END ELSE
+          THMSG<1,PTR>=THMSG<1,PTR>: ', ':WHS.LOC<1,L>
+        END
+        TVALDAT=TVALDAT:VM:WHS.LOC<1,L>
+      NEXT L
+    CASE TCNT < 1
+      THMSG=""
+  END CASE
+  BEGIN.PAGE=14
+  LINE.SPACE=1
+  PAGE.SIZE=6
+  LINES=0
+  OLD.START.LINE=0
+  GOSUB SET.HEADING
+  SCV.REC(3)<1>=FROM.WHSE
+  SCV.REC(4)<1>=TO.WHSE
+  NET.QTY=IWH.ON.HAND-IWH.RESV
+  TMP=CALC.STK.QTY(NET.QTY,MAT INV.CNV.REC,'.5','')
+  SCV.REC(5)<1>=OCONV(TMP,ICR.CNV)
+  TMP=CALC.STK.QTY(TO.QOH,MAT INV.CNV.REC,'.5','')
+  SCV.REC(6)<1>=OCONV(TMP,ICR.CNV)
+  ECD.ACTION=3;CALL SCRN.EDIT
+*
+**** MAIN PROCESS
+*
+  LINES=DCOUNT(D.TRAN.FROM.LOC<1,WLN>,SVM)
+  LN=1
+  GOSUB DISP.WHSE.BAL;GOSUB DISP.TRAN.DETAIL
+  LN=LINES
+  IF DCOUNT(D.TRAN.FROM.LOC<1,WLN>,SVM)=0 THEN
+    GOSUB ADD.LINES
+  END
+  ;*
+  ;***** ENTER OPTIONS
+  ;*
+  MORE=1
+  LOOP
+    X=0;Y=21
+    TYP=1;MAXL=2;O.R="O"
+    IF D.TRAN.DATE.PROSS<1,WLN>='' THEN
+      ECD.NUM=43
+    END ELSE
+      ECD.NUM=46
+    END
+    ECD.ACTION=4;CALL SCRN.EDIT
+    OPTION=ECD.RET.VALUE
+    BEGIN CASE
+      CASE OPTION='' OR OPTION='END' OR OPTION='E'
+        MORE=0
+      CASE OPTION='A'
+        GOSUB CALC.QTY.ENTERED
+        GOSUB ADD.LINES
+      CASE OPTION='C'
+        GOSUB ENT.LINE.NUM
+        IF LN.NO THEN
+          BEGIN CASE 
+            CASE CATG.TRK.LVL='S'
+              MATREAD ISTK.REC FROM INV_SERIAL, CONO:D.TRAN.SERIAL<1,WLN> ELSE
+                MAT ISTK.REC=""
+              END
+            CASE CATG.TRK.LVL='G' OR CATG.TRK.LVL='R'
+              IWLO.ID=IWH.ID:"!":D.TRAN.FROM.LOC<1,WLN,LN>
+              TEMP.LOC=D.TRAN.FROM.LOC<1,WLN,LN>
+              GOSUB CALC.LOC.QTY
+              GOSUB CALC.QTY.ENTERED
+          END CASE
+          LN=LN.NO
+          SLN=BEGIN.PAGE+LINE.SPACE*MOD(LN-1,PAGE.SIZE)
+          GOSUB ENT.DETAIL
+          GOSUB DISP.WHSE.BAL;GOSUB DISP.TRAN.DETAIL
+        END
+      CASE OPTION='D'
+        GOSUB ENT.LINE.NUM
+        IF LN.NO THEN
+          LN=LN.NO
+          D.TRAN.FROM.LOC=DELETE(D.TRAN.FROM.LOC,1,WLN,LN)
+          D.TRAN.TO.LOC=DELETE(D.TRAN.TO.LOC,1,WLN,LN)
+          D.TRAN.TOT.QTY<1,WLN>-=D.TRAN.QTY<1,WLN,LN>
+          D.TRAN.QTY=DELETE(D.TRAN.QTY,1,WLN,LN)
+          LINES=DCOUNT(D.TRAN.TO.LOC<1,WLN>,SVM)
+          IF LN > 1 AND LN > LINES THEN LN=LN-1
+          IF LN < 1 THEN LN=1
+          OLD.START.LINE=0
+          GOSUB DISP.WHSE.BAL;GOSUB DISP.TRAN.DETAIL
+        END
+      CASE OPTION='F'
+        MORE=0
+      CASE OPTION='S'
+        LN=LN+PAGE.SIZE
+        IF LN > LINES THEN LN=1
+        GOSUB DISP.TRAN.DETAIL
+        ;* T25978 v
+      CASE OPTION = 'SR'
+        LN -= PAGE.SIZE
+        IF LN < 1 THEN LN = 1
+        GOSUB DISP.TRAN.DETAIL
+      CASE OPTION = 'ST'
+        LN = 1
+        GOSUB DISP.TRAN.DETAIL
+      CASE OPTION = 'SB'
+        LN = LINES
+        GOSUB DISP.TRAN.DETAIL
+        ;* T25978 ^
+    END CASE
+  WHILE MORE DO REPEAT
+  GOTO 88888
+*
+**************************************************************************
+*** S U B R O U T I N E S ************************************************
+**************************************************************************
+*
+*************
+ADD.LINES: 
+*************
+*
+  BEGIN CASE
+    CASE CATG.TRK.LVL='S'
+      IF LINES=0 THEN
+        OPTION="A"
+        LN=LINES+1
+        OLD.LINES=LINES
+        GOSUB ENT.DETAIL
+      END
+    CASE CATG.TRK.LVL='G' OR CATG.TRK.LVL="R"
+      LOOP
+        OPTION='A'
+        LN=LINES+1
+        OLD.LINES=LINES
+        RLOC=1
+        GOSUB ENT.DETAIL
+      WHILE LINES > OLD.LINES DO
+        GOSUB DISP.WHSE.BAL
+      REPEAT
+      LN=LINES
+  END CASE
+  RETURN
+*
+*************
+ENT.DETAIL: 
+*************
+*
+  GOSUB DISP.TRAN.DETAIL
+  SLN=BEGIN.PAGE+LINE.SPACE*MOD(LN-1,PAGE.SIZE)
+  IF PGM.MODE='M' THEN
+    EOP=0
+    FOR GG=1 TO 3  UNTIL EOP=1
+      ON GG GOSUB ENT.FROM.LOC,ENT.TO.LOC,ENT.QTY
+    NEXT GG
+  END
+  RETURN
+*
+*************
+ENT.FROM.LOC: 
+*************
+*
+  EOI=0
+  LOOP
+    ERR=0
+    P_X =32;P_Y=SLN;P_VALUE=LN "R#3";P_OPT="CL"
+    CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+    BEGIN CASE
+      CASE CATG.TRK.LVL='S'
+        LLOC=1
+        VALUE=ISTK.LOC
+        P_X =36;P_Y=SLN;P_VALUE=VALUE "L#4";P_OPT=""
+        CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      CASE CATG.TRK.LVL="G" OR CATG.TRK.LVL="R"
+        ;* fngds would be trk.lvl='R'
+        X=36;Y=SLN;TYP=1;MAXL=4 
+        HMSG=FHMSG 
+        IF LN<2 THEN
+          DEFAULT=D.TRAN.FROM.LOC<1,WLN,LN>
+        END ELSE
+          DEFAULT=D.TRAN.FROM.LOC<1,WLN,LN>
+          IF DEFAULT="" THEN 
+            DEFAULT=D.TRAN.FROM.LOC<1,WLN,LN-1>
+          END
+        END
+        O.R='R'
+        CALL EDIT.SUB
+        IF VALUE='END' THEN 
+          GOSUB DELETE.DETAIL
+          EOI=1 ; EOP=1
+        END ELSE
+          LOCATE VALUE IN FVALDAT<1>,1  SETTING FLOC ELSE
+            ERRMSG='Location is not valid for item in warehouse ':FROM.WHSE
+            GOSUB 91000
+            ERR=1
+          END
+          IF NOT(ERR) THEN
+            IWLO.ID = IWH.ID:"!":VALUE
+            TEMP.LOC=VALUE
+            GOSUB CALC.LOC.QTY
+          END
+        END
+    END CASE
+    IF NOT(ERR) AND VALUE#'END' THEN
+      EOI=1
+      D.TRAN.FROM.LOC<1,WLN,LN>=VALUE
+      P_X =36;P_Y=SLN;P_VALUE=D.TRAN.FROM.LOC<1,WLN,LN> "L#4";P_OPT="CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+    END
+  UNTIL (EOI) DO REPEAT
+  RETURN
+*
+***********
+ENT.TO.LOC: 
+***********
+*
+  EOI=0
+  LOOP
+    X=41;Y=SLN;O.R='R';TYP=1;MAXL=4
+    HMSG=THMSG
+    DEFAULT=D.TRAN.TO.LOC<1,WLN,LN>
+    O.R='R'
+    IF LN < 2 THEN
+      IF DEFAULT NE "" THEN O.R='O' 
+    END ELSE
+*C40142  IF DEFAULT="" THEN   
+*C40142     DEFAULT=D.TRAN.TO.LOC<1,WLN,LN-1>
+*C40142  END
+      O.R='O'
+    END
+    CALL EDIT.SUB
+    IF VALUE='END' THEN
+      GOSUB DELETE.DETAIL
+      EOI=1; GG=0; EOP=1
+    END ELSE
+      IF CO.ICS.LOC.TRAN='N' THEN
+        LOCATE VALUE IN TVALDAT<1>,1 SETTING FLOC ELSE
+          ERRMSG="Location invalid for warehouse"
+          GOSUB 91000
+          GG=0 ;ERR=1;EOI=1
+        END
+      END
+*C40142 v
+      IF NOT(ERR) THEN
+        CCNT = DCOUNT(D.TRAN.TO.LOC<1,WLN>,SM)
+        CHECK.FROM.LOC = D.TRAN.FROM.LOC<1,WLN,LN>
+        CHECK.TO.LOC = VALUE
+        FOR C = 1 TO CCNT UNTIL ERR
+          IF C # LN THEN
+            IF D.TRAN.FROM.LOC<1,WLN,C> = CHECK.FROM.LOC THEN
+              IF D.TRAN.TO.LOC<1,WLN,C> = CHECK.TO.LOC THEN
+                ERR = 1
+              END
+            END
+          END
+        NEXT C
+        IF ERR THEN
+          ERRMSG = "This from location and to location have alreay been used."
+          GOSUB 91000
+          GG=0 ;ERR=1;EOI=1
+        END
+      END
+*C40142 ^
+      IF NOT(ERR) THEN
+        IF XFROM.WHSE=XTO.WHSE AND ("X":D.TRAN.FROM.LOC<1,WLN,LN>)=("X":VALUE) THEN
+          ERRMSG='CANNOT TRANSFER TO THE SAME LOCATION'
+          GOSUB 91000
+        END ELSE
+          D.TRAN.TO.LOC<1,WLN,LN>=VALUE
+          EOI=1
+          P_X =41;P_Y=SLN
+          P_VALUE=D.TRAN.TO.LOC<1,WLN,LN> "L#4";P_OPT="CL"
+          CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+          IF CATG.TRK.LVL="S" THEN
+            D.TRAN.TOT.QTY<1,WLN>+=ISTK.CUR.QTY
+            D.TRAN.QTY<1,WLN,LN>=ISTK.CUR.QTY
+            LINES=DCOUNT(D.TRAN.TO.LOC<1,WLN>,SVM) 
+          END
+        END
+      END
+    END
+  UNTIL (EOI) DO REPEAT
+  RETURN
+*
+*********
+ENT.QTY: 
+*********
+*
+  IF ICR.CNV="MD2" THEN
+    TYP=4;SCALER=2;MAXV=99999999
+  END ELSE
+    TYP=3;MAXV=999999999
+  END
+  BEGIN CASE
+    CASE CATG.TRK.LVL='S'
+      ERR=0
+      VALUE=ISTK.CUR.QTY
+      SVALUE=CALC.STK.QTY(VALUE,MAT INV.CNV.REC,'.5','')
+      P_X =46;P_Y=SLN ; P_OPT=""
+      P_VALUE=CALC.STK.QTY(VALUE,MAT INV.CNV.REC,'.5','')
+      P_VALUE=OCONV(P_VALUE,ICR.CNV)"R#9"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      D.TRAN.QTY<1,WLN,LN>=VALUE                    
+      D.TRAN.TOT.QTY<1,WLN>=SUM(D.TRAN.QTY<1,WLN>)  
+      LINES=DCOUNT(D.TRAN.TO.LOC<1,WLN>,SVM)        
+      GOSUB DISP.WHSE.BAL
+    CASE CATG.TRK.LVL='G' OR CATG.TRK.LVL='R'
+      EOI=0
+      LOOP
+        IF ICR.CNV="MD2" THEN         
+          TYP=4;SCALER=2;MAXV=99999999
+        END ELSE                      
+          TYP=3;MAXV=999999999        
+        END                           
+        X=46;Y=SLN;MAXL=11;MINV=0
+        O.R="R" ; DEFAULT=''
+        BEGIN CASE
+          CASE D.TRAN.QTY<1,WLN,LN> # ""
+            DEFAULT=CALC.STK.QTY(D.TRAN.QTY<1,WLN,LN>, MAT INV.CNV.REC,'.5','')
+            DEFAULT=OCONV(DEFAULT,ICR.CNV)
+          CASE 1
+            GOSUB CALC.TRANSFERABLE
+            HMSG=CALC.STK.QTY(TRANSFERABLE,MAT INV.CNV.REC,'.5','')
+            HMSG=OCONV(HMSG,ICR.CNV)
+            HMSG='TRANSFERABLE IS ':HMSG
+        END CASE
+        CALL EDIT.SUB
+        IF VALUE='END' THEN
+          EOI=1
+          BEGIN CASE
+            CASE OPTION # 'A'
+            CASE FCNT=1
+              GOSUB DELETE.DETAIL
+            CASE 1
+              GG=0
+          END CASE
+        END ELSE
+          ERR=0
+          VALUE=CALC.COST.QTY(VALUE,MAT INV.CNV.REC,'.5','')
+          SVALUE=CALC.STK.QTY(VALUE,MAT INV.CNV.REC,'.5','')
+          IF CURR.QTY>0 THEN
+            GOSUB CALC.TRANSFERABLE
+            IF VALUE>TRANSFERABLE THEN
+              ERRMSG='TRANSFERABLE IS ONLY '
+              TMP=CALC.STK.QTY(TRANSFERABLE,MAT INV.CNV.REC,'.5','')
+              TMP=OCONV(TMP,ICR.CNV)
+              ERRMSG:=TMP
+              GOSUB 91000;ERR=1
+            END
+          END ELSE
+            ERRMSG='THERE IS NO QUANTITY AVAILABLE FOR THIS LOCATION '
+            GOSUB 91000;ERR=1
+            GOSUB DELETE.DETAIL
+            LINES=DCOUNT(D.TRAN.FROM.LOC<1,WLN>,SVM)  
+            LN=1 ; GG=0
+            GOSUB DISP.WHSE.BAL;GOSUB DISP.TRAN.DETAIL
+          END
+          IF NOT(ERR) THEN
+            LOCATE D.TRAN.FROM.LOC<1,WLN,LN> IN LOC.QTY.LIST SETTING LPOS THEN
+              ;* IFif changing the location qty add back qty anon the line.
+              ADD.QTY=VALUE-D.TRAN.QTY<1,WLN,LN>
+              LOC.QTY.LIST<2,LPOS>+=ADD.QTY
+            END ELSE
+              LOC.QTY.LIST<1,-1>=D.TRAN.FROM.LOC<1,WLN,LN>
+              LOC.QTY.LIST<2,-1>=VALUE
+            END
+            EOI=1
+            D.TRAN.QTY<1,WLN,LN>=VALUE
+            D.TRAN.TOT.QTY<1,WLN>=SUM(D.TRAN.QTY<1,WLN>)
+            LINES=DCOUNT(D.TRAN.TO.LOC<1,WLN>,SVM)
+          END 
+        END
+      UNTIL (EOI) DO REPEAT
+  END CASE
+  RETURN
+*
+*************
+CALC.LOC.QTY: 
+*************
+*
+  BEGIN CASE
+    CASE CATG.TRK.LVL='G'
+      CURR.QTY=0; G.RSVBLE=0
+      TEST.CURQTY=0; TESTRSVBLE=0 ;*T27396
+      MATREAD IWLO.REC FROM INV.WHSE.LOC,IWLO.ID THEN
+        S.CNT=DCOUNT(IWLO.SERIAL,VM)
+        FOR SS=1 TO S.CNT
+          S.ID=CONO:IWLO.SERIAL<1,SS>
+          MATREAD ISTK.REC FROM INV_SERIAL,S.ID THEN
+            ;*qty. received in the future period cannot be available
+            ;*for transfer.
+            IF ISTK.RECP.PERIOD<=D.TRAN.PERIOD THEN
+              CURR.QTY+=ISTK.CUR.QTY
+              G.RSVBLE+=ISTK.RSVB.QTY
+*T27396 v
+*           END
+            END ELSE
+              IACNT=DCOUNT(ISTK.AUDIT.NO,VM)
+              TESTRSVBLE+=ISTK.RSVB.QTY
+              TEST.CURQTY+=ISTK.CUR.QTY
+              FOR II = 1 TO IACNT
+                MATREAD INAH.REC FROM INV_AUDIT_HIST,CONO:ISTK.AUDIT.NO<1,II> THEN
+                  BEGIN CASE
+                  CASE INAH.TYPE # 'I'
+                  CASE INAH.SRC[1,1] = 'C'
+                  CASE 'X':INAH.WHSE # XFROM.WHSE
+                  CASE 'X':INAH.LOC # 'X':TEMP.LOC
+                  CASE INAH.PERIOD > D.TRAN.PERIOD
+                    TESTRSVBLE -= INAH.QTY
+                    TEST.CURQTY -= INAH.QTY
+                    IF TESTRSVBLE < 0 THEN TESTRSVBLE = 0
+                    IF TEST.CURQTY < 0 THEN TEST.CURQTY = 0
+                  END CASE
+                END
+              NEXT II
+              G.RSVBLE += TESTRSVBLE
+              CURR.QTY += TEST.CURQTY
+            END
+*T27396 ^
+          END
+        NEXT SS
+      END
+      IF CURR.QTY=0 THEN 
+        ERRMSG='THERE IS NO QUANTITY AVAILABLE FOR THIS LOCATION '
+        GOSUB 91000 ; ERR=1
+        GOSUB DELETE.DETAIL
+      END
+    CASE CATG.TRK.LVL='R' AND INV.M.LINE='FNGD'
+      ISTK.ID=CONO:"R":D.TRAN.RECP<1,WLN>:"!":D.TRAN.FROM.WHSE:"!":TEMP.LOC
+      CURR.QTY=0; R.RSVBLE=0 
+      ;* qty is not reserved at the serial level (location level)
+      ;* until user prints a pick ticket.
+      MATREAD ISTK.REC FROM INV_SERIAL,ISTK.ID THEN
+*T27396 IF ISTK.RECP.PERIOD<=D.TRAN.PERIOD THEN
+          MATREAD IRW.REC FROM INV_RECP_WHSE,CONO:D.TRAN.RECP<1,WLN>:"!":D.TRAN.FROM.WHSE THEN
+            IF ISTK.RSVB.QTY < IRW.RSVB.QTY THEN
+              CURR.QTY=ISTK.CUR.QTY
+              R.RSVBLE=ISTK.RSVB.QTY
+            END ELSE
+              CURR.QTY=IRW.CUR.QTY
+              R.RSVBLE=IRW.RSVB.QTY
+            END
+          END
+*T27396 v
+*       END
+        IF ISTK.RECP.PERIOD > D.TRAN.PERIOD THEN
+          IACNT=DCOUNT(ISTK.AUDIT.NO,VM)
+          FOR II = 1 TO IACNT
+            MATREAD INAH.REC FROM INV_AUDIT_HIST,CONO:ISTK.AUDIT.NO<1,II> THEN
+              BEGIN CASE
+              CASE INAH.TYPE # 'I'
+              CASE INAH.SRC[1,1] = 'C'
+              CASE 'X':INAH.WHSE # XFROM.WHSE
+              CASE 'X':INAH.LOC # 'X':TEMP.LOC
+              CASE INAH.PERIOD > D.TRAN.PERIOD
+                R.RSVBLE -= INAH.QTY
+                CURR.QTY -= INAH.QTY
+                IF R.RSVBLE < 0 THEN R.RSVBLE = 0
+                IF CURR.QTY < 0 THEN CURR.QTY = 0
+              END CASE
+            END
+          NEXT II
+        END
+*T27396 ^
+      END
+  END CASE
+  RETURN
+*
+*****************
+CALC.QTY.ENTERED: 
+*****************
+*
+  ;*calculate location qty. entered so far
+  LOC.QTY.LIST=''
+  QCNT=DCOUNT(D.TRAN.QTY<1,WLN>,SVM)
+  FOR QQ=1 TO QCNT
+    LOCATE D.TRAN.FROM.LOC<1,WLN,QQ> IN LOC.QTY.LIST<1> SETTING POS ELSE NULL
+    LOC.QTY.LIST<1,POS>=D.TRAN.FROM.LOC<1,WLN,QQ>
+    LOC.QTY.LIST<2,POS>+=D.TRAN.QTY<1,WLN,QQ>
+  NEXT QQ
+  RETURN
+*
+******************
+CALC.TRANSFERABLE: 
+******************
+*
+  BEGIN CASE
+    CASE CATG.TRK.LVL='S'
+      TRANSFERABLE=ISTK.CUR.QTY
+    CASE CATG.TRK.LVL='G'
+      LOCATE D.TRAN.FROM.LOC<1,WLN,LN> IN LOC.QTY.LIST<1>,1 SETTING LPOS THEN
+        TOT.ENTERED=LOC.QTY.LIST<2,LPOS>-D.TRAN.QTY<1,WLN,LN>
+        IF LOC.QTY.LIST<2,LPOS> <= 0 THEN
+          DEL LOC.QTY.LIST<1,LPOS>
+          DEL LOC.QTY.LIST<2,LPOS>
+        END
+      END ELSE
+        TOT.ENTERED=0
+      END
+      IF XFROM.WHSE#XTO.WHSE THEN
+        TRANSFERABLE=G.RSVBLE-TOT.ENTERED
+      END ELSE
+        TRANSFERABLE=CURR.QTY-TOT.ENTERED
+      END
+    CASE CATG.TRK.LVL='R'
+      LOCATE D.TRAN.FROM.LOC<1,WLN,LN> IN LOC.QTY.LIST<1>,1 SETTING LPOS THEN
+        TOT.ENTERED=LOC.QTY.LIST<2,LPOS>-D.TRAN.QTY<1,WLN,LN>
+        IF LOC.QTY.LIST<2,LPOS> <= 0 THEN
+          DEL LOC.QTY.LIST<1,LPOS>
+          DEL LOC.QTY.LIST<2,LPOS>
+        END
+      END ELSE
+        TOT.ENTERED=0
+      END
+      IF XFROM.WHSE#XTO.WHSE THEN
+        TRANSFERABLE=R.RSVBLE-TOT.ENTERED
+      END ELSE
+        TRANSFERABLE=CURR.QTY-TOT.ENTERED
+      END
+  END CASE
+  RETURN
+*
+*************
+ENT.LINE.NUM: 
+*************
+*
+  GOSUB DISP.TRAN.DETAIL
+  ECD.NUM=45
+  ECD.MINV=OLD.START.LINE
+  ECD.MAXV=LAST.LINE
+  ECD.O.R='O';ECD.MAXL=2 
+  ECD.ACTION=4;CALL SCRN.EDIT
+  LN.NO=ECD.RET.VALUE
+  IF LN.NO='' OR LN.NO='END' THEN LN.NO=0
+  RETURN
+*
+************
+DISP.WHSE.BAL: 
+************
+*
+  IF PGM.MODE='M' THEN
+    ECD.NUM=7
+    TMP=CALC.STK.QTY(D.TRAN.TOT.QTY<1,WLN>,MAT INV.CNV.REC,'.5','')
+    TMP=OCONV(TMP,ICR.CNV)
+    SCV.REC(ECD.NUM)<1>=TMP
+    ECD.ACTION=5;CALL SCRN.EDIT
+    ECD.NUM=8
+    TMP=CALC.STK.QTY(D.TRAN.TOT.QTY<1,WLN>,MAT INV.CNV.REC,'.5','')
+    TMP=OCONV(TMP,ICR.CNV)
+    SCV.REC(ECD.NUM)<1>=TMP
+    ECD.ACTION=5;CALL SCRN.EDIT
+    IF XFROM.WHSE=XTO.WHSE THEN
+      ECD.NUM=9;SCV.REC(ECD.NUM)<1>=SCV.REC(5)<1>
+      ECD.ACTION=5;CALL SCRN.EDIT
+      ECD.NUM=10;SCV.REC(ECD.NUM)<1>=SCV.REC(6)<1>
+      ECD.ACTION=5;CALL SCRN.EDIT
+    END ELSE
+      ECD.NUM=9
+      TMP=NET.QTY-D.TRAN.TOT.QTY<1,WLN>
+      TMP=CALC.STK.QTY(TMP,MAT INV.CNV.REC,'.5','')
+      TMP=OCONV(TMP,ICR.CNV)
+      SCV.REC(ECD.NUM)<1>=TMP
+      ECD.ACTION=5;CALL SCRN.EDIT
+      ECD.NUM=10
+      TMP=TO.QOH+D.TRAN.TOT.QTY<1,WLN>
+      TMP=CALC.STK.QTY(TMP,MAT INV.CNV.REC,'.5','')
+      TMP=OCONV(TMP,ICR.CNV)
+      SCV.REC(ECD.NUM)<1>=TMP
+      ECD.ACTION=5;CALL SCRN.EDIT
+    END
+  END
+  RETURN
+*
+*********
+DISP.TRAN.DETAIL: 
+*********
+*
+  START.LINE=1+INT((LN-1)/PAGE.SIZE)*PAGE.SIZE
+  LAST.LINE=START.LINE+PAGE.SIZE-1
+  IF LAST.LINE > LINES THEN LAST.LINE=LINES
+  IF START.LINE=OLD.START.LINE THEN GOTO 11999
+  OLD.START.LINE=START.LINE
+  CNT=1
+  FOR N=START.LINE TO LAST.LINE
+    SLN=BEGIN.PAGE+LINE.SPACE*MOD(N-1,PAGE.SIZE)
+    P_X =32;P_Y=SLN;P_VALUE=N "R#3";P_OPT=""
+    P_X := AM:36;P_Y:= AM:SLN;P_VALUE:= AM:D.TRAN.FROM.LOC<1,WLN,N> "L#4"
+    P_X := AM:41;P_Y:= AM:SLN;P_VALUE:= AM:D.TRAN.TO.LOC<1,WLN,N> "L#4"
+    CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+    P_X =46;P_Y=SLN
+*C40142 v
+*     P_VALUE=CALC.STK.QTY(D.TRAN.QTY<1,WLN,LN>,MAT INV.CNV.REC,'.5','')
+    P_VALUE=CALC.STK.QTY(D.TRAN.QTY<1,WLN,N>,MAT INV.CNV.REC,'.5','')
+*C40142 ^
+    P_VALUE=OCONV(P_VALUE,ICR.CNV)"R#9" ; P_OPT=''
+    CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+    CNT=CNT+1
+  NEXT N
+  FOR M=CNT TO PAGE.SIZE
+    SLN=BEGIN.PAGE+LINE.SPACE*MOD(M-1,PAGE.SIZE)
+    P_X =32;P_Y=SLN;P_VALUE="";P_OPT="CL"
+    CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+  NEXT M
+11999 RETURN
+*
+************
+SET.HEADING: 
+************
+*
+* T27340 v
+*COPY>ICSBP>INV.UM.CNV
+  BEGIN CASE
+    CASE INV.UOM.STK='SHT' AND INV.UOM.CST='LBS'
+      HD1A='Qty/SHT'
+      HD1B=""
+      HD1C=""
+    CASE INV.UOM.STK='PC' AND INV.UOM.CST='MSI'
+      HD1='Roll Number Qty/PC'
+      HD1A='Qty/PC'
+      HD1B=""
+      HD1C=""
+    CASE INV.UOM.STK='FT' AND INV.UOM.CST='MSI'
+      HD1A='Qty/FT'
+      HD1B=""
+      HD1C=""
+    CASE 1
+      HD1A='Qty/':INV.UOM.STK
+      HD1B=""
+      HD1C=""
+  END CASE
+* T27340 ^
+  P_X =46;P_Y=12;P_VALUE=HD1A;P_OPT="CL"
+  P_X := AM:58;P_Y:= AM:12;P_VALUE:= AM:HD1B
+  P_X := AM:68;P_Y:= AM:12;P_VALUE:= AM:HD1C
+  CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+  RETURN
+*
+**************
+DELETE.DETAIL: 
+**************
+*
+  IF OPTION='A' THEN
+    D.TRAN.FROM.LOC=DELETE(D.TRAN.FROM.LOC,1,WLN,LN)
+    D.TRAN.TO.LOC=DELETE(D.TRAN.TO.LOC,1,WLN,LN)
+    D.TRAN.QTY=DELETE(D.TRAN.QTY,1,WLN,LN)
+    P_X =32;P_Y=SLN;P_VALUE="";P_OPT="CL"
+    CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+  END
+  RETURN
+*
+91000 ERR.TYPE=1
+  CALL SYSCOM(MAT SYSCOM.REC)
+  RETURN
+92000 ERR.TYPE=2
+  CALL SYSCOM(MAT SYSCOM.REC)
+  RETURN
+93000 ERR.TYPE=3
+  CALL SYSCOM(MAT SYSCOM.REC)
+88888 *
+  P_X =46;P_Y=12;P_VALUE="";P_OPT="CL"
+  CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+  P_X =46;P_Y=14;P_VALUE="";P_OPT="CL"
+  CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+  P_X =12;P_Y=15;P_VALUE="";P_OPT="CL"
+  CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+  P_X =12;P_Y=16;P_VALUE="";P_OPT="CL"
+  CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+  P_X =12;P_Y=17;P_VALUE="";P_OPT="CL"
+  CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+  P_X =12;P_Y=18;P_VALUE="";P_OPT="CL"
+  CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+  P_X =12;P_Y=19;P_VALUE="";P_OPT="CL"
+  CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+  SCV.REC(3)<1>='';SCV.REC(4)<1>='';SCV.REC(5)<1>='';SCV.REC(6)<1>=''
+  SCV.REC(7)<1>='';SCV.REC(8)<1>='';SCV.REC(9)<1>='';SCV.REC(10)<1>=''
+  FOR CC=BEGIN.PAGE TO 19
+    P_X =32;P_Y=CC;P_VALUE="";P_OPT="CL"
+    CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+  NEXT CC
+99999 *
+  RETURN
+END

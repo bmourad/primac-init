@@ -1,0 +1,885 @@
+   SUBROUTINE BARCODE.REC.INQ(CONO,CURR.LOC,MIN.QTY,JOB.NO,R.DATE,FIFO.NO,TMP.SERIAL,WHSE.CODE,PROD.NUM,WHSE.NO)
+*COPY>CPYLIB>COM1
+*COPY>ICS.CPYLIB>COM.INV.INQ
+*********************************************************************
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - ICSBP
+* PROGRAM     - BARCODE.REC.INQ
+* DATE        - 07/18/01
+* DESCRIPTION - This program is used to display Barcode items received and 
+*              a given location.
+*
+*T25740 edvard 07/19/2001 * Rev12
+*T26556 cmykleb 05/22/2002 * Correct page #/line cnt problem.
+*C40189 adelgado 06/26/2002 * Correct scrolling.
+*T27458 lross 05/28/2003 * OPTION 'SI' should return back to line selected.
+*T27990 lross 03/11/2004 * BUILD.SCREEN subroutine was missing "RETURN".
+*ENDDOC
+*********************************************************************
+*
+*TMP.SERIAL<1> = SERIAL LOCATION
+*TMP.SERIAL<2> = SERIAL NO
+*TMP.SERIAL<3> = CURRENT SERIAL QTY
+*TMP.SERIAL<4> = ORIGINAL SERIAL QTY
+*TMP.SERIAL<5> = CURRENT DIAM
+*TMP.SERIAL<6> = ORIG DIAM
+*TMP.SERIAL<7> = CURRENT STOCK QTY
+*TMP.SERIAL<8> = ORIGINAL STOCK QTY
+*TMP.SERIAL<9> = LAST USED DATE
+*TMP.SERIAL<10>= SERIAL PO
+*TMP.SERIAL<11>= SERIAL ENTRY DATE
+*TMP.SERIAL<12>=RESERVABLE SERIAL QTY IN COST UOM
+*TMP.SERIAL<13>=RESERVABLE SERIAL QTY IN STK UOM
+*
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>CATEGORY
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>ICS.CPYLIB>INV_SERIAL
+*COPY>ICS.CPYLIB>INV_RECEIPTS
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+*
+   DEFFUN CALC.STK.QTY(COST.QTY,MAT INV.CNV.REC,ROND,LN)
+*
+   MAT SYSCOM.REC= ""; SYS.TYPE=2
+*
+*
+   PAGE.SIZE=5
+   PAGE.NO = 1
+   START = 1
+   EQU ESN TO ECD.SCRN.NO
+   DEFAULT.SORT="R"
+   SORT.OPTION="R"
+   SORT.DESC="RDT/SER"
+   OLD.SORT=""
+   LN.NUM = ""
+   LOCNO = "ALL"
+   ACTION='' ;*T27458
+   MIN.QTY.CNV = 1
+*
+   EQU INV.UOM.STK TO INV.UNIT<1,2>
+   EQU INV.UOM.CST TO INV.UNIT<1,3>
+*
+   GOSUB GEN.SETUP
+   GOSUB PROCESS.SELECTION
+   GOSUB BUILD.SCREEN
+   ECD.ACTION=3; CALL SCRN.EDIT
+*
+   ;*
+   ;* Main Prompt
+   ;*
+   LOOP
+      ECD.NUM=PNUM; SCV.REC(ECD.NUM)<ESN>=""
+      ECD.ACTION=4; CALL SCRN.EDIT
+      ACTION=ECD.RET.VALUE
+      BEGIN CASE
+         CASE ACTION="END" OR ACTION="E" OR ACTION=""
+            ACTION=""
+         CASE ACTION="A"
+            CHANGED=0
+            IF LCNT > 1 THEN GOSUB ENT.LOCATION
+            GOSUB ENT.QTY
+            IF FIFO.NO="ALL" THEN
+               GOSUB ENT.RECP.DATE
+               GOSUB ENT.JOB.PO
+            END
+            IF CHANGED THEN GOSUB PROCESS.SELECTION
+            ECD.ACTION=6 ; CALL SCRN.EDIT
+            ECD.ACTION=3 ; CALL SCRN.EDIT
+         CASE ACTION="L" AND LCNT < 2
+            ERRMSG="There is only one location for this warehouse"
+            GOSUB 91000
+         CASE ACTION="L"
+            CHANGED=0
+            GOSUB ENT.LOCATION
+            IF CHANGED THEN GOSUB PROCESS.SELECTION
+         CASE ACTION="Q"
+            CHANGED=0
+            GOSUB ENT.QTY
+            IF CHANGED THEN GOSUB PROCESS.SELECTION
+         CASE ACTION="C"
+            CHANGED=0
+            GOSUB CHANGE.SORT
+            IF CHANGED THEN GOSUB PROCESS.SELECTION
+         CASE ACTION="W" AND WCNT < 2 
+            ERRMSG="There is only one warehouse for this product"
+            GOSUB 91000
+         CASE ACTION="W"
+            CHANGED=0
+            GOSUB ENT.WHSE
+            IF CHANGED THEN
+               TMP.SERIAL = ""
+               CALL GET.ALL.WHSE.SERIALS (CONO,PROD.NUM,WHSE.NO,TMP.SERIAL)
+               SCV.REC(4)<ESN>="ALL"
+*        LOCNO="ALL"; LLOC=0
+               LOCNO="";LLOC=0
+               GOSUB PROCESS.SELECTION
+               LVALDAT="ALL"
+               LHMSG="Location - ALL"
+               LCNT=DCOUNT(TMP.SERIAL<1>,VM)
+               L=1
+               FOR I=1 TO LCNT
+                  LVALDAT=LVALDAT : "," : TMP.SERIAL<1,I,1>
+                  IF LEN(LHMSG<1,1,L>) > 50 THEN
+                     L=L + 1
+                     LHMSG<1,1,L>="Location - ": TMP.SERIAL<1,I,1>
+                  END ELSE
+                     LHMSG<1,1,L>=LHMSG<1,1,L> :", ":TMP.SERIAL<1,I,1>
+                  END
+               NEXT I
+            END
+         CASE ACTION="D"
+            BEGIN CASE
+               CASE FIFO.NO # "ALL"
+                  ERRMSG="The criteria for this selection is already set"
+                  GOSUB 91000
+               CASE FIFO.NO=""
+                  ERRMSG="Actual Costing is not utilized for this product"
+                  GOSUB 91000
+               CASE 1
+                  CHANGED=0
+                  GOSUB ENT.RECP.DATE
+                  IF CHANGED THEN GOSUB PROCESS.SELECTION
+            END CASE
+         CASE ACTION="J" OR ACTION="P"
+            BEGIN CASE
+               CASE FIFO.NO # "ALL"
+                  ERRMSG="The criteria for this selection is already set"
+                  GOSUB 91000
+               CASE 1
+                  CHANGED=0
+                  GOSUB ENT.JOB.PO
+                  IF CHANGED THEN GOSUB PROCESS.SELECTION
+            END CASE
+         CASE ACTION="SI"
+            GOSUB ENT.LINE.NUM
+            IF LNNO#'' THEN
+               READV TEST FROM INV_SERIAL, CONO:R.S.NO<1,LNNO>, 1 THEN
+                  ECD.SCRN.NO=16
+                  XSTAT=1
+                  SERIAL.NO=R.S.NO<1,LNNO>
+                  OLD.LLOC = LLOC
+                  CALL SER.TRACK.INQ(CONO,SERIAL.NO,XSTAT)
+                  IF XSTAT THEN 
+                     ECD.ACTION=99 ; CALL SCRN.EDIT
+                  END
+                  ECD.SCRN.NO=4 ; GOSUB BUILD.SCREEN
+                  LLOC = OLD.LLOC
+                  GOSUB PROCESS.SELECTION
+                  ECD.ACTION=3 ; CALL SCRN.EDIT
+                  ACTION="S";START=START-PAGE.SIZE; PAGE.NO-=1
+                  IF START<0 THEN START=0
+                  IF PAGE.NO<0 THEN PAGE.NO=0
+                  GOSUB SCROLL
+               END ELSE
+                  ERRMSG="Invalid serial number ":R.S.NO<1,LNNO>:" on line ":ECD.RET.VALUE
+               END
+            END
+         CASE ACTION[1,1] = "S"
+            GOSUB SCROLL
+         CASE 1
+            ERRMSG="Invalid entry, please re-enter"
+            GOSUB 91000
+      END CASE
+   WHILE ACTION # "" DO REPEAT
+   GOTO 99999
+*
+*************************************************************************
+**** S U B R O U T I N E S **********************************************
+*************************************************************************
+*
+**************
+ENT.LOCATION: 
+**************
+*
+   ECD.VALDAT=LVALDAT; ECD.HMSG=LHMSG
+   ECD.NUM=4;  ECD.ACTION=4; CALL SCRN.EDIT
+   BEGIN CASE
+      CASE ECD.RET.VALUE="END"
+      CASE ECD.RET.VALUE="ALL"
+         LLOC=0
+         IF ECD.RET.VALUE # LOCNO THEN
+            CHANGED=1
+            LOCNO="ALL"
+         END
+      CASE ECD.RET.VALUE="N" AND LCNT > 1
+         CHANGED=1
+         LLOC=LLOC + 1
+         IF LLOC > LCNT THEN
+            LLOC=1
+         END
+         LOCNO=TMP.SERIAL<1,LLOC,1>
+         SCV.REC(ECD.NUM)<ESN>=LOCNO
+         ECD.ACTION=5; CALL SCRN.EDIT
+      CASE 1
+         TEMP.LOC=DCOUNT(TMP.SERIAL<1>,VM)
+         FND=0
+         FOR T=1 TO TEMP.LOC UNTIL FND
+            IF "X":ECD.RET.VALUE="X":TMP.SERIAL<1,T,1> THEN
+               FND=1
+               LLOC=T
+            END
+         NEXT T
+         IF FND=0 THEN
+            ERRMSG="Cannot locate location # ":ECD.RET.VALUE
+            GOSUB 91000
+         END ELSE
+            IF ECD.RET.VALUE # LOCNO THEN
+               CHANGED=1
+               LOCNO=ECD.RET.VALUE
+            END
+         END
+   END CASE
+   RETURN
+*
+***************
+ENT.QTY: 
+***************
+*
+   ECD.NUM=6; ECD.ACTION=4; CALL SCRN.EDIT
+   BEGIN CASE
+      CASE ECD.RET.VALUE="END"
+      CASE ECD.RET.VALUE < 1
+         IF MIN.QTY # 0 THEN
+            CHANGED=1
+            MIN.QTY=0
+         END
+      CASE MIN.QTY # ECD.RET.VALUE
+         CHANGED=1
+         MIN.QTY=ECD.RET.VALUE
+   END CASE
+   MIN.QTY.CNV=1
+   FOR MX=1 TO ICR.SCAL
+      MIN.QTY.CNV=MIN.QTY.CNV * 10
+   NEXT MX
+   RETURN
+*
+**************
+ENT.RECP.DATE: 
+**************
+*
+   ECD.NUM=7; ECD.ACTION=4; CALL SCRN.EDIT
+   BEGIN CASE
+      CASE ECD.RET.VALUE="END"
+      CASE RDATE # ECD.RET.VALUE
+         CHANGED=3
+         RDATE=ECD.RET.VALUE
+   END CASE
+   RETURN
+*
+***********
+ENT.JOB.PO: 
+***********
+*
+   ECD.NUM=9; ECD.ACTION=4; CALL SCRN.EDIT
+   BEGIN CASE
+      CASE ECD.RET.VALUE="END"
+      CASE JOBNO # ECD.RET.VALUE
+         CHANGED=4
+         JOBNO=ECD.RET.VALUE
+   END CASE
+   RETURN
+*
+***************
+ENT.WHSE: 
+***************
+*
+   ECD.VALDAT=WVALDAT; ECD.HMSG=WHMSG
+   ECD.NUM=3;  ECD.ACTION=4; CALL SCRN.EDIT
+   BEGIN CASE
+      CASE ECD.RET.VALUE="END"
+      CASE ECD.RET.VALUE="ALL"
+         WLOC=0
+         IF ECD.RET.VALUE # LOCNO THEN
+            CHANGED=1
+            LOCNO="ALL"
+         END
+      CASE ECD.RET.VALUE="N" AND LCNT > 1
+         CHANGED=1
+         WLOC=WLOC + 1
+         IF WLOC > WCNT THEN
+            WLOC=1
+         END
+         WHSE.NO=WHSE.CODE<1,WLOC>
+         SCV.REC(ECD.NUM)<ESN>=WHSE.NO
+         ECD.ACTION=5; CALL SCRN.EDIT
+      CASE 1
+         TEMP.WHSE=DCOUNT(WHSE.CODE,VM)
+         FND=0
+         FOR T=1 TO TEMP.WHSE UNTIL FND
+            IF "X":ECD.RET.VALUE="X":WHSE.CODE<1,T> THEN
+               FND=1
+               WLOC=T
+            END
+         NEXT T
+         IF FND=0 THEN
+            ERRMSG="Cannot locate Warehouse # ":ECD.RET.VALUE
+            GOSUB 91000
+         END ELSE
+            IF ECD.RET.VALUE # WHSE.NO THEN
+               CHANGED=1
+               WHSE.NO=ECD.RET.VALUE
+            END
+         END
+   END CASE
+   RETURN
+*
+*************
+CHANGE.SORT: 
+*************
+*
+   IF OLD.SORT="" THEN OLD.SORT=DEFAULT.SORT
+   ECD.NUM=33; ECD.ACTION=4; CALL SCRN.EDIT
+   BEGIN CASE
+      CASE ECD.RET.VALUE="END"
+      CASE ECD.RET.VALUE="R"   ; * Sort by receipt date, by serial #
+         SORT.OPTION=ECD.RET.VALUE
+         SORT.DESC  ="RDT/SER"
+      CASE ECD.RET.VALUE="Q"   ; * Sort by qty, by location
+         SORT.OPTION=ECD.RET.VALUE
+         SORT.DESC  ="QTY/LOC"
+      CASE ECD.RET.VALUE="S"   ; * Sort by serial #
+         SORT.OPTION=ECD.RET.VALUE
+         SORT.DESC  ="SERIAL#"
+      CASE ECD.RET.VALUE="L"   ; * Sort by location, by qty
+         SORT.OPTION=ECD.RET.VALUE
+         SORT.DESC  ="LOC/QTY"
+      CASE 1
+         ERRMSG="Invalid - enter 'R'cpt Date, 'Q'ty, 'L'oc, 'S'erial"
+         GOSUB 91000
+         GOTO CHANGE.SORT
+   END CASE
+   IF ECD.RET.VALUE NE OLD.SORT THEN CHANGED=1
+   OLD.SORT=ECD.RET.VALUE
+   SCV.REC(34)<ESN>=SORT.DESC
+   ECD.NUM=34 ; ECD.ACTION=5 ; CALL SCRN.EDIT
+   RETURN
+*
+******************
+PROCESS.SELECTION: 
+******************
+*
+   IF LLOC THEN
+      SD=""
+      SD<2>=TMP.SERIAL<2,LLOC>
+      NUM.RECEIPTS=DCOUNT(TMP.SERIAL<2,LLOC>,SVM)
+      FOR I=1  TO NUM.RECEIPTS 
+         SD<1,1,I>=TMP.SERIAL<1,LLOC>
+      NEXT I
+      SD<3>=TMP.SERIAL<3,LLOC>
+      SD<4>=TMP.SERIAL<4,LLOC>
+      SD<5>=TMP.SERIAL<5,LLOC>
+      SD<6>=TMP.SERIAL<6,LLOC>
+      SD<7>=TMP.SERIAL<7,LLOC>
+      SD<8>=TMP.SERIAL<8,LLOC>
+      SD<9>=TMP.SERIAL<9,LLOC>
+      SD<10>=TMP.SERIAL<10,LLOC>
+      SD<11>=TMP.SERIAL<11,LLOC>
+      SD<12>=TMP.SERIAL<12,LLOC> ; * reservable qty in cost uom
+      SD<13>=CALC.STK.QTY(TMP.SERIAL<12,LLOC>,MAT INV.CNV.REC,'.5','')
+      IF MIN.QTY > 0 THEN
+         GOSUB 1845
+      END
+      IF RDATE # "ALL" THEN
+         GOSUB 1865
+      END
+      IF JOBNO # "ALL" THEN
+         GOSUB 1875
+      END
+   END ELSE
+      SD=""
+      NUM.LOC=DCOUNT(TMP.SERIAL<1>,VM)
+      SD<2>=TMP.SERIAL<2,1>
+      NUM.RECEIPTS=DCOUNT(TMP.SERIAL<2,1>,SVM)
+      FOR I=1  TO NUM.RECEIPTS 
+         SD<1,1,I>=TMP.SERIAL<1,1>
+      NEXT I
+      SD<3>=TMP.SERIAL<3,1>
+      SD<4>=TMP.SERIAL<4,1>
+      SD<5>=TMP.SERIAL<5,1>
+      SD<6>=TMP.SERIAL<6,1>
+      SD<7>=TMP.SERIAL<7,1>
+      SD<8>=TMP.SERIAL<8,1>
+      SD<9>=TMP.SERIAL<9,1>
+      SD<10>=TMP.SERIAL<10,1>
+      SD<11>=TMP.SERIAL<11,1>
+      SD<12>=TMP.SERIAL<12,1>
+      SD<13>=CALC.STK.QTY(TMP.SERIAL<13,1>,MAT INV.CNV.REC,'.5','')
+      FOR L=2 TO NUM.LOC
+         NUM.RECEIPTS=DCOUNT(TMP.SERIAL<2,L>,SVM)
+         TEMP.STR=""
+         FOR I=1  TO NUM.RECEIPTS 
+            TEMP.STR<1,1,I>=TMP.SERIAL<1,L>
+         NEXT I
+         SD<1> :=SVM:TEMP.STR
+         SD<2> :=SVM:TMP.SERIAL<2,L>
+         SD<3> :=SVM:TMP.SERIAL<3,L>
+         SD<4> :=SVM:TMP.SERIAL<4,L>
+         SD<5> :=SVM:TMP.SERIAL<5,L>
+         SD<6> :=SVM:TMP.SERIAL<6,L>
+         SD<7> :=SVM:TMP.SERIAL<7,L>
+         SD<8> :=SVM:TMP.SERIAL<8,L>
+         SD<9> :=SVM:TMP.SERIAL<9,L>
+         SD<10> :=SVM:TMP.SERIAL<10,L>
+         SD<11> :=SVM:TMP.SERIAL<11,L>
+         SD<12> :=SVM:TMP.SERIAL<12,L>
+         SD<13> :=SVM:CALC.STK.QTY(TMP.SERIAL<13,L>,MAT INV.CNV.REC,'.5','')
+      NEXT L
+      IF MIN.QTY > 0 THEN
+         GOSUB 1845
+      END
+      IF JOBNO # "ALL" THEN 
+         GOSUB 1875
+      END
+      IF RDATE # "ALL" THEN
+         GOSUB 1865
+      END
+   END
+   GOSUB REBUILD.SD
+   R.S.NO=""
+   CURR.WT=""
+   ORIG.WT=""
+   CURR.QTY=""
+   ORIG.QTY=""
+   CURR.DIAM=""
+   ORIG.DIAM=""
+   LA.USED=""
+   ORIG.LOC=""
+   RSVD.WT=''
+   RSVD.QTY=''
+   P=0
+   LN.NUM = ""
+   RCNT =DCOUNT(SD<2>,SVM)
+   LN.CNT = RCNT
+   FOR R=1 TO RCNT
+      IF SD<2,1,R> # "" THEN
+         P=P + 1
+         LN.NUM<1,P> = P
+         R.S.NO<1,P> =SD<2,1,R>
+         ORIG.WT<1,P> =SD<4,1,R> / ODVD
+         CURR.WT<1,P> =SD<3,1,R> / ODVD
+         RSVD.WT<1,P> = (SD<3,1,R>-SD<12,1,R>)/ODVD
+         LA.USED<1,P> =SD<9,1,R>
+         IF LA.USED<1,P>=0 THEN LA.USED<1,P>=""
+         ORIG.LOC<1,P>=SD<1,1,R>
+         IF INV.UOM.STK=INV.UOM.CST THEN
+            ORIG.QTY<1,P> =SD<6,1,R>
+            CURR.QTY<1,P> =SD<5,1,R>
+         END ELSE
+            ORIG.QTY<1,P> =SD<8,1,R>
+            CURR.QTY<1,P> =SD<7,1,R>
+            RSVD.QTY<1,P>=SD<7,1,R>-SD<13,1,R>
+         END
+      END
+   NEXT R
+   SCV.REC(16)<ESN> = ""
+   SCV.REC(17)<ESN> = ""
+   SCV.REC(18)<ESN> = ""
+   SCV.REC(19)<ESN> = ""
+   SCV.REC(20)<ESN> = ""
+   SCV.REC(21)<ESN> = ""
+   SCV.REC(22)<ESN> = ""
+   SCV.REC(23)<ESN> = ""
+   SCV.REC(24)<ESN> = ""
+   SCV.REC(25)<ESN> = ""
+   SCV.REC(26)<ESN> = ""
+   SCV.REC(27)<ESN>=""
+   SCV.REC(30)<ESN> = ""
+   SCV.REC(36)<ESN> = ''
+   SCV.REC(37)<ESN> = ''
+   RCNT = DCOUNT(ORIG.WT<1>,VM)
+   FOR R=1 TO RCNT
+      SCV.REC(19)<ESN,R> = OCONV(INT(ORIG.WT<1,R>+.5),OCNV)
+      SCV.REC(20)<ESN,R> = OCONV(INT(CURR.WT<1,R>+.5),OCNV) 
+      SCV.REC(25)<ESN,R> = OCONV(INT(ORIG.QTY<1,R>+.5),ICR)
+      SCV.REC(26)<ESN,R> = OCONV(INT(CURR.QTY<1,R>+.5),ICR)
+      IF RSVD.WT<1,R>+0>0 THEN
+         SCV.REC(36)<ESN,R> = OCONV(INT(RSVD.WT<1,R>+.5),OCNV)
+      END
+*     IF RSVD.QTY<1,R>+0>0"" THEN
+      IF RSVD.QTY<1,R>+0>0 THEN
+         SCV.REC(37)<ESN,R>=OCONV(INT(RSVD.QTY<1,R>+.5),ICR)
+      END
+   NEXT R
+*T25743 v
+   SCV.REC(16)<ESN> = LN.NUM
+   SCV.REC(17)<ESN> = ORIG.LOC
+   SCV.REC(18)<ESN> = R.S.NO
+   SCV.REC(27)<ESN>=LA.USED<1>
+   SCV.REC(29)<ESN>=PAGE.NO"R%2"
+   SCV.REC(30)<ESN> = INT(LN.CNT/PAGE.SIZE+.99) "R%2"
+*T25743 ^
+   SCV.REC(21)<ESN>=OCONV(INT(SUM(ORIG.WT)+.5),OCNV)
+   SCV.REC(22)<ESN>=OCONV(INT(SUM(CURR.WT)+.5),OCNV)
+   SCV.REC(23)<ESN>=OCONV(INT(SUM(ORIG.QTY)+.5),ICR)
+   SCV.REC(24)<ESN>=OCONV(INT(SUM(CURR.QTY)+.5),ICR)
+*T26556 v
+*T27458 v
+   IF ACTION # 'SI' THEN
+      PAGE.NO = 1
+      START = 1
+   END
+*T27458 ^
+   SCV.REC(29)<ESN>=PAGE.NO"R%2"
+*T26556 ^
+*
+   ECD.ACTION = 6 ; CALL SCRN.EDIT 
+   ECD.ACTION=3 ; CALL SCRN.EDIT   
+   RETURN
+**
+*********
+1845 *
+*********
+*
+   TEST.LINES=DCOUNT(SD<3,1>,SVM)
+   FOR I=TEST.LINES TO 1 STEP -1
+      TEST.CURR=INT((SD<3,1,I> / ODVD)+.5)
+      IF ICR.TYPE=4 THEN
+         TEST.MIN =MIN.QTY * MIN.QTY.CNV
+      END ELSE
+         TEST.MIN =MIN.QTY * MIN.QTY.CNV *  100
+      END
+      IF TEST.CURR < TEST.MIN THEN
+         GOSUB DELETE.SD
+      END
+   NEXT I
+   RETURN
+*
+********
+1865*
+********
+*
+   TEST.LINES=DCOUNT(SD<11,1>, SVM)
+   FOR I=TEST.LINES TO 1 STEP -1
+      IF SD<11,1,I> < RDATE OR TRIM(SD<11,1,I>)="" THEN
+         GOSUB DELETE.SD
+      END
+   NEXT I
+   RETURN
+*
+********
+1875*
+********
+*
+   FOR I=LN.CNT TO 1 STEP -1
+      IF SD<10,1,I> # JOBNO THEN
+         GOSUB DELETE.SD
+      END
+   NEXT I
+   RETURN
+* 
+**********
+REBUILD.SD: 
+**********
+*
+   TMP.REC=""
+   NUM.VALUE =DCOUNT(SD<1,1>,SVM)
+   TMP.REC=SD
+   SD=""
+   BEGIN CASE
+      CASE SORT.OPTION = "R"
+         ;* Sort by Receipt date, by serial # 
+         FOR I=1 TO NUM.VALUE
+            LOCATE TMP.REC<11,1,I> IN SD<11,1>,1 BY "AR" SETTING RPOS ELSE NULL
+    * Now find pos where serial # fits in within the same receipt date
+            DONE=0
+            NEXT.POS=RPOS 
+            IF SD<2,1>#'' THEN
+               LOOP
+      * Check if serial should be inserted here or in the next pos
+                  IF SD<2,1,NEXT.POS> < TMP.REC<2,1,I> AND (SD<11,1,NEXT.POS>=TMP.REC<11,1,I> AND TMP.REC<11,1,I>#'') THEN
+                     NEXT.POS=NEXT.POS + 1
+                  END ELSE
+                     DONE=1
+                     RPOS=NEXT.POS
+                  END
+               UNTIL DONE DO REPEAT
+            END
+            GOSUB INSERT.SD
+         NEXT I
+      CASE SORT.OPTION="L"
+         ;* Sort by location, by qty 
+         FOR I=1 TO NUM.VALUE
+            LOCATE TMP.REC<1,1,I> IN SD<1,1>,1 BY "AR" SETTING RPOS ELSE NULL
+    * Now find pos where serial # fits in within the qty range
+            DONE=0
+            NEXT.POS=RPOS 
+            LOOP
+      * Check if serial should be inserted here or in the next pos
+               IF SD<3,1,NEXT.POS> < TMP.REC<3,1,I> AND (SD<1,1,NEXT.POS>=TMP.REC<1,1,I>) THEN
+                  NEXT.POS=NEXT.POS + 1
+               END ELSE
+                  DONE=1
+                  RPOS=NEXT.POS
+               END
+            UNTIL DONE DO REPEAT
+            GOSUB INSERT.SD
+         NEXT I
+      CASE SORT.OPTION="Q"
+         ;* Sort by qty, by location 
+         FOR I=1 TO NUM.VALUE
+            LOCATE TMP.REC<3,1,I> IN SD<3,1>,1 BY "AR" SETTING RPOS ELSE NULL
+    * Now find pos where serial # fits in within the location range
+            DONE=0
+            NEXT.POS=RPOS 
+            LOOP
+      * Check if serial should be inserted here or in the next pos
+               IF SD<1,1,NEXT.POS> < TMP.REC<1,1,I> AND (SD<3,1,NEXT.POS>=TMP.REC<3,1,I>) THEN
+                  NEXT.POS=NEXT.POS + 1
+               END ELSE
+                  DONE=1
+                  RPOS=NEXT.POS
+               END
+            UNTIL DONE DO REPEAT
+            GOSUB INSERT.SD
+         NEXT I
+      CASE SORT.OPTION="S"
+         ;* Sort by serial number 
+         FOR I=1 TO NUM.VALUE
+            LOCATE TMP.REC<2,1,I> IN SD<2,1>,1 BY "AR" SETTING RPOS ELSE NULL
+            GOSUB INSERT.SD
+         NEXT I
+   END CASE
+   RETURN
+*
+**************
+INSERT.SD: 
+**************
+*
+   SD=INSERT(SD,1,1,RPOS,TMP.REC<1,1,I>)  
+   SD=INSERT(SD,2,1,RPOS,TMP.REC<2,1,I>)  
+   SD=INSERT(SD,3,1,RPOS,TMP.REC<3,1,I>)  
+   SD=INSERT(SD,4,1,RPOS,TMP.REC<4,1,I>)  
+   SD=INSERT(SD,5,1,RPOS,TMP.REC<5,1,I>)  
+   SD=INSERT(SD,6,1,RPOS,TMP.REC<6,1,I>)  
+   SD=INSERT(SD,7,1,RPOS,TMP.REC<7,1,I>)  
+   SD=INSERT(SD,8,1,RPOS,TMP.REC<8,1,I>)  
+   SD=INSERT(SD,9,1,RPOS,TMP.REC<9,1,I>)  
+   SD=INSERT(SD,10,1,RPOS,TMP.REC<10,1,I>)
+   SD=INSERT(SD,11,1,RPOS,TMP.REC<11,1,I>)
+   SD=INSERT(SD,12,1,RPOS,TMP.REC<12,1,I>)
+   SD=INSERT(SD,13,1,RPOS,CALC.STK.QTY(TMP.REC<12,1,I>,MAT INV.CNV.REC,'.5',''))
+   RETURN
+*
+************
+DELETE.SD: 
+************
+*
+   SD=DELETE(SD,1,1,I)
+   SD=DELETE(SD,2,1,I)
+   SD=DELETE(SD,3,1,I)
+   SD=DELETE(SD,4,1,I)
+   SD=DELETE(SD,5,1,I)
+   SD=DELETE(SD,6,1,I)
+   SD=DELETE(SD,7,1,I)
+   SD=DELETE(SD,8,1,I)
+   SD=DELETE(SD,9,1,I)
+   SD=DELETE(SD,10,1,I)
+   SD=DELETE(SD,11,1,I)
+   RETURN
+*
+***********
+SCROLL: 
+***********
+*
+   LN.CNT =DCOUNT(SD<2>,SVM)
+   BEGIN CASE                                     
+      CASE ACTION = "S" OR ACTION = "SF"           
+         IF LN.CNT > PAGE.SIZE THEN                 
+            START +=PAGE.SIZE                        
+            PAGE.NO +=1
+            IF START > LN.CNT THEN
+               START = 1         
+               PAGE.NO = 1
+            END
+         END                                        
+      CASE ACTION = "SR"                           
+         IF LN.CNT > PAGE.SIZE THEN                 
+            START -=PAGE.SIZE                        
+            PAGE.NO -=1
+            IF START<1 THEN      ;* C40189
+               START = 1           
+               PAGE.NO = 1
+            END
+         END                                        
+      CASE ACTION = "ST"                           
+         START = 1                                  
+         PAGE.NO = 1
+      CASE ACTION = "SB"                           
+         START=LN.CNT
+         PAGE.NO = INT(LN.CNT/PAGE.SIZE+.99)
+      CASE ACTION[1,1] = "S" AND NUM(ACTION[2,99]) 
+         START = ACTION[2,99]+0                     
+         IF START < 1 OR START > LN.CNT THEN        
+            ERRMSG = "** Invalid selection **"       
+            GOSUB 91000                              
+         END                                        
+   END CASE                                       
+
+*
+   START=1+INT((START-1)/PAGE.SIZE)*PAGE.SIZE 
+   ECD.NUM=16;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=17;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=18;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=19;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=20;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=25;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=26;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=27;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=36;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=37;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   SCV.REC(29)<ESN>=PAGE.NO"R%2" ; ECD.NUM=29
+   ECD.ACTION=5; CALL SCRN.EDIT
+   RETURN
+*
+****************
+BUILD.SCREEN: 
+****************
+*
+   SCV.REC(5)<ESN>=SPACE(INT((50-LEN(HD))/2)):HD
+   SCV.REC(8)<ESN>=PJHD
+*SCV.REC(11)<ESN>=LHD
+   SCV.REC(12)<ESN>="Org Qty ":INV.UOM.CST
+   SCV.REC(13)<ESN>="Cur/Rsv ":INV.UOM.CST
+   IF INV.UOM.STK=INV.UOM.CST THEN
+*  IF INV.PAP.TYPE="ROLL" OR INV.PAP.TYPE="SHEET" THEN
+      IF INV.PAP.TYPE='ROLL' OR INV.PAP.TYPE='LROLL' OR INV.PAP.TYPE='PCOAT' THEN
+         SCV.REC(14)<ESN>="Org Diam"
+         SCV.REC(15)<ESN>="Cur Diam"
+      END ELSE
+         SCV.REC(14)<ESN>=""
+         SCV.REC(15)<ESN>=""
+      END
+   END ELSE
+      SCV.REC(14)<ESN>="Org Qty ":INV.UOM.STK
+      SCV.REC(15)<ESN>="Cur/Rsv ":INV.UOM.STK
+   END
+   SCV.REC(4)<ESN>=LOCNO
+   SCV.REC(6)<ESN>=MIN.QTY
+   SCV.REC(7)<ESN>=RDATE
+   SCV.REC(9)<ESN>=JOBNO
+   SCV.REC(33)<ESN>=SORT.OPTION
+   SCV.REC(34)<ESN>=SORT.DESC
+   RETURN ;*T27990
+*
+*****************
+GEN.SETUP: 
+******************
+*
+   MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE ELSE
+      MAT CATG.REC=""
+   END
+   BEGIN CASE
+      CASE INV.PAP.TYPE="SHEET"
+         HD="S K I D"
+         LHD="Skid"
+         OCNV="MD2"; ODVD=10
+         ICR="MD0"
+         PNUM=32
+         PJHD="Po"
+      CASE INV.PAP.TYPE="ROLL"
+         HD="R O L L"
+         LHD="Roll"
+         OCNV="MD2"; ODVD=10
+         ICR="MD2"
+         PNUM=32
+         PJHD="Po"
+      CASE INV.PAP.TYPE="LROLL"
+         HD="R O L L   L A B E L"
+         LHD="Roll"
+         OCNV="MD0"; ODVD=10
+         ICR="MD0"
+         PNUM=32
+         PJHD="Po"
+      CASE INV.PAP.TYPE="PCOAT"
+         HD="P A P E R   C O A T E R"
+         LHD="Roll"
+         OCNV="MD0"; ODVD=10
+         ICR="MD0"
+         PNUM=32
+         PJHD="Po"
+      CASE 1
+         HD="R E G U L A R"
+         LHD="BarCode"
+         OCNV="MD2"; ODVD=10
+         ICR="MD2"
+         PNUM=31
+         PJHD=""
+   END CASE
+   IF INV.UOM.CST="SHT" OR INV.UOM.CST="FT" OR INV.UOM.CST="PC" THEN
+      OCNV="MD0"; ODVD=1000
+   END ELSE
+      OCNV="MD2"; ODVD=10
+   END
+*IF CATG.FNGD # "" THEN PNUM=31; PJHD="Job"
+   IF INV.M.LINE = "FNGD" THEN PNUM=31; PJHD='Job'
+   HD=HD:"   I N Q U I R Y"
+   LHD=LHD:" Number"
+   IF JOB.NO="" THEN
+      JOBNO="ALL"
+   END ELSE
+      JOBNO=JOB.NO
+   END
+   IF R.DATE="" THEN
+      RDATE="ALL"
+   END ELSE
+      RDATE=R.DATE
+   END
+   LVALDAT="ALL"
+   LHMSG="Location - ALL"
+   LCNT=DCOUNT(TMP.SERIAL<1>,VM)
+   L=1
+   FOR I=1 TO LCNT
+      LVALDAT=LVALDAT : "," : TMP.SERIAL<1,I,1>
+      IF LEN(LHMSG<1,1,L>) > 50 THEN
+         L=L + 1
+         LHMSG<1,1,L>="Location - ": TMP.SERIAL<1,I,1>
+      END ELSE
+         LHMSG<1,1,L>=LHMSG<1,1,L> :", ":TMP.SERIAL<1,I,1>
+      END
+   NEXT I
+   WVALDAT="ALL"
+   WHMSG="Warehouse - ALL"
+   WCNT=DCOUNT(WHSE.CODE,VM)
+   W=1
+   FOR I=1 TO WCNT
+      WVALDAT=WVALDAT : "," : WHSE.CODE<1,I>
+      IF LEN(WHMSG<1,1,L>) > 50 THEN
+         W=W + 1
+         WHMSG<1,1,W>="Warehouse - ": WHSE.CODE<1,I>
+      END ELSE
+         WHMSG<1,1,W>=WHMSG<1,1,W> :", ":WHSE.CODE<1,I>
+      END
+   NEXT I
+   LOCNO="ALL"
+   LLOC=0
+   RETURN
+*
+*************
+ENT.LINE.NUM: 
+*************
+*
+   ECD.NUM=35                                       
+   ECD.MAXV = START+PAGE.SIZE                 
+   IF ECD.SUB.NUM='' THEN ECD.SUB.NUM=1             
+   ECD.MINV = START                           
+   RSCNT=DCOUNT(R.S.NO,VM)
+   IF ECD.MAXV > RSCNT THEN ECD.MAXV=RSCNT
+   ECD.ACTION=4 ; CALL SCRN.EDIT                    
+   IF ECD.RET.VALUE#"END" AND ECD.RET.VALUE#"E" THEN
+      LNNO=ECD.RET.VALUE                            
+   END ELSE
+      LNNO=''
+   END
+   RETURN
+*
+91000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+99999*
+   ECD.ACTION=99;CALL SCRN.EDIT
+   RETURN
+END

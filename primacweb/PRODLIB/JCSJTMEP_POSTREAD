@@ -1,0 +1,151 @@
+SUBROUTINE JCSJTMEP_POSTREAD
+********************************************************************************
+*   Program name :- JCSJTMEP_POSTREAD
+*   Created:- 9/14/2005
+*------------------------------------------------------------------------------*
+*
+*  This server event is triggered from within the {m:WW:uObject=ReadData}, {m- *
+*  :WW:uObject=DeleteData} and {m:WW:uObject=WriteData} server events. In eac- *
+*  h case, this {m:WW:uObject=PostRead} event occurs after the physical datab- *
+*  ase read, but before values are extracted from the database record. This p- *
+*  rovides a window of opportunity in which the database values may be direct- *
+*  ly manipulated. The API functions
+*  RBO.setDBVals() and RBO.getDBVals() are - *
+*  used to do this.
+*  
+*                - *
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE CPYLIB CHAR
+$INCLUDE JCS.CPYLIB OPERATION
+$INCLUDE PMC.CPYLIB COST.CNTR
+$INCLUDE JCS.CPYLIB JOB
+$INCLUDE PMC.CPYLIB COMPANY
+$INCLUDE PMC.CPYLIB CUSTOMER
+
+  OPEN '','CONTROL' TO CONTROL ELSE ERRMSG='CONTROL FILE IS MISSING'; GOTO 93000
+  OPEN "","COMPANY" TO COMPANY ELSE ERRMSG="CANNOT OPEN COMPANY FILE";GOTO 93000
+  OPEN '','JOB' TO JOB ELSE ERRMSG='JOB FILE IS MISSING'; GOTO 93000
+  OPEN "","OPERATION" TO OPERATION ELSE ERRMSG="CANNOT OPEN OPERATION FILE";GOTO 93000
+  OPEN '','CUSTOMER' TO CUSTOMER ELSE ERRMSG='CUSTOMER FILE IS MISSING'; GOTO 93000
+  OPEN '','COST.CNTR' TO COST.CNTR ELSE ERRMSG='COST.CNTR FILE IS MISSING'; GOTO 93000
+
+* Insert method code here
+MAT COMP.REC='' ; CONO = ''
+
+MAT JOB.REC=''
+MAT OPER.REC = ''
+JOB_DESCS = ''
+JOB_COUNT = ''
+OPER_COUNT = ''
+OPER_SF_COUNT = ''
+FLAG = ''
+JOB_TYPE = ''
+CCTR_LIST = ''
+OPERDESCS = ''
+STATUS=RBO.getProperty('','PMCProperty',PMCProperty)
+CONO   = PMCProperty<1,4>
+STATUS=RBO.getProperty('','DTM_JOB',DTM_JOB)
+STATUS=RBO.getProperty('','DTM_TYPE',TTYPE)
+STATUS=RBO.getProperty('','DTM_TIME_ST',STIME)
+STATUS=RBO.getProperty('','DTM_TIME',ETIME)
+STATUS=RBO.getProperty('','DTM_OPER',DTM_OPER)
+STATUS=RBO.getProperty('','DTM_CCTR',DTM_CCTR)
+
+********** COMPANY VALUES
+	MATREAD COMP.REC FROM COMPANY, CONO ELSE
+		ERRMSG = "COMPANY FILE IS MISSING"
+	END
+
+********* JOB VALUES
+JOB_COUNT=DCOUNT(DTM_JOB,VM)
+	FOR Y = 1 TO JOB_COUNT
+		MATREAD JOB.REC FROM JOB,CONO:DTM_JOB<1,Y> THEN
+			*JOB_CUST<1,Y> = JOB.CUST
+			MATREAD CUST.REC FROM CUSTOMER,CONO:JOB.CUST ELSE
+               	   MAT CUST.REC=""
+               	   CUST.NAME=""
+			END
+                     IF CO.JOB.CUST.FLG = 'C' THEN
+              		JOB_DESCS<1,Y>=CUST.NAME
+              	END ELSE
+              		JOB_DESCS<1,Y>=JOB.DESC<1,1>
+              	END
+		END
+		JOB_TYPE<1,Y> = JOB.TYPE
+	NEXT Y	
+
+*--Operation Values
+OPER_COUNT=DCOUNT(DTM_OPER,VM)
+	FOR Y = 1 TO OPER_COUNT
+		MATREAD OPER.REC FROM OPERATION,CONO:DTM_OPER<1,Y> THEN
+			IF OPER.SF.PROMPT<1,1>='N' OR OPER.SF.PROMPT<1,1>='' THEN FLAG<1,Y>='N' ELSE FLAG<1,Y>='Y' 
+		END
+	NEXT
+
+
+*--CostCenter  Values
+WRITE DTM_CCTR ON CONTROL,"01DTM1"
+CCTR_COUNT=DCOUNT(DTM_CCTR,VM)
+	WRITE CCTR_COUNT:"KK" ON CONTROL,"01DTM"
+	FOR Z = 1 TO CCTR_COUNT
+		MATREAD CCTR.REC FROM COST.CNTR,CONO:DTM_CCTR<1,Z> THEN
+			IF CCTR_LIST  = "" THEN
+				CCTR_LIST=CCTR.OPER	
+			END ELSE		
+				CCTR_LIST=CCTR_LIST:"~":CCTR.OPER
+			END
+		   CCTR_DESC<1,Z>=CCTR.DESC
+  		   CNT = DCOUNT(CCTR.OPER,VM)
+    		   FOR I=1 TO CNT
+       		MATREAD OPER.REC FROM OPERATION, CONO:CCTR.OPER<1,I> THEN
+				OPRDESC<1,I>=CCTR.OPER<1,I>  : "-" : OPER.DESC	
+       		END
+    		   NEXT I
+		   
+			IF OPERDESCS  = "" THEN
+				OPERDESCS=OPRDESC	
+			END ELSE		
+				OPERDESCS=OPERDESCS:"!":OPRDESC
+			END
+		END
+	NEXT
+*-- CALCULATE ACTIVE, IDLE AND TOTAL TIME
+   
+   ATIME=0
+   ITIME=0
+   TTIME=0
+   OVERLAP=0
+   CALL CALC.EMP.TIME (TTYPE, STIME, ETIME, ATIME, ITIME, TTIME, OVERLAP)
+ATIME=OCONV(ATIME,"MD0Z")
+ITIME=OCONV(ITIME,"MD0Z")
+TTIME=OCONV(TTIME,"MD0Z")
+STATUS=RBO.setProperty('','DTM_AP',FLAG)
+STATUS=RBO.setProperty('','JOB_DESCS',JOB_DESCS)
+STATUS = RBO.setProperty('','JOB_TYPE',JOB_TYPE)
+STATUS = RBO.setProperty('','CCTR_OPER_LIST',CCTR_LIST)
+STATUS = RBO.setProperty('','OPER_DESCS',OPERDESCS)
+STATUS = RBO.setProperty('','CCTR_DESC',CCTR_DESC)
+
+
+STATUS=RBO.setProperty('','A_TIME',ATIME)
+STATUS=RBO.setProperty('','I_TIME',ITIME)
+STATUS=RBO.setProperty('','T_TIME',TTIME)
+RETURN
+93000*
+STATUS = RBO.setProperty('','ServerStatus',1)
+STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+
+
+* End of method code
+RETURN
+

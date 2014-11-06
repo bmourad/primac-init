@@ -1,0 +1,484 @@
+      SUBROUTINE ASSETS.DEPR.SUB
+*COPY>CPYLIB>COM1
+*COPY>FAS.CPYLIB>COM.ASSETS
+*********************************************************************
+* REVISION    - [08.1]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - FASBP
+* PROGRAM     - ASSETS.DEPR.SUB
+* BY          - Ziad Yamout, Vercom Software, Inc.
+* DATE        - 09/25/88
+* DESCRIPTION - Fixed Assets Maintenance Program
+* TASK
+*     18573 6/95 LLH 1-52 WEEK ACCOUNTING
+*
+*********************************************************************
+*
+*COPY>PMC.CPYLIB>FISCAL
+*COPY>FAS.CPYLIB>ASSETS
+*COPY>FAS.CPYLIB>DEP.MAST
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+MAT SYSCOM.REC =  ""; SYS.TYPE = 2
+*
+*  
+  READ PERIOD.REC FROM CONTROL, CONO:"ACCT.PERIODS" ELSE
+    PERIOD.REC = ""
+    PERIOD.REC<1> = 12
+  END
+  NUM.PERIODS = PERIOD.REC<1>
+*
+      ERR.FLG(BT) = 0
+      DEPR.NO = AST.DEPR.METHOD<1,BT>
+      FST.YR = AST.FST.PER<1,BT>[1,4]
+      FST.MN = AST.FST.PER<1,BT>[5,2]
+      LST.YR = AST.LST.PER<1,BT>[1,4]
+      LST.MN = AST.LST.PER<1,BT>[5,2]
+      BEGIN CASE
+      CASE DEPR.NO = "M"
+         IF AST.FISCAL.MON[1,4] >= FST.YR THEN
+            YR = AST.FISCAL.MON[1,4] - FST.YR + 1
+            MN = FR.CURR.PER[5,2] + 1
+            FOR I = MN TO NUM.PERIODS
+               D.REC(YR,BT)<I> = ""
+            NEXT I
+            YR = YR + 1
+         END ELSE
+            YR = 1
+         END
+         FOR I = YR TO DSP.YRS(BT)
+            D.REC(I,BT) = ""
+         NEXT I
+         GOTO 99999
+      CASE DEPR.NO[1,1] = "U"
+         IF AST.FISCAL.MON[1,4] >= FST.YR THEN
+            DSP.YRS(BT) = AST.FISCAL.MON[1,4] - FST.YR + 1
+            MN = FR.CURR.PER[5,2] + 1
+            FOR I = MN TO NUM.PERIODS
+               D.REC(DSP.YRS(BT),BT)<I> = ""
+            NEXT I
+         END ELSE
+            DSP.YRS(BT) = 0
+         END
+         GOTO 99999
+      END CASE
+      DIM COM.VARS(3)
+      DIM STACK.REC(3)
+      DIM VALID.VARS(3)
+      DIM AM.CNT(3)
+      DIM VM.CNT(3)
+      DIM ACQ.MON(2)
+      DIM DSP.MON(2)
+      DIM MN.DEPR(52)
+      DIM OLD.AST(10)
+*--- Depreciation calculation
+*
+      MAT STACK.REC = ""
+      MAT VALID.VARS = ""
+      ATT.CNT = 1
+      ATT.PTR = 23
+      MAT VM.CNT = ""; SLOC = 1
+      ERRMSG = ""
+      DEPR.ID = CONO : DEPR.NO
+      READ STACK.REC(1) FROM DEP.MAST, DEPR.ID:"!STACK" ELSE
+         ERRMSG = "Cannot locate the STACK for method - ":DEPR.NO
+         GOSUB 91000; GOTO 99999
+      END
+      READ VALID.VARS(1) FROM DEP.MAST, DEPR.ID:"!VARS" ELSE
+         ERRMSG = "Cannot locate the VARIABLES for method - ":DEPR.NO
+         GOSUB 91000; GOTO 99999
+      END
+      READ YR.PCT FROM DEP.MAST, DEPR.ID:"!TAB" ELSE
+         LOCATE "TABLE" IN VALID.VARS(1) SETTING FND THEN
+            ERRMSG = "Cannot locate the TABLE for method - ":DEPR.NO
+            GOSUB 91000; GOTO 99999
+         END
+         YR.PCT = ""
+      END
+      ALT.METHOD = DEPR.ALT
+      IF DEPR.ALT # "N" THEN
+         SLOC = SLOC + 1
+         FOR SL = 2 TO SLOC WHILE ERRMSG = ""
+            ASL = SL - 1
+            READ STACK.REC(SL) FROM DEP.MAST, DEPR.ID:"!STACK.":ASL ELSE
+               ERRMSG = "Cannot locate the switching STACK for method - ":DEPR.NO
+               GOTO 103
+            END
+            READ VALID.VARS(SL) FROM DEP.MAST, DEPR.ID:"!VARS.":ASL ELSE
+               ERRMSG = "Cannot locate the switching VARIABLES for method - ":DEPR.NO
+               GOTO 103
+            END
+103      NEXT SL
+         IF ERRMSG # "" THEN
+            GOSUB 91000; GOTO 99999
+         END
+      END
+      IF DEPR.TOT > 0 THEN
+         SLOC = SLOC + 1
+         READ STACK.REC(SLOC) FROM DEP.MAST, DEPR.ID:"!STACK.T" ELSE
+            ERRMSG = "Cannot locate the total STACK for method - ":DEPR.NO
+            GOSUB 91000; GOTO 99999
+         END
+         READ VALID.VARS(SLOC) FROM DEP.MAST, DEPR.ID:"!VARS.T" ELSE
+            ERRMSG = "Cannot locate the total VARIABLES for method - ":DEPR.NO
+            GOSUB 91000; GOTO 99999
+         END
+      END
+      FOR SL = 1 TO SLOC
+         AM.CNT(SL) = DCOUNT(VALID.VARS(SL),AM)
+         FOR I = 1 TO AM.CNT(SL)
+            VM.CNT(SL)<I> = DCOUNT(VALID.VARS(SL)<I>,VM)
+         NEXT I
+      NEXT SL
+      LIFE.YRS = AST.YEARS<1,BT>[1,2] + (AST.YEARS<1,BT>[3,2] /NUM.PERIODS)
+      ACQ.MON(2) = NUM.PERIODS; DSP.MON(1) = 1
+      IF DEPR.YR.TYPE = "F" THEN
+         MAX.YRS = LST.YR - FST.YR + 1
+         ACQ.MON(1) = FST.MN
+         DSP.MON(2) = LST.MN
+      END ELSE
+         MAX.YRS = INT(LIFE.YRS + .99)
+         ACQ.MON(1) = 1
+         IF LIFE.YRS = INT(LIFE.YRS + .99) THEN
+            DSP.MON(2) = NUM.PERIODS
+         END ELSE
+            DSP.MON(2) = AST.YEARS<1,BT>[3,2] + 0
+         END
+      END
+      COM.VARS(1) = "LIFE.YEARS"
+      COM.VARS(2) = COM.VARS(1)
+      COM.VARS(1)<2> = "TABLE"
+      FOR I = 1 TO 2
+         COM.VARS(I)<3> = "CUR.YEAR"
+         COM.VARS(I)<4> = "REM.AMT"
+         COM.VARS(I)<5> = "REM.LIFE.YEARS"
+      NEXT I
+      COM.VARS(3) = ""
+      FOR I = 1 TO ATT.CNT
+         OLD.AST(I) = AST.REC(ATT.PTR<I>)<1,BT>
+      NEXT I
+      REM.FLG = 0
+      AST.CUM.DEPR<1,BT> = 0
+*--- Initialization
+*
+      YR.PTR = 0 - 1
+      IF DEPR.TOT > 0 THEN
+         SL = SLOC; GOSUB 6000
+         MAX.DEPR = INT(STACK/100 * (DEPR.TOT/100) + ADD)
+      END
+      IF AST.FISCAL.MON > AST.FST.PER<1,BT> THEN
+         FSC.YR = AST.FISCAL.MON[1,4]
+         MN = AST.FISCAL.MON[5,2] + 1
+         IF MN > NUM.PERIODS THEN
+            FSC.YR = FSC.YR + 1
+            MN = 1
+         END
+         YR = FSC.YR - FST.YR
+         FOR I = 1 TO YR
+            FOR P = 1 TO NUM.PERIODS
+               AST.CUM.DEPR<1,BT> = AST.CUM.DEPR<1,BT>+D.REC(I,BT)<P>
+            NEXT P
+         NEXT I
+         YR = YR + 1
+         MN = MN - 1
+         FOR P = 1 TO MN
+            AST.CUM.DEPR<1,BT> = AST.CUM.DEPR<1,BT>+D.REC(YR,BT)<P>
+         NEXT P
+         MN = MN + 1
+         FOR P = MN TO NUM.PERIODS
+            D.REC(YR,BT)<P> = ""
+         NEXT P
+         PER = FSC.YR : (MN "R%2")
+         GOSUB 5000
+      END ELSE
+         PER = AST.FST.PER<1,BT>
+         D.REC(1,BT) = ""
+         REM.AMT = AST.INSTALL.AMT<1,BT>
+         REM.YRS = AST.YEARS<1,BT>
+         REM.LIFE.YRS = LIFE.YRS
+      END
+      LOOP WHILE PER <= AST.LST.PER<1,BT> DO
+         FSC.YR = PER[1,4]; FSC.MN = PER[5,2]
+         PER = FSC.YR + 1 : "01"
+         IF (FSC.YR : NUM.PERIODS) > AST.LST.PER<1,BT> THEN
+            LAST.LINE = LST.MN
+         END ELSE
+            LAST.LINE = NUM.PERIODS
+         END
+         YR = FSC.YR - FST.YR
+         FYR = YR + 1
+         D.REC(FYR+1,BT) = ""
+         FOR MN = FSC.MN TO LAST.LINE
+            BEGIN CASE
+            CASE DEPR.YR.TYPE = "F"
+               CUR.YR = FYR; CUR.MN = MN
+            CASE MN < FST.MN
+               CUR.YR = YR
+               CUR.MN = (NUM.PERIODS+1) - FST.MN + MN
+            CASE 1
+               CUR.YR = FYR
+               CUR.MN = MN - FST.MN + 1
+            END CASE
+            IF CUR.YR <> YR.PTR THEN
+               YR.PTR = CUR.YR
+               BEGIN CASE
+               CASE ALT.METHOD = "N"
+                  SL = 1; GOSUB 6000; GOSUB 6010
+               CASE ALT.METHOD = "Y"
+                  SL = 2; GOSUB 6000; GOSUB 6010
+               CASE NUM(ALT.METHOD)
+                  IF ALT.METHOD = CUR.YR THEN
+                     ALT.METHOD = "Y"
+                     GOSUB 5000
+                     SL = 2; GOSUB 6000; GOSUB 6010
+                  END ELSE
+                     SL = 1; GOSUB 6000; GOSUB 6010
+                  END
+               CASE 1
+                  GOSUB 5000
+                  SL = 2; GOSUB 6000; GOSUB 6010
+                  YR.DEPR = STACK
+                  AST.CUM.DEPR<1,BT> = AST.CUM.DEPR<1,BT> - STACK
+                  SL = 1; GOSUB 6000; GOSUB 6010
+                  BEGIN CASE
+                  CASE ALT.METHOD = "G" AND YR.DEPR > STACK
+                     ALT.METHOD = "Y"
+                     AST.CUM.DEPR<1,BT> = AST.CUM.DEPR<1,BT> - STACK
+                     SL = 2; GOSUB 6000; GOSUB 6010
+                  CASE ALT.METHOD = "E" AND YR.DEPR = STACK
+                     ALT.METHOD = "Y"
+                     AST.CUM.DEPR<1,BT> = AST.CUM.DEPR<1,BT> - STACK
+                     SL = 2; GOSUB 6000; GOSUB 6010
+                  CASE ALT.METHOD = "L" AND YR.DEPR < STACK
+                     ALT.METHOD = "Y"
+                     AST.CUM.DEPR<1,BT> = AST.CUM.DEPR<1,BT> - STACK
+                     SL = 2; GOSUB 6000; GOSUB 6010
+                  END CASE
+               END CASE
+            END
+            D.REC(FYR,BT)<MN> = MN.DEPR(CUR.MN)
+         NEXT MN
+      REPEAT
+      DSP.YRS(BT) = LST.YR - FST.YR + 1
+      GOTO 99000
+*
+*--- Calculate remaining amount and years
+5000  REM.AMT = AST.INSTALL.AMT<1,BT> - AST.CUM.DEPR<1,BT>
+      XMN = MN - 1
+      IF XMN < 1 THEN
+         FSC.YR = FSC.YR - 1
+         XMN = NUM.PERIODS
+      END
+      XMN = XMN "R%2"
+      XYR = 0
+      LOOP
+         XPER = FSC.YR : XMN
+      WHILE XPER < AST.LST.PER<1,BT> DO
+         FSC.YR = FSC.YR + 1
+         XYR = XYR + 1
+      REPEAT
+      IF XPER = AST.LST.PER<1,BT> THEN
+         XMN = 0
+      END ELSE
+         XYR = XYR - 1
+         IF FSC.YR = LST.YR THEN
+            XMN = XMN - LST.MN
+         END ELSE
+            XMN = NUM.PERIODS - LST.MN + XMN
+         END
+      END
+*      REM.LIFE.YRS = XYR + (XMN/NUM.PERIODS)
+      REM.LIF.YRS = XYR + (XMN/12)
+      REM.YRS = XYR "R%2" : XMN "R%2"
+      RETURN
+*
+*--- Depreciation calculation
+*
+6000  STACK = STACK.REC(SL)
+      TAB.FLG = 0
+      FOR I = 1 TO AM.CNT(SL)
+         IF VALID.VARS(SL)<I,1> THEN
+            VALUE = AST.REC(VALID.VARS(SL)<I,1>)<1,BT> + 0
+         END ELSE
+            LOCATE STACK<VALID.VARS(SL)<I,2>> IN COM.VARS(SL) SETTING PTR THEN
+               ON PTR GOSUB 6110,6120,6130,6210,6220
+            END ELSE
+               VALUE = 0
+            END
+         END
+         FOR J = 2 TO VM.CNT(SL)<I>
+            STACK<VALID.VARS(SL)<I,J>> = VALUE
+         NEXT J
+      NEXT I
+      CALL STACK.CALC(STACK,ERRMSG)
+      IF ERRMSG # "" THEN
+         GOSUB 91000
+         ERRMSG = ""
+      END
+      IF STACK > 0 THEN
+         ADD = .5
+      END ELSE
+         ADD = 0 - .5
+      END
+      RETURN
+6010  IF TAB.FLG AND YR.PCT<CUR.YR,2> > 0 THEN
+         IF STACK > YR.PCT<CUR.YR,2> THEN
+            STACK = YR.PCT<CUR.YR,2>
+         END
+      END
+      BEGIN CASE
+      CASE CUR.YR = 1
+         IF DEPR.ACQ.YR > 0 AND DEPR.ACQ.YR < NUM.PERIODS THEN
+            STACK = INT(((STACK/10)/NUM.PERIODS)*DEPR.ACQ.YR*10+ADD)
+         END ELSE
+            STACK = INT(STACK+ADD)
+         END
+         ST.MON = ACQ.MON(1); EN.MON = ACQ.MON(2)
+         GOSUB 6100
+         BEGIN CASE
+         CASE NUM(DEPR.ACQ.MON)
+         CASE DEPR.ACQ.MON[2,2] > 0
+            DIF = INT(MN.DEPR(ST.MON) * DEPR.ACQ.MON[2,2] / 100 + .5)
+            STACK = STACK - MN.DEPR(ST.MON) + DIF
+            MN.DEPR(ST.MON) = DIF
+         CASE 1
+            DIF = INT(MN.DEPR(ST.MON) * (FST.DATE(2,BT) - FST.DATE(1,BT)) / FST.DATE(2,BT) + .5)
+            STACK = STACK - MN.DEPR(ST.MON) + DIF
+            MN.DEPR(ST.MON) = DIF
+         END CASE
+         BEGIN CASE
+         CASE AST.FISCAL.MON >= AST.FST.PER<1,BT>
+         CASE FR.CURR.PER[1,4] <> FST.YR
+         CASE FR.CURR.PER[5,2] > FST.MN
+            EN.MON = ST.MON + FR.CURR.PER[5,2] - FST.MN
+            LIMIT = EN.MON - 1
+            FOR P = ST.MON TO LIMIT
+               MN.DEPR(EN.MON) = MN.DEPR(EN.MON) + MN.DEPR(P)
+               MN.DEPR(P) = 0
+            NEXT P
+         END CASE
+      CASE CUR.YR = MAX.YRS
+         BEGIN CASE
+         CASE DEPR.DSP.YR > 0 AND DEPR.DSP.YR < NUM.PERIODS
+            STACK = INT(((STACK/10)/NUM.PERIODS)*DEPR.DSP.YR*10+ADD)
+         CASE REM.FLG OR ALT.METHOD = "Y"
+            IF REM.YRS[3,2] > 0 THEN
+               STACK = INT(((STACK/10)/NUM.PERIODS)*REM.YRS[3,2]*10+ADD)
+            END ELSE
+               STACK = INT(STACK+ADD)
+            END
+         CASE AST.YEARS<1,BT>[3,2] > 0
+            STACK = INT(((STACK/10)/NUM.PERIODS)*AST.YEARS<1,BT>[3,2]*10+ADD)
+         CASE 1
+            STACK = INT(STACK+ADD)
+         END CASE
+         ST.MON = DSP.MON(1); EN.MON = DSP.MON(2)
+         GOSUB 6100
+         BEGIN CASE
+         CASE NUM(DEPR.DSP.MON)
+         CASE DEPR.DSP.MON[2,2] > 0
+            DIF = INT(MN.DEPR(EN.MON) * DEPR.DSP.MON[2,2] / 100 + .5)
+            STACK = STACK + DIF
+            MN.DEPR(EN.MON) = MN.DEPR(EN.MON) + DIF
+         CASE 1
+            DIF = INT(MN.DEPR(EN.MON) * FST.DATE(1,BT) / FST.DATE(2,BT) + .5)
+            STACK = STACK + DIF
+            MN.DEPR(EN.MON) = MN.DEPR(EN.MON) + DIF
+         END CASE
+         IF DEPR.TOT > 0 THEN
+            IF ABS(AST.CUM.DEPR<1,BT> + STACK) < ABS(MAX.DEPR) THEN
+               DIF = MAX.DEPR - AST.CUM.DEPR<1,BT> - STACK
+               MN.DEPR(EN.MON) = MN.DEPR(EN.MON) + DIF
+               STACK = STACK + DIF
+            END
+         END
+      CASE 1
+         STACK = INT(STACK+ADD)
+         ST.MON = 1; EN.MON = NUM.PERIODS
+         GOSUB 6100
+      END CASE
+      IF DEPR.TOT > 0 THEN
+         IF ABS(AST.CUM.DEPR<1,BT> + STACK) > ABS(MAX.DEPR) THEN
+            DIF = AST.CUM.DEPR<1,BT> + STACK - MAX.DEPR
+            FOR P = EN.MON TO ST.MON STEP -1 WHILE DIF > 0
+               IF MN.DEPR(P) < DIF THEN
+                  DIF = DIF - MN.DEPR(P)
+                  STACK = STACK - MN.DEPR(P)
+                  MN.DEPR(P) = 0
+               END ELSE
+                  MN.DEPR(P) = MN.DEPR(P) - DIF
+                  STACK = STACK - DIF
+                  DIF = 0
+               END
+            NEXT P
+         END
+      END
+      AST.CUM.DEPR<1,BT> = AST.CUM.DEPR<1,BT> + STACK
+      RETURN
+6100  MON.CNT = EN.MON - ST.MON + 1
+      IF STACK < 0 THEN
+         MON.AMT = INT(((STACK / 10) / MON.CNT) * 10 - .5)
+      END ELSE
+         MON.AMT = INT(((STACK / 10) / MON.CNT) * 10 + .5)
+      END
+      DIF = STACK - MON.AMT * MON.CNT
+      MAT MN.DEPR = 0
+      BEGIN CASE
+      CASE DIF > 0
+         LIMIT = EN.MON - DIF + 1
+         FOR P = LIMIT TO EN.MON
+            MN.DEPR(P) = MON.AMT + 1
+         NEXT P
+         LIMIT = LIMIT - 1
+         FOR P = ST.MON TO LIMIT
+            MN.DEPR(P) = MON.AMT
+         NEXT P
+      CASE DIF < 0
+         LIMIT = ST.MON - DIF - 1
+         FOR P = ST.MON TO LIMIT
+            MN.DEPR(P) = MON.AMT - 1
+         NEXT P
+         LIMIT = LIMIT + 1
+         FOR P = LIMIT TO EN.MON
+            MN.DEPR(P) = MON.AMT
+         NEXT P
+      CASE 1
+         FOR P = ST.MON TO EN.MON
+            MN.DEPR(P) = MON.AMT
+         NEXT P
+      END CASE
+      RETURN
+6110  VALUE = LIFE.YRS
+      RETURN
+6120  VALUE = YR.PCT<CUR.YR,1> / 100
+      TAB.FLG = TAB.FLG + 1
+      RETURN
+6130  VALUE = CUR.YR
+      RETURN
+6210  VALUE = REM.AMT
+      RETURN
+6220  VALUE = REM.LIFE.YRS
+      REM.FLG = 1
+      RETURN
+*
+*--- Error message routine
+91000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+* 91000*
+      IF GLS.FLG = "REPORT" THEN
+         ERR.FLG(BT) = ERRMSG
+      END ELSE
+*          PRINT @(0,23) : ERRMSG : CL :
+*          INPUT REPLY :
+*          PRINT @(0,23) : CL :
+         ERR.FLG(BT) = ERR.FLG(BT) + 1
+      END
+*       RETURN
+99000 FOR I = 1 TO ATT.CNT
+         AST.REC(ATT.PTR<I>)<1,BT> = OLD.AST(I)
+      NEXT I
+99999 *
+RETURN
+   END

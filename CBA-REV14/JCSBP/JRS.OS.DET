@@ -1,0 +1,335 @@
+      SUBROUTINE JRS.OS.DET
+*COPY>JCS.CPYLIB>COM.JRS
+*********************************************************************
+*
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates(Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - JCSBP
+* PROGRAM     - JRS.OS.DET
+* BY          - KERRY WILSON, CBA
+* DATE        - 06/16/88
+* DESCRIPTION - This program produces a Job Outside Purchases Posted
+*               Detail report.
+*T26556 ajibaly 05/09/2002 * Use report # and GET.PROG.HEAD.
+*T27947 thompson 02/11/2004 * Eactual cost amount field on report to
+*                             allow for -999999.99
+*T28964 wvaughan 08/07/2006 * Extend JOB.QTY field to display 8 numbers.
+*********************************************************************
+*COPY>PMC.CPYLIB>VEND
+*COPY>JCS.CPYLIB>JOB.OSP
+*COPY>PMC.CPYLIB>DEPARTMENT
+*COPY>JCS.CPYLIB>JOB
+*COPY>JCS.CPYLIB>OPERATION
+*COPY>JCS.CPYLIB>JOB.RPT.SET
+*COPY>JCS.CPYLIB>JOB.RPT.SUM
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*
+*---- INITIALIZATION
+*
+      PAGE.NO = 0
+*T26556 v
+*     RPT.NO="XXXX"
+      HD1 = ""; HD2 = ""
+      RPT.NAME = ""
+      RPT.DATE = DATE()
+      CALL GET.PROG.HEAD(CONO,C.CO.NAME,RPT.NAME,RPT.NO,RPT.DATE,HD1,HD2)
+      PRINTER ON
+*T26556 ^
+      CCTR.TOT = 0
+      CCTR.QTY = 0
+      CCTR.STOT = 0
+      CCTR.SQTY = 0
+      DEPT.TOT = 0
+      DEPT.QTY = 0
+      DEPT.STOT = 0
+      DEPT.SQTY = 0
+      GRAND.TOT = 0
+      GRAND.QTY = 0
+      GRAND.STOT = 0
+      GRAND.SQTY = 0
+*
+*---- MAIN PROCESSING
+*
+      JOB.COUNT = DCOUNT(JRS.IDS,AM)
+      PTR = 0
+      FRST.OSP = 0
+      FOR I = 1 TO JOB.COUNT WHILE PTR = 0
+         IF FIELD(JRS.IDS<I>,"&",5) # 'P' THEN GOTO 25
+         DPNO = FIELD(JRS.IDS<I>,"&",2)
+         CCTR = FIELD(JRS.IDS<I>,"&",3)
+         MATREAD JRS.REC FROM JOB.RPT.SET,CONO:JOBNO:'&':JRS.IDS<I> ELSE GOTO 25
+         OSP.CNT = DCOUNT(JRS.SEQ,VM)
+         FOR J = 1 TO OSP.CNT
+            SVM.CNT = DCOUNT(JRS.SEQ<1,J>,SM)
+            OS.ID = CONO:JOBNO:"!":DPNO:"!":CCTR:"!"
+            FOR K = 1 TO SVM.CNT
+               IF JRS.SUB.JOB<1,J,K> # '' THEN
+                  OS.ID = CONO:JRS.SUB.JOB<1,J,K>:'!':DPNO:'!':CCTR:'!'
+               END
+               MATREAD JOS.REC FROM JOB.OSP,OS.ID:JRS.SEQ<1,J,K> ELSE GOTO 20
+               PTR = I
+               OPNO = FIELD(JRS.IDS<PTR>,"&",4)
+               MATREAD VEND.REC FROM VEND,CONO:JOS.VEND ELSE
+                  VEND.DESC = 'UNKNOWN'
+               END
+               MATREAD DEPT.REC FROM DEPARTMENT,CONO:DPNO ELSE
+                  DEPT.DESC = 'UNKNOWN'
+               END
+               MATREAD OPER.REC FROM OPERATION,CONO:OPNO ELSE
+                  OPER.DESC = 'UNKNOWN'
+               END
+               IF FRST.OSP = 0 THEN
+                  GOSUB 5000
+                  GOSUB 3500
+                  GOSUB 1000
+                  FRST.OSP = J
+               END ELSE
+                  GOSUB 1000
+               END
+               PREV.DEPT = DPNO
+               PREV.CCTR = CCTR
+               PREV.OPNO = OPNO
+20          NEXT K
+         NEXT J
+25    NEXT I
+      IF PTR = 0 THEN GOTO 99999
+      PTR = PTR + 1
+      FOR I = PTR TO JOB.COUNT
+         IF FIELD(JRS.IDS<I>,"&",5) # 'P' THEN GOTO 35
+         DPNO = FIELD(JRS.IDS<I>,"&",2)
+         CCTR = FIELD(JRS.IDS<I>,"&",3)
+         MATREAD JRS.REC FROM JOB.RPT.SET,CONO:JOBNO:'&':JRS.IDS<I> ELSE GOTO 35
+         OSP.CNT = DCOUNT(JRS.SEQ,VM)
+         FOR J = 1 TO OSP.CNT
+            SVM.CNT = DCOUNT(JRS.SEQ<1,J>,SM)
+            OS.ID = CONO:JOBNO:"!":DPNO:"!":CCTR:"!"
+            FOR K = 1 TO SVM.CNT
+               IF JRS.SUB.JOB<1,J,K> # '' THEN
+                  OS.ID = CONO:JRS.SUB.JOB<1,J,K>:'!':DPNO:'!':CCTR:'!'
+               END
+               MATREAD JOS.REC FROM JOB.OSP,OS.ID:JRS.SEQ<1,J,K> ELSE GOTO 30
+               OPNO = FIELD(JRS.IDS<I>,"&",4)
+               MATREAD VEND.REC FROM VEND,CONO:JOS.VEND ELSE
+                  VEND.DESC = 'UNKNOWN'
+               END
+               BEGIN CASE
+               CASE PREV.DEPT # DPNO
+                  GOSUB 2000
+                  PREV.CCTR = CCTR
+                  GOSUB 3000
+                  GOSUB 3500
+                  PREV.DEPT = DPNO
+                  PREV.OPNO = OPNO
+               CASE PREV.CCTR # CCTR
+                  GOSUB 2000
+                  PREV.CCTR = CCTR
+                  PREV.OPNO = OPNO
+               CASE PREV.OPNO # OPNO
+                  GOSUB 2000
+                  PREV.OPNO = OPNO
+               END CASE
+               MATREAD OPER.REC FROM OPERATION,CONO:OPNO ELSE
+                  OPER.DESC = 'UNKNOWN'
+               END
+               GOSUB 1000
+30          NEXT K
+         NEXT J
+35    NEXT I
+      GOSUB 2000
+      GOSUB 3000
+      IF LINE.COUNT >= 48 THEN GOSUB 5000
+*T27947      PRINT SPACE(82):'-------- -------- ------- -------- '
+      PRINT SPACE(82):'-------- --------- ------- -------'
+      PLINE = '*** GRAND TOTALS ***':SPACE(62)
+      PLINE = PLINE:GRAND.QTY "MD2" "R#8":' '
+*T27947      PLINE = PLINE:GRAND.TOT "MD2" "R#8":' '
+      PLINE = PLINE:GRAND.TOT "MD2" "R#9":' '
+      PLINE = PLINE:GRAND.SQTY "MD2" "R#7":' '
+*T27947      PLINE = PLINE:GRAND.STOT "MD2" "R#8"
+      PLINE = PLINE:GRAND.STOT "MD2" "R#7"
+      PRINT PLINE
+      GOTO 99999
+*
+*---- PRINT DETAIL
+*
+1000 *
+      IF LINE.COUNT >= 50 THEN GOSUB 5000
+      PROD.LINE = FIELD(JRS.SEQ,"!",1)
+      PLINE = SPACE(15):VEND.DESC:'  ':JOS.VEND
+      PRINT PLINE
+      LINE.COUNT = LINE.COUNT + 1
+      IF JOS.TYPE = 'C' THEN
+         TYPE = 'CO'
+      END ELSE
+         TYPE = '  '
+      END
+      PLINE = SPACE(15):JOS.DESC
+      PRINT PLINE
+      LINE.COUNT = LINE.COUNT + 1
+      PLINE = SPACE(35):TYPE "L#2":' '
+      PLINE = PLINE:OCONV(JOS.DATE,"D2-") "L#8":' '
+      PLINE = PLINE:JOS.PO "L#8":' '
+      PLINE = PLINE:PROD.LINE "L#7":' '
+      PLINE = PLINE:JOS.INV "L#8":' '
+      PLINE = PLINE:OCONV(JOS.INV.DATE,"D2-") "L#8":' '
+      BEGIN CASE
+      CASE JOS.TYPE = 'S'
+         PLINE = PLINE:SPACE(16)
+         PLINE = PLINE:JOS.QTY"MD2" "R#8":' '
+*T27947         PLINE = PLINE:JOS.COST "MD2" "R#8":' '
+         PLINE = PLINE:JOS.COST "MD2" "R#9":' '
+         PLINE = PLINE:JOS.SPOIL.CODE "L#6":' '
+         PLINE = PLINE:JOS.RC.JOB "L#8"
+         CCTR.STOT = CCTR.STOT + JOS.COST
+         CCTR.SQTY = CCTR.SQTY + JOS.QTY
+      CASE 1
+         PLINE = PLINE:' ':JOS.QTY "MD2" "R#7":' '
+*T27947         PLINE = PLINE:JOS.COST "MD2" "R#8":' '
+         PLINE = PLINE:JOS.COST "MD2" "R#9":' '
+*T27947         PLINE = PLINE:SPACE(17)
+         PLINE = PLINE:SPACE(16)
+         PLINE = PLINE:JOS.SPOIL.CODE "L#6":' '
+         PLINE = PLINE:JOS.RC.JOB "L#8"
+         CCTR.TOT = CCTR.TOT + JOS.COST
+         CCTR.QTY = CCTR.QTY + JOS.QTY
+      END CASE
+      PRINT PLINE
+      LINE.COUNT = LINE.COUNT + 1
+      RETURN
+*
+*---- PRINT COST CENTER TOTALS
+*
+2000 *
+      IF LINE.COUNT >= 50 THEN GOSUB 5000
+*T27947      PLINE = SPACE(82):'-------- -------- ------- -------- '
+      PLINE = SPACE(82):'-------- --------- ------- -------'
+      PRINT PLINE
+      PLINE = '    * ':PREV.CCTR "L#4":' ':PREV.OPNO "L#4":' '
+      PLINE = PLINE:OPER.DESC "L#31":SPACE(35)
+      PLINE = PLINE:CCTR.QTY "MD2" "R#8":' '
+*T27947      PLINE = PLINE:CCTR.TOT "MD2" "R#8":' '
+      PLINE = PLINE:CCTR.TOT "MD2" "R#9":' '
+      PLINE = PLINE:CCTR.SQTY "MD2" "R#7":' '
+*T27947      PLINE = PLINE:CCTR.STOT "MD2" "R#8"
+      PLINE = PLINE:CCTR.STOT "MD2" "R#7"
+      PRINT PLINE
+      PRINT;PRINT
+      LINE.COUNT = LINE.COUNT + 4
+      DEPT.QTY = DEPT.QTY + CCTR.QTY
+      DEPT.TOT = DEPT.TOT + CCTR.TOT
+      DEPT.SQTY = DEPT.SQTY + CCTR.SQTY
+      DEPT.STOT = DEPT.STOT + CCTR.STOT
+      CCTR.QTY = 0
+      CCTR.TOT = 0
+      CCTR.SQTY = 0
+      CCTR.STOT = 0
+      RETURN
+*
+*---- PRINT DEPARTMENT TOTALS
+*
+3000 *
+      IF LINE.COUNT >= 50 THEN GOSUB 5000
+*T27947      PLINE = SPACE(82):'-------- -------- ------- -------- '
+      PLINE = SPACE(82):'-------- --------- ------- ------- '
+      PRINT PLINE
+      PLINE = '** ':DEPT.DESC:' DEPARTMENT TOTAL'
+      PLINE = PLINE "L#40"
+      PLINE = PLINE:SPACE(42):DEPT.QTY "MD2" "R#8":' '
+*T27947      PLINE = PLINE:DEPT.TOT "MD2"  "R#8":' '
+      PLINE = PLINE:DEPT.TOT "MD2"  "R#9":' '
+      PLINE = PLINE:DEPT.SQTY"MD2" "R#7":' '
+*T27947      PLINE = PLINE:DEPT.STOT "MD2" "R#8"
+      PLINE = PLINE:DEPT.STOT "MD2" "R#7"
+      PRINT PLINE
+      PRINT;PRINT
+      LINE.COUNT = LINE.COUNT + 4
+      GRAND.QTY = GRAND.QTY + DEPT.QTY
+      GRAND.TOT = GRAND.TOT + DEPT.TOT
+      GRAND.SQTY = GRAND.SQTY + DEPT.SQTY
+      GRAND.STOT = GRAND.STOT + DEPT.STOT
+      DEPT.QTY = 0
+      DEPT.TOT = 0
+      DEPT.SQTY = 0
+      DEPT.STOT = 0
+      RETURN
+*
+*---- PRINT DEPT DESCRIPTION
+*
+3500 *
+      MATREAD DEPT.REC FROM DEPARTMENT,CONO:DPNO ELSE DEPT.DESC = 'UNKNOWN'
+      PLINE = DEPT.DESC:'  ':DPNO
+      PRINT PLINE
+      DEPT.LNG = LEN(DEPT.DESC) + LEN(DPNO) + 2
+      PLINE = STR('-',DEPT.LNG)
+      PRINT PLINE
+      LINE.COUNT = LINE.COUNT + 2
+      RETURN
+*
+*---- PRINT HEADINGS
+*
+5000 *
+      PRINT CHAR(12)
+      PAGE.NO = PAGE.NO + 1
+      IF JRSD.CONS = "Y" THEN
+         CONSOL = "CONSOLIDATED"
+      END ELSE
+         CONSOL = "            "
+      END
+      PLINE = '#':JOBNO "L#7":CONSOL:' REPORT NO: ':RPT.NO "L#4":SPACE(6)
+      N = SPACE((50-LEN(C.CO.NAME))/2)
+      PLINE = PLINE:N:C.CO.NAME:N:SPACE(8)
+      PLINE = PLINE:OCONV(DATE(),"D2/")"R#8":SPACE(12)
+      PLINE = PLINE:'PAGE: ':PAGE.NO
+*T26556 v
+*     PRINT PLINE
+*     PLINE = JOB.CUST "L#8":SPACE(35):'D E T A I L   R E P O R T (OUTSIDE PURCHASES)'
+*     PLINE = PLINE:SPACE(22):'#':JOBNO "L#7"
+*     PRINT PLINE
+      PRINT HD1:PAGE.NO
+      PRINT HD2
+      PRINT "Job Number: ":JOBNO "L#8":SPACE(1):CONSOL
+      PRINT JOB.CUST "L#8"
+*T26556 ^
+      PLINE = C.CUST.NAME"L#30":SPACE(72):C.CUST.NAME
+      PRINT PLINE
+      *T28964   PLINE = JOB.QTY<1,1> "L#7":SPACE(45)
+      PLINE = JOB.QTY<1,1> "L#8":SPACE(45);*T28964
+      PLINE = PLINE:'FOR ITEMS THROUGH: ':OCONV(JRSD.DATE,"D2-"):SPACE(23)
+      *T28964   PLINE = PLINE:JOB.QTY<1,1> "L#7"
+      PLINE = PLINE:JOB.QTY<1,1> "L#8";*T28964
+      PRINT PLINE
+      PLINE = JOB.DESC "L#30":SPACE(22)
+      PLINE = PLINE:'DATE LAST ENTRY  : ':OCONV(JRSD.OS.DATE,"D2-"):SPACE(23)
+      PLINE = PLINE:JOB.DESC "L#30"
+      PRINT PLINE
+      PLINE = 'SM: ':C.SALS.NAME "L#27":' '
+      PLINE = PLINE:'SALES CODE: ':JOB.SALES.CODE
+      PRINT PLINE
+*T27947      PLINE = SPACE(83):'ACTUAL   ACTUAL   SPOIL    SPOIL'
+      PLINE = SPACE(83):'ACTUAL   ACTUAL   SPOIL    SPOIL'
+      PRINT PLINE
+      PLINE = 'DEPT CCTR OPER VENDOR/DESCRIPTION       '
+      PLINE = PLINE:'DATE    PO NUM  PROD LN INVOICE  INV DATE   QTY      '
+*T27947      PLINE = PLINE:'COST     QTY     COST   REASON XREF JOB'
+      PLINE = PLINE:'COST     QTY     COST   REASON XREF JOB'
+      PRINT PLINE
+      PLINE = '---- ---- ---- ':STR('-',21):'  -------- -------- ------- '
+*T27947      PLINE = PLINE:'------- -------- ------ --------'
+      PLINE = PLINE:'-------  -------- -------- --------- '
+*T27947      PLINE = PLINE:'------- -------- ------ --------'
+      PLINE = PLINE:'------- ------- ------ --------'
+      PRINT PLINE
+*T26556 v
+*     LINE.COUNT = 9
+      LINE.COUNT = 11
+*T26556 ^
+      RETURN
+*
+*---- END OF SUBROUTINE
+*
+99999 *
+      PRINTER OFF
+      RETURN
+      END

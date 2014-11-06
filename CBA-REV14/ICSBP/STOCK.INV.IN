@@ -1,0 +1,536 @@
+   SUBROUTINE STOCK.INV.IN(CONO,PO.CODE,FIND.PO)
+*COPY>CPYLIB>COM1
+*COPY>ICS.CPYLIB>COM.INV.MAIN  
+*COPY>ICS.CPYLIB>COM.INV.SERIAL
+*COPY>ICS.CPYLIB>COM.INV.LINK  
+*COPY>POS.CPYLIB>COM.PO.INTRF
+*********************************************************************
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - ICSBP
+* PROGRAM     - STOCK.INV.IN
+* BY          - EDVARD PITKA
+* DATE        - 07/18/01
+* DESCRIPTION
+*T25978 adelgado 02/18/2002 * Add the use of prompts (S,SR,SB,ST).
+*T28173 lross 06/25/2004 * Unit Price cannot be negative.
+*T27920 cmykleb 08/18/2004 * Add the ability to close a purchase order
+*                            from inventory receipts.
+*********************************************************************
+*COPY>PMC.CPYLIB>PO
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>CATEGORY
+*COPY>ICS.CPYLIB>INV.WHSE
+**COPY>ICS.CPYLIB>STOCK.REC
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>ICS.CPYLIB>PO.RSKI.XREF
+*COPY>CPYLIB>GEN.XREF
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>ICS.CPYLIB>SAVE.STOCK.REC
+*COPY>ICS.CPYLIB>INV_SERIAL
+*COPY>ICS.CPYLIB>INV_RECEIPTS
+*COPY>ICS.CPYLIB>INV_RECP_WHSE
+*COPY>ICS.CPYLIB>INV_AUDIT_HIST
+*COPY>ICS.CPYLIB>WAREHOUSE
+   ;*
+   ;***** SETUP ERRMSG ROUTINE
+   ;*
+   SYS.TYPE=1
+   CALL SYSCOM(MAT SYSCOM.REC)
+   BEGIN.PAGE=6
+   PAGE.SIZE=2
+   LINE.SPACE=2
+   UNKNOWN=STR('?',30)
+   PRT.INV.DESC=''
+   CALL GET.CONO(CONO,MAT COMP.REC) ; * T27920
+   ;*
+   ;**** SETUP GEN.XREF FOR PRODUCT
+   ;*
+   MAT GEN.XREF.REC=''
+   GXR.CO=CONO
+   GXR.HEADING<1,2>='DESCRIPTION'
+   GXR.ATT<1,1>=0
+   GXR.ATT<1,2>=2
+   GXR.LEN<1,1>=15
+   GXR.LEN<1,2>=45
+   LINES=0
+   OLD.START.LINE=0
+   ;*
+   ;**** MAIN PROCESSING
+   ;*
+   IF PO.PROD.NUM='' AND FIND.PO=0 THEN
+      LOOP
+         OPTION='A'
+         LN=LINES + 1
+         OLD.LINES=LINES
+         GOSUB 1000
+      WHILE LINES > OLD.LINES DO REPEAT
+      LN=LINES
+   END ELSE
+      LINES=DCOUNT(PO.PROD.NUM,VM)
+      LN=1
+   END
+   GOSUB 11000
+   ;*
+   ;**** ENTER OPTION
+   ;*
+   MORE=1
+   LOOP
+      IF FIND.PO THEN
+         ECD.NUM=36
+      END ELSE
+         ECD.NUM=37
+      END
+      SCV.REC(ECD.NUM)<ECD.SCRN.NO>=""
+      ECD.ACTION=4
+      CALL SCRN.EDIT
+      OPTION=ECD.RET.VALUE
+      BEGIN CASE
+         CASE OPTION='E' OR OPTION='END'
+            MORE=0
+         CASE OPTION='A'
+            LOOP
+               LN=LINES + 1
+               OLD.LINES=LINES
+               GOSUB 1000
+            WHILE LINES > OLD.LINES DO REPEAT
+            LN=LINES
+         CASE OPTION='C'
+            GOSUB 9000
+            IF LNO THEN
+               LN=LNO
+               SLN=BEGIN.PAGE + LINE.SPACE * MOD(LN - 1,PAGE.SIZE)
+               GOSUB 1200
+            END
+         CASE OPTION='R'
+            GOSUB 9000
+            IF LNO THEN
+               LN=LNO
+               FOUND=1
+               MATREAD INV.REC FROM INVENTORY, CONO : PO.PROD.NUM<1,LN> THEN
+                  MATREAD CATG.REC FROM CATEGORY,CONO:INV.LINE THEN
+                     IF CATG.TRK.LVL = 'S' THEN
+                        ERRMSG="Must use Serial stock receipts for this line item. "
+                        GOSUB 91000 
+                     END ELSE
+                        INV.WHSE.KEY=CONO:PO.PROD.NUM<1,LN>:'!':PO.WHSE<1,LN>
+                        MATREAD IWH.REC FROM INV.WHSE , INV.WHSE.KEY THEN
+                           SSLN=BEGIN.PAGE + LINE.SPACE * MOD(LN - 1,PAGE.SIZE)
+                           P_X =4 ; P_Y=SSLN ; P_VALUE="*" ; P_OPT=""
+                           CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+*T27920 v
+*                          CALL STOCK.WHLO.IN(CONO,PO.CODE,FIND.PO,LN)
+                           CALL STOCK.WHLO.IN(CONO,PO.CODE,FIND.PO,LN,MAT COMP.REC)
+*T27920 ^
+                           P_X =4 ; P_Y=SSLN ; P_VALUE=" " ; P_OPT=""
+                           CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+                        END ELSE
+                           ERRMSG='CANNOT LOCATE INV.WHSE # ' : INV.WHSE.KEY
+                           GOSUB 91000; FOUND=0
+                        END
+                     END
+                  END ELSE
+                     ERRMSG = 'CANNOT LOCATE CATEGORY ':INV.LINE
+                     GOSUB 91000; FOUND=0
+                  END
+               END ELSE
+                  ERRMSG='CANNOT LOCATE INVENTORY # ' : PO.PROD.NUM<1,LN>
+                  GOSUB 91000; FOUND=0
+               END
+            END
+         CASE OPTION='J'
+            GOSUB 9000
+            IF LNO THEN
+               LN=LNO
+               FOUND=1
+               MATREAD INV.REC FROM INVENTORY, CONO : PO.PROD.NUM<1,LN> ELSE
+                  ERRMSG='CANNOT LOCATE INVENTORY # ' : PO.PROD.NUM<1,LN>
+                  GOSUB 91000; FOUND=0
+               END
+               MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE ELSE
+                  ERRMSG="PRODUCT LINE '":INV.LINE:"' DOES NOT EXIST"
+                  GOSUB 91000
+                  GO 1100
+               END
+               IF CATG.INV="" OR CATG.ACCRU.LIAB="" OR CATG.AP.ACCT="" THEN
+                  ERRMSG="ACCOUNT DETAILS NOT SET UP FOR PRODUCT LINE '":INV.LINE:"'"
+                  GOSUB 91000
+                  GO 1100
+               END
+               IF FOUND AND CATG.TRACK.QOH="Y" THEN
+                  INV.WHSE.KEY=CONO:PO.PROD.NUM<1,LN>:'!':PO.WHSE<1,LN>
+                  MATREAD IWH.REC FROM INV.WHSE , INV.WHSE.KEY ELSE
+                     ERRMSG='CANNOT LOCATE INV.WHSE # ' : INV.WHSE.KEY
+                     GOSUB 91000; FOUND=0
+                  END
+                  IF FOUND THEN
+                     GOSUB GET.INV.CNV
+                     SSLN=BEGIN.PAGE + LINE.SPACE * MOD(LN - 1,PAGE.SIZE)
+                     P_X =4 ; P_Y=SSLN ; P_VALUE="*" ; P_OPT=""
+                     CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+                     CALL STOCK.JOB.IN(CONO,LN,MAT INV.CNV.REC,FIND.PO)
+                     P_X =4 ; P_Y=SSLN ; P_VALUE=" " ; P_OPT=""
+                     CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+                     ECD.ACTION=2; CALL SCRN.EDIT
+                     ECD.ACTION=3; CALL SCRN.EDIT
+                     OLD.START.LINE=0
+                     GOSUB 11000
+                  END
+               END
+            END
+         CASE OPTION='D'
+            GOSUB 9000
+            IF LNO THEN
+               LN=LNO
+               PO.PROD.NUM=DELETE(PO.PROD.NUM,1,LN,0)
+               PO.WHSE=DELETE(PO.WHSE,1,LN,0)
+               PO.GROS.PRICE=DELETE(PO.GROS.PRICE,1,LN,0)
+               PO.DISCOUNT=DELETE(PO.DISCOUNT,1,LN,0)
+               PO.TOT.ONORD=DELETE(PO.TOT.ONORD,1,LN,0)
+               PO.TOT.RECEVED=DELETE(PO.TOT.RECEVED,1,LN,0)
+               PO.PREV.RECEVED=DELETE(PO.PREV.RECEVED,1,LN,0)
+               PO.QTY.OPEN=DELETE(PO.QTY.OPEN,1,LN,0)
+               PO.TOT.CANCEL=DELETE(PO.TOT.CANCEL,1,LN,0)
+               SSTK.LOC=DELETE(SSTK.LOC,1,LN,0)
+               SSTK.SERIAL=DELETE(SSTK.SERIAL,1,LN,0)
+               SSTK.QTY=DELETE(SSTK.QTY,1,LN,0)
+               SSTK.SHEET=DELETE(SSTK.SHEET,1,LN,0)
+               SSTK.DIAM=DELETE(SSTK.DIAM,1,LN,0)
+               SSTK.TOT.REC=DELETE(SSTK.TOT.REC,1,LN,0)
+               SSTK.CUST=DELETE(SSTK.CUST,1,LN,0)
+               SSTK.JOB.QTY=DELETE(SSTK.JOB.QTY,1,LN,0)
+               SSTK.JOB.ALC=DELETE(SSTK.JOB.ALC,1,LN,0)
+               SSTK.JOB.REC=DELETE(SSTK.JOB.REC,1,LN,0)
+               PO.PROD.TYPE=DELETE(PO.PROD.TYPE,1,LN,0)
+               PO.UNIT.FLG=DELETE(PO.UNIT.FLG,1,LN,0)
+               PO.DEL.DATE=DELETE(PO.DEL.DATE,1,LN,0)
+               PRT.INV.DESC=DELETE(PRT.INV.DESC,1,LN,0)
+               LINES=COUNT(PO.PROD.NUM,VM) + (PO.PROD.NUM # '')
+               IF LN > 1 AND LN > LINES THEN LN=LN - 1
+               IF LN < 1 THEN LN=1
+               OLD.START.LINE=0
+            END
+            GOSUB 11000
+         CASE OPTION='S'
+            LN=1 + INT((LN-1)/PAGE.SIZE) * PAGE.SIZE + PAGE.SIZE
+            IF LN > LINES THEN LN=1
+            GOSUB 11000
+      * T25978 v
+         CASE OPTION = 'SR'
+            LN=1 + INT((LN-1)/PAGE.SIZE) * PAGE.SIZE - PAGE.SIZE
+            IF LN < 1 THEN LN = 1
+            GOSUB 11000
+         CASE OPTION = 'ST'
+            LN = 1
+            GOSUB 11000
+         CASE OPTION = 'SB'
+            LN = LINES
+            GOSUB 11000
+      * T25978 ^
+      END CASE
+   WHILE MORE=1 DO REPEAT
+   GOTO 99999
+*
+**************************************************************************
+******* S U B R O U T I N E S ********************************************
+**************************************************************************
+*
+****** ENTER PRODUCT INFORMATION
+1000 GOSUB 11000
+   SLN=BEGIN.PAGE + LINE.SPACE * MOD(LN - 1,PAGE.SIZE)
+   P_X =0 ; P_Y=SLN ; P_VALUE=LN "R#3" ; P_OPT="CL"
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+1100 X=6 ; Y=SLN ; TYP=1 ; MAXL=15 ; O.R='O' ; VALDAT='' ; HMSG=''
+   DEFAULT=PO.PROD.NUM<1,LN>
+   CALL EDIT.SUB
+   IF VALUE='END' THEN
+      PO.PROD.NUM=DELETE(PO.PROD.NUM,1,LN,0)
+      PO.WHSE=DELETE(PO.WHSE,1,LN,0)
+      PO.GROS.PRICE=DELETE(PO.GROS.PRICE,1,LN,0)
+      PO.DISCOUNT=DELETE(PO.DISCOUNT,1,LN,0)
+      PO.TOT.ONORD=DELETE(PO.TOT.ONORD,1,LN,0)
+      PO.TOT.RECEVED=DELETE(PO.TOT.RECEVED,1,LN,0)
+      PO.PREV.RECEVED=DELETE(PO.PREV.RECEVED,1,LN,0)
+      PO.QTY.OPEN=DELETE(PO.QTY.OPEN,1,LN,0)
+      PO.TOT.CANCEL=DELETE(PO.TOT.CANCEL,1,LN,0)
+      SSTK.LOC=DELETE(SSTK.LOC,1,LN,0)
+      SSTK.SERIAL=DELETE(SSTK.SERIAL,1,LN,0)
+      SSTK.QTY=DELETE(SSTK.QTY,1,LN,0)
+      SSTK.SHEET=DELETE(SSTK.SHEET,1,LN,0)
+      SSTK.DIAM=DELETE(SSTK.DIAM,1,LN,0)
+      SSTK.TOT.REC=DELETE(SSTK.TOT.REC,1,LN,0)
+      SSTK.CUST=DELETE(SSTK.CUST,1,LN,0)
+      SSTK.JOB.QTY=DELETE(SSTK.JOB.QTY,1,LN,0)
+      SSTK.JOB.ALC=DELETE(SSTK.JOB.ALC,1,LN,0)
+      SSTK.JOB.REC=DELETE(SSTK.JOB.REC,1,LN,0)
+      PO.PROD.TYPE=DELETE(PO.PROD.TYPE,1,LN,0)
+      PO.UNIT.FLG=DELETE(PO.UNIT.FLG,1,LN,0)
+      PO.DEL.DATE=DELETE(PO.DEL.DATE,1,LN,0)
+      PRT.INV.DESC=DELETE(PRT.INV.DESC,1,LN,0)
+      P_X =0 ; P_Y=SLN ; P_VALUE="" ; P_OPT="CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      GOTO 1999
+   END
+   IF VALUE='' THEN
+      X=6 ; Y=SLN+1 ; O.R='O' ; TYP=1 ; MAXL=45 ; VALDAT='' ; HMSG=''
+      CALL EDIT.SUB
+      IF VALUE='' OR VALUE='END' THEN GOTO 1100
+      GXR.TOP.LINE='INVENTORY XREF SEARCH'
+      GXR.HEADING<1,1>='PRODUCT NUMBER '
+      GXR.LOC=1
+      GXR.FILE=INVENTORY
+      GXR.XREF=INVENTORY.XREF
+      GXR.ID=''
+      GXR.SRCH.ID=VALUE
+      CALL GEN.XREF(MAT GEN.XREF.REC,PREFIX)
+      ECD.ACTION=2; CALL SCRN.EDIT
+      ECD.ACTION=3; CALL SCRN.EDIT
+      OLD.START.LINE=0
+      GOSUB 11000
+      IF GXR.ID='' THEN GOTO 1000
+      VALUE=GXR.ID
+      SLN=BEGIN.PAGE + LINE.SPACE * MOD(LN - 1,PAGE.SIZE)
+      P_X =0 ; P_Y=SLN ; P_VALUE=LN "R#3" ; P_OPT="CL"
+      P_X  := AM:6 ; P_Y := AM:SLN ; P_VALUE := AM:VALUE "L#15"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   END
+   MATREAD INV.REC FROM INVENTORY, CONO:VALUE ELSE
+      ERRMSG='INVENTORY (':VALUE:') IS NOT ON FILE.'
+      GOSUB 91000
+      GOTO 1100
+   END
+   MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE ELSE
+      ERRMSG="PRODUCT LINE '":INV.LINE:"' DOES NOT EXIST"
+      GOSUB 91000
+      GO 1100
+   END
+   IF CATG.TRK.LVL = "S" THEN 
+      ERRMSG='CANNOT RECEIVE SERIALIZED INVENTORY WITH THIS FUNCTION.'
+      GOSUB 91000 ; GOTO 1100
+   END
+   IF CATG.INV="" OR CATG.ACCRU.LIAB="" OR CATG.AP.ACCT="" THEN
+      ERRMSG="ACCOUNT DETAILS NOT SET UP FOR PRODUCT LINE '":INV.LINE:"'"
+      GOSUB 91000
+      GO 1100
+   END
+   IF INV.M.LINE="FNGD" THEN
+      ERRMSG="FINISHED GOODS INVENTORY CAN'T BE RECEIVED"
+      GOSUB 91000
+      GOTO 1100
+   END
+   PO.PROD.NUM<1,LN>=VALUE
+   IF INV.COST.WT+0=0 THEN INV.COST.WT=100
+   IF INV.SBR+0=0 THEN INV.SBR=1
+   PRT.INV.DESC<1,LN>=INV.FULL.DESC
+   P_X =6 ; P_Y=SLN+1 ; P_VALUE=INV.FULL.DESC "L#45" ; P_OPT=""
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   W.CNT=COUNT(INV.WHSE.CODE, VM) + (INV.WHSE.CODE # '')
+   BEGIN CASE
+      CASE W.CNT < 1
+         ERRMSG="NO WAREHOUSE FOR THIS PRODUCT"; GOSUB 91000; GOTO 1100
+      CASE W.CNT=1
+         PO.WHSE<1,LN>=INV.WHSE.CODE<1,1>
+         P_X =52 ; P_Y=SLN ; P_VALUE=INV.WHSE.CODE<1,1> "L#4" ; P_OPT=""
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      CASE 1
+         HMSG='WAREHOUSE - ':INV.WHSE.CODE<1,1>
+         VALDAT=INV.WHSE.CODE<1,1>
+         FOR W=2 TO W.CNT
+            HMSG=HMSG :',':INV.WHSE.CODE<1,W>
+            VALDAT=VALDAT :VM:INV.WHSE.CODE<1,W>
+         NEXT W
+         X=52 ; Y=SLN ; TYP=1 ; MAXL=4
+         IF PO.WHSE<1,LN> # '' THEN
+            DEFAULT=PO.WHSE<1,LN>
+            O.R='O'
+         END ELSE
+            O.R='R'
+         END
+         CALL EDIT.SUB
+         IF VALUE='END' THEN GOTO 1100
+         PO.WHSE<1,LN>=VALUE
+   END CASE
+   INV.WHSE.KEY=CONO:PO.PROD.NUM<1,LN>:'!':PO.WHSE<1,LN>
+   MATREAD IWH.REC FROM INV.WHSE , INV.WHSE.KEY ELSE
+      ERRMSG='Cannot Locate INV.WHSE - ':INV.WHSE.KEY
+      GOSUB 91000; GOTO 1100
+   END
+   MATREAD WHSE.REC FROM WAREHOUSE, CONO:PO.WHSE<1,LN> ELSE
+      ERRMSG="Warehouse ":PO.WHSE<1,LN>:" not on file"
+      GOSUB 91000; GOTO 1100
+   END
+   BEGIN CASE
+      CASE PO.DIV.OWNER="00"
+      CASE WHS.DIV # PO.DIV.OWNER
+         ERRMSG="Warehouse division does not match owner ":PO.DIV.OWNER
+         GOSUB 91000; GOTO 1100
+   END CASE
+   LOCATE PO.VEND.NO IN INV.VENDOR<1>,1 SETTING VV ELSE VV=0 
+   IF VV THEN PO.GROS.PRICE<1,LN>=INV.PRICE<1,VV>
+1200 X=57 ; Y=SLN ; TYP=4 ; SCALER=4 ; VALDAT='' ; HMSG='' ; MAXL=9
+   IF PO.GROS.PRICE<1,LN>='' THEN
+      O.R='R'
+   END ELSE
+      O.R='O'
+      DEFAULT=OCONV(PO.GROS.PRICE<1,LN> , "MD4")
+   END
+   CALL EDIT.SUB
+   IF VALUE="END" AND OPTION="A" THEN GOTO 1100
+   IF VALUE='END' AND OPTION="C" THEN
+      P_X =57 ; P_Y=SLN ; P_VALUE=OCONV(PO.GROS.PRICE<1,LN>, "MD4") "R#9" ; P_OPT=""
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      GOTO 1999
+   END
+*T28173 v
+   IF VALUE < 0 THEN
+      ERRMSG='** OUT OF RANGE **'
+      GOSUB 91000
+      VALUE = ''
+      GOTO 1200
+   END
+*T28173 ^
+   PO.GROS.PRICE<1,LN>=VALUE
+   X=67 ; Y=SLN ; TYP=4 ;SCALER=2;VALDAT='' ;HMSG='';MAXL=6
+   DEFAULT =OCONV(PO.DISCOUNT<1,LN> , "MD2")
+   O.R='O'
+   CALL EDIT.SUB
+   IF VALUE="END" AND OPTION="A" THEN GOTO 1100
+   IF VALUE="END" AND OPTION='C' THEN
+      P_X =67 ; P_Y=SLN ; P_VALUE=OCONV(PO.DISCOUNT<1,LN>, "MD2") "R#6" ; P_OPT=""
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      GOTO 1999
+   END
+   RECV.PRICE=INT((PO.GROS.PRICE<1,LN> * (1- (PO.DISCOUNT<1,LN>/10000))) / INV.SBR +.5)
+   PO.DISCOUNT<1,LN>=VALUE
+   PO.DEL.DATE<1,LN>=DATE()
+   IF OPTION="A" THEN
+      IF FIND.PO THEN
+         P_X =74 ; P_Y=SLN ; P_VALUE=INV.UNIT<1,1> "L#3" ; P_OPT=""
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      END ELSE
+         IF INV.UNIT<1,1>=INV.UNIT<1,2> THEN
+            PO.UNIT.FLG<1,LN>=INV.UNIT<1,1>
+            P_X =74 ; P_Y=SLN ; P_VALUE=INV.UNIT<1,1> "L#3" ; P_OPT=""
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         END ELSE
+            IF INV.PAP.TYPE="REGULAR" OR INV.PAP.TYPE="REG" OR INV.PAP.TYPE="" THEN
+               PO.UNIT.FLG<1,LN>=INV.UNIT<1,1>
+               P_X =74 ; P_Y=SLN ; P_VALUE=INV.UNIT<1,1> "L#3" ; P_OPT=""
+               CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            END ELSE
+1300           X=74; Y=SLN; TYP=1; MAXL=3; O.R="O"; DEFAULT=INV.UNIT<1,1>
+               VALDAT=INV.UNIT<1,1> ; HMSG=INV.UNIT<1,1>
+               IF INV.UNIT<1,1> # INV.UNIT<1,2> THEN
+                  VALDAT=VALDAT:VM:INV.UNIT<1,2>
+                  HMSG=HMSG :" , ":INV.UNIT<1,2>
+               END
+               IF INV.UNIT<1,1> # INV.UNIT<1,3> THEN
+                  VALDAT=VALDAT:VM:INV.UNIT<1,3>
+                  HMSG=HMSG:" , ":INV.UNIT<1,3>
+               END
+               CALL EDIT.SUB
+               IF VALUE="END" THEN GOTO 1100
+               IF VALUE="" THEN GOTO 1300
+               PO.UNIT.FLG<1,LN>=VALUE
+            END
+         END
+      END
+   END
+   LINES=COUNT(PO.PROD.NUM,VM) + (PO.PROD.NUM # '')
+   IF OPTION='A' THEN
+      P_X =4 ; P_Y=SLN ; P_VALUE="*" ; P_OPT=""
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+*T27920 v
+*     CALL STOCK.WHLO.IN(CONO,PO.CODE,FIND.PO,LN)
+      CALL STOCK.WHLO.IN(CONO,PO.CODE,FIND.PO,LN,MAT COMP.REC)
+*T27920 ^
+      P_X =4 ; P_Y=SLN ; P_VALUE=" " ; P_OPT=""
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   END
+1999 RETURN
+**** ENTER LINE NUMBER
+9000* GOSUB 11000 ;X=0 ; Y=23 ; TYP=3
+   GOSUB 11000
+   ECD.NUM=38
+   SCV.REC(ECD.NUM)<ECD.SCRN.NO>=""
+   ECD.MINV=OLD.START.LINE
+   ECD.MAXV=LAST.LINE
+   ECD.ACTION=4
+   CALL SCRN.EDIT
+   LNO=ECD.RET.VALUE
+   IF LNO='' OR LNO='END' THEN LNO=0
+   RETURN
+**** SCROLL ROUTINE FOR PROD
+11000 START.LINE=1 + INT((LN-1)/PAGE.SIZE) * PAGE.SIZE
+   LAST.LINE=START.LINE + PAGE.SIZE - 1
+   IF LAST.LINE > LINES THEN LAST.LINE=LINES
+   IF START.LINE=OLD.START.LINE THEN GOTO 11999
+   OLD.START.LINE=START.LINE
+   CNT=1
+   FOR N=START.LINE TO LAST.LINE
+      SLN=BEGIN.PAGE + LINE.SPACE * MOD(N-1,PAGE.SIZE)
+      P_X =0 ; P_Y=SLN ; P_VALUE=N "R#3" ; P_OPT=""
+      P_X  := AM:6 ; P_Y := AM:SLN ; P_VALUE := AM:PO.PROD.NUM<1,N> "L#15"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      IF PRT.INV.DESC<1,N>='' THEN
+         MATREAD INV.REC FROM INVENTORY, CONO:PO.PROD.NUM<1,N> ELSE
+            MAT INV.REC=''; INV.FULL.DESC=UNKNOWN; INV.UNIT<1,1>='???'
+         END
+         IF INV.SBR+0=0 THEN INV.SBR=1
+         IF INV.COST.WT+0=0 THEN INV.COST.WT=100
+         PRT.INV.DESC<1,N>=INV.FULL.DESC
+         IF PO.UNIT.FLG<1,N>="" THEN PO.UNIT.FLG<1,N>=INV.UNIT<1,1>
+      END
+      P_X =6 ; P_Y=SLN+1 ; P_VALUE=PRT.INV.DESC<1,N> "L#45" ; P_OPT=""
+      P_X  := AM:52 ; P_Y := AM:SLN ; P_VALUE := AM:PO.WHSE<1,N> "L#4"
+      P_X  := AM:57 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(PO.GROS.PRICE<1,N> , "MD4") "R#9"
+      P_X  := AM:67 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(PO.DISCOUNT<1,N> , "MD2") "R#6"
+      P_X  := AM:74 ; P_Y := AM:SLN ; P_VALUE := AM:PO.UNIT.FLG<1,N> "L#3"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      CNT=CNT + 1
+   NEXT N
+   FOR M=CNT TO PAGE.SIZE
+      SLN=BEGIN.PAGE + LINE.SPACE * MOD(M-1,PAGE.SIZE)
+      P_X =0 ; P_Y=SLN ; P_VALUE="" ; P_OPT="CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      P_X =0 ; P_Y=SLN+1 ; P_VALUE="" ; P_OPT="CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   NEXT M
+11999 RETURN
+*
+*************
+GET.INV.CNV: 
+*************
+*
+   MAT INV.CNV.REC=""
+   BEGIN CASE
+      CASE INV.UNIT<1,2>='SHT' AND INV.UNIT<1,3>='LBS'
+         ICR.DV1=INV.M.WT; ICR.MT1=1; ICR.DV2=1; ICR.CNV="MD0"
+      CASE INV.UNIT<1,2>='PC' AND INV.UNIT<1,3>='MSI'
+         ICR.DV1=INV.PAP.WIDTH/100; ICR.MT1=10; ICR.DV2=1; ICR.CNV="MD0"
+         IF PO.UNIT.FLG<1,LN>='FT' THEN
+            ICR.DV1<2>=INV.PAP.WIDTH/100; ICR.MT1<2>=100; ICR.DV2<2>=12
+         END
+      CASE INV.UNIT<1,2>='FT' AND INV.UNIT<1,3>='MSI'
+         ICR.DV1=INV.PAP.WIDTH/100; ICR.MT1=100; ICR.DV2=12; ICR.CNV="MD0"
+         IF PO.UNIT.FLG<1,LN>='PC' THEN
+            ICR.DV1<2>=INV.PAP.WIDTH/100; ICR.MT1<2>=10; ICR.DV2<2>=1
+         END
+      CASE 1
+         ICR.DV1=10; ICR.MT1=1; ICR.DV2=1; ICR.CNV="MD2"
+   END CASE
+   RETURN
+*
+**** CALLS FOR SYSCOM
+91000 ERR.TYPE=1; CALL SYSCOM(MAT SYSCOM.REC); RETURN
+92000 ERR.TYPE=2; CALL SYSCOM(MAT SYSCOM.REC); RETURN
+93000 ERR.TYPE=3; CALL SYSCOM(MAT SYSCOM.REC)
+99999 *
+   ECD.ACTION=99;CALL SCRN.EDIT
+   RETURN
+END

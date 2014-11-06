@@ -1,0 +1,1461 @@
+   SUBROUTINE VSI_MENU_SUB(ACTION,MST.MENU.ID,ERRMSG,CONO,USERID,PORT.NO,MAT MENU.REC,UPM.ID,UPMH.ID,CHAIN.VERB,CURR.MENUS,MENUS,COMPANY.OPEN,COMPANY,DFLT_USER,PMC.PATH,CONTROL)
+*COPY>CPYLIB>COM1
+*COPY>CPYLIB>COM.KSEL
+*COPY>CPYLIB>COM.MENU
+*******************************************************************
+* Revision    -[11.0]
+* Copyright   - 1982 by Computer Business Associates (Vercom Software, Inc)
+* Program     - VSI_MENU_SUB
+* System      - CBABP
+* BY          - Ziad Yamout
+* DATE        - 04/01/96
+* DESCRIPTION -
+*T21177 diane 11/06/1996 * REV11 UPG
+*T21177 diane 02/05/1997 * REV11 MOVE PRINTER ASSIGNMENT
+*T21909 diane 05/09/1997 * Restore CEO screen execution
+*T21911 diane 05/16/1997 * Check for G/L Backup or Restore in process
+*                          before running Gls items
+*T22426 stefanie 02/04/1998 * Allow reports to print to the screen.
+*T22627 rick 02/23/1998 * modify pgm so that when user chooses an option
+*                         from the menus by clicking on the menu the
+*                         correct number is returned
+*T22788 diane 04/28/1998 * Do not allow entry of invalid system
+*T11111 duane 05/08/1998 * MODIFICATION FOR HANDLING PAYROLL PASSWORD
+*T23702 diane 02/23/1999 * CLEARSELECT AFTER EXECUTION
+*T26095 alex 09/06/2001 * Fix security for menu.
+*T26465 thompson 03/04/2002 * FIX LEVEL PROGRAM TO ALLOW LEVEL 0 TO RUN
+*                             PROCESSES
+*T26090 adelgado 03/08/2002 * Develop a new PRINT/VIEW/EMAIL/ETC option
+*                             for REPORT.SCRN.
+*T26090 wyamout 04/15/2002 * Add FileInfo check before openning the
+*                            files. Files are opened and passed through
+*                            FILE.VARS
+*T27665 thompson 08/25/2003 * ALLOW PASS CHECK ON PAROLL ASCII OR GUI
+*T27704 cmykleb 11/11/2003 * Write the PMC_PROCESS also, when invoking
+*                            the Overnight process for GUI.
+********************************************************************
+* Enddoc
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>TCC
+*COPY>CPYLIB>PORT.CONTROL
+*COPY>PMC.CPYLIB>SECURITY
+*COPY>PMC.CPYLIB>MENUS.CONTROL
+*COPY>CPYLIB>PORT.MENU.HIST
+*COPY>CPYLIB>PORT.MENU
+*COPY>PMC.CPYLIB>PMC_PROCESS
+*COPY>PMC.CPYLIB>PMC_PROCESS_XREF
+* *COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*
+*COPY>CPYLIB>SPECIAL.H
+*COPY>CPYLIB>ROC.H
+*INCLUDE TUBP OBJECT.H
+*INCLUDE TUBP USER.INCLUDE.H
+*
+   IF FILEINFO (PMC_PROCESS, 0) # 1 THEN
+      OPEN "","PMC_PROCESS" TO PMC_PROCESS ELSE
+         ERRMSG = "PMC_PROCESS file is missing"; GOTO 99999
+      END
+   END
+   IF FILEINFO (PMC_PROCESS_XREF, 0) # 1 THEN
+      OPEN "","PMC_PROCESS_XREF" TO PMC_PROCESS_XREF ELSE
+         ERRMSG = "PMC_PROCESS_XREF file is missing"; GOTO 99999
+      END
+   END
+   IF FILEINFO (PREFIX, 0) # 1 THEN
+      OPEN "","PREFIX" TO PREFIX ELSE
+         ERRMSG = "PREFIX file is missing"; GOTO 99999
+      END
+   END
+   IF FILEINFO (COMPANY, 0) # 1 THEN
+      OPEN "","COMPANY" TO COMPANY ELSE
+         ERRMSG = "COMPANY file is missing"; GOTO 99999
+      END
+   END
+   IF FILEINFO (VOC, 0) # 1 THEN
+      OPEN '','VOC' TO VOC ELSE
+         ERRMSG = 'VOC FILE IS MISSING'
+         GOTO 99999
+      END
+   END
+*
+   DIM MENU(40)
+   DIM WORK.MENU(40)
+   DIM SEL.REF(30)
+   ERRMSG = ""
+   ENTRY.CNT = 0
+   PROGID = ""
+   GCAT.ID = "AE"
+   DIR.NAME = "ACCT"; CALL SYSVARS.SUB(DIR.NAME)
+   UPM.ID="U.":PORT.NO
+   SEC.ID="R.":PORT.NO
+   PMC.PATH=PRIMAC.PATH[1,INDEX(PRIMAC.PATH,"/",COUNT(PRIMAC.PATH,"/"))]
+   LOGTO.VERB="LOGTO ":PMC.PATH
+   PROCNAME = "VSI_MENU_SUB"
+***
+   IF ACTION="RETURN" OR ACTION="" THEN
+      SEL.MENU.ID=USER.MENU
+   END ELSE
+      SEL.MENU.ID="M.":ACTION
+      SEL.CMD=SEL.MENU.ID
+      DIR.MENU.ID=SEL.MENU.ID
+      DSP.MENU.ID=""
+      MENU_ID = "M.PMCLOGO"
+      GOSUB 1000
+      LOGO_TITLE = "User (":USER.ID:"), Acct (":USER.DIR:"), Port (":PORT.NO:")"
+      TU_FUNC = "TU.FORM.SETATTR":TU_VERNO
+      CALL @TU_FUNC("","title",LOGO_TITLE,ERROR)
+*COPY>CBABP>VSI_TU_ERR_SETUP
+      SEC.LOGON.DATE=DATE()
+      SEC.LOGON.TIME=TIME()
+      SEC.LOGON.PORT=PORT.NO
+      MATWRITE SEC.REC ON SECURITY, CONO:USERID
+      DISPLAYED.MENUS = ""
+      HIDDEN.MENUS = ""
+      GOSUB 1100
+   END
+*---- MAIN PROCESSING
+*
+100 *
+   MORE = 1
+   LOOP
+      VAL.ERR = 0
+      X = 0; Y = 21; TYP = 1; MAXL = 30
+      O.R = "O"
+      CALL EDIT.SUB
+      SEL.STMT = TRIM(VALUE)
+      ENTRY.CNT = DCOUNT(SEL.STMT," ")
+      IF ENTRY.CNT = 0 THEN ENTRY.CNT = 1
+      FOR SEL.PTR = 1 TO ENTRY.CNT
+         SEL.NO = FIELD(VALUE," ",SEL.PTR)
+         SLEN = LEN(SEL.NO)
+         SET.FLAG=SEL.NO[SLEN,1]
+         MENU.FND = 0
+         PROCESS.FND = 0
+         FND.SYS = 0
+         FND.OFF = 0
+         FND.EXIT = 0
+200 *
+         SAVE.VALUE = VALUE
+         VALUE = SAVE.VALUE
+         BEGIN CASE
+* Exit this menu
+            CASE SEL.NO = "END" OR SEL.NO = ""
+               IF DISPLAYED.MENUS<1,1> # "M.MASTER" THEN
+                  GOSUB 2100
+                  IF DISPLAYED.MENUS # "" THEN
+                     SEL.MENU.ID = DISPLAYED.MENUS<1,1>
+                     GOSUB 1200
+                  END
+               END
+* Exit all menus
+            CASE SEL.NO = "CLOSE"
+               GOSUB 2000
+               SEL.PTR = ENTRY.CNT
+               MORE = 0
+* Menu selected via mouse
+            CASE SEL.NO[1,3] = "&M&"
+               SEL.CMD = TRIM(SEL.NO[4,999])
+               GOSUB 4000
+               IF NOT(SEL.ERR) THEN
+                  GOSUB 4100
+                  IF NOT(VAL.ERR) THEN
+                     SEL.MENU.ID = SEL.CMD
+                     GOSUB 1100
+                     IF ERRMSG THEN
+                        ERRMSG = ""
+                     END ELSE
+                        GUIFORM = FRMHNDL
+                     END
+                  END
+               END
+* Program selected via mouse
+            CASE SEL.NO[1,3] = "&P&"
+               PROGID = TRIM(SEL.NO[4,999])
+               MATREAD PPS.REC FROM PMC_PROCESS, PROGID THEN
+                  SEL.CMD = PPS.VOC
+                  GOSUB 4000
+                  IF NOT(SEL.ERR) THEN
+                     GOSUB 4100
+                     IF NOT(VAL.ERR) THEN
+                        SEL.DSP = ''
+                        PINPUT.FLAG = 0
+                        GOSUB 3010
+                     END
+                  END
+               END ELSE
+                  ERRMSG="** Function Not Installed **"
+               END
+* Numbers
+            CASE NUM(SEL.NO)
+               IF SEL.NO < 1 OR SEL.NO > SEL.CNT THEN
+                  ERRMSG="** Out of range ** (":SEL.NO:")";* (VMS 01)"
+                  GOSUB 91000; GOTO 190
+               END
+               MENU.LINE=MENU(SEL.REF(SEL.NO))
+               SEL.CMD = MENU.LINE<1,1>
+               SEL.DSP = MENU.LINE<1,3>
+               GOSUB 4000
+               IF NOT(SEL.ERR) THEN
+                  GOSUB 4100
+                  IF NOT(VAL.ERR) THEN
+                     IF SEL.CMD[1,2] = "M." THEN
+                        SEL.MENU.ID = SEL.CMD
+                        GOSUB 1100
+                        GUIFORM = FRMHNDL
+                     END ELSE
+                        PROGID = TRIM(SEL.CMD)
+                        MATREAD PPSX.REC FROM PMC_PROCESS_XREF, PROGID THEN
+                           PROGID = PPSX.PROCESS.ID
+                           PINPUT.FLAG = 0
+                           GOSUB 3010
+                        END ELSE
+                           ERRMSG="** Function Not Installed **"
+                           GOSUB 91000
+                           ERRMSG = ""
+                           OK = 0
+                        END
+                     END
+                  END
+               END
+* Display Master menu
+            CASE SEL.NO = "M"
+               GOSUB 2000
+               MENU_ID = "M.PMCLOGO"
+               GOSUB 1000
+               MENU_ID = "M.MASTER"
+               SEL.MENU.ID = "M.MASTER"
+               DISPLAYED.MENUS = ""
+               GOSUB 1100
+* Menu via input with "M."
+            CASE SEL.NO[1,2] = "M."
+*T22788 v
+               SYS.NO = FIELD(SEL.NO,".",2)
+               LOCATE SYS.NO IN VALID.SYS<1>,1 SETTING FND.SYS ELSE FND.SYS = ""
+               LOCATE SYS.NO IN BASE.SYS<1>,1 SETTING FND.BASE ELSE FND.BASE = ""
+               IF NOT(FND.SYS) AND NOT(FND.BASE) THEN
+*T22788 ^
+                  SEL.CMD = SEL.NO
+                  GOSUB 4000
+                  IF NOT(SEL.ERR) THEN
+                     GOSUB 4100
+                     IF NOT(VAL.ERR) THEN
+                        SEL.MENU.ID = SEL.CMD
+                        GOSUB 1100
+                        IF ERRMSG THEN
+                           ERRMSG = ""
+                        END ELSE
+                           GUIFORM = FRMHNDL
+                        END
+                     END
+                  END
+                  IF ERRMSG THEN
+                     ERRMSG = ""
+                  END ELSE
+                     GUIFORM = FRMHNDL
+                  END
+*T22788 v
+               END
+*T22788 ^
+* Zoom
+            CASE SEL.NO = "}"
+               GOSUB 8500
+               PERFORM "VSI_ZOOM"
+***---???? Should not have an "R." record after VSI_ZOOM
+               MATREADU USER.REC FROM SECURITY, SEC.ID THEN
+                  USER.EXEC=""
+                  DELETE SECURITY, SEC.ID
+               END ELSE
+                  ERRMSG="** Invalid return stack after PERFORM ** (VMS 02)"
+                  GOSUB 91000
+                  USER.EXEC=""; MORE=0 ; SEL.PTR = ENTRY.CNT
+                  MATWRITE USER.REC ON SECURITY, SEC.ID
+                  CHAIN.VERB=LOGTO.VERB:USER.DIR
+               END
+* Prompt Company after END input
+            CASE SEL.NO = "CO"
+               GOSUB 7000
+* Who
+            CASE SEL.NO="WHO"
+               ERRMSG="Port (":PORT.NO:"), Account (":USER.DIR:")"
+               TITLE = "W H O"
+               GOSUB 9000
+               ERRMSG = ""
+* Time
+            CASE SEL.NO="TIME"
+               ODAY=UPCASE(OCONV(DATE(),"DWA"))
+               ERRMSG = ODAY
+               OTIME=OCONV(TIME(),"MTH")
+               ERRMSG=ERRMSG:" at ":OTIME[1,5]:" ":OTIME[6,2]
+               TITLE = "T I M E"
+               GOSUB 9000
+               ERRMSG = ""
+* Mail
+            CASE SEL.NO="TEST"
+               P_TITLE = "TEST"
+               PPS.CEO = ""
+               CALL EXE_CEOSCRN("BATCH.INPUT.PROC",GUIFORM,P_TITLE,PPS.CEO,PROGID,ERROR)
+            CASE SEL.NO="MAIL"
+               SEL.NO=1
+               CALL MENU.MAIL.MAINT(SEL.NO)
+* Terminal setup
+            CASE SEL.NO = "ASCII"
+               MATREAD TCC.PORT.REC FROM TCC, PORT.NO THEN
+                  PC.PORT.TYPE = "STD"
+                  PC.PORT.TSEL = "STD"
+                  MATREADU UPM.REC FROM SECURITY, UPM.ID THEN
+                     UPM.PC.TYPE = "STD"
+                     MATWRITE UPM.REC ON SECURITY, UPM.ID
+                  END ELSE
+                     RELEASE SECURITY, UPM.ID     ;* TEST LOCK
+                  END
+               END
+               GOSUB 2000
+               CHAIN.VERB="ASCII"
+               MORE = 0
+               SEL.PTR = ENTRY.CNT
+            CASE SEL.NO="SETUP"
+               SAVE.PC.PORT.TYPE = PC.PORT.TYPE
+               CALL TCC.SETUP.SCRN(PORT.NO)
+               IF PC.PORT.TSEL # "termulator" AND PC.PORT.TYPE # "termulator" THEN
+                  MATREAD TCC.PORT.REC FROM TCC, PORT.NO THEN
+                     PC.PORT.TYPE = "STD"
+                     PC.PORT.TSEL = "STD"
+                     MATREADU UPM.REC FROM SECURITY, UPM.ID THEN
+                        UPM.PC.TYPE = "STD"
+                        MATWRITE UPM.REC ON SECURITY, UPM.ID
+                     END ELSE
+                        RELEASE SECURITY, UPM.ID     ;* TEST LOCK
+                     END
+                  END
+                  GOSUB 2000
+                  CHAIN.VERB="ASCII"
+                  MORE = 0
+                  SEL.PTR = ENTRY.CNT
+               END
+* Inquiry screens
+            CASE SEL.NO="USERS" OR SEL.NO="PROCS" OR SEL.NO="VERBS" OR SEL.NO="HPROCS" OR SEL.NO="HVERBS"
+               CALL MENU.USER.INQ(SEL.NO)
+* LOGTO cannot be performed
+            CASE SEL.NO = "LOGTO"
+               ERRMSG="** Invalid Selection ** (VMS 03)"
+               GOSUB 91000
+            CASE NUM(SEL.NO[1,SLEN-1]) AND SLEN > 1
+               SET.FLAG=SEL.NO[SLEN,1]
+               SEL.NO=SEL.NO[1,SLEN-1]
+               IF SEL.NO < 1 OR SEL.NO > SEL.CNT THEN
+                  ERRMSG="** Out of range **";* (VMS 04)"
+                  GOSUB 91000
+               END ELSE
+                  BEGIN CASE
+* Process running msg
+                     CASE SET.FLAG="*"
+                        GOSUB 6100
+* Overnight processor
+                     CASE (SET.FLAG="+" OR SET.FLAG="-") AND SEC.MENU.LEVEL > 2
+                        GOSUB 6000
+                     CASE SET.FLAG="!" OR SET.FLAG="?"
+                        GOSUB 6200
+                  END CASE
+               END
+* Other options via input
+            CASE 1
+               LOCATE SEL.NO IN OFF.VERB<1>,1 SETTING FND.OFF ELSE FND.OFF = ""
+               LOCATE SEL.NO IN EXIT.VERB<1>,1 SETTING FND.EXIT ELSE FND.EXIT = ""
+*T22788 v
+*T22788               LOCATE SEL.NO IN VALID.SYS<1>,1 SETTING FND.SYS ELSE FND.SYS = ""
+               SYS.NO = FIELD(SEL.NO,".",1)
+               LOCATE SYS.NO IN VALID.SYS<1>,1 SETTING FND.SYS ELSE FND.SYS = ""
+               LOCATE SYS.NO IN BASE.SYS<1>,1 SETTING FND.BASE ELSE FND.BASE = ""
+*T22788 ^
+               MATREAD PPS.REC FROM PMC_PROCESS, SEL.NO THEN
+                  PROCESS.FND = 1
+               END ELSE
+                  PROCESS.FND = 0
+               END
+               ;* T26095 v
+          * MATREAD MENU FROM MENUS, "M.":SEL.NO THEN
+               MATREAD WORK.MENU FROM MENUS, "M.":SEL.NO THEN
+                  ;* T26095 ^
+                  MENU.FND = 1
+               END ELSE
+                  MENU.FND = 0
+               END
+               BEGIN CASE
+* Program via input (PMC_PROCESS id)
+                  CASE PROCESS.FND
+                     PROGID = SEL.NO
+                     SEL.DSP = ''
+                     PINPUT.FLAG = 1
+                     GOSUB 3000
+* System
+                  CASE FND.SYS
+                     GOSUB 5200
+                     VAL.ERR = 0      ;* T26095
+* Menu via input without "M."
+*T22788                  CASE MENU.FND
+                  CASE MENU.FND AND NOT(FND.SYS) AND NOT(FND.BASE)     ;*T22788
+                     SEL.CMD = "M.":SEL.NO
+                     GOSUB 4000
+                     IF NOT(SEL.ERR) THEN
+                        ;* T26095 v
+                        PRIOR.MENU = SEL.CMD
+                        CHECK.MENUS = '' ; DONE.CHECK = 0
+                        LOOP
+                           IF PRIOR.MENU = MST.MENU.ID THEN
+                              DONE.CHECK = 1
+                           END ELSE
+                              MATREAD WORK.MENU FROM MENUS, PRIOR.MENU THEN
+                                 CHECK.MENUS<1,-1> = PRIOR.MENU
+                                 PRIOR.MENU = WORK.MENU(1)<1,1>
+                              END ELSE
+                                 ERRMSG = "** Cannot locate Menu, ":PRIOR.MENU:" **"
+                                 GOSUB 91000
+                                 DONE.CHECK = 1 ; VAL.ERR = 1
+                              END
+                           END
+                        UNTIL DONE.CHECK DO REPEAT
+                        IF VAL.ERR = 1 THEN VAL.ERR = 0 ; RETURN
+                        OLD.SEL.CMD = SEL.CMD
+                        CCNT = DCOUNT(CHECK.MENUS,VM)
+                        FOR CPTR = 1 TO CCNT UNTIL VAL.ERR = 1
+                           SEL.CMD = CHECK.MENUS<1,CPTR>
+                           GOSUB 4100
+                        NEXT CPTR
+                        SEL.CMD = OLD.SEL.CMD
+                        ;* T26095 ^
+                        IF NOT(VAL.ERR) THEN
+                           SEL.MENU.ID = SEL.CMD
+                           GOSUB 1100
+                           IF ERRMSG THEN
+                              ERRMSG = ""
+                           END ELSE
+                              GUIFORM = FRMHNDL
+                           END
+                           ;* T26095 v
+                        END ELSE
+                           VAL.ERR = 0
+                           ;* T26095 ^
+                        END
+                     END
+* Logoff
+                  CASE FND.OFF
+                     GOSUB 5000
+* Tcl
+                  CASE FND.EXIT
+                     GOSUB 5100
+*
+                  CASE 1
+                     ENTRY.CNT = 0
+                     LOCATE SEL.NO IN GCAT.ID,1 SETTING FND ELSE
+                        READ REC FROM MDICT, SEL.NO ELSE
+                           ERRMSG="** Invalid Selection ** (":SEL.NO:")"; * (VMS 05)"
+                           GOSUB 91000; GOTO 190
+                        END
+                        BEGIN CASE
+                           CASE REC<1> = "PQN"
+                           CASE REC<1> = "V"
+                           CASE REC<1> = "S"
+                           CASE REC<1> = "PA"
+                           CASE 1
+                              ERRMSG="** Invalid Selection ** (VMS 06)"
+                              GOSUB 91000; GOTO 190
+                        END CASE
+                     END
+                     LOG.ERR=0; GOSUB 8200
+                     IF LOG.ERR THEN
+                        CHAIN.VERB=OFF.VERB<1,1>
+                        MORE=0; GOSUB 8900; GOTO 190
+                     END
+                     IF SEC.MENU.LEVEL < 1 THEN
+                        ERRMSG="** You are not authorized to perform this function **"
+                        GOSUB 91000; GOTO 190
+                     END
+                     USER.EXEC=PROCNAME
+                     USER.VERB=SEL.STMT; USER.STAT="VERB"
+                     GOSUB 8500
+                     P_TITLE = SEL.STMT
+                     PPS.CEO = ""
+                     CALL EXE_CEOSCRN(SEL.STMT,GUIFORM,P_TITLE,PPS.CEO,PROGID,ERROR)
+                     MATREADU USER.REC FROM SECURITY, SEC.ID THEN
+                        IF USER.EXEC = "" OR USER.EXEC = PROCNAME THEN
+                           USER.EXEC=""; USER.STAT="PROC"
+                           DELETE SECURITY, SEC.ID
+                           GOTO 190
+                        END ELSE
+                           ERRMSG="** Invalid return stack value (":USER.EXEC:") ** (VMS 07)"
+                        END
+                     END ELSE
+                        ERRMSG="** Invalid return stack after PERFORM ** (VMS 08)"
+                     END
+                     GOSUB 91000
+                     MORE=0; USER.EXEC=""; USER.STAT="PROC"
+                     MATWRITE USER.REC ON SECURITY, SEC.ID
+                     CHAIN.VERB=LOGTO.VERB:USER.DIR
+190 *
+               END CASE
+         END CASE
+199 *
+      NEXT SEL.PTR
+   WHILE MORE DO REPEAT
+   GOTO 99990
+*---- SUBROUTINES -----*
+*
+*---- Display master menu
+1000 *
+   ERRMSG = ""
+   TFILE = "EASY.MENUFORMS"
+   TNAME = MENU_ID
+   M_FRMHNDL = ""
+   TU_FUNC = "TU.FORM.LOAD":TU_VERNO
+   CALL @TU_FUNC(TFILE,TNAME,M_FRMHNDL,"",FRMHNDL,ERROR)
+   IF ERROR THEN
+      ERRMSG = "Cannot utilize MENU (":MENU_ID:")"
+      RETURN
+   END
+   GUIFORM_BU = FRMHNDL
+   FRMHNDLS = FRMHNDL
+   GUIFORM = FRMHNDL
+   RETURN
+*
+*---- Validate Menu/Process Selection
+1100 *
+   ERRMSG = ""
+   OK = 1
+   LOCATE SEL.MENU.ID IN DISPLAYED.MENUS<1>,1 SETTING FNDIT THEN
+      ERRMSG = "Menu ":SEL.MENU.ID:" already in use."
+      GOSUB 91000
+      OK = 0
+   END
+*---- Display menu
+   IF OK THEN
+      TFILE = "EASY.MENUFORMS"
+      TNAME = SEL.MENU.ID
+      IF ENTRY.CNT > 1 THEN
+         TU_FUNC = "TU.FORM.LOAD":TU_VERNO
+         CALL @TU_FUNC(TFILE,TNAME,M_FRMHNDL,"H",FRMHNDL,ERROR)
+         HIDDEN = 'Y'
+      END ELSE
+         TU_FUNC = "TU.FORM.LOAD":TU_VERNO
+         CALL @TU_FUNC(TFILE,TNAME,M_FRMHNDL,"",FRMHNDL,ERROR)
+         HIDDEN = ""
+      END
+      IF ERROR THEN
+         ERRMSG = "Cannot utilize MENU (":SEL.MENU.ID:")"
+         GOSUB 91000
+         OK = 0
+         GOTO 1299
+      END ELSE
+         INS FRMHNDL BEFORE FRMHNDLS<1>
+         INS SEL.MENU.ID BEFORE DISPLAYED.MENUS<1,1>
+         INS HIDDEN BEFORE HIDDEN.MENUS<1,1>
+*        CALL TU.FORM.UPDATEFIELD(30,1,CONO,ERROR)
+         READV CO.NAME FROM COMPANY, USER.CONO, 1 THEN
+            TU_FUNC = "TU.FORM.SETATTR":TU_VERNO
+            CALL @TU_FUNC("_pmccono","string",CO.NAME "L#25":" (":USER.CONO:")",ERROR)
+         END
+      END
+      GUIFORM = FRMHNDL
+*
+*---- Read menu and set up variables
+1200 *
+*       CALL TU.FORM.FOCUS(HFORM,"",ERROR)
+      VAL.ERR=0
+      MATREAD MENU FROM MENUS, SEL.MENU.ID ELSE
+         ERRMSG="** Cannot locate Menu, ":SEL.MENU.ID:" **"
+         GOSUB 91000
+         OK = 0
+         GOTO 1299
+      END
+      USER.MENU=SEL.MENU.ID
+      USER.M.DSP=MENU(1)<1,3>
+      HD.CNT=0; LIMIT=33
+      FOR I=2 TO LIMIT
+         IF MENU(I)="" THEN
+            LIMIT=0
+         END ELSE
+            HD.CNT=HD.CNT + 1
+         END
+      NEXT I
+      MAT SEL.REF=""
+      SEL.CNT=0
+      FOR I=1 TO HD.CNT
+         IF MENU(I+1)<1,1>="C" THEN
+            LHD=MENU(I+1)<1,3>
+            IF LHD # "" THEN
+               IF STR("-",LEN(LHD))=LHD THEN
+                  MENU(I+1)<1,3>=""
+               END
+            END
+         END ELSE
+            SEL.CNT=SEL.CNT + 1
+            SEL.REF(SEL.CNT)=I + 1
+         END
+      NEXT I
+   END
+1299*
+   RETURN
+*
+*---- Close all open forms
+2000 *
+   TU_FUNC = "TU.FORM.KILL":TU_VERNO
+   CALL @TU_FUNC(GUIFORM,ERROR)
+   FRMHNDLS = DELETE(FRMHNDLS,1,0,0)
+   LOOP WHILE FRMHNDLS # "" DO
+      GUIFORM = FRMHNDLS<1>
+      TU_FUNC = "TU.FORM.KILL":TU_VERNO
+      CALL @TU_FUNC(GUIFORM,ERROR)
+      FRMHNDLS = DELETE(FRMHNDLS,1,0,0)
+   REPEAT
+   RETURN
+*
+*---- Close current form
+2100 *
+   TU_FUNC = "TU.FORM.KILL":TU_VERNO
+   CALL @TU_FUNC(GUIFORM,ERROR)
+   FRMHNDLS = DELETE(FRMHNDLS,1,0,0)
+   DISPLAYED.MENUS = DELETE(DISPLAYED.MENUS,1,1,0)
+   BEGIN CASE
+      CASE FRMHNDLS = ""
+         MORE = 0 ; SEL.PTR = ENTRY.CNT
+      CASE FRMHNDLS = GUIFORM_BU
+         TU_FUNC = "TU.FORM.KILL":TU_VERNO
+         CALL @TU_FUNC(GUIFORM_BU,ERROR)
+         MORE = 0 ; SEL.PTR = ENTRY.CNT
+      CASE 1
+         GUIFORM = FRMHNDLS<1>
+         TU_FUNC = "TU.FORM.SETATTR":TU_VERNO
+         CALL @TU_FUNC("_pmccono","string",CO.NAME "L#25":" (":USER.CONO:")",ERROR)
+   END CASE
+   RETURN
+*
+*---- Run Program entered via Process name
+3000 *
+   VAL.ERR = 0
+*T26465  IF SEC.MENU.LEVEL < 1 THEN
+*T26465    ERRMSG="** You are not authorized to perform this function **"
+*T26465    GOSUB 91000; VAL.ERR = 1; GOTO 3099
+*T26465  END
+3010 *
+   VAL.ERR = 0
+   MATREAD PPS.REC FROM PMC_PROCESS, PROGID THEN
+      GOSUB 3300
+      IF ERRMSG THEN ERRMSG = "" ; VAL.ERR = 1 ; GOTO 3099
+      MATREAD SEC.REC FROM SECURITY, USER.C.CO:USER.ID THEN
+         IF PINPUT.FLAG THEN
+            GOSUB 3100
+         END ELSE
+            CK.SEL.MENU.ID = ""
+            CK.SEL.OPTION = ""
+            MENU.OFFSET.POS = 0   ;*T22627
+            IF NOT(NUM(SEL.NO))THEN
+               FOR I = 1 TO SEL.CNT
+*T22627 v                 
+                  IF MENU(I+1)<1,1>#'C' THEN
+                     MENU.OFFSET.POS = MENU.OFFSET.POS + 1
+                  END
+*T22627 ^
+                  IF MENU(I+1)<1,1> = SEL.CMD THEN
+*T22627                       SEL.NO = I + 1
+                     SEL.NO = MENU.OFFSET.POS    ;* T22627
+                  END
+               NEXT I
+            END
+            CK.SEL.MENU.ID<1,1> = SEL.MENU.ID
+            CK.SEL.OPTION<1,1> = SEL.NO
+         END
+         IF VAL.ERR THEN
+            ERRMSG="** You are not authorized to perform this function **"
+            GOSUB 91000; VAL.ERR=0
+         END ELSE
+            VOC_ID = "E_":PORT.NO
+            CALL VSI_VERB_SUB(VOC_ID,MDICT,PROGID,PMC_PROCESS,EXE_TYPE,EXE_VERB,ERRMSG)
+            BEGIN CASE
+               CASE ERRMSG # ""
+*TEMP              GOSUB 91000; GOTO 1129
+                  GOSUB 91000
+               CASE EXE_VERB # ""
+                  LOG.ERR=0; GOSUB 8200
+                  IF LOG.ERR THEN
+                     CHAIN.VERB=OFF.VERB<1,1>
+                     GOSUB 8900
+*TEMP                MORE=0; GOTO 1129
+*                  MORE = 0
+                  END
+                  IF EXE_TYPE = "P" THEN
+                     USER.EXEC=PROCNAME
+                  END
+                  USER.VERB = PROGID
+                  IF SEL.DSP = '' THEN
+                     USER.V.DSP = PPS.DESC
+                  END ELSE
+                     USER.V.DSP=SEL.DSP
+                  END
+                  GOSUB 8500
+                  FLAG = 'S'
+                  SPCNT = DCOUNT(CK.SEL.MENU.ID<1>,VM)
+                  SET.DONE = 0
+                  FOR SPI = 1 TO SPCNT
+*T22426 >                     CALL SP.DEST.ASSIGN(FLAG,USER.CONO,USER.ID,CK.SEL.MENU.ID<1,SPI>,CK.SEL.OPTION<1,SPI>,SET.DONE)
+                     CALL SP.DEST.ASSIGN(FLAG,USER.CONO,USER.ID,CK.SEL.MENU.ID<1,SPI>,CK.SEL.OPTION<1,SPI>,SET.DONE,MAT USER.REC,MAT TCC.PORT.REC)
+                     IF SET.DONE THEN
+                        SPI = SPCNT
+                     END
+                  NEXT SPI
+                  IF PROGID[1,3] = 'PRS' OR PROGID[1,3] = 'PR4' OR PROGID[1,3] = 'EPS' OR PROGID[1,3] = 'EP4' THEN
+                     IF UPM.PAYROLL # 'Y' THEN
+                        CALL PASS.CHECK('termulator')
+                        UPM.PAYROLL = 'Y'
+                        MATWRITE UPM.REC ON SECURITY, UPM.ID
+                     END
+                  END ELSE
+                     UPM.PAYROLL = 'N'
+                     MATWRITE UPM.REC ON SECURITY, UPM.ID
+                  END
+*T21909 v
+                  IF (EXE_TYPE = "P" OR EXE_TYPE = "PB") AND (PPS.CEO = "M" OR PPS.CEO = "R") THEN
+                     P_TITLE = PPS.DESC
+                     CALL EXE_CEOSCRN(EXE_VERB,GUIFORM,P_TITLE,PPS.CEO,PROGID,ERROR)
+                  END ELSE
+                     PREV_PROG_ID = @USER1
+                     @USER1 = PROGID
+                     PROCWRITE ""
+                     EXECUTE EXE_VERB
+                     UDTEXECUTE "CLEARSELECT"      ;* T23702
+*WRITE EXE_VERB ON VOC,'X_':PORT.NO
+*EXECUTE 'DUANE'
+*CRT @(0,23):'I AM NOW BACK'
+                     @USER1 = PREV_PROG_ID
+                  END
+*T21909 ^
+                  FLAG = 'R'
+*T22426 >                  CALL SP.DEST.ASSIGN(FLAG,USER.CONO,USER.ID,'','','')
+                  CALL SP.DEST.ASSIGN(FLAG,USER.CONO,USER.ID,'','','',MAT USER.REC,MAT TCC.PORT.REC)
+                  ;* T26090 v
+                  HF_NAME = PORT.NO:'_':OCONV(@LOGNAME,'MCU')
+                  READV HF.ERR FROM CONTROL, HF_NAME,1 ELSE HF.ERR = ''
+                  IF HF.ERR # '' THEN
+                     ERRMSG = 'There is no data to display!  <RETURN> to Exit.'
+                     GOSUB 91000
+                  END
+                  DELETE CONTROL, HF_NAME
+                  ;* T26090 ^
+                  IF EXE_TYPE = "P" OR EXE_TYPE = "PB" THEN
+                     READU EXEC_PROC FROM MDICT, VOC_ID THEN
+                        DELETE MDICT, VOC_ID
+                     END ELSE
+                        RELEASE MDICT, VOC_ID
+                     END
+                     CALL PRINTER_CLOSE
+                  END
+                  MATREADU USER.REC FROM SECURITY, SEC.ID THEN
+                     IF USER.EXEC = "" OR USER.EXEC = PROCNAME THEN
+                        USER.EXEC=""
+                        DELETE SECURITY, SEC.ID
+                        ERRMSG = ""
+                     END ELSE
+                        ERRMSG="** Invalid return stack value (":USER.EXEC:") ** (VMS 09)"
+                     END
+                  END ELSE
+                     ERRMSG="** Invalid return stack after PERFORM ** (VMS 10)"
+                  END
+                  IF ERRMSG # "" THEN
+                     GOSUB 91000
+                     USER.EXEC=""; MORE=0
+                     MATWRITE USER.REC ON SECURITY, SEC.ID
+                     CHAIN.VERB=LOGTO.VERB:USER.DIR
+                  END
+            END CASE
+         END
+      END
+   END ELSE
+      ERRMSG="** Function Not Installed **"
+      GOSUB 91000
+      ERRMSG = ""
+      OK = 0
+   END
+3099 *
+   RETURN
+*---- Build array with menus to check
+3100 *
+*   MAT WORK.MENU = MAT MENU
+*   PRIOR.MENU = MENU(1)<1,1>
+   SEC.VALIDATE.ONLY = 0    ;* T26095
+   PRIOR.MENU = ""
+   CK.SEL.MENU.ID = ""
+   CK.SEL.OPTION = ""
+   MCNT = DCOUNT(PPS.MENU,VM)
+   FOR MPTR = 1 TO MCNT
+      PRIOR.MENU = PPS.MENU<1,MPTR>
+      DONE.CHECK = 0
+      CHECK.MENUS = ""
+      LOOP
+         IF PRIOR.MENU = MST.MENU.ID THEN
+            DONE.CHECK = 1
+         END ELSE
+            MATREAD WORK.MENU FROM MENUS, PRIOR.MENU THEN
+               CHECK.MENUS<1,-1> = PRIOR.MENU
+               PRIOR.MENU = WORK.MENU(1)<1,1>
+            END ELSE
+               ERRMSG="** Cannot locate Menu, ":PRIOR.MENU:" **"
+               GOSUB 91000
+               DONE.CHECK = 1
+            END
+         END
+      UNTIL DONE.CHECK
+      REPEAT
+      GOSUB 3200
+   NEXT MPTR
+   IF SUM(VAL.ERR) # MCNT THEN
+      VAL.ERR = 0
+   END
+   ;* T26095 v
+   IF SEC.MENU.FLAG # 'A' THEN
+      CHECK.MENUS = PPS.VOC ; SEC.VALIDATE.ONLY = 1 ; MCNT = 1
+      GOSUB 3200             
+   END
+   ;* T26095 ^
+   RETURN
+*---- Check each menu for access
+3200 *
+   CCNT = DCOUNT(CHECK.MENUS,VM)
+   FOR CPTR = 1 TO CCNT
+      CHECK.SEL.MENU.ID = CHECK.MENUS<1,CPTR>
+      BEGIN CASE
+         CASE SEC.MENU.LEVEL > 2
+         CASE SEC.MENU.FLAG="A"
+            LOCATE CHECK.SEL.MENU.ID IN SEC.MENU.PROC<1>,1 SETTING FND THEN
+          * VAL.ERR<1,MCNT> = 0      ;* T26095
+               VAL.ERR<1,MPTR> = 0        ;* T26095
+               GOTO 3250
+            END ELSE
+               LOCATE PPS.VOC IN SEC.MENU.PROC<1>,1 SETTING FND THEN
+            * VAL.ERR<1,MCNT> = 0    ;* T26095
+                  VAL.ERR<1,MPTR> = 0      ;* T26095
+                  GOTO 3250
+               END ELSE
+            * VAL.ERR<1,MCNT> = 1    ;* T26095
+                  VAL.ERR<1,MPTR> = 1      ;* T26095
+*               IF SEC.MENU.DISP<1,FND> = "Y" THEN
+*                  OK = 1
+*               END
+               END
+            END
+         CASE 1
+            ;* T26095 v
+        * IF PPS.VOC[1,2] = "M." THEN
+        *   PPS.VOC = CHECK.SEL.MENU.ID
+        * END
+        * LOCATE PPS.VOC IN SEC.MENU.PROC<1>,1 SETTING FND THEN
+            LOCATE CHECK.SEL.MENU.ID IN SEC.MENU.PROC<1>,1 SETTING FND THEN
+               ;* T26095 ^
+               VAL.ERR<1,MPTR> = 1
+            END
+      END CASE
+   NEXT CPTR
+3250 *
+*
+*---- Build array for SP.DEST.ASSIGN
+   IF SEC.VALIDATE.ONLY = 1 THEN RETURN    ;* T26095
+   MATREAD WORK.MENU FROM MENUS, CHECK.MENUS<1,1> THEN
+      THD.CNT=0; TLIMIT=33
+      FOR I=2 TO TLIMIT
+         IF WORK.MENU(I)="" THEN
+            TLIMIT=33
+         END ELSE
+            THD.CNT=THD.CNT + 1
+         END
+      NEXT I
+      TSEL.CNT=0
+      FOR I=1 TO THD.CNT
+         IF WORK.MENU(I+1)<1,1>="C" THEN
+            NULL
+         END ELSE
+            IF PPS.VOC = WORK.MENU(I+1)<1,1> THEN
+               CK.SEL.OPTION<1,-1> = TSEL.CNT + 1
+               CK.SEL.MENU.ID<1,-1> = CHECK.MENUS<1,1>
+*               I = THD.CNT - 1
+               I = THD.CNT
+            END ELSE
+               TSEL.CNT=TSEL.CNT + 1
+            END
+         END
+      NEXT I
+   END
+   RETURN
+*
+*---- Check for G/L backup or restore in process
+3300 *
+   ERRMSG = ""
+   READ PROCESS.CONTROL FROM CONTROL,CONO:'GLS.BACKUP.RESTORE' THEN
+      IF PROCESS.CONTROL # "" THEN
+         FINDSTR "M.GLS" IN PPS.MENU,1 SETTING GFLAG THEN
+            IF PROCESS.CONTROL = 'R' OR PROCESS.CONTROL = 'B' THEN
+               ERRMSG = 'GENERAL LEDGER BACKUP/RESTORE IN PROCESS'
+               GOSUB 91000 ; RETURN
+            END
+         END
+      END
+   END ELSE
+      ERRMSG = ""
+   END
+   RETURN
+*
+*---- Validate access security
+4000 *
+   SEL.ERR = 0
+   BEGIN CASE
+      CASE SEL.CMD[1,1]="*"
+         ERRMSG="** Function Not Installed **"
+         GOSUB 91000
+         SEL.ERR = 1
+      CASE SEL.CMD[1,1]="$"
+         SEL.CMD=SEL.CMD[2,99]
+         DSP.SCRN=1; GOSUB 80000
+      CASE 1
+         DSP.SCRN=0
+   END CASE
+   RETURN
+*
+4100*
+   VAL.ERR=0
+   BEGIN CASE
+      CASE SEC.MENU.LEVEL > 2
+      CASE SEC.MENU.FLAG="A"
+         BEGIN CASE
+            CASE SEL.CMD[1,2]="M."
+            CASE INDEX(SEL.CMD,"LOGTO",1)
+            CASE 1
+               LOCATE SEL.MENU.ID IN SEC.MENU.PROC<1>,1 SETTING FND ELSE
+                  LOCATE SEL.CMD IN SEC.MENU.PROC<1>,1 SETTING FND ELSE
+                     ERRMSG="** You are not authorized to perform this function **"
+                     GOSUB 91000; VAL.ERR=1; GOSUB 21000
+                  END
+               END
+         END CASE
+      CASE 1
+         LOCATE SEL.CMD IN SEC.MENU.PROC<1>,1 SETTING FND THEN
+            ERRMSG="** You are not authorized to perform this function **"
+            GOSUB 91000; VAL.ERR=1; GOSUB 21000
+         END
+   END CASE
+   RETURN
+*
+*---- Check for logoff verb
+5000 *
+   CHAIN.VERB=OFF.VERB<1,1>
+   GOSUB 8900
+   GOSUB 2000
+   MORE = 0 ; SEL.PTR = ENTRY.CNT
+   ERRMSG = ""
+   RETURN
+*
+*---- Check for tcl verb
+5100 *
+   IF SEC.MENU.LEVEL > 0 THEN
+      CHAIN.VERB=""; GOSUB 8900
+      GOSUB 2000
+      MORE = 0 ; SEL.PTR = ENTRY.CNT
+   END ELSE
+      ERRMSG="** You are not authorized to perform this function **"
+      GOSUB 91000
+      ERRMSG = ""
+   END
+   RETURN
+*
+*---- Check for system
+5200 *
+   IF SEL.NO = "PRS" THEN SEL.NO = "EP4"
+   SEL.MENU.ID="M.":SEL.NO
+  * T26095 v
+   PRIOR.MENU = SEL.MENU.ID
+   CHECK.MENUS = '' ; DONE.CHECK = 0
+   LOOP
+      IF PRIOR.MENU = MST.MENU.ID THEN
+         DONE.CHECK = 1
+      END ELSE
+         MATREAD WORK.MENU FROM MENUS, PRIOR.MENU THEN
+            CHECK.MENUS<1,-1> = PRIOR.MENU
+            PRIOR.MENU = WORK.MENU(1)<1,1>
+         END ELSE
+            ERRMSG = "** Cannot locate Menu, ":PRIOR.MENU:" **"
+            GOSUB 91000
+            DONE.CHECK = 1 ; VAL.ERR = 1
+         END
+      END
+   UNTIL DONE.CHECK DO REPEAT
+   IF VAL.ERR = 1 THEN RETURN
+   OLD.SEL.CMD = SEL.CMD
+   CCNT = DCOUNT(CHECK.MENUS,VM)
+   FOR CPTR = 1 TO CCNT UNTIL VAL.ERR = 1
+      SEL.CMD = CHECK.MENUS<1,CPTR>
+      GOSUB 4100
+   NEXT CPTR
+   SEL.CMD = OLD.SEL.CMD
+   IF VAL.ERR = 1 THEN RETURN
+   GOSUB 1100
+   GOSUB 1200
+  * IF VAL.ERR THEN
+  *   MORE=0 ; SEL.PTR = ENTRY.CNT
+  * END
+  * T26095 ^
+*   GOSUB 3000
+   RETURN
+*
+*--- Number entry
+5300 *
+   SEL.CMD = ""
+   ERROR = ""
+   FLDNO = "_pmcpb":SEL.NO
+*                  CALL TU.FORM.GETATTR(FLDNO,"callbacks",SEL.CMD,ERROR)
+   IF ERROR # 0 THEN
+      ERRMSG="** Out of range **"; * (VMS 11)"
+      GOSUB 91000
+   END ELSE
+*                     SEL.CMD=MENU(SEL.REF(SEL.NO))<1,1>
+*                     SEL.DSP=MENU(SEL.REF(SEL.NO))<1,3>
+      BEGIN CASE
+* Display menu or process for selection
+         CASE SEL.CMD[1,1]="*"
+            ERRMSG="** Function Not Installed **"
+            GOSUB 91000
+         CASE SEL.CMD[1,1]="$"
+            SEL.CMD=SEL.CMD[2,99]
+            DSP.SCRN=1; GOSUB 80000
+         CASE 1
+            IF SEL.CMD[1,3] = "&M&" THEN
+               SEL.MENU.ID = TRIM(SEL.CMD[4,999])
+               GOSUB 1100
+               IF ERRMSG THEN
+                  ERRMSG = ""
+               END ELSE
+                  GUIFORM = FRMHNDL
+               END
+            END ELSE
+               VALUE = SEL.CMD
+               GOSUB 3000
+            END
+      END CASE
+*                     CHAIN.VERB = ""
+   END
+   RETURN
+*
+*---- Overnight Processor
+6000 *
+   OPEN "","OVERNIGHT.PROCS" TO ONP.PROCS THEN
+      SEL.CMD=MENU(SEL.REF(SEL.NO))<1,1>
+*T27704 v
+      SEL.PMC.CMD = ''
+      READ PSS_XRF FROM PMC_PROCESS_XREF, SEL.CMD THEN
+         SEL.PMC.CMD = PSS_XRF<1>
+      END
+*T27704 ^
+      IF SET.FLAG="+" THEN
+         WRITE "" ON ONP.PROCS,SEL.CMD
+*T27704 v
+         IF SEL.PMC.CMD # "" THEN
+            WRITE "" ON ONP.PROCS,SEL.PMC.CMD
+         END
+*T27704 ^
+         ERRMSG="Overnight Processing Enabled"
+      END ELSE
+         DELETE ONP.PROCS,SEL.CMD
+         DELETE ONP.PROCS,SEL.PMC.CMD ; * T27704
+         ERRMSG="Overnight Processing Disabled"
+      END
+   END ELSE
+      ERRMSG="** Invalid Selection ** (VMS 12)"
+   END
+   TITLE = "O V E R N I G H T   P R O C E S S O R"
+   GOSUB 9000
+   ERRMSG = ""
+   RETURN
+*
+*---- Process
+6100 *
+   MENU.LINE=MENU(SEL.REF(SEL.NO))
+   READ PPS_XRF FROM PMC_PROCESS_XREF, MENU.LINE<1,1> THEN
+      PPS_XRF=PPS_XRF<1>
+      EXE_PROC = "PQN"
+      EXE_PROC<-1> = 'MV %1 "':PPS_XRF:'"'
+      EXE_PROC<-1> = 'MV %2 "':SEC.MENU.LEVEL:'"'
+      EXE_PROC<-1> = "HPMC_PROC_D"
+      EXE_PROC<-1> = "P"
+      VOC_ID = "M_":PORT.NO:"_PMC_PROC_D"
+      WRITE EXE_PROC ON MDICT, VOC_ID
+*** ??/?? Check why the "R." record is needed here
+*DT TESTING      GOSUB 8500
+      CALL MENU.DOC.MAINT(SET.FLAG, MENU.LINE,"1",VOC_ID)
+      READU EXEC_PROC FROM MDICT, VOC_ID THEN
+         DELETE MDICT, VOC_ID
+      END ELSE
+         RELEASE MDICT, VOC_ID
+      END
+*DT TESTING      MATREADU USER.REC FROM SECURITY, SEC.ID THEN
+*DT TESTING         USER.EXEC=""
+*DT TESTING         DELETE SECURITY, SEC.ID
+*DT TESTING      END ELSE
+*DT TESTING         ERRMSG="** Invalid return stack after PERFORM ** (VMS 13)"
+*DT TESTING         GOSUB 91000
+*DT TESTING         USER.EXEC=""; MORE=0 ; SEL.PTR = ENTRY.CNT
+*DT TESTING         MATWRITE USER.REC ON SECURITY, SEC.ID
+*DT TESTING         CHAIN.VERB=LOGTO.VERB:USER.DIR
+*DT TESTING      END
+   END ELSE
+      VOC_ID = ""
+      CALL MENU.DOC.MAINT(SET.FLAG, MENU.LINE,"1",VOC_ID)
+   END
+   IF SET.FLAG THEN
+      EXEC.PROC = MENU(SEL.REF(SEL.NO))<1,1>
+   END
+   RETURN
+*---- Documentation
+6200 *
+   MENU.LINE=MENU(SEL.REF(SEL.NO))
+   VOC_ID = ""
+   CALL MENU.DOC.MAINT(SET.FLAG, MENU.LINE,"1",VOC_ID)
+   IF SET.FLAG THEN
+      EXEC.PROC = MENU(SEL.REF(SEL.NO))<1,1>
+   END
+   RETURN
+*
+*---- Change Company
+7000 *
+   BEGIN CASE
+      CASE USER.M.CO
+         ERRMSG="** Invalid Selection ** (VMS 14)"
+         GOSUB 91000; GOTO 7139
+      CASE NOT(COMPANY.OPEN)
+         OPEN "","COMPANY" TO COMPANY THEN
+            COMPANY.OPEN=1
+         END ELSE
+            ERRMSG="** Cannot locate the COMPANY file **"
+            GOSUB 91000; GOTO 7139
+         END
+   END CASE
+7131*
+   X=0; Y=23; TYP=13; MAXL=3
+   MINV=1; MAXV=999; FILL.CHR=0
+   PMSG="Logto Company :"
+   CALL EDIT.SUB
+   BEGIN CASE
+      CASE VALUE="END"
+         GOTO 7139
+      CASE USER.CONO=VALUE
+         GOTO 7139
+      CASE 1
+         READV CO.NAME FROM COMPANY, VALUE, 1 ELSE
+            ERRMSG="** Invalid Company number **";* (VMS 15)"
+            GOSUB 91000; GOTO 7131
+         END
+   END CASE
+   IF NOT(USER.CORP) THEN
+      N.CNTL.ID=VALUE:USER.ID
+      MATREADU SEC.REC FROM SECURITY, N.CNTL.ID ELSE
+         RELEASE SECURITY, N.CNTL.ID
+         ERRMSG="** Invalid user for company (":VALUE:") ** (VMS 16)"
+         ERRMSG="** Invalid user for company (":VALUE:") **"
+         GOSUB 91000; GOTO 7139
+      END
+      GOSUB 8000
+      IF LOG.ERR THEN
+         RELEASE SECURITY, N.CNTL.ID
+         MATREAD SEC.REC FROM SECURITY, CNTL.ID ELSE NULL
+         GOTO 7139
+      END
+   END
+   IF USER.CORP AND VALUE=USER.C.CO THEN
+      NEW.MENUS="CORPORATE.MENUS"
+   END ELSE
+      NEW.MENUS="EASY.MENUS"
+   END
+   OLD.CONO=USER.CONO
+   USER.CONO=VALUE
+   IF NEW.MENUS # CURR.MENUS THEN
+      OPEN "",NEW.MENUS TO MENUS ELSE
+         IF NOT(USER.CORP) THEN
+            RELEASE SECURITY, N.CNTL.ID
+            MATREAD SEC.REC FROM SECURITY, CNTL.ID ELSE NULL
+         END
+         ERRMSG="** Cannot locate the ":NEW.MENUS:" file **"
+         USER.CONO=OLD.CONO; GOSUB 91000; GOTO 7139
+      END
+      CURR.MENUS=NEW.MENUS
+*TEMP      DSP.MENU.ID=""; GOSUB 2000
+      IF VAL.ERR THEN
+         IF NOT(USER.CORP) THEN
+            RELEASE SECURITY, N.CNTL.ID
+            MATREAD SEC.REC FROM SECURITY, CNTL.ID ELSE NULL
+         END
+         SEL.PTR = ENTRY.CNT
+         MORE=0; GOTO 7139
+      END
+   END
+   IF NOT(USER.CORP) THEN
+      CNTL.ID=N.CNTL.ID
+      SEC.LOGON.DATE=DATE()
+      SEC.LOGON.TIME=TIME()
+      SEC.LOGON.PORT=PORT.NO
+      MATWRITE SEC.REC ON SECURITY, CNTL.ID
+      GOSUB 8600
+   END
+   TU_FUNC = "TU.FORM.SETATTR":TU_VERNO
+   CALL @TU_FUNC("_pmccono","string",CO.NAME "L#25":" (":USER.CONO:")",ERROR)
+*   DISPLAY.NAME=SYSTEM.NAME:" (":USER.CONO:")"
+*   P=INT((80 - LEN(DISPLAY.NAME)) / 2)
+*   DISPLAY.NAME=@(P,0) : DISPLAY.NAME
+7139*
+   RETURN
+*
+*--- Verfiy Login
+8000*
+   LOG.ERR=0
+   IF SEC.PORT # "" THEN
+      CNT=COUNT(SEC.PORT,",") + 1
+      FOR I=1 TO CNT
+         IF FIELD(SEC.PORT,",",I)=PORT.NO THEN CNT=0
+      NEXT I
+      IF CNT THEN
+         SEL.CMD="** LOGGED ON PORT **"
+         GOSUB 21000
+         ERRMSG="** Unauthorized port location for this user **"
+         GOSUB 91000
+         LOG.ERR=1; GOTO 8099
+      END
+   END
+   IF SEC.ROLLOVER="" THEN
+      GOTO 8200
+   END ELSE
+      LOCATE USER.ID IN DFLT_USER,1 SETTING FND THEN
+         GOTO 8200
+      END
+   END
+   IF DATE() - SEC.ROLL.DATE <= SEC.ROLLOVER THEN GOTO 8200
+   CALL ENCODE.SUB("D",USER.ID,SEC.PASSWORD,OLD.PW)
+8010*
+   X=0; Y=23; TYP=11; MINL=3; MAXL=8; ECHO.BACK=0
+   PMSG="Your password has expired, please enter a new password :"
+   CALL EDIT.SUB
+   BEGIN CASE
+      CASE VALUE="END"
+         SEL.CMD="** ROLLOVER DAYS **"
+         GOSUB 21000
+         LOG.ERR=1; GOTO 8099
+      CASE VALUE=OLD.PW
+         ERRMSG="Sorry, cannot use your existing password!!"
+         GOSUB 91000; GOTO 8010
+   END CASE
+   NEW.PW=VALUE
+   X=0; Y=23; TYP=11; MINL=3; MAXL=8; ECHO.BACK=0
+   PMSG="Verify new password :"
+   CALL EDIT.SUB
+   IF VALUE # NEW.PW THEN GOTO 8010
+   CRT @(0,23):@(-4):
+   CALL ENCODE.SUB("E",USER.ID,NEW.PW,SEC.PASSWORD)
+   SEC.ROLL.DATE=DATE()
+8200*
+   BEGIN CASE
+      CASE SEC.LOGIN > 0
+         NOW=OCONV(TIME(),"MTS")
+         NOW=NOW[1,2]:NOW[4,2]
+         IF NOW < SEC.LOGIN THEN
+            SEL.CMD="** LOGIN TIME **"
+            GOSUB 21000
+            ERRMSG="** Unauthorized login time frame **"
+            GOSUB 91000
+            LOG.ERR=1; GOTO 8099
+         END
+         IF SEC.LOGOUT > 0 AND NOW > SEC.LOGOUT THEN
+            SEL.CMD="** LOGOUT TIME **"
+            GOSUB 21000
+            ERRMSG="** Unauthorized logged on time frame **"
+            GOSUB 91000
+            LOG.ERR=1; GOTO 8099
+         END
+      CASE SEC.LOGOUT > 0
+         NOW=OCONV(TIME(),"MTS")
+         NOW=NOW[1,2]:NOW[4,2]
+         IF NOW > SEC.LOGOUT THEN
+            SEL.CMD="** LOGOUT TIME **"
+            GOSUB 21000
+            ERRMSG="** Unauthorized logged on time frame **"
+            GOSUB 91000
+            LOG.ERR=1; GOTO 8099
+         END
+   END CASE
+8099*
+   RETURN
+*
+*--- Update PORT & MENU CONTROL
+8500*
+   IF VALUE = "}" THEN
+      USER.DATE = ''
+      USER.TIME = ''
+   END ELSE
+      USER.DATE=DATE(); USER.TIME=TIME()
+   END
+   MATWRITE USER.REC ON SECURITY, SEC.ID
+8600*
+   MATREADU UPM.REC FROM SECURITY, UPM.ID ELSE
+      MAT UPM.REC=""
+   END
+   UPM.CONO=USER.CONO; UPM.USER=USER.ID
+   UPM.DIR=USER.DIR
+   UPM.DATE=DATE(); UPM.TIME=TIME()
+*   UPM.LOGIN = LOGIN_NAME
+   UPM.LOGIN = @LOGNAME
+   BEGIN CASE
+      CASE USER.STAT="PROC"
+         IF USER.VERB=UPM.PROC<1,1> AND USER.DIR=UPM.P.DIR<1,1> THEN
+            UPM.P.DATE<1,1>=USER.DATE
+            UPM.P.TIME<1,1>=USER.TIME
+         END ELSE
+            INS USER.VERB BEFORE UPM.PROC<1,1>
+            INS USER.DIR<1,1> BEFORE UPM.P.DIR<1,1>
+            INS USER.DATE<1,1> BEFORE UPM.P.DATE<1,1>
+            INS USER.TIME<1,1> BEFORE UPM.P.TIME<1,1>
+         END
+      CASE USER.STAT="VERB"
+         P=1
+         LOOP
+            LOCATE USER.VERB IN UPM.VERB<1>,P SETTING V THEN
+               IF USER.DIR=UPM.V.DIR<1,V> THEN
+*            DEL UPM.VERB<1,V>
+*            DEL UPM.V.DIR<1,V>
+*            DEL UPM.V.DATE<1,V>
+*            DEL UPM.V.TIME<1,V>
+                  UPM.VERB = DELETE(UPM.VERB,1,V)
+                  UPM.V.DIR = DELETE(UPM.V.DIR,1,V)
+                  UPM.V.DATE = DELETE(UPM.V.DATE,1,V)
+                  UPM.V.TIME = DELETE(UPM.V.TIME,1,V)
+                  P=0
+               END
+            END ELSE
+               P=0
+            END
+         WHILE P DO
+            P=V + 1
+         REPEAT
+         INS USER.VERB BEFORE UPM.VERB<1,1>
+         INS USER.DIR BEFORE UPM.V.DIR<1,1>
+         INS USER.DATE BEFORE UPM.V.DATE<1,1>
+         INS USER.TIME BEFORE UPM.V.TIME<1,1>
+         IF USER.VERB<1,21> # "" THEN
+*      DEL UPM.VERB<1,21>
+*      DEL UPM.V.DIR<1,21>
+*      DEL UPM.V.DATE<1,21>
+*      DEL UPM.V.TIME<1,21>
+            UPM.VERB = DELETE(UPM.VERB,1,21)
+            UPM.V.DIR = DELETE(UPM.V.DIR,1,21)
+            UPM.V.DATE = DELETE(UPM.V.DATE,1,21)
+            UPM.V.TIME = DELETE(UPM.V.TIME,1,21)
+         END
+   END CASE
+   MATWRITE UPM.REC ON SECURITY, UPM.ID
+   RETURN
+8900*
+   MATREADU UPM.REC FROM SECURITY, UPM.ID ELSE
+      RELEASE SECURITY, UPM.ID
+      GOTO 8990
+   END
+   UPMH.ID="H.":PORT.NO:"!":UPM.CONO:UPM.USER
+   MATREADU UPMH.REC FROM SECURITY, UPMH.ID ELSE
+      MAT UPMH.REC=""
+   END
+   UPMH.DIR=DIR.NAME
+   UPMH.DATE=DATE()
+   UPMH.TIME=TIME()
+   CNT=DCOUNT(UPM.PROC,VM)
+   FOR V=1 TO CNT
+      P=1
+      LOOP
+         LOCATE UPM.PROC<1,V> IN UPMH.PROC<1>,P SETTING VH THEN
+            IF UPM.P.DIR<1,V>=UPMH.P.DIR<1,VH> THEN
+               UPMH.P.DATE<1,VH>=UPM.P.DATE<1,V>
+               UPMH.P.TIME<1,VH>=UPM.P.TIME<1,V>
+               P=0
+            END
+         END ELSE
+            INS UPM.PROC<1,V> BEFORE UPMH.PROC<1,1>
+            INS UPM.P.DIR<1,V> BEFORE UPMH.P.DIR<1,1>
+            INS UPM.P.DATE<1,V> BEFORE UPMH.P.DATE<1,1>
+            INS UPM.P.TIME<1,V> BEFORE UPMH.P.TIME<1,1>
+            P=0
+         END
+      WHILE P DO
+         P=VH + 1
+      REPEAT
+   NEXT V
+   CNT=DCOUNT(UPM.VERB,VM) + 1
+   IF CNT > 1 THEN
+      LIMIT=DCOUNT(UPMH.VERB,VM) + CNT - 1
+      IF LIMIT > 40 THEN LIMIT=40
+      FOR V=CNT TO LIMIT
+         VH=V - CNT + 1
+         UPM.VERB<1,V>=UPMH.VERB<1,VH>
+         UPM.V.DIR<1,V>=UPMH.V.DIR<1,VH>
+         UPM.V.DATE<1,V>=UPMH.V.DATE<1,VH>
+         UPM.V.TIME<1,V>=UPMH.V.TIME<1,VH>
+      NEXT V
+      UPMH.VERB=UPM.VERB
+      UPMH.V.DIR=UPM.V.DIR
+      UPMH.V.DATE=UPM.V.DATE
+      UPMH.V.TIME=UPM.V.TIME
+   END
+   MATWRITE UPMH.REC ON SECURITY, UPMH.ID
+   DELETE SECURITY, UPM.ID
+8990*
+   RETURN
+*
+*---- Log access violation attempt
+21000*
+*   IF INV.ACC.NOT.OPEN THEN
+   OPEN "","INVALID.ACCESS" TO INVALID.ACCESS ELSE
+      ERRMSG="** Cannot locate the INVALID.ACCESS file **"
+      GOSUB 91000; GOTO 21999
+   END
+   INV.ACC.NOT.OPEN=0
+*   END
+   IF USER.ID="" THEN USER.ID="??????"
+   INV.ACC.KEY=USER.ID:"*":DATE():"*":TIME():"*":PORT.NO
+   WRITE SEL.CMD ON INVALID.ACCESS, INV.ACC.KEY
+21999*
+   RETURN
+*
+*---- Display software disclaimer
+80000*
+   TITLE = "-----  W A R N I N G  -----"
+   ERRMSG = "This module is not officially installed at this time."
+   ERRMSG := AM: "VERCOM Software Inc. disclaims any responsibility for the integrity"
+   ERRMSG := AM: "of data entered through use of this function and will not respond"
+   ERRMSG := AM: "to questions, problems or any other matters related to the use of"
+   ERRMSG := AM: "this function."
+   GOSUB 9000
+   ERRMSG = ""
+   RETURN
+*******************
+*
+*---- Display dialog box
+9000 *
+   TYPE = "DLG.ERROR"
+   TYPE = "DLG.QUESTION"
+   BUTTONS = ""; RETURNS = ""; ERROR = ""
+   BUTTONS = "YES":VM:"NO"
+   RETURNS = "Y":VM:"N"
+   TU_FUNC = "TU.FORM.DIALOG":TU_VERNO
+   CALL @TU_FUNC(VALUE, TYPE, ERRMSG, BUTTONS, RETURNS, TITLE, ERROR)
+   RETURN
+91000 *
+   TYPE = "DLG.ERROR"
+   BUTTONS = ""; RETURNS = ""
+   TITLE = "E R R O R   B O X"
+   TU_FUNC = "TU.FORM.DIALOG":TU_VERNO
+   CALL @TU_FUNC(VALLS, TYPE, ERRMSG, BUTTONS, RETURNS, TITLE, ERROR)
+   ERROR = ""; ERRMSG = ""
+   RETURN
+*
+99990*
+   GUIFORM = GUIFORM_BU
+99999*
+   RETURN
+END

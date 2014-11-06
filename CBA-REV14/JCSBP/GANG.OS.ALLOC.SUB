@@ -1,0 +1,428 @@
+      SUBROUTINE GANG.OS.ALLOC.SUB(CONO,OSP.ID,DPTR,MAT WIP.LEVEL.REC,GANG.JOB,GANG.ALLOC,STATUS)
+*********************************************************************
+*
+* Copyright 1982 by Vercom Software Inc.
+*
+* REVISION - [09.1]
+*
+* PROGRAM  - GANG.OS.ALLOC.SUB
+*
+* AUTHOR   - NICK AMENDOLA, COMPUTER BUSINESS ASSOCIATES
+*
+* DATE     - 11/20/92
+*
+* DESCRIPTION
+*
+* This subroutine is used to allocate cost among ganged jobs.
+*
+* CSF40101 ajibaly 06/04/2002 * REV12 problem 484, gang allocation error
+*                               output when the dept is not found
+*
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>CPYLIB>COM1
+*COPY>JCS.CPYLIB>COM.JOB
+*COPY>JCS.CPYLIB>GANG.JOB
+*COPY>JCS.CPYLIB>GANG.ALLOC
+*COPY>JCS.CPYLIB>JOB
+*COPY>JCS.CPYLIB>JOB.OSP
+*COPY>JCS.CPYLIB>WIP.LEVEL
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*
+*---- INITIALIZATION
+*
+      TODAY = DATE()
+      GJOB.ID = FIELD(OSP.ID,"!",1)
+      DEPT = FIELD(OSP.ID,"!",2)
+      CCTR = FIELD(OSP.ID,"!",3)
+      PLINE = FIELD(OSP.ID,"!",4)
+      STATUS = ""
+*
+*---- MAIN PROCESSING
+*
+100 *
+      JOBNO = GJOB.ID
+      MATREADU JOB.REC FROM JOB, CONO:JOBNO ELSE
+         STATUS = "INVALID JOB"
+         GOTO 99999
+      END
+      PDATE = JOB.TRACK.DATE<1,5>
+      MATREADU JOS.REC FROM JOB.OSP, CONO:OSP.ID ELSE
+         STATUS = "INVALID JOB.OSP"
+         GOTO 99999
+      END
+      MATREAD GJOB.REC FROM GANG.JOB, CONO:GJOB.ID ELSE
+         STATUS = "INVALID GANG JOB"
+         GOTO 99999
+      END
+      JCNT = DCOUNT(GJOB.JOB,VM)
+      FOR JPTR = 1 TO JCNT
+         READV REC FROM JOB, CONO:GJOB.JOB<1,JPTR>,1 ELSE
+            STATUS = "GANG JOB ERROR"
+            GOTO 99999
+         END
+      NEXT JPTR
+*
+      IF GJOB.ALLOC = "" THEN
+         MAT GAT.REC = ""
+         GAT.DEPT = GJOB.DEPT
+         GAT.CCTR = GJOB.CCTR
+         GAT.TYPE = GJOB.TYPE
+      END ELSE
+         MATREAD GAT.REC FROM GANG.ALLOC, CONO:GJOB.ALLOC ELSE
+            STATUS = "INVALID GANG ALLOC"
+            GOTO 99999
+         END
+      END
+*
+      LOCATE CCTR IN GAT.CCTR<1>,1 SETTING APTR ELSE
+         PTR=1
+         LOOP
+            LOCATE DEPT IN GAT.DEPT<1>,PTR SETTING APTR THEN
+               IF GAT.CCTR<1,APTR> = "" THEN PTR=0
+            END ELSE
+               APTR=0
+               PTR=0
+            END
+         UNTIL PTR = 0 DO
+            PTR=APTR+1
+         REPEAT
+         IF APTR = 0 THEN
+            ;* CSF40101 v
+            ;  * If there is no allocation for this department then do not
+            ;  * indicate an error and do not perform any calculations
+            LOCATE DEPT IN GAT.DEPT SETTING F ELSE GOTO 99999
+            ;* CSF40101 ^
+            STATUS = "GANG ALLOC ERROR"
+            GOTO 99999
+         END
+      END
+      ATYPE = GAT.TYPE<1,APTR>
+      GOSUB 2000                  ;* DERIVE COST ALLOCATION
+      GOSUB 3000                  ;* DISTRIBUTE COST TO GANGED JOBS
+      GOTO 99999
+*
+*---- DERIVE ALLOCATED PERCENTAGE BY JOB
+*
+2000 *
+      JTRAN = JOS.SEQ
+      JTYPE = JOS.TYPE
+      JMON  = JOS.MON<1,1>
+      TQTY = JOS.QTY
+      DCOST = JOS.DCOST
+      TCOST = JOS.COST
+      TSALE = JOS.SALE
+      BEGIN CASE
+      CASE WLR.SPL = "N" AND JTYPE = "S"
+         WPTR = 0
+      CASE WLR.NON.CHG = "N" AND JTYPE = "N"
+         WPTR = 0
+      CASE 1
+         WPTR = WLR.OS.WIP
+      END CASE
+      ATQTY = ""
+      ADCOST = ""
+      ATCOST = ""
+      ATSALE = ""
+      CALC.TQTY = ""
+      CALC.DCOST = ""
+      CALC.TCOST = ""
+      CALC.TSALE = ""
+      HIPTR = 1
+*
+      JCNT = DCOUNT(GJOB.JOB,VM)
+      TAREA = 0
+      FOR JPTR = 1 TO JCNT
+         JSPOTS = GJOB.SPOTS<1,JPTR>
+         W = GJOB.WIDTH<1,JPTR>
+         L = GJOB.LENGTH<1,JPTR>
+         JAREA  = INT(W / 1000 * L / 1000 * JSPOTS + 0.5)
+         TAREA = TAREA + JAREA
+      NEXT JPTR
+      TSPOTS = SUM(GJOB.SPOTS)
+*
+      FOR JPTR = 1 TO JCNT
+         JSPOTS = GJOB.SPOTS<1,JPTR>
+         W = GJOB.WIDTH<1,JPTR>
+         L = GJOB.LENGTH<1,JPTR>
+         JAREA  = INT(W / 1000 * L / 1000 * JSPOTS + 0.5)
+         BEGIN CASE
+         CASE ATYPE = "A"
+            APCT = INT(JAREA * 10000 / TAREA * 100 + 0.5) / 10000
+         CASE ATYPE = "S"
+            APCT = INT(JSPOTS * 10000 / TSPOTS * 100 + 0.5) / 10000
+         CASE ATYPE = "B"
+            APCT = INT(JAREA * 5000 / TAREA * 100 + 0.5)
+            APCT = APCT + INT(JSPOTS * 5000 / TSPOTS * 100 + 0.5)
+            APCT = APCT / 10000
+         CASE 1
+            IF GJOB.PCT<1,JPTR>+0 > 0 THEN
+               APCT = GJOB.PCT<1,JPTR>
+            END ELSE
+               APCT = INT(10000 / JCNT * 100 + 0.5) / 10000
+            END
+         END CASE
+         ATQTY<JPTR> = INT(TQTY * APCT / 100 + 0.5)
+         ADCOST<JPTR> = INT(DCOST * APCT / 100 + 0.5)
+         ATCOST<JPTR> = INT(TCOST * APCT / 100 + 0.5)
+         ATSALE<JPTR> = INT(TSALE * APCT / 100 + 0.5)
+         CALC.TQTY = CALC.TQTY + ATQTY<JPTR>
+         CALC.DCOST = CALC.DCOST + ADCOST<JPTR>
+         CALC.TCOST = CALC.TCOST + ATCOST<JPTR>
+         CALC.TSALE = CALC.TSALE + ATSALE<JPTR>
+         IF ATCOST<JPTR> > ATCOST<HIPTR> THEN HIPTR = JPTR
+      NEXT JPTR
+*---- CORRECT ROUNDING ERRORS
+      ATQTY<HIPTR> = ATQTY<HIPTR> + (TQTY - CALC.TQTY)
+      ADCOST<HIPTR> = ADCOST<HIPTR> + (DCOST - CALC.DCOST)
+      ATCOST<HIPTR> = ATCOST<HIPTR> + (TCOST - CALC.TCOST)
+      ATSALE<HIPTR> = ATSALE<HIPTR> + (TSALE - CALC.TSALE)
+      RETURN
+*
+*---- REVERSE COST FROM GANG JOB AND UPDATE GANGED JOBS
+*
+3000 *
+*- UPDATE ORIGINAL TRANSACTION
+      IF WPTR > 0 THEN
+         JOS.MON<1,2> = JOS.MON<1,1>
+         JOS.WIP<1,2> = 0-JOS.DCOST
+         IF WPTR > 1 THEN
+            JOS.WIP<1,2,2> = 0-(JOS.COST-JOS.DCOST)
+         END
+      END
+      JOS.RC.COST = JOS.COST
+      MATWRITE JOS.REC ON JOB.OSP, CONO:OSP.ID
+*- CREATE REVERSING ENTRY
+      GOSUB 89000
+      JOS.SEQ = NEW.SEQ
+      JOS.QTY = 0-JOS.QTY
+      JOS.DCOST = 0-JOS.DCOST
+      JOS.COST = 0-JOS.COST
+      JOS.SALE = 0-JOS.SALE
+      JOS.MON = ""
+      JOS.WIP = ""
+      IF WPTR > 0 THEN
+         JOS.MON<1,1> = JMON
+         JOS.MON<1,2> = JMON
+         JOS.WIP<1,1> = JOS.DCOST
+         JOS.WIP<1,2> = 0-JOS.DCOST
+         IF WPTR > 1 THEN
+            JOS.WIP<1,1,2> = (JOS.COST-JOS.DCOST)
+            JOS.WIP<1,2,2> = 0-(JOS.COST-JOS.DCOST)
+         END
+      END
+      JOS.RC.COST = 0
+      JOS.RC.TRAN = JTRAN
+      JOS.RC.JOB  = "GANG"
+      JOS.RC.DESC = "GANG ALLOC"
+      GOSUB 4100
+*- CREATE TRANSACTIONS FOR GANGED JOBS
+      MATREAD JOS.REC FROM JOB.OSP, CONO:OSP.ID ELSE MAT JOS.REC=""
+      FOR JPTR = 1 TO JCNT
+         JOBNO = GJOB.JOB<1,JPTR>
+         MATREADU JOB.REC FROM JOB, CONO:JOBNO ELSE MAT JOB.REC=""
+         GOSUB 89000
+         JOS.SEQ = NEW.SEQ
+         JOS.QTY = ATQTY<JPTR>
+         JOS.DCOST = ADCOST<JPTR>
+         JOS.COST = ATCOST<JPTR>
+         JOS.SALE = ATSALE<JPTR>
+         JOS.MON = ""
+         JOS.WIP = ""
+         IF WPTR > 0 THEN
+            JOS.MON<1,1> = JMON
+            JOS.WIP<1,1> = JOS.DCOST
+            IF WPTR > 1 THEN
+               JOS.WIP<1,1,2> = JOS.COST-JOS.DCOST
+            END
+         END
+         JOS.RC.COST = 0
+         JOS.RC.TRAN = JTRAN
+         JOS.RC.JOB  = GJOB.ID
+         JOS.RC.DESC = "GANG ALLOC"
+         GOSUB 4200
+      NEXT JPTR
+      RETURN
+*
+*---- REVERSE COST FROM GANG JOB
+*
+4100 *
+      DCNT = DCOUNT(JOB.OS.DEPT,VM)
+      DFND = DCNT + 1
+      FOR D = 1 TO DCNT WHILE DFND > DCNT
+         BEGIN CASE
+         CASE DEPT # JOB.OS.DEPT<1,D>
+         CASE CCTR # JOB.OS.CCTR<1,D>
+         CASE PLINE # JOB.OS.PLINE<1,D>
+         CASE 1
+            DFND = D
+         END CASE
+      NEXT D
+      IF DFND > DCNT THEN
+         JOB.OS.DEPT<1,DFND> = DEPT
+         JOB.OS.CCTR<1,DFND> = CCTR
+         JOB.OS.PLINE<1,DFND> = PLINE
+         JOB.OS.DATE<1,DFND,1> = JOS.DATE
+      END
+*
+      OS.ID = JOBNO:"!":DEPT:"!":CCTR:"!":PLINE:"!"
+      LOOP
+         JOB.OS.SEQ<1,DFND> = JOB.OS.SEQ<1,DFND> + 1
+         JOS.ID = OS.ID:JOB.OS.SEQ<1,DFND>
+         READ DUMMY FROM JOB.OSP, CONO:JOS.ID ELSE DUMMY = ""
+      WHILE DUMMY # "" DO REPEAT
+*
+      IF JOS.WIP # "" THEN
+         JOB.WIP<1,1> = JOB.WIP<1,1> - 2
+         JOB.OS.WIP<1,1> = JOB.OS.WIP<1,1> - 2
+         FOR W = 1 TO WPTR
+            JOB.WIP<1,2,W> = JOB.WIP<1,2,W> + JOS.WIP<1,1,W>
+            JOB.OS.WIP<1,2,W> = JOB.OS.WIP<1,2,W> + JOS.WIP<1,1,W>
+         NEXT W
+      END
+*
+      IF JOS.SEQ > JOB.OS.DATE<1,DFND,2> THEN
+         JOB.OS.DATE<1,DFND,2> = JOS.SEQ
+         JOB.OS.DATE<1,DFND,3> = JOB.OS.SEQ<1,DFND>
+      END
+      JOB.OS.QTY<1,DFND> = JOB.OS.QTY<1,DFND> + JOS.QTY
+      JOB.OS.DCOST<1,DFND> = JOB.OS.DCOST<1,DFND> + JOS.DCOST
+      JOB.OS.COST<1,DFND> = JOB.OS.COST<1,DFND> + JOS.COST
+      JOB.OS.SALE<1,DFND> = JOB.OS.SALE<1,DFND> + JOS.SALE
+      BEGIN CASE
+      CASE JOS.TYPE = "N"
+         PTR = 2
+      CASE JOS.TYPE = "C"
+         PTR = 3
+      CASE JOS.TYPE = "S"
+         PTR = 4
+      CASE 1
+         PTR = 1
+         JOS.TYPE = "R"
+      END CASE
+      JOB.OS.TCOST<1,DFND,PTR> = JOB.OS.TCOST<1,DFND,PTR> + JOS.COST
+*
+      JOB.TOT.DCOST = JOB.TOT.DCOST + JOS.DCOST
+      JOB.TOT.COST = JOB.TOT.COST + JOS.COST
+      JOB.TOT.SALE = JOB.TOT.SALE + JOS.SALE
+      MATWRITE JOS.REC ON JOB.OSP, CONO:JOS.ID
+      MATWRITE JOB.REC ON JOB, CONO:JOBNO
+      RETURN
+*
+*---- UPDATE JOB RECORD
+*
+4200 *
+      DCNT = DCOUNT(JOB.OS.DEPT,VM)
+      DFND = DCNT + 1
+      FOR D = 1 TO DCNT WHILE DFND > DCNT
+         BEGIN CASE
+         CASE DEPT # JOB.OS.DEPT<1,D>
+         CASE CCTR # JOB.OS.CCTR<1,D>
+         CASE PLINE # JOB.OS.PLINE<1,D>
+         CASE 1
+            DFND = D
+         END CASE
+      NEXT D
+      IF DFND > DCNT THEN
+         JOB.OS.DEPT<1,DFND> = DEPT
+         JOB.OS.CCTR<1,DFND> = CCTR
+         JOB.OS.PLINE<1,DFND> = PLINE
+         JOB.OS.DATE<1,DFND,1> = JOS.DATE
+      END
+*
+      OS.ID = JOBNO:"!":DEPT:"!":CCTR:"!":PLINE:"!"
+      LOOP
+         JOB.OS.SEQ<1,DFND> = JOB.OS.SEQ<1,DFND> + 1
+         JOS.ID = OS.ID:JOB.OS.SEQ<1,DFND>
+         READ DUMMY FROM JOB.OSP, CONO:JOS.ID ELSE DUMMY = ""
+      WHILE DUMMY # "" DO REPEAT
+      MATWRITE JOS.REC ON JOB.OSP, CONO:JOS.ID
+*
+      IF JOS.WIP # "" THEN
+         JOB.WIP<1,1> = JOB.WIP<1,1> + 2
+         JOB.OS.WIP<1,1> = JOB.OS.WIP<1,1> + 2
+         FOR W = 1 TO WPTR
+            JOB.WIP<1,2,W> = JOB.WIP<1,2,W> + JOS.WIP<1,1,W>
+            JOB.OS.WIP<1,2,W> = JOB.OS.WIP<1,2,W> + JOS.WIP<1,1,W>
+         NEXT W
+         IF JOS.MON < JOB.OS.WIP<1,4> OR JOB.OS.WIP<1,4> = "" THEN
+            JOB.OS.WIP<1,4> = JOS.MON
+            IF JOS.MON < JOB.WIP<1,4> OR JOB.WIP<1,4> = "" THEN
+               JOB.WIP<1,4> = JOS.MON
+            END
+         END
+         IF JOS.MON > JOB.OS.WIP<1,5> THEN
+            JOB.OS.WIP<1,5> = JOS.MON
+            IF JOS.MON > JOB.WIP<1,5> THEN
+               JOB.WIP<1,5> = JOS.MON
+            END
+         END
+      END
+*
+      IF JOS.DATE >= JOB.OS.DATE<1,DFND,1> THEN
+         JOB.OS.DATE<1,DFND,1> = JOS.DATE
+      END
+      IF JOS.SEQ > JOB.OS.DATE<1,DFND,2> THEN
+         JOB.OS.DATE<1,DFND,2> = JOS.SEQ
+         JOB.OS.DATE<1,DFND,3> = JOB.OS.SEQ<1,DFND>
+      END
+      JOB.OS.QTY<1,DFND> = JOB.OS.QTY<1,DFND> + JOS.QTY
+      JOB.OS.DCOST<1,DFND> = JOB.OS.DCOST<1,DFND> + JOS.DCOST
+      JOB.OS.COST<1,DFND> = JOB.OS.COST<1,DFND> + JOS.COST
+      JOB.OS.SALE<1,DFND> = JOB.OS.SALE<1,DFND> + JOS.SALE
+      BEGIN CASE
+      CASE JOS.TYPE = "N"
+         PTR = 2
+      CASE JOS.TYPE = "C"
+         PTR = 3
+      CASE JOS.TYPE = "S"
+         PTR = 4
+      CASE 1
+         JOS.TYPE = "R"
+         PTR = 1
+      END CASE
+      JOB.OS.TCOST<1,DFND,PTR> = JOB.OS.TCOST<1,DFND,PTR> + JOS.COST
+*
+*********************************************************************
+* TASK 15062
+*     IF JOB.STATUS<1,1> # 1 THEN
+*        JOB.STATUS = INSERT(JOB.STATUS,1,1,0,"1")
+*        JOB.STAT.DATE = INSERT(JOB.STAT.DATE,1,1,0,TODAY)
+*     END
+      BEGIN CASE
+      CASE JOB.STATUS = ""
+         JOB.STATUS = INSERT(JOB.STATUS,1,1,0,"1")
+         JOB.STAT.DATE = INSERT(JOB.STAT.DATE,1,1,0,TODAY)
+      CASE JOB.STATUS<1,1>="1"
+      CASE JOB.STATUS<1,1>="5"
+      CASE 1
+         JOB.STATUS = INSERT(JOB.STATUS,1,1,0,"5")
+         JOB.STAT.DATE = INSERT(JOB.STAT.DATE,1,1,0,TODAY)
+      END CASE
+*********************************************************************
+*
+      IF JOB.TRACK.DATE<1,5> = "" THEN JOB.TRACK.DATE<1,5> = PDATE
+      JOB.TOT.DCOST = JOB.TOT.DCOST + JOS.DCOST
+      JOB.TOT.COST = JOB.TOT.COST + JOS.COST
+      JOB.TOT.SALE = JOB.TOT.SALE + JOS.SALE
+      MATWRITE JOB.REC ON JOB,CONO : JOBNO
+      RETURN
+*
+*---- DERIVE NEXT TRANSACTION NUMBER
+*
+89000 *
+      READU NEW.SEQ FROM CONTROL,CONO:"DAILY.OSP" ELSE NEW.SEQ=10001
+      NEXT.SEQ = NEW.SEQ + 1
+      WRITE NEXT.SEQ ON CONTROL,CONO:"DAILY.OSP"
+      RETURN
+*
+*---- END OF PROGRAM
+*
+99999 *
+      RELEASE JOB,CONO:GJOB.ID
+      RELEASE JOB.OSP,CONO:OSP.ID
+      RETURN
+   END

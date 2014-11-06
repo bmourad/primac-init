@@ -1,0 +1,419 @@
+  SUBROUTINE INVINQ_S_READ
+*********************************************************************
+*
+* REVISION - [12.0]
+*
+* PROGRAM  - INVINQ_S_READ
+*
+* AUTHOR   - ALEJANDRO DELGADO
+*
+* DATE     - 09/30/2002
+*
+* DESCRIPTION
+*
+* This program builds the data from INVENTORY file to load into 
+* Inventory Receipt Selection Inquiry screen.
+*
+*********************************************************************
+*
+*---- FILE COPY STATEMENTS
+*
+  $INCLUDE WWINSERT RBO.H
+  $INCLUDE ICS.CPYLIB INVENTORY
+  $INCLUDE ICS.CPYLIB CATEGORY
+  $INCLUDE ICS.CPYLIB INV.CNV
+  $INCLUDE ICS.CPYLIB INV.WHSE
+  $INCLUDE CPYLIB FILE.VARS
+  $INCLUDE CPYLIB CHAR
+  DEFFUN CALC.STK.QTY(COST.QTY,MAT INV.CNV.REC,ROND,LN)
+*
+*---- INITIALIZATION
+*
+  STATUS = RBO.setProperty('','ServerMessage','')
+  STATUS = RBO.setProperty('','ServerStatus','')
+
+  PROD.NO = ''
+  WHSE.NO = ''
+  LOC.NO = ''
+  MIN_QTY = ''
+  MIN.QTY.CNV = 1
+  ODVD = 10
+
+  ERRMSG = RBO.getProperty('','ID',PROD.NO)
+  ERRMSG = RBO.getProperty('','WHSE_ID',WHSE.NO)
+  ERRMSG = RBO.getProperty('','LOC_FLAG',LOC.NO)
+  ERRMSG = RBO.getProperty('','MIN_QTY',MIN_QTY)
+
+  CONO = PROD.NO[1,3]
+  PROD.NO = PROD.NO[4,99]
+
+  ERRMSG = "" ; IN_PARAM = "" ; OUT_PARAM = ""
+  RCNT = ''
+  IN_PARAM<1,1> = 'INVENTORY'
+  IN_PARAM<1,2> = 'INV.WHSE'
+  IN_PARAM<1,3> = 'CATEGORY'
+  IN_PARAM<1,4> = 'INV_RECEIPTS'
+  IN_PARAM<1,5> = 'INV_SERIAL'
+  IN_PARAM<1,6> = 'INV.WHSE.LOC'
+  CALL GetInvOpenFiles(ERRMSG,IN_PARAM,OUT_PARAM,MAT FILE.VARS)
+  IF ERRMSG # '' THEN GOTO SET.ERROR
+  *
+  MATREAD INV.REC FROM INVENTORY, CONO:PROD.NO ELSE
+    ERRMSG = 'Inventory is not on file.  Try again'
+    GOTO SET.ERROR
+  END
+  IWH.ID = CONO:PROD.NO:'!':WHSE.NO
+  MATREAD IWH.REC FROM INV.WHSE, IWH.ID ELSE
+    ERRMSG = "No data found to the Inventory's Warehouse."
+    GOTO SET.ERROR
+  END
+  MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE ELSE MAT CATG.REC = ''
+  ERRMSG = "" ; IN_PARAM = "" ; OUT_PARAM = "" ; MAT INV.CNV.REC = ""
+
+  IF CATG.TRK.LVL = 'G' THEN
+	ERRMSG = "This is for Serial Tracked Products only"
+	*STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+	*RETURN
+	GOTO SET.ERROR
+  END
+
+  CALL GetInvUMCnv(ERRMSG,IN_PARAM,OUT_PARAM,MAT INV.CNV.REC,MAT INV.REC)
+  IN_PARAM = CONO
+  IN_PARAM<2> = PROD.NO
+  IN_PARAM<3> = WHSE.NO
+  CALL GetWhseSerials(ERRMSG,IN_PARAM,OUT_PARAM,MAT FILE.VARS)
+  $INCLUDE ICSBP INV.UM.CNV
+
+*
+*---- PROCESSING
+*
+
+*  CURR.LOC = IWH.LOC<1,1>
+
+  BEGIN CASE
+    CASE INV.PAP.TYPE="SHEET"
+      OCNV="MD2"; ODVD=10
+      ICR="MD0"
+    CASE INV.PAP.TYPE="ROLL"
+      OCNV="MD2"; ODVD=10
+      ICR="MD2"
+    CASE INV.PAP.TYPE="LROLL"
+      OCNV="MD0"; ODVD=10
+      ICR="MD0"
+    CASE INV.PAP.TYPE="PCOAT"
+      OCNV="MD0"; ODVD=10
+      ICR="MD0"
+    CASE 1
+      OCNV="MD2"; ODVD=10
+      ICR="MD2"
+  END CASE
+  IF INV.UNIT<1,3>="SHT" OR INV.UNIT<1,3>="FT" OR INV.UNIT<1,3>="PC" THEN
+    OCNV="MD0"; ODVD=1000
+  END ELSE
+    OCNV="MD2"; ODVD=10
+  END
+  *
+  SD = ''
+  TMP.SERIAL = OUT_PARAM
+  SERIAL.NUMBER = '' ; SERIAL.LOC = ''
+  SERIAL.ORIG.WT = '' ; SERIAL.CURR.WT = ''
+  SERIAL.ORIG.QTY = '' ; SERIAL.CURR.QTY = ''
+  SERIAL.RSVD.QTY = '' ; SERIAL.RSVD.WT = ''
+  SERIAL.TOT.ORIG.WT = '' ; SERIAL.TOT.CURR.WT = ''
+  SERIAL.TOT.ORIG.QTY = '' ; SERIAL.TOT.CURR.QTY = ''
+  SERIAL.LST.USED = '' 
+
+
+  *SD = OUT_PARAM
+*ADDED NEW COZ OF INVINQ
+      LLOC = 0
+      TEMP.LOC=DCOUNT(TMP.SERIAL<1>,VM)
+      FND=0
+      FOR T=1 TO TEMP.LOC UNTIL FND
+     		IF "X":LOC.NO="X":TMP.SERIAL<1,T,1> THEN
+			FND=1
+			LLOC=T
+		END
+      NEXT T
+*END
+      IF LLOC THEN
+      SD=""
+      SD<2>=TMP.SERIAL<2,LLOC>
+      NUM.RECEIPTS=DCOUNT(TMP.SERIAL<2,LLOC>,SVM)
+      FOR I=1  TO NUM.RECEIPTS 
+         SD<1,1,I>=TMP.SERIAL<1,LLOC>
+      NEXT I
+      SD<3>=TMP.SERIAL<3,LLOC>
+      SD<4>=TMP.SERIAL<4,LLOC>
+      SD<5>=TMP.SERIAL<5,LLOC>
+      SD<6>=TMP.SERIAL<6,LLOC>
+      SD<7>=TMP.SERIAL<7,LLOC>
+      SD<8>=TMP.SERIAL<8,LLOC>
+      SD<9>=TMP.SERIAL<9,LLOC>
+      SD<10>=TMP.SERIAL<10,LLOC>
+      SD<11>=TMP.SERIAL<11,LLOC>
+      SD<12>=TMP.SERIAL<12,LLOC> ; * reservable qty in csot uom
+      SD<13>=CALC.STK.QTY(TMP.SERIAL<12,LLOC>,MAT INV.CNV.REC,'.5','')
+
+      IF MIN_QTY = '' THEN GOSUB REBUILD.SD
+      IF MIN_QTY+0 > 0 THEN
+         GOSUB 1845
+      END
+      END ELSE
+      SD=""
+      NUM.LOC=DCOUNT(TMP.SERIAL<1>,VM)
+      SD<2>=TMP.SERIAL<2,1>
+      NUM.RECEIPTS=DCOUNT(TMP.SERIAL<2,1>,SVM)
+      FOR I=1  TO NUM.RECEIPTS 
+         SD<1,1,I>=TMP.SERIAL<1,1>
+      NEXT I
+      SD<3>=TMP.SERIAL<3,1>
+      SD<4>=TMP.SERIAL<4,1>
+      SD<5>=TMP.SERIAL<5,1>
+      SD<6>=TMP.SERIAL<6,1>
+      SD<7>=TMP.SERIAL<7,1>
+      SD<8>=TMP.SERIAL<8,1>
+      SD<9>=TMP.SERIAL<9,1>
+      SD<10>=TMP.SERIAL<10,1>
+      SD<11>=TMP.SERIAL<11,1>
+      SD<12>=TMP.SERIAL<12,1>
+      SD<13>=CALC.STK.QTY(TMP.SERIAL<13,1>,MAT INV.CNV.REC,'.5','')
+      FOR L=2 TO NUM.LOC
+         NUM.RECEIPTS=DCOUNT(TMP.SERIAL<2,L>,SVM)
+         TEMP.STR=""
+         FOR I=1  TO NUM.RECEIPTS 
+            TEMP.STR<1,1,I>=TMP.SERIAL<1,L>
+         NEXT I
+         SD<1> :=SVM:TEMP.STR
+         SD<2> :=SVM:TMP.SERIAL<2,L>
+         SD<3> :=SVM:TMP.SERIAL<3,L>
+         SD<4> :=SVM:TMP.SERIAL<4,L>
+         SD<5> :=SVM:TMP.SERIAL<5,L>
+         SD<6> :=SVM:TMP.SERIAL<6,L>
+         SD<7> :=SVM:TMP.SERIAL<7,L>
+         SD<8> :=SVM:TMP.SERIAL<8,L>
+         SD<9> :=SVM:TMP.SERIAL<9,L>
+         SD<10> :=SVM:TMP.SERIAL<10,L>
+         SD<11> :=SVM:TMP.SERIAL<11,L>
+         SD<12> :=SVM:TMP.SERIAL<12,L>
+         SD<13> :=SVM:CALC.STK.QTY(TMP.SERIAL<13,L>,MAT INV.CNV.REC,'.5','')
+      NEXT L
+
+
+*ADDED NEW
+      IF MIN_QTY = '' THEN GOSUB REBUILD.SD
+      IF MIN_QTY+0 > 0 THEN
+         GOSUB 1845
+      END
+   END
+   GOSUB REBUILD.SD
+*END
+  
+  LOC.CNT = DCOUNT(SD<1>,VM) ; POS = 0
+  FOR LC = 1 TO LOC.CNT
+  *ADDED NEW
+*  STATUS = RBO.setProperty('','ServerMessage',SD<1,1,LC>:"~")
+*  RETURN
+
+    IF LOC.NO = SD<1,1,LC> OR LOC.NO = 'ALL' THEN
+  *END
+    NUM.RECEIPTS=DCOUNT(SD<2,LC>,SVM)
+    FOR SC = 1 TO NUM.RECEIPTS 
+      IF SD<2,LC,SC> # "" THEN
+        POS += 1
+        STK.QTY = CALC.STK.QTY(SD<12,LC,SC>,MAT INV.CNV.REC,'.5','')
+        SERIAL.LOC<1,LC,POS> = SD<1,LC,SC>
+        SERIAL.NUMBER<1,LC,POS> = SD<2,LC,SC>
+        SERIAL.ORIG.WT<1,LC,POS> = OCONV(INT((SD<4,LC,SC> / ODVD) + .5),OCNV)
+        SERIAL.CURR.WT<1,LC,POS> = OCONV(INT((SD<3,LC,SC> / ODVD) + .5),OCNV)
+	 SERIAL.RSVD.WT<1,LC,POS> = OCONV(INT(((SD<3,LC,SC>-SD<12,LC,SC>)/ODVD)+.5),OCNV)
+        SERIAL.TOT.ORIG.WT += (SD<4,LC,SC> / ODVD)
+        SERIAL.TOT.CURR.WT += (SD<3,LC,SC> / ODVD)
+
+
+	 *CODE FOR LAST_USED
+	 SERIAL.LST.USED<1,LC,POS> = SD<9,LC,SC>
+	 IF SERIAL.LST.USED<1,LC,POS>=0 THEN SERIAL.LST.USED<1,LC,POS>=""
+	 IF SERIAL.LST.USED<1,LC,POS> # "" THEN SERIAL.LST.USED<1,LC,POS> = OCONV(SERIAL.LST.USED<1,LC,POS>,'D4/')
+	 *END
+        *IF SD<1,LC,SC> = 0 OR SD<1,LC,SC> = '' THEN
+        *  SERIAL.LST.USED<1,LC,POS> = ""
+        *END ELSE
+        *  SERIAL.LST.USED<1,LC,POS> = OCONV(SD<9,LC,SC>,'D4/')
+        *END
+
+        IF INV.UNIT<1,2>=INV.UNIT<1,3> THEN
+          SERIAL.ORIG.QTY<1,LC,POS> = OCONV(INT(SD<6,LC,SC>+.5),ICR)
+          SERIAL.TOT.ORIG.QTY += SD<6,LC,SC>
+          SERIAL.CURR.QTY<1,LC,POS> = OCONV(INT(SD<5,LC,SC>+.5),ICR)
+          SERIAL.TOT.CURR.QTY += SD<5,LC,SC>
+          SERIAL.RSVD.QTY<1,LC,POS> = ''
+        END ELSE
+          SERIAL.ORIG.QTY<1,LC,POS> = OCONV(INT(SD<8,LC,SC>+.5),ICR)
+          SERIAL.TOT.ORIG.QTY += SD<8,LC,SC>
+          SERIAL.CURR.QTY<1,LC,POS> = OCONV(INT(SD<7,LC,SC>+.5),ICR)
+          SERIAL.TOT.CURR.QTY += SD<7,LC,SC>
+	   *SERIAL.RSVD.WT<1,LC,POS>
+          SERIAL.RSVD.QTY<1,LC,POS> = OCONV(INT((SD<7,LC,SC>-STK.QTY)+.5),ICR)
+        END
+      END
+    NEXT SC
+   END
+  NEXT LC
+  *
+*ADDED NEW
+*  STATUS = RBO.setProperty('','ServerMessage',SERIAL.ORIG.WT<1>)
+*  RETURN
+
+*  RCNT = DCOUNT(SERIAL.ORIG.WT<1>,VM)
+*  FOR R=1 TO RCNT
+*	IF SERIAL.RSVD.WT<1,R>+0>0 THEN
+*		SERIAL.RSVD.WT<1,R> = OCONV(INT(SERIAL.RSVD.WT<1,R>+.5),OCNV)
+* 	END
+*      IF SERIAL.RSVD.QTY<1,R>+0>0"" THEN
+*         SERIAL.RSVD.QTY<1,R>=OCONV(INT(SERIAL.RSVD.QTY<1,R>+.5),ICR)
+*      END
+*  NEXT R
+*END
+  SERIAL.TOT.ORIG.WT = OCONV(INT(SERIAL.TOT.ORIG.WT+.5),OCNV)
+  SERIAL.TOT.CURR.WT  = OCONV(INT(SERIAL.TOT.CURR.WT+.5),OCNV)
+  SERIAL.TOT.ORIG.QTY = OCONV(INT(SERIAL.TOT.ORIG.QTY+.5),ICR)
+  SERIAL.TOT.CURR.QTY  = OCONV(INT(SERIAL.TOT.CURR.QTY+.5),ICR)
+
+  UOM.CST.TEXT1 = "Org Qty ":INV.UNIT<1,3>
+  UOM.CST.TEXT2 = "Cur/Rsv ":INV.UNIT<1,3>
+  IF INV.UNIT<1,2>=INV.UNIT<1,3> THEN
+    IF INV.PAP.TYPE='ROLL' OR INV.PAP.TYPE='LROLL' OR INV.PAP.TYPE='PCOAT' THEN
+      UOM.STK.TEXT1 = "Org Diam"
+      UOM.STK.TEXT2 = "Cur Diam"
+    END ELSE
+      UOM.STK.TEXT1 = ""
+      UOM.STK.TEXT2 = ""
+    END
+  END ELSE
+    UOM.STK.TEXT1 = "Org Qty ":INV.UNIT<1,2>
+    UOM.STK.TEXT2 = "Cur/Rsv ":INV.UNIT<1,2>
+  END
+*
+*---- BUILD RBO RECORD
+*
+  STATUS = RBO.setProperty('','SERIAL_LOC',SERIAL.LOC)
+  STATUS = RBO.setProperty('','SERIAL_NUMBER',SERIAL.NUMBER)
+  STATUS = RBO.setProperty('','SERIAL_ORIG_WT',SERIAL.ORIG.WT)
+  STATUS = RBO.setProperty('','SERIAL_CURR_WT',SERIAL.CURR.WT)
+  STATUS = RBO.setProperty('','SERIAL_RSVD_WT',SERIAL.RSVD.WT)
+  STATUS = RBO.setProperty('','SERIAL_ORIG_QTY',SERIAL.ORIG.QTY)
+  STATUS = RBO.setProperty('','SERIAL_CURR_QTY',SERIAL.CURR.QTY)
+  STATUS = RBO.setProperty('','SERIAL_RSVD_QTY',SERIAL.RSVD.QTY)
+  STATUS = RBO.setProperty('','SERIAL_LST_USED',SERIAL.LST.USED)
+  STATUS = RBO.setProperty('','SERIAL_TOT_ORIG_WT',SERIAL.TOT.ORIG.WT)
+  STATUS = RBO.setProperty('','SERIAL_TOT_ORIG_QTY',SERIAL.TOT.ORIG.QTY)
+  STATUS = RBO.setProperty('','SERIAL_TOT_CURR_WT',SERIAL.TOT.CURR.WT)
+  STATUS = RBO.setProperty('','SERIAL_TOT_CURR_QTY',SERIAL.TOT.CURR.QTY)
+  STATUS = RBO.setProperty('','UOM_CST_TEXT1',UOM.CST.TEXT1)
+  STATUS = RBO.setProperty('','UOM_CST_TEXT2',UOM.CST.TEXT2)
+  STATUS = RBO.setProperty('','UOM_STK_TEXT1',UOM.STK.TEXT1)
+  STATUS = RBO.setProperty('','UOM_STK_TEXT2',UOM.STK.TEXT2)
+  RETURN
+*
+
+
+1845:
+   TEST.LINES = ''; TEST.CURR = ''; TEST.MIN = ''
+   TEST.LINES=DCOUNT(SD<3,1>,SVM)
+   FOR I=TEST.LINES TO 1 STEP -1
+       TEST.CURR=INT((SD<3,1,I> / ODVD)+.5)
+      IF ICR.TYPE=4 THEN
+         *TEST.MIN = INT(MIN_QTY) * MIN.QTY.CNV
+	  *ADDED THIS FOR INVINQ
+		TEST.MIN = INT(MIN_QTY) * MIN.QTY.CNV * 100
+	  *END
+      END ELSE
+         TEST.MIN = INT(MIN_QTY) * MIN.QTY.CNV *  100
+      END
+
+      IF TEST.CURR < TEST.MIN THEN
+         GOSUB DELETE.SD
+      END
+   NEXT I
+RETURN
+
+DELETE.SD: 
+   SD=DELETE(SD,1,1,I)
+   SD=DELETE(SD,2,1,I)
+   SD=DELETE(SD,3,1,I)
+   SD=DELETE(SD,4,1,I)
+   SD=DELETE(SD,5,1,I)
+   SD=DELETE(SD,6,1,I)
+   SD=DELETE(SD,7,1,I)
+   SD=DELETE(SD,8,1,I)
+   SD=DELETE(SD,9,1,I)
+   SD=DELETE(SD,10,1,I)
+   SD=DELETE(SD,11,1,I)
+*   SD=DELETE(SD,12,1,I)
+
+*   SD=DELETE(SD,1,LC,J)
+*   SD=DELETE(SD,2,LC,J)
+*   SD=DELETE(SD,3,LC,J)
+*   SD=DELETE(SD,4,LC,J)
+*   SD=DELETE(SD,5,LC,J)
+*   SD=DELETE(SD,6,LC,J)
+*   SD=DELETE(SD,7,LC,J)
+*   SD=DELETE(SD,8,LC,J)
+*   SD=DELETE(SD,9,LC,J)
+*   SD=DELETE(SD,10,LC,J)
+*   SD=DELETE(SD,11,LC,J)
+*   SD=DELETE(SD,12,LC,J)
+RETURN
+
+
+REBUILD.SD: 
+   TMP.REC=""
+   NUM.VALUE =DCOUNT(SD<1,1>,SVM)
+   TMP.REC=SD
+   SD=""
+         ;* Sort by Receipt date, by serial # ; THIS IS SORT.OPTION = R
+         FOR I=1 TO NUM.VALUE
+            LOCATE TMP.REC<11,1,I> IN SD<11,1>,1 BY "AR" SETTING RPOS ELSE NULL
+    * Now find pos where serial # fits in within the same receipt date
+            DONE=0
+            NEXT.POS=RPOS
+            IF SD<2,1>#'' THEN
+               LOOP
+      * Check if serial should be inserted here or in the next pos
+                  IF SD<2,1,NEXT.POS> < TMP.REC<2,1,I> AND (SD<11,1,NEXT.POS>=TMP.REC<11,1,I> AND TMP.REC<11,1,I>#'') THEN
+                     NEXT.POS=NEXT.POS + 1
+                  END ELSE
+                     DONE=1
+                     RPOS=NEXT.POS
+                  END
+               UNTIL DONE DO REPEAT
+            END
+	  GOSUB INSERT.SD
+         NEXT I
+RETURN
+
+
+INSERT.SD: 
+   SD=INSERT(SD,1,1,RPOS,TMP.REC<1,1,I>)  
+   SD=INSERT(SD,2,1,RPOS,TMP.REC<2,1,I>)  
+   SD=INSERT(SD,3,1,RPOS,TMP.REC<3,1,I>)  
+   SD=INSERT(SD,4,1,RPOS,TMP.REC<4,1,I>)  
+   SD=INSERT(SD,5,1,RPOS,TMP.REC<5,1,I>)  
+   SD=INSERT(SD,6,1,RPOS,TMP.REC<6,1,I>)  
+   SD=INSERT(SD,7,1,RPOS,TMP.REC<7,1,I>)  
+   SD=INSERT(SD,8,1,RPOS,TMP.REC<8,1,I>)  
+   SD=INSERT(SD,9,1,RPOS,TMP.REC<9,1,I>)  
+   SD=INSERT(SD,10,1,RPOS,TMP.REC<10,1,I>)
+   SD=INSERT(SD,11,1,RPOS,TMP.REC<11,1,I>)
+   SD=INSERT(SD,12,1,RPOS,TMP.REC<12,1,I>)
+   SD=INSERT(SD,13,1,RPOS,CALC.STK.QTY(TMP.REC<12,1,I>,MAT INV.CNV.REC,'.5',''))
+RETURN
+
+
+SET.ERROR: 
+*
+  STATUS = RBO.setProperty('','ServerStatus',1)
+  STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+  RETURN
+

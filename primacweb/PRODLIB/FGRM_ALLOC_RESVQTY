@@ -1,0 +1,310 @@
+SUBROUTINE FGRM_ALLOC_RESVQTY
+********************************************************************************
+*   Program name :- FGRM_ALLOC_RESVQTY
+*   Created BY:- RAZI MOHIUDDIN ON 10/30/2003
+*------------------------------------------------------------------------------*
+* In Properties:
+* --------------
+* Out Properties:
+* ---------------
+*  THIS METHOD IS TO DISTRRIBUTE ALLOCATED AND RESERVE QTY PROPERLY
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE ICS.CPYLIB COM.INV.CNV
+$DEFINE INVCNV
+$INCLUDE ICS.CPYLIB INV.CNV
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE OPS.CPYLIB JOB.FNGD.STATS
+$INCLUDE JCS.CPYLIB JOB
+$INCLUDE OPS.CPYLIB DAILY_FNGD_RECEIPT
+$INCLUDE OPS.CPYLIB ORDER
+$INCLUDE OPS.CPYLIB ORDER.DETAIL
+$INCLUDE OPS.CPYLIB ORDER.RELEASE
+$INCLUDE PMC.CPYLIB SHIP.TO
+$INCLUDE CPYLIB CHAR
+
+DEFFUN CalcStkQty(COST.QTY,MAT INV.CNV.REC,ROND,LN)
+DEFFUN CalcCostQty(STK.QTY,MAT INV.CNV.REC,ROND,LN)
+
+OPEN '','JOB.FNGD.STATS' TO JOB.FNGD.STATS ELSE	ERRMSG = 'JOB.FNGD.STATS FILE IS MISSING';GOTO 93000
+OPEN '','JOB' TO JOB ELSE 	ERRMSG = 'JOB FILE IS MISSING';GOTO 93000
+OPEN '','DAILY_FNGD_RECEIPT' TO DAILY_FNGD_RECEIPT ELSE ERRMSG = 'DAILY_FNGD_RECEIPT FILE IS MISSING'; GOTO 93000
+OPEN '','ORDER' TO ORDER ELSE ERRMSG = 'ORDER FILE IS MISSING'; GOTO 93000
+OPEN '','ORDER.DETAIL' TO ORDER.DETAIL ELSE ERRMSG = 'ORDER.DETAIL FILE IS MISSING'; GOTO 93000
+OPEN '','ORDER.RELEASE' TO ORDER.RELEASE ELSE ERRMSG = 'ORDER.RELEASE FILE IS MISSING'; GOTO 93000
+OPEN '','SHIP.TO' TO SHIP.TO ELSE ERRMSG = 'SHIP.TO FILE IS MISSING'; GOTO 93000
+OPEN '','INVENTORY' TO INVENTORY ELSE ERRMSG = 'INVENTORY FILE IS MISSING'; GOTO 93000
+
+CONO=''
+OPCO.SHP.FRM=''
+REFNOS=''
+PLOC=''
+WLOC=''
+ServerStatus =""
+ServerMessage = ""
+
+STATUS = RBO.getProperty('','ID',ID)
+STATUS = RBO.getProperty('','Job',Job)
+STATUS = RBO.getProperty('','TotSQty',TotSQty)
+STATUS = RBO.getProperty('','GRIDCOUNT',GRIDCOUNT)
+STATUS = RBO.getProperty('', 'PMCProperty', PMCProperty)
+STATUS = RBO.getProperty('','Prod',INVID)
+
+TotSQty =TotSQty 
+
+*EXTRACT.ORD.INFO: 
+*****************
+CONO=ID[1,3]
+JFS.ORDER=Job
+DFR.JOB=Job
+
+***********************READING INVENTORY FILE WHICH IS IMP WHEN USING INV.CNV *********************
+  MATREAD JFS.REC FROM JOB.FNGD.STATS,CONO:Job ELSE MAT JFS.REC = ""
+	DFR.JOB = Job	
+	DFR.PROD = JFS.PROD
+	DFR.WHSE = JFS.WHSE
+ 
+  MATREAD INV.REC FROM INVENTORY, CONO:INVID ELSE
+      ERRMSG="Cannot locate Product # ":INVID
+      GOTO 93000
+  END 
+***************************************************************************************************
+   DFR.ORDER=""
+   DFR.SHIP.TO=""
+   TEMP.SHPNM=""
+   TEMP.ALLOC=""
+   REL.NO = ""
+   DFR.PICK.FLG = ""
+   OP=0
+
+*** vvv ADDED 11/21/2005
+   FLINES=DCOUNT(JFS.PROD,VM)
+   FOR P=1 TO FLINES
+     PROD=JFS.PROD<1,P>
+     WHSE=JFS.WHSE<1,P>
+     LOCATE PROD IN PDNOS,1 SETTING PLOC THEN
+       ;* i don't get this logic prod/whse is one to one
+       ;* relationship. There can never be more  then one
+       ;* whse in the same multivalue according to cpylib
+       LOCATE WHSE IN WHNOS<PLOC>,1 SETTING WLOC ELSE
+         WHNOS<PLOC,WLOC>=WHSE
+         REFNOS<PLOC,WLOC>=P
+       END
+     END ELSE
+       PDNOS<PLOC>=PROD
+       WHNOS<PLOC>=WHSE
+       REFNOS<PLOC>=P
+     END
+   NEXT P
+*** ^^^ 
+
+   FLN=REFNOS<PLOC,WLOC>
+   OCNT=DCOUNT(JFS.ORDER<1,FLN>,SM)
+   FOR OPTR=1 TO OCNT
+      ORDNO=JFS.ORDER<1,FLN,OPTR>
+      ORD.ID=CONO:ORDNO
+
+      MATREAD ORD.REC FROM ORDER,ORD.ID THEN
+         SCNT=DCOUNT(ORD.SHIP.TO,VM)
+
+*STATUS = RBO.setProperty('','TEST','test order - ' : SCNT :'end')  
+*RETURN
+         FOR SPTR=1 TO SCNT
+            SHPNO=ORD.SHIP.TO<1,SPTR>
+            OSD.ID=ORD.ID:"!":SHPNO 
+            MATREAD ORD.DET.REC FROM ORDER.DETAIL,OSD.ID THEN
+		 PCNT=DCOUNT(OSD.PROD,VM)
+               PP=0
+               *FOR PPTR=1 TO PCNT UNTIL PP > 0
+		 FOR PPTR=1 TO PCNT 
+                 * BEGIN CASE
+                    * CASE OSD.PROD<1,PPTR> # DFR.PROD
+                    * CASE OSD.WHSE<1,PPTR> # DFR.WHSE
+                    * CASE OSD.KIT<1,PPTR> # "N"
+                    * CASE 1
+                       PP=PPTR
+			 * PP=PCNT * COMMENTED BY ZUBAIR, ADDED THE ABOVE LINE
+
+                         LOCATE DFR.JOB IN OSD.JOB<1,PP>,1 SETTING JP THEN
+				*TEMP_PP<1,-1> = OSD.JOB<1,PP,1> : 'JP -' : JP
+
+                           IF OSD.JOB.QTY<1,PP,JP>+0 > 0 THEN  RCNT=DCOUNT(ORD.REL.NO,VM)
+			      FOR R=1 TO RCNT
+                                 ORR.ID=CONO:ORD.REL.NO<1,R>
+                                 MATREAD ORR.REC FROM ORDER.RELEASE,ORR.ID THEN
+                                    BEGIN CASE
+                                       CASE ORR.STATUS # ""
+                                       CASE ORR.SHIP.TO # SHPNO
+                                       CASE ORR.QTY<1,PP>=0
+                                       CASE 1
+                                          P=1; RESVD=0
+                                          LOOP
+                                             LOCATE ORD.REL.NO<1,R> IN OSD.REL.NO<1,PP>,P SETTING RPTR THEN
+                                                RESVD=RESVD + OSD.REL.QTY<1,PP,RPTR>
+                                                P=RPTR + 1
+                                             END ELSE
+                                                P=0
+                                             END
+                                          WHILE P DO REPEAT
+                                          REL.OPEN=ORR.QTY<1,PP> - RESVD
+                                          IF REL.OPEN > 0 THEN
+                                             LOCATE ORR.DUE.DATE IN REL.DATE,1 BY "AR" SETTING RPTR THEN
+                                                RPTR=RPTR + 1
+                                             END
+                                             REL.NO=INSERT(REL.NO,RPTR,0,0,ORD.REL.NO<1,R>)
+                                             REL.DATE=INSERT(REL.DATE,RPTR,0,0,ORR.DUE.DATE)
+                                             REL.QTY=INSERT(REL.QTY,RPTR,0,0,REL.OPEN)
+                                          END
+                                    END CASE
+                                 END
+                              NEXT R
+                              BEGIN CASE
+                                 CASE OP=0
+                                    OP=1
+                                 CASE DFR.ORDER<1,OP> # ORDNO
+                                    OP=OP + 1
+                                 CASE DFR.SHIP.TO<1,OP> # SHPNO
+                                    OP=OP + 1
+                              END CASE
+
+        			  TEMP.ALLOC<1,OP>=TEMP.ALLOC<1,OP> + OSD.JOB.QTY<1,PP,JP>                      	   
+				  DFR.ORDER<1,OP>=ORDNO
+                              DFR.SHIP.TO<1,OP>=SHPNO	 
+                              MATREAD SPT.REC FROM SHIP.TO, CONO:ORD.CUST:"!":SHPNO ELSE
+                                 MAT SPT.REC=""
+                                 IF SHPNO="000" THEN
+                                    SPT.NAME="GENERAL SHIPTO"
+                                 END ELSE
+                                    SPT.NAME="???????????????"
+                                 END
+                              END
+                              TEMP.SHPNM<1,OP>=SPT.NAME
+                              IF ORD.PRINT="N" OR OPCO.SHP.FRM="R" OR SHPNO="000" THEN;*T21248
+                                 DFR.PICK.FLG<1,OP>="N"
+                              END ELSE
+                                 IF DFR.PICK.FLG<1,OP>="" THEN
+                                    DFR.PICK.FLG<1,OP>="Y"
+                                 END
+                              END
+                           *END
+                        END
+                 * END CASE
+               NEXT PPTR
+            END
+         NEXT SPTR
+      END
+   NEXT OPTR
+
+*STATUS = RBO.setProperty('','TEST',' TEMP.ALLOC----': TEMP.ALLOC: '-END')
+*RETURN
+
+   DFR.ORDER<1,OP+1>="*FNGD*"
+   LN=1; LINES=DCOUNT(DFR.ORDER,VM)
+  
+*GET THE INPUT
+*ENT.RECP.QTY: 
+*********************************************
+$INCLUDE ICSBP INV.UM.CNV
+	
+	VALUE=TotSQty
+      	VALUE=ICONV(VALUE,ICR.CNV)
+      	DFR.TOT.QTY=CalcCostQty(VALUE,MAT INV.CNV.REC,'.5','')
+      	DFR.TOT.SQTY=CalcStkQty(DFR.TOT.QTY,MAT INV.CNV.REC,'.5','')  
+
+************************************************
+*DISTRIBUTE.TO.ORDERS: 
+************************************************
+*LINES SEND COUNT OF GRID******
+   LINES=GRIDCOUNT 
+   DFR.QTY=""
+   DFR.SQTY=""
+   PQTY=""
+   RESVQTY=""
+   DQTY=DFR.TOT.QTY
+   RCNT=DCOUNT(REL.NO,AM)
+
+   FOR R=1 TO RCNT UNTIL DQTY=0
+      ORR.ID=CONO:REL.NO<R>
+      MATREAD ORR.REC FROM ORDER.RELEASE,ORR.ID THEN
+         PTR=1
+         LOOP
+            LOCATE ORR.ORD IN DFR.ORDER<1>,PTR SETTING REF THEN
+               IF ORR.SHIP.TO=DFR.SHIP.TO<1,REF> THEN PTR=0
+            END ELSE
+               PTR=0; REF=0
+            END
+         WHILE PTR DO
+            PTR=REF + 1
+         REPEAT
+         IF REF THEN
+            BEGIN CASE
+               CASE DQTY > REL.QTY<R>
+                  DFR.QTY<1,REF>+=REL.QTY<R>
+                  TMP=CalcStkQty(DFR.QTY<1,REF>,MAT INV.CNV.REC,'.5','')
+                  DFR.SQTY<1,REF>=TMP
+                  DQTY=DQTY - REL.QTY<R>
+               CASE DQTY <= REL.QTY<R>
+                  DFR.QTY<1,REF>+=DQTY
+                  TMP=CalcStkQty(DFR.QTY<1,REF>,MAT INV.CNV.REC,'.5','')
+                  DFR.SQTY<1,REF>=TMP                                  
+                  DQTY=0
+            END CASE
+         END
+      END
+   NEXT R
+  
+   FOR REF=1 TO (LINES-1) UNTIL DQTY=0
+      IF DFR.QTY<1,REF> < TEMP.ALLOC<1,REF> THEN
+         IF DFR.QTY<1,REF> + DQTY > TEMP.ALLOC<1,REF> THEN
+            DQTY=DQTY - (TEMP.ALLOC<1,REF> - DFR.QTY<1,REF>)
+            DFR.QTY<1,REF>=TEMP.ALLOC<1,REF>
+            DFR.SQTY<1,REF>=CalcStkQty(DFR.QTY<1,REF>,MAT INV.CNV.REC,'.5','')
+         END ELSE
+            DFR.QTY<1,REF>+=DQTY
+            DFR.SQTY<1,REF>=CalcStkQty(DFR.QTY<1,REF>,MAT INV.CNV.REC,'.5','')
+            DQTY=0
+         END
+      END
+   NEXT REF
+   DFR.QTY<1,LINES>=DQTY
+   DFR.SQTY<1,LINES>=CalcStkQty(DFR.QTY<1,LINES>,MAT INV.CNV.REC,'.5','')
+   LN=1
+*****************************************************
+*STATUS = RBO.setProperty('','TEST',' DFR.ORDER----': DFR.ORDER: '-END')
+*RETURN
+*1115ý*FNGD*-
+   ORCNT=DCOUNT(DFR.ORDER,VM)
+   **OCONV(TEMP.RESERVE,"MD0")
+  
+	FOR ORD=1 TO ORCNT
+      		PQTY<1,ORD>=CalcStkQty(TEMP.ALLOC<1,ORD>,MAT INV.CNV.REC,'.5','') 
+       	PQTY<1,ORD>=OCONV(PQTY<1,ORD>,ICR.CNV1)	
+              *PQTY<1,ORD>=CalcStkQty(DFR.QTY<1,ORD>,MAT INV.CNV.REC,'.5','') 
+       	*PQTY<1,ORD>=OCONV(PQTY<1,ORD>,ICR.CNV1)	
+		
+
+		RESVQTY<1,ORD>=CalcStkQty(DFR.QTY<1,ORD>,MAT INV.CNV.REC,'.5','')
+      		RESVQTY<1,ORD>=OCONV(RESVQTY<1,ORD>,ICR.CNV1)
+		*STATUS = RBO.setProperty('','RESV_QTY',RESVQTY)
+	NEXT ORD
+
+	STATUS = RBO.setProperty('','ALLOC_QTY',PQTY)
+	STATUS = RBO.setProperty('','RESV_QTY',RESVQTY)
+
+ 	*IF GRIDCOUNT = 1 THEN 
+  	*	FOR ORD=1 TO ORCNT
+     	* 		PQTY<1,ORD>=CalcStkQty(TEMP.ALLOC<1,ORD>,MAT INV.CNV.REC,'.5','') 
+      	*	 	STATUS = RBO.setProperty('','ALLOC_QTY',PQTY)
+	*		RESVQTY<1,ORD>=CalcStkQty(DFR.QTY<1,ORD>,MAT INV.CNV.REC,'.5','')
+      	*		STATUS = RBO.setProperty('','RESV_QTY',OCONV(RESVQTY,"MD2"))
+	*	NEXT ORD
+ 	*END 
+******************************************************
+RETURN
+ 
+93000
+STATUS = RBO.setProperty('','ServerStatus',1)
+*STATUS = RBO.setProperty('','ServerMessage','S MSG TEMP_PP -' : TEMP_PP : 'TEMP_JP -':TEMP_JP : 'TEMP_OSD_JO -' :TEMP_OSD_JO)
+STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+RETURN
+

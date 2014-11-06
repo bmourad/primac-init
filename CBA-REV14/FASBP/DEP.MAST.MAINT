@@ -1,0 +1,960 @@
+*COPY>CPYLIB>COM1
+*COPY>FAS.CPYLIB>COM.DEP.MAST
+********************************************************************
+* REVISION    - [08.1]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM        - PRIMAC
+* SOURCE        - FASBP
+* PROGRAM       - DEP.MAST.MAINT
+* BY            - ZIAD YAMOUT, Vercom software, Inc.
+* DATE          - 11/21/88
+* DESCRIPTION   - This program maintains the various depreciation
+*                 methods, and checks the calculations.
+* TASK
+*     18573 - LLH 04/24/95 MULTIPLE ACCOUNTING PERIODS 1-52
+*
+*T26445 adelgado 02/15/2002 * Field 7 is not allowing to change
+*                             DEPR.SVC.PER.
+*T26126 adelgado 02/25/2002 * Implement the LOCKED clause for READU.
+********************************************************************
+*
+*--- Data base libraries
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>SALESDATES
+*COPY>FAS.CPYLIB>DEP.MAST
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>CHAR
+*
+  SLOC = 3
+  DIM STACK.ID(3)
+  DIM VARS.ID(3)
+  DIM STACK(3)
+  DIM VARS(3)
+  DIM VLOC(3)
+  DIM VALID.VARS(3)
+  DIM VVARS(5)
+*
+*--- Setup SYSCOM subroutine
+  SYS.TYPE = 1
+  CALL SYSCOM(MAT SYSCOM.REC)
+*
+*--- Open files
+  OPEN "","CONTROL" TO CONTROL ELSE
+    ERRMSG = "Cannot locate CONTROL file"; GOTO 93000
+  END
+  OPEN "","COMPANY" TO COMPANY ELSE
+    ERRMSG = "Cannot locate COMPANY file"; GOTO 93000
+  END
+  OPEN "","FAS.SCREENS" TO M.SCREENS ELSE
+    ERRMSG = "Cannot locate FAS.SCREENS file"; GOTO 93000
+  END
+  OPEN "","PMC.SCREENS" TO SECOND.SCREENS ELSE
+    ERRMSG = "Cannot locate PMC.SCREENS file"; GOTO 93000
+  END
+  OPEN "","FAS.CPYLIB" TO CPYLIB ELSE
+    ERRMSG = "Cannot locate FAS.CPYLIB file"; GOTO 93000
+  END
+  OPEN "","SYMBOLS" TO SYMBOLS ELSE
+    ERRMSG = "Cannot locate SYMBOLS file"; GOTO 93000
+  END
+  OPEN "","DEP.MAST" TO DEP.MAST ELSE
+    ERRMSG = "Cannot locate DEP.MAST file"; GOTO 93000
+  END
+*
+*--- Get asset cpylib variables
+  READ AST.CPYLIB FROM CPYLIB, "ASSETS" ELSE
+    ERRMSG = "Cannot locate ASSETS cpylib record"; GOTO 93000
+  END
+  CALL CPYLIB.SUB(AST.CPYLIB,ARY.PFX,ERRMSG)
+  IF ERRMSG # "" THEN
+    ERRMSG = "(FAS.CPYLIB, ASSETS) " : ERRMSG
+    GOTO 93000
+  END
+*
+*--- Define valid asset cpylib variables for depreciation
+  FOR I = 2 TO 5
+    VVARS(I) = "INSTALL.AMT"
+    VVARS(I)<2> = "SALVAGE"
+  NEXT I
+  FOR I = 3 TO 5
+    VVARS(I)<3> = "CUM.DEPR"
+    VVARS(I)<4> = "CUR.YEAR"
+  NEXT I
+  FOR I = 3 TO 4
+    VVARS(I)<5> = "LIFE.YEARS"
+    VVARS(I)<6> = "REM.AMT"
+    VVARS(I)<7> = "REM.LIFE.YEARS"
+  NEXT I
+*
+  VVARS(4)<8> = "TABLE"
+*
+  VVARS(5)<5> = "UNITS"
+  VVARS(5)<6> = "CUR.UNITS"
+  VVARS(5)<7> = "CUM.UNITS"
+  VVARS(5)<8> = "UNIT.COST"
+*
+*--- Get company
+  CONO = ""
+  CALL GET.CONO(CONO,MAT COMP.REC)
+  IF CONO = "END" THEN GOTO 99999
+*
+*--- Get sales dates
+  MATREAD SALESDATES.REC FROM CONTROL, CONO:"SALESDATES" ELSE
+    ERRMSG = "Need to setup sales dates table"
+    GOSUB 91000; GOTO 99999
+  END
+  READ PERIOD.REC FROM CONTROL, CONO:"ACCT.PERIODS" ELSE
+    PERIOD.REC = ""
+    PERIOD.REC<1> = 12
+  END
+  NUM.PERIODS = PERIOD.REC<1>
+*
+*--- Setup EDIT.SUB subroutine
+*     MAT EDIT.COM = ""
+*     TYP = 0; CALL EDIT.SUB
+  FILL = "#"
+*
+*--- Setup SCRN.EDIT subroutine
+  MAT EDIT.COM.DRIVER = ""
+  ECD.SCRN.CNT = 1
+  ECD.SCRN.NAME = "DEP.MAST.MAINT"
+  ECD.SCRN.NAME<2> = "DEP.MAST.SUB"
+  ECD.SCRN.NAME<3> = "ARITH.EXP.SUB"
+  ECD.SCRN.FLAG<3> = 2
+  ECD.ACTION=1;CALL SCRN.EDIT
+  ECD.SCRN.NO = 1
+  ESN = 1
+*
+*--- Initialization
+*      PAGE.SIZE = 3
+*      BEGIN.PAGE = 17
+*      LINE.SPACE = 1
+  LINE.COUNT = 3
+  REF.CNT = 0
+  REF.NO = ""
+  CURR.REF.NO = ""
+*
+*--- Depreciation method prompt (Item Id)**** CLEAR SCREEN
+100 MAT SCV.REC = ""
+  ECD.ACTION = 6 ; CALL SCRN.EDIT
+  FOR I = 1 TO NUM.PERIODS
+    SCV.REC(10+I) = SALESDATES.REC(I+1)<1,2>
+  NEXT I
+110 ECD.NUM = 1
+  ECD.ACTION = 4; CALL SCRN.EDIT
+  BEGIN CASE
+    CASE ECD.RET.VALUE = "END"
+      GOTO 99999
+    CASE INDEX(ECD.RET.VALUE," ",1)
+      ERRMSG = "Spaces are invalid in the depreciation method field"
+      GOSUB 91000; GOTO 110
+    CASE INDEX(ECD.RET.VALUE,"!",1)
+      ERRMSG = "Character (!) is invalid in the depreciation method field"
+      GOSUB 91000; GOTO 110
+  END CASE
+  DEPR.NO = ECD.RET.VALUE
+  IF DEPR.NO[1,1] = "U" THEN
+    VVARS(1) = VVARS(5)
+  END ELSE
+    VVARS(1) = VVARS(4)
+  END
+  DEPR.ID = CONO : DEPR.NO
+  TAB.ID = DEPR.ID : "!TAB"
+  STACK.ID(1) = DEPR.ID : "!STACK"
+  VARS.ID(1) = DEPR.ID : "!VARS"
+  STACK.ID(2) = STACK.ID(1) : ".T"
+  VARS.ID(2) = VARS.ID(1) : ".T"
+  FOR SL = 3 TO SLOC
+    ASL = SL - 2
+    STACK.ID(SL) = STACK.ID(1) : "." : ASL
+    VARS.ID(SL) = VARS.ID(1) : "." : ASL
+  NEXT SL
+  MAT VARS = ""; MAT VLOC = ""
+  * T26126 v
+  MATREADU DEPR.REC FROM DEP.MAST, DEPR.ID LOCKED
+    ERRMSG = 'DEPRECIATION METHOD record is locked by user - ':GETUSERNAME(STATUS())
+    GOSUB 91000;GOTO 110 
+  END THEN
+  * T26126 ^
+    FOR SL = 1 TO SLOC
+      READU STACK(SL) FROM DEP.MAST, STACK.ID(SL) ELSE
+        STACK(SL) = ""
+      END
+      READU VALID.VARS(SL) FROM DEP.MAST, VARS.ID(SL) ELSE
+        VALID.VARS(SL) = ""
+      END
+      VCNT = DCOUNT(VALID.VARS(SL),AM); ERRMSG = ""
+      FOR V = 1 TO VCNT
+        IF VALID.VARS(SL)<V,1> > 0 THEN
+          VARS(SL)<V> = AST.CPYLIB<VALID.VARS(SL)<V,1>>
+          IF VARS(SL)<V> # STACK(SL)<VALID.VARS(SL)<V,2>> THEN ERRMSG = 1
+        END ELSE
+          VARS(SL)<V> = STACK(SL)<VALID.VARS(SL)<V,2>>
+        END
+        VLOC(SL)<V> = DELETE(VALID.VARS(SL)<V>,1,1,0)
+      NEXT V
+      IF ERRMSG # "" THEN STACK(SL) = ""
+    NEXT SL
+    READU YR.PCT FROM DEP.MAST, TAB.ID ELSE YR.PCT = ""
+    SCV.REC(2) = DEPR.DESC
+    SCV.REC(3) = DEPR.MAX.YRS
+    SCV.REC(4) = DEPR.MAX.PER
+    SCV.REC(5) = DEPR.YR.TYPE
+    SCV.REC(6) = DEPR.TOT
+    SCV.REC(7) = DEPR.ALT
+    SCV.REC(63) = NUM.PERIODS
+    GOSUB 4000
+    BEGIN CASE
+      CASE NOT(NUM(DEPR.ACQ.MON))
+        IF DEPR.ACQ.MON[2,2] > 0 THEN
+          SCV.REC(9)<1,1> = DEPR.ACQ.MON[2,2] + 0
+        END ELSE
+          SCV.REC(9)<1,1> = DEPR.ACQ.MON
+        END
+        ACQ.MON.NUM = 1
+      CASE DEPR.ACQ.MON >= 0
+        SCV.REC(9)<1,2> = DEPR.ACQ.MON
+        ACQ.MON.NUM = 2
+      CASE 1
+        SCV.REC(9)<1,3> = 0 - DEPR.ACQ.MON
+        ACQ.MON.NUM = 3
+    END CASE
+    BEGIN CASE
+      CASE NOT(NUM(DEPR.DSP.MON))
+        IF DEPR.DSP.MON[2,2] > 0 THEN
+          SCV.REC(10)<1,1> = DEPR.DSP.MON[2,2] + 0
+        END ELSE
+          SCV.REC(10)<1,1> = DEPR.DSP.MON
+        END
+        DSP.MON.NUM = 1
+      CASE DEPR.DSP.MON >= 0
+        SCV.REC(10)<1,2> = DEPR.DSP.MON
+        DSP.MON.NUM = 2
+      CASE 1
+        SCV.REC(10)<1,3> = 0 - DEPR.DSP.MON
+        DSP.MON.NUM = 3
+    END CASE
+    SCV.REC(23)<ESN> = DEPR.ACQ.YR
+    SCV.REC(24)<ESN> = DEPR.ACQ.FYR
+    SCV.REC(25)<ESN> = NUM.PERIODS
+    SCV.REC(26)<ESN> = "Y"
+    SCV.REC(27)<ESN> = DEPR.DSP.YR
+    SCV.REC(28)<ESN> = DEPR.DSP.FYR
+    FOR I = 1 TO NUM.PERIODS
+      SCV.REC(30)<ESN,I> = SALESDATES.REC(I+1)<1,2>"R#3"
+      SCV.REC(33)<ESN,I> = SALESDATES.REC(I+1)<1,2>"R#3"
+      SCV.REC(36)<ESN,I> = SALESDATES.REC(I+1)<1,2>"R#3"
+      SCV.REC(31)<ESN,I> = I"R%2"
+      SCV.REC(34)<ESN,I> = I"R%2"
+      SCV.REC(39)<ESN,I> = I"R%2"
+      SCV.REC(32)<ESN,I> = DEPR.ACQ.PER<1,I>
+      SCV.REC(35)<ESN,I> = DEPR.SVC.PER<1,I>
+      SCV.REC(40)<ESN,I> = DEPR.DSP.PER<1,I>
+    NEXT I
+    ECD.ACTION = 3; CALL SCRN.EDIT
+  END ELSE
+    MAT DEPR.REC = ""
+    MAX.YRS = 0
+    DEPR.ACQ.MON = 15; ACQ.MON.NUM = 2
+    DEPR.DSP.MON = -15; DSP.MON.NUM = 3
+    DEPR.ACQ.YR = NUM.PERIODS
+    DEPR.DSP.YR = NUM.PERIODS
+    DEPR.ACQ.FYR = "N"
+    DEPR.DSP.FYR = "N"
+    SCV.REC(23) = NUM.PERIODS
+    SCV.REC(24) = "N"
+    SCV.REC(25) = NUM.PERIODS
+    SCV.REC(26) = "Y"
+    SCV.REC(27) = NUM.PERIODS
+    SCV.REC(28) = "N"
+    FOR I = 1 TO NUM.PERIODS
+      DEPR.ACQ.PER<1,I> = "X"
+      DEPR.DSP.PER<1,I> = "X"
+      DEPR.SVC.PER<1,I> = "X"
+      SCV.REC(32)<1,I> = "X"
+      SCV.REC(35)<1,I> = "X"
+      SCV.REC(40)<1,I> = "X"
+      SCV.REC(30)<ESN,I> = SALESDATES.REC(I+1)<1,2>"R#3"
+      SCV.REC(33)<ESN,I> = SALESDATES.REC(I+1)<1,2>"R#3"
+      SCV.REC(36)<ESN,I> = SALESDATES.REC(I+1)<1,2>"R#3"
+      SCV.REC(31)<ESN,I> = I"R%2"
+      SCV.REC(34)<ESN,I> = I"R%2"
+      SCV.REC(39)<ESN,I> = I"R%2"
+    NEXT I
+    BEGIN CASE
+      CASE DEPR.NO = "M"
+        DEPR.YR.TYPE = "A"; SCV.REC(5) = DEPR.YR.TYPE
+        DEPR.TOT = 0; SCV.REC(6) = DEPR.TOT
+        DEPR.ALT = "N"; SCV.REC(7) = DEPR.ALT
+      CASE DEPR.NO[1,1] = "U"
+        DEPR.YR.TYPE = "A"; SCV.REC(5) = DEPR.YR.TYPE
+        DEPR.TOT = 0
+        DEPR.ALT = "N"; SCV.REC(7) = DEPR.ALT
+        DEPR.DSP.MON = 1; DSP.MON.NUM = 2
+      CASE 1
+        DEPR.TOT = 10000; DEPR.TOT.1 = "INSTALL.AMT"
+    END CASE
+    SCV.REC(9)<1,ACQ.MON.NUM> = DEPR.ACQ.MON
+    SCV.REC(10)<1,DSP.MON.NUM> = DEPR.DSP.MON
+    ECD.ACTION = 3; CALL SCRN.EDIT
+    SCV.REC(6) = DEPR.TOT
+    MAT STACK = ""; YR.PCT = ""
+    FOR OPTION = 1 TO 10 WHILE ECD.RET.VALUE # "END"
+      ON OPTION GOSUB 1100,1200,1300,1400,1500,1600,1700,1800,1900,2000
+    NEXT OPTION
+    IF ECD.RET.VALUE = "END" THEN
+      RELEASE DEP.MAST, DEPR.ID
+      GOTO 100
+    END
+    FOR SL = 1 TO SLOC
+      READU DUMMY FROM DEP.MAST, STACK.ID(SL) ELSE NULL
+      READU DUMMY FROM DEP.MAST, VARS.ID(SL) ELSE NULL
+    NEXT SL
+    READU DUMMY FROM DEP.MAST, TAB.ID ELSE NULL
+  END
+  MAT VALID.VARS = ""
+*
+*--- Prompt line routine
+  MORE = 1
+  CURR.REF.NO = 1
+  LOOP
+    ECD.NUM = 37; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ""
+    REF.CNT = PERIOD.REC<1>
+    ECD.ACTION = 4; CALL SCRN.EDIT
+    OPTION = ECD.RET.VALUE
+    BEGIN CASE
+      CASE OPTION = "E" OR OPTION = "END" OR OPTION = ""
+        RELEASE DEP.MAST, DEPR.ID
+        RELEASE DEP.MAST, TAB.ID
+        FOR SL = 1 TO SLOC
+          RELEASE DEP.MAST, STACK.ID(SL)
+          RELEASE DEP.MAST, VARS.ID(SL)
+        NEXT SL
+        MORE = 0
+      CASE OPTION = "F"
+        BEGIN CASE
+          CASE STACK(1) = "" AND DEPR.NO # "M"
+            ERRMSG = "Depreciation calculation equation is not setup"
+            GOSUB 91000; GOTO 509
+          CASE DEPR.TOT > 0 AND STACK(2) = ""
+            ERRMSG = "Total depreciation calculation equation is not setup"
+            GOSUB 91000; GOTO 509
+          CASE DEPR.ALT # "N" AND STACK(3) = ""
+            ERRMSG = "Switching to depreciation calculation equation is not setup"
+            GOSUB 91000; GOTO 509
+        END CASE
+        TAB.FLG = ""; ERRMSG = ""
+        FOR SL = 1 TO SLOC WHILE ERRMSG = ""
+          VCNT = DCOUNT(VARS(SL),AM)
+          TAB.FLG<SL> = 0
+          FOR V = 1 TO VCNT WHILE ERRMSG = ""
+            LOCATE VARS(SL)<V> IN AST.CPYLIB SETTING L THEN
+              VALID.VARS(SL)<V> = L
+              VALID.VARS(SL)<V,-1> = VLOC(SL)<V>
+            END ELSE
+              LOCATE VARS(SL)<V> IN VVARS(SL) SETTING L THEN
+                VALID.VARS(SL)<V> = 0
+                VALID.VARS(SL)<V,-1> = VLOC(SL)<V>
+                IF VARS(SL)<V> = "TABLE" THEN TAB.FLG<SL> = 1
+              END ELSE
+                ERRMSG = "326,DMM Invalid variable in arithmetic expression (":VARS(SL)<1>:")"
+              END
+            END
+          NEXT V
+        NEXT SL
+        IF ERRMSG # "" THEN
+          GOSUB 91000; GOTO 509
+        END
+        YRS.CNT = DCOUNT(YR.PCT,AM)
+        BEGIN CASE
+          CASE TAB.FLG<1> AND YRS.CNT < 1
+            ERRMSG = "Depreciation yearly percentage table is not setup"
+            GOSUB 91000; GOTO 509
+          CASE YRS.CNT AND TAB.FLG<1> = 0
+            ERRMSG = "The depreciation equation does not reference the depreciation table"
+            GOSUB 91000; GOTO 509
+          CASE YRS.CNT AND MAX.YRS > YRS.CNT
+            ERRMSG = "The last ":MAX.YRS-YRS.CNT:" of the depreciation percentage table are not setup"
+            GOSUB 91000; GOTO 509
+          CASE TAB.FLG<2> AND YRS.CNT < 1
+            ERRMSG = "Depreciation yearly percentage table is not setup"
+            GOSUB 91000; GOTO 509
+          CASE TAB.FLG<3> AND YRS.CNT < 1
+            ERRMSG = "Depreciation yearly percentage table is not setup"
+            GOSUB 91000; GOTO 509
+          CASE TAB.FLG<1> AND DEPR.YR.TYPE # "F"
+            ERRMSG = "Warning !!! Depreciation % table is not on a fiscal year basis."
+            GOSUB 91000
+          CASE TAB.FLG<1> = 0 AND DEPR.YR.TYPE = "F"
+            ERRMSG = "Warning !!! Depreciation calculation is on a fiscal year basis."
+            GOSUB 91000
+        END CASE
+        MATWRITE DEPR.REC ON DEP.MAST, DEPR.ID
+        FOR SL = 1 TO SLOC
+          IF STACK(SL) # "" THEN
+            WRITE STACK(SL) ON DEP.MAST, STACK.ID(SL)
+            WRITE VALID.VARS(SL) ON DEP.MAST, VARS.ID(SL)
+          END ELSE
+            DELETE DEP.MAST, STACK.ID(SL)
+            DELETE DEP.MAST,VARS.ID(SL)
+          END
+        NEXT SL
+        IF YR.PCT # "" THEN
+          WRITE YR.PCT ON DEP.MAST, TAB.ID
+        END ELSE
+          DELETE DEP.MAST, TAB.ID
+        END
+        MORE = 0
+509   CASE OPTION = "Q" AND DEPR.NO # "M"
+        ECD.SCRN.NO = ECD.SCRN.NO + 2
+        ARITH.EXP = DEPR.EQU.1
+        IF DEPR.EQU.2 # "" THEN
+          ARITH.EXP<2> = DEPR.EQU.2
+          IF DEPR.EQU.3 # "" THEN
+            ARITH.EXP<3> = DEPR.EQU.3
+          END
+        END
+        CALL ARITH.EXP.SUB(VVARS(1),VARS(1),VLOC(1),STACK(1),ARITH.EXP)
+        IF STACK(1) # "" THEN
+          DEPR.EQU.1 = ARITH.EXP<1>
+          DEPR.EQU.2 = ARITH.EXP<2>
+          DEPR.EQU.3 = ARITH.EXP<3>
+        END
+        ECD.SCRN.NO = ECD.SCRN.NO - 2
+        ECD.ACTION = 2; CALL SCRN.EDIT
+        ECD.ACTION = 3; CALL SCRN.EDIT
+      CASE OPTION = "T" AND MAX.YRS < 1
+        ERRMSG = "Need to setup the maximum number of years."
+        GOSUB 91000
+      CASE OPTION = "T"
+        ECD.SCRN.NO = ECD.SCRN.NO + 1
+        SCV.REC(1)<ECD.SCRN.NO> = DEPR.NO
+        SCV.REC(2)<ECD.SCRN.NO> = DEPR.DESC
+        ECD.ACTION = 2; CALL SCRN.EDIT
+        ECD.ACTION = 3; CALL SCRN.EDIT
+        CALL DEP.MAST.SUB
+        ECD.SCRN.NO = ECD.SCRN.NO - 1
+        ECD.ACTION = 2; CALL SCRN.EDIT
+        ECD.ACTION = 3; CALL SCRN.EDIT
+      CASE OPTION = "H"
+        ECD.SCRN.NO = ECD.SCRN.NO + 2
+        VVARS.0 = ""; VARS.0 = ""; VLOC.0 = ""
+        STACK.0 = ""; ARITH.EXP = ""
+        CALL ARITH.EXP.SUB(VVARS.0,VARS.0,VLOC.0,STACK.0,ARITH.EXP)
+        ECD.SCRN.NO = ECD.SCRN.NO - 2
+        ECD.ACTION = 2; CALL SCRN.EDIT
+        ECD.ACTION = 3; CALL SCRN.EDIT
+      CASE OPTION = "M"
+        ECD.NUM = 38; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ""
+        ECD.ACTION = 4; CALL SCRN.EDIT
+        BEGIN CASE
+          CASE ECD.RET.VALUE = "END"
+          CASE INDEX(ECD.RET.VALUE," ",1)
+            ERRMSG = "Spaces are invalid in the depreciation method field"
+            GOSUB 91000
+          CASE INDEX(ECD.RET.VALUE,"!",1)
+            ERRMSG = "Character (!) is invalid in the depreciation method field"
+            GOSUB 91000
+          CASE DEPR.NO = "M" OR ECD.RET.VALUE = "M"
+            ERRMSG = "Cannot duplicate the manual depreciation method"
+            GOSUB 91000
+          CASE DEPR.NO[1,1] = "U" AND ECD.RET.VALUE[1,1] # "U"
+            ERRMSG = "Cannot duplicate to a regular depreciation method"
+            GOSUB 91000
+          CASE DEPR.NO[1,1] # "U" AND ECD.RET.VALUE[1,1] = "U"
+            ERRMSG = "Cannot duplicate to a units depreciation method"
+            GOSUB 91000
+          CASE 1
+            READU DUMMY FROM DEP.MAST, CONO : ECD.RET.VALUE THEN
+              ERRMSG = "The new depreciation method (":ECD.RET.VALUE:")  already exists on file"
+              GOSUB 91000
+              RELEASE DEP.MAST, CONO : ECD.RET.VALUE
+            END ELSE
+              RELEASE DEP.MAST, DEPR.ID
+              DEPR.NO = ECD.RET.VALUE
+              DEPR.ID = CONO : DEPR.NO
+              RELEASE DEP.MAST, TAB.ID
+              TAB.ID = DEPR.ID : "!TAB"
+              READU DUMMY FROM DEP.MAST, TAB.ID ELSE NULL
+              FOR SL = 1 TO SLOC
+                RELEASE DEP.MAST, STACK.ID(SL)
+                RELEASE DEP.MAST, VARS.ID(SL)
+              NEXT SL
+              STACK.ID(1) = DEPR.ID : "!STACK"
+              VARS.ID(1) = DEPR.ID : "!VARS"
+              STACK.ID(2) = STACK.ID(1) : ".T"
+              VARS.ID(2) = VARS.ID(1) : ".T"
+              FOR SL = 3 TO SLOC
+                ASL = I - 2
+                STACK.ID(SL) = STACK.ID(1) : "." : ASL
+                VARS.ID(SL) = VARS.ID(1) : "." : ASL
+              NEXT SL
+              FOR SL = 1 TO SLOC
+                READU DUMMY FROM DEP.MAST, STACK.ID(SL) ELSE NULL
+                READU DUMMY FROM DEP.MAST, VARS.ID(SL) ELSE NULL
+              NEXT SL
+              ECD.NUM = 1; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = DEPR.NO
+              ECD.ACTION = 5; CALL SCRN.EDIT
+            END
+        END CASE
+      CASE OPTION="S" AND REF.CNT > 0
+        REF.NO=CURR.REF.NO + LINE.COUNT
+        IF REF.NO > REF.CNT THEN REF.NO=1
+        GOSUB 10000
+      CASE OPTION="SF" AND REF.CNT > 0
+        REF.NO=CURR.REF.NO + LINE.COUNT
+        IF REF.NO > REF.CNT THEN REF.NO=1
+        GOSUB 10000
+      CASE OPTION="ST" AND REF.CNT > 0
+        REF.NO=1
+        GOSUB 10000
+      CASE OPTION="SR" AND REF.CNT > 0
+        REF.NO=CURR.REF.NO - LINE.COUNT
+        IF REF.NO < 1 THEN REF.NO=1
+        GOSUB 10000
+      CASE OPTION="SB" AND REF.CNT > 0
+        REF.NO=REF.CNT
+        GOSUB 10000
+      CASE NOT(NUM(OPTION))
+        ERRMSG = "Invalid entry, please re-enter"
+        GOSUB 91000
+      CASE OPTION < 1 AND OPTION > 8
+        ERRMSG = "*** Out of range ***"
+        GOSUB 91000
+      CASE 1
+        ON OPTION GOSUB 1100,1200,1300,1400,1500,1600,1700,1800,1900,2000
+    END CASE
+  WHILE MORE DO REPEAT
+  GOTO 100
+*
+*--- Depreciation description
+1100 ECD.NUM = 2
+  ECD.ACTION = 4; CALL SCRN.EDIT
+  IF ECD.RET.VALUE # "END" THEN
+    DEPR.DESC = ECD.RET.VALUE
+  END
+  RETURN
+*
+*--- Maximum depreciation period
+1200 IF DEPR.NO = "M" OR DEPR.NO[1,1] = "U" THEN GOTO 1209
+  ECD.NUM = 3; ECD.ACTION = 4; CALL SCRN.EDIT
+  IF ECD.RET.VALUE # "END" THEN
+    DEPR.MAX.YRS = ECD.RET.VALUE
+    ECD.NUM = 4
+    IF DEPR.MAX.YRS = "" THEN
+      DEPR.MAX.PER = ""
+      SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ""
+      ECD.ACTION = 5; CALL SCRN.EDIT
+    END ELSE
+      ECD.ACTION = 4; CALL SCRN.EDIT
+      IF ECD.RET.VALUE # "END" THEN
+        DEPR.MAX.PER = ECD.RET.VALUE
+      END
+    END
+    GOSUB 4000
+  END
+1209 RETURN
+*
+*--- Depreciation's year type
+1300 IF DEPR.NO = "M" OR DEPR.NO[1,1] = "U" THEN GOTO 1309
+  ECD.NUM = 5; ECD.ACTION = 4; CALL SCRN.EDIT
+  IF ECD.RET.VALUE # "END" THEN
+    DEPR.YR.TYPE = ECD.RET.VALUE
+    GOSUB 4000
+  END
+1309 RETURN
+*
+*--- Depreciation total amount
+1400 IF DEPR.NO = "M" THEN GOTO 1409
+  ECD.NUM = 6; ECD.ACTION = 4; CALL SCRN.EDIT
+  BEGIN CASE
+    CASE ECD.RET.VALUE = "END"
+      GOTO 1409
+    CASE ECD.RET.VALUE = 0
+      DEPR.TOT.1 = ""
+      DEPR.TOT.2 = ""
+      DEPR.TOT.3 = ""
+      STACK(2) = ""
+      VARS(2) = ""
+      VLOC(2) = ""
+      GOTO 1408
+    CASE ECD.RET.VALUE < 1 OR ECD.RET.VALUE > 10000
+      ERRMSG = "Out of range, please re-enter"
+      GOSUB 91000; GOTO 1400
+  END CASE
+  ECD.SCRN.NO = ECD.SCRN.NO + 2
+  ARITH.EXP = DEPR.TOT.1
+  IF DEPR.TOT.2 # "" THEN
+    ARITH.EXP<2> = DEPR.TOT.2
+    IF DEPR.TOT.3 # "" THEN
+      ARITH.EXP<3> = DEPR.TOT.3
+    END
+  END
+  TEMP = ECD.RET.VALUE
+  CALL ARITH.EXP.SUB(VVARS(2),VARS(2),VLOC(2),STACK(2),ARITH.EXP)
+  IF STACK(2) # "" THEN
+    DEPR.TOT.1 = ARITH.EXP<1>
+    DEPR.TOT.2 = ARITH.EXP<2>
+    DEPR.TOT.3 = ARITH.EXP<3>
+  END
+  ECD.SCRN.NO = ECD.SCRN.NO - 2
+  ECD.ACTION = 2; CALL SCRN.EDIT
+  ECD.ACTION = 3; CALL SCRN.EDIT
+  ECD.RET.VALUE = TEMP
+1408 DEPR.TOT = ECD.RET.VALUE
+1409 RETURN
+*
+*--- Switch to equation
+1500 IF DEPR.NO = "M" OR DEPR.NO[1,1] = "U" THEN GOTO 1509
+  ECD.NUM = 7; ECD.ACTION = 4; CALL SCRN.EDIT
+  BEGIN CASE
+    CASE ECD.RET.VALUE = "END"
+      GOTO 1509
+    CASE ECD.RET.VALUE = ""
+      ERRMSG = "Invalid entry, please re-enter"
+      GOSUB 91000; GOTO 1500
+    CASE ECD.RET.VALUE = "N"
+      DEPR.ALT.1 = ""
+      DEPR.ALT.2 = ""
+      DEPR.ALT.3 = ""
+      STACK(3) = ""
+      VARS(3) = ""
+      VLOC(3) = ""
+      GOTO 1508
+    CASE NUM(ECD.RET.VALUE)
+      IF ECD.RET.VALUE < 1 OR ECD.RET.VALUE > MAX.YRS THEN
+        ERRMSG = "Invalid year number, please re-enter"
+        GOSUB 91000; GOTO 1500
+      END
+    CASE ECD.RET.VALUE # "L" AND ECD.RET.VALUE # "E" AND ECD.RET.VALUE # "G"
+      ERRMSG = "Invalid entry, please re-enter"
+      GOSUB 91000; GOTO 1500
+  END CASE
+  ECD.SCRN.NO = ECD.SCRN.NO + 2
+  ARITH.EXP = DEPR.ALT.1
+  IF DEPR.ALT.2 # "" THEN
+    ARITH.EXP<2> = DEPR.ALT.2
+    IF DEPR.ALT.3 # "" THEN
+      ARITH.EXP<3> = DEPR.ALT.3
+    END
+  END
+  TEMP = ECD.RET.VALUE
+  CALL ARITH.EXP.SUB(VVARS(3),VARS(3),VLOC(3),STACK(3),ARITH.EXP)
+  IF STACK(3) # "" THEN
+    DEPR.ALT.1 = ARITH.EXP<1>
+    DEPR.ALT.2 = ARITH.EXP<2>
+    DEPR.ALT.3 = ARITH.EXP<3>
+  END
+  ECD.SCRN.NO = ECD.SCRN.NO - 2
+  ECD.ACTION = 2; CALL SCRN.EDIT
+  ECD.ACTION = 3; CALL SCRN.EDIT
+  ECD.RET.VALUE = TEMP
+1508 DEPR.ALT = ECD.RET.VALUE
+1509 RETURN
+*
+*--- Acquisition year criteria
+1600 *
+  IF DEPR.NO = "M" OR DEPR.NO[1,1] = "U" THEN GOTO 1650
+  ECD.NUM = 23; ECD.ACTION = 4; CALL SCRN.EDIT
+  IF ECD.RET.VALUE = "END" THEN GOTO 1699
+  DEPR.ACQ.YR = ECD.RET.VALUE
+  ECD.NUM = 24; ECD.ACTION = 4; CALL SCRN.EDIT
+  IF ECD.RET.VALUE = "END" THEN GOTO 1699
+  DEPR.ACQ.FYR = ECD.RET.VALUE
+  GOSUB 4000
+1650 T.PER = DEPR.ACQ.PER
+  REF.NO = 1; CURR.REF.NO = 1
+  REF.CNT = 0
+  DONE = 0
+  FOR REF.NO = REF.CNT + 1  TO PERIOD.REC<1> UNTIL DONE = 1
+    IF REF.NO > 0 THEN GOSUB 10000
+    ECD.NUM = 32; ECD.SUB.NUM = REF.NO; ESNO = REF.NO
+    GOSUB 5000
+    IF T.PER = "XEND" THEN
+      FOR I = 1 TO NUM.PERIODS
+        SCV.REC(ECD.NUM)<ECD.SCRN.NO,I> = DEPR.ACQ.PER<1,I>
+      NEXT I
+      REF.NO = 1
+      GOSUB 10000
+      DONE = 1
+    END
+    REF.CNT = REF.NO
+  NEXT REF.NO
+  IF T.PER # "XEND" THEN
+    DEPR.ACQ.PER = T.PER
+  END
+1699 ECD.SUB.NUM = 0
+  REF.NO = 1
+  CURR.REF.NO = ''
+  GOSUB 10000
+  RETURN
+*
+*--- Service years criteria
+1700 T.PER = DEPR.SVC.PER
+  REF.NO = 1; CURR.REF.NO = 1
+  REF.CNT = 0
+  DONE = 0
+  FOR REF.NO = REF.CNT + 1  TO PERIOD.REC<1> UNTIL DONE = 1
+    IF REF.NO > 0 THEN GOSUB 10000
+    ECD.NUM = 35; ECD.SUB.NUM = REF.NO; ESNO = REF.NO
+    GOSUB 5000
+    IF T.PER = "XEND" THEN
+      FOR I = 1 TO NUM.PERIODS
+        SCV.REC(ECD.NUM)<ECD.SCRN.NO,I> = DEPR.SVC.PER<1,I>
+      NEXT I
+      REF.NO = 1
+      GOSUB 10000
+      DONE = 1
+    END
+    REF.CNT = REF.NO
+  NEXT REF.NO
+  IF T.PER # "XEND" THEN
+    * T26445 v
+    * DEPR.SCV.PER = T.PER
+    DEPR.SVC.PER = T.PER
+    * T26445 ^
+    IF DEPR.NO[1,1] = "U" THEN
+      DEPR.DSP.PER = T.PER
+      ECD.NUM = 40
+      FOR I = 1 TO NUM.PERIODS
+        ECD.SUB.NUM = I
+        ESNO = I
+        SCV.REC(ECD.NUM)<ECD.SCRN.NO,ECD.SUB.NUM> = DEPR.DSP.PER<1,I>
+      NEXT I
+      REF.CNT = 1; GOSUB 10000
+    END
+  END
+  ECD.SUB.NUM = 0
+  REF.NO = 1
+  CURR.REF.NO = ''
+  GOSUB 10000
+  RETURN
+*
+*--- Disposal year criteria
+1800 *
+  BEGIN CASE
+    CASE DEPR.NO = "M"
+      GOTO 1850
+    CASE DEPR.NO[1,1] = "U"
+      GOTO 1899
+  END CASE
+  ECD.NUM = 27; ECD.ACTION = 4; CALL SCRN.EDIT
+  IF ECD.RET.VALUE = "END" THEN GOTO 1899
+  DEPR.DSP.YR = ECD.RET.VALUE
+  ECD.NUM = 28; ECD.ACTION = 4; CALL SCRN.EDIT
+  IF ECD.RET.VALUE = "END" THEN GOTO 1899
+  DEPR.DSP.FYR = ECD.RET.VALUE
+1850 T.PER = DEPR.DSP.PER
+  REF.NO = 1; CURR.REF.NO = 1
+  REF.CNT = 0
+  DONE = 0
+  FOR REF.NO = REF.CNT + 1 TO PERIOD.REC<1> UNTIL DONE = 1
+    IF REF.NO > 0 THEN GOSUB 10000
+    ECD.NUM = 40; ECD.SUB.NUM = REF.NO; ESNO = REF.NO
+    GOSUB 5000
+    IF T.PER = "XEND" THEN
+      FOR I = 1 TO NUM.PERIODS
+        SCV.REC(ECD.NUM)<ECD.SCRN.NO,I> = DEPR.ACQ.PER<1,I>
+      NEXT I
+      REF.NO = 1
+      GOSUB 10000
+      DONE = 1
+    END
+    REF.CNT = REF.NO
+  NEXT REF.NO
+  IF T.PER # "XEND" THEN
+    DEPR.DSP.PER = T.PER
+  END
+1899 ECD.SUB.NUM = 0
+  REF.NO = 1
+  CURR.REF.NO = ''
+  GOSUB 10000
+  RETURN
+*
+*--- Acquisition month criteria
+1900 ECD.NUM = 9; ECD.SUB.NUM = ACQ.MON.NUM
+  GOSUB 6000
+  IF ECD.RET.VALUE = "END" THEN
+    ECD.SUB.NUM = ACQ.MON.NUM
+    BEGIN CASE
+      CASE ACQ.MON.NUM = 3
+        SCV.REC(ECD.NUM)<ECD.SCRN.NO,ECD.SUB.NUM>= 0-DEPR.ACQ.MON
+      CASE ACQ.MON.NUM = 1 AND DEPR.ACQ.MON[2,2] > 0
+        SCV.REC(ECD.NUM)<ECD.SCRN.NO,ECD.SUB.NUM> = DEPR.ACQ.MON[2,2] + 0
+      CASE 1
+        SCV.REC(ECD.NUM)<ECD.SCRN.NO,ECD.SUB.NUM> = DEPR.ACQ.MON
+    END CASE
+    ECD.ACTION = 5; CALL SCRN.EDIT
+  END ELSE
+    ACQ.MON.NUM = ECD.SUB.NUM
+    DEPR.ACQ.MON = ECD.RET.VALUE
+  END
+  ECD.SUB.NUM = 0
+  RETURN
+*
+*--- Disposal month criteria
+2000 IF DEPR.NO[1,1] = "U" THEN GOTO 2099
+  ECD.NUM = 10; ECD.SUB.NUM = DSP.MON.NUM
+  GOSUB 6000
+  IF ECD.RET.VALUE = "END" THEN
+    ECD.SUB.NUM = DSP.MON.NUM
+    BEGIN CASE
+      CASE DSP.MON.NUM = 3
+        SCV.REC(ECD.NUM)<ECD.SCRN.NO,ECD.SUB.NUM>= 0-DEPR.DSP.MON
+      CASE ACQ.MON.NUM = 1 AND DEPR.ACQ.MON[2,2] > 0
+        SCV.REC(ECD.NUM)<ECD.SCRN.NO,ECD.SUB.NUM> = DEPR.DSP.MON[2,2] + 0
+      CASE 1
+        SCV.REC(ECD.NUM)<ECD.SCRN.NO,ECD.SUB.NUM> = DEPR.DSP.MON
+    END CASE
+    ECD.ACTION = 5; CALL SCRN.EDIT
+  END ELSE
+    DSP.MON.NUM = ECD.SUB.NUM
+    DEPR.DSP.MON = ECD.RET.VALUE
+  END
+  ECD.SUB.NUM = 0
+2099 RETURN
+*
+*--- Get Maximum years
+4000 YRS.CNT = DCOUNT(YR.PCT,AM)
+  BEGIN CASE
+    CASE DEPR.MAX.YRS < 1
+      MAX.YRS = 0
+    CASE DEPR.YR.TYPE = "F"
+      IF DEPR.ACQ.FYR = "Y" THEN
+        MAX.YRS = DEPR.MAX.YRS+INT(DEPR.MAX.PER/NUM.PERIODS+.99)
+      END ELSE
+        MAX.YRS = DEPR.MAX.YRS+INT(DEPR.MAX.PER/NUM.PERIODS+.99)+1
+      END
+    CASE 1
+      MAX.YRS = DEPR.MAX.YRS+INT(DEPR.MAX.PER/NUM.PERIODS+.99)
+  END CASE
+  IF YRS.CNT > MAX.YRS THEN
+    MAX.YRS = MAX.YRS + 1
+    FOR I = YRS.CNT TO MAX.YRS STEP -1
+      YR.PCT = DELETE(YR.PCT,I,0,0)
+    NEXT I
+    MAX.YRS = MAX.YRS - 1
+  END
+  RETURN
+*
+*--- Horizental scrolling routine
+5000 *
+  ECD.SUB.NUM = REF.NO; ESNO = REF.NO
+  ECD.ACTION = 4; CALL SCRN.EDIT
+  BEGIN CASE
+    CASE ECD.RET.VALUE = "END"
+      ECD.RET.VALUE = ""
+      SCV.REC(ECD.NUM)<ECD.SCRN.NO,ESNO> = """R#1"
+      ECD.SUB.NUM = ESNO
+      ECD.ACTION = 5; CALL SCRN.EDIT
+      T.PER<1,ESNO> = ""
+    CASE ECD.RET.VALUE = "U"
+      T.PER = "XEND"
+    CASE TRIM(ECD.RET.VALUE) = ""
+      SCV.REC(ECD.NUM)<ECD.SCRN.NO,ESNO> = """R#1"
+      ECD.SUB.NUM = ESNO
+      ECD.ACTION = 5; CALL SCRN.EDIT
+      T.PER<1,ESNO> = ""
+    CASE ECD.RET.VALUE = "X"
+      T.PER<1,ESNO> = ECD.RET.VALUE
+    CASE 1
+      ERRMSG = "Invalid, Please enter X,U, or <RETURN> "
+      GOSUB 91000; GOTO 5000
+  END CASE
+  RETURN
+*
+*--- Vretical scrolling routine
+6000 SWOOP = 1
+  ESNO = ECD.SUB.NUM
+  LOOP
+    ECD.ACTION = 4; CALL SCRN.EDIT
+    BEGIN CASE
+      CASE ECD.RET.VALUE = "END"
+        SWOOP = 0
+      CASE ECD.RET.VALUE = ""
+        IF ESNO = 3 THEN
+          ESNO = 1
+        END ELSE
+          ESNO = ESNO + 1
+        END
+      CASE 1
+        ON ESNO GOSUB 6100,6200,6300
+    END CASE
+    ECD.SUB.NUM = ESNO
+  WHILE SWOOP DO REPEAT
+  RETURN
+*
+*--- Check %
+6100 BEGIN CASE
+    CASE NUM(ECD.RET.VALUE)
+      IF ECD.RET.VALUE < 1 OR ECD.RET.VALUE > 99 THEN
+        ERRMSG = "Out of range, please re-enter"
+        GOSUB 91000
+      END ELSE
+        ECD.RET.VALUE = "%" : ECD.RET.VALUE
+        SWOOP = 0
+      END
+    CASE ECD.RET.VALUE[1,1] # "%"
+      ERRMSG = "Invalid entry, please re-enter"
+      GOSUB 91000
+    CASE 1
+      SWOOP = 0
+  END CASE
+  RETURN
+*
+*--- Check >= 0
+6200 BEGIN CASE
+    CASE NOT(NUM(ECD.RET.VALUE))
+      ERRMSG = "Numeric input required"
+      GOSUB 91000
+    CASE ECD.RET.VALUE < 0 OR ECD.RET.VALUE > 31
+      ERRMSG = "Out of range"
+      GOSUB 91000
+    CASE 1
+      SWOOP = 0
+  END CASE
+  RETURN
+*
+*--- Check < 1
+6300 BEGIN CASE
+    CASE NOT(NUM(ECD.RET.VALUE))
+      ERRMSG = "Numeric input required"
+      GOSUB 91000
+    CASE ECD.RET.VALUE < 1 OR ECD.RET.VALUE > 31
+      ERRMSG = "Out of range"
+      GOSUB 91000
+    CASE 1
+      ECD.RET.VALUE = 0 - ECD.RET.VALUE
+      SWOOP = 0
+  END CASE
+  RETURN
+*
+*--- Multiple Scroll Control
+10000 *
+  START.REF.NO = 1 + INT((REF.NO-1)/LINE.COUNT)*LINE.COUNT
+  IF START.REF.NO = CURR.REF.NO THEN RETURN
+  CURR.REF.NO = START.REF.NO
+  ECD.NUM = 30;ECD.SUB.NUM=START.REF.NO;ECD.ACTION=7;CALL SCRN.EDIT
+  ECD.NUM = 31;ECD.SUB.NUM=START.REF.NO;ECD.ACTION=7;CALL SCRN.EDIT
+  ECD.NUM = 32;ECD.SUB.NUM=START.REF.NO;ECD.ACTION=7;CALL SCRN.EDIT
+  ECD.NUM = 33;ECD.SUB.NUM=START.REF.NO;ECD.ACTION=7;CALL SCRN.EDIT
+  ECD.NUM = 34;ECD.SUB.NUM=START.REF.NO;ECD.ACTION=7;CALL SCRN.EDIT
+  ECD.NUM = 35;ECD.SUB.NUM=START.REF.NO;ECD.ACTION=7;CALL SCRN.EDIT
+  ECD.NUM = 36;ECD.SUB.NUM=START.REF.NO;ECD.ACTION=7;CALL SCRN.EDIT
+  ECD.NUM = 39;ECD.SUB.NUM=START.REF.NO;ECD.ACTION=7;CALL SCRN.EDIT
+  ECD.NUM = 40;ECD.SUB.NUM=START.REF.NO;ECD.ACTION=7;CALL SCRN.EDIT
+  RETURN
+*
+*--- Error message routines
+91000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+* 91000 PRINT @(0,23) : ERRMSG : CL :
+*       INPUT XX :
+*       PRINT @(0,23) : CL :
+*       RETURN
+93000 ERR.TYPE=3;CALL SYSCOM(MAT SYSCOM.REC)
+* 93000 ERR.TYPE = 3
+*       CALL SYSCOM(MAT SYSCOM.REC)
+99999 END

@@ -1,0 +1,533 @@
+   SUBROUTINE CASH.REC.UPDATE(MAT SAVE.OR.REC,GLTB.CASH)
+*COPY>CPYLIB>COM1
+*********************************************************************
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM    - PRIMAC
+* PROGRAM   - CASH.REC.UPDATE
+* AUTHOR    - JIHAD YAMOUT, COMPUTER BUSINESS ASSOCIATES
+* DATE      - 09/04/84
+* DESCRIPTION
+*  This program provides for maintenance of A/R Open Receivables.
+* MODS FOR CSF 18282 LMR 10/16/92
+* CSF 22598 GAT 03/10/95 FIX CASH.HIST/ DAILY CASH SEQ 
+*T22113 gat 08/05/1997 * FIX CASH REC UPDATE FOR EMPTY SUB VALUES.
+*T25338 cm 02/14/2001 * Check for record locks before proceeding to
+*                       update the records to prevent partial posted
+*                       records that then have to be corrected manually.
+*T25884 ajibaly 07/24/2001 * Add a short pay code for every misc cash
+*                            entry.
+*T29079 lross 04/10/2007 * CASH.HIST PERIOD GETTING WRONG VALUE.
+*********************************************************************
+*COPY>ARS.CPYLIB>COM.CASH.REC
+*COPY>ARS.CPYLIB>OPEN.RECV
+*COPY>ARS.CPYLIB>DAILY.CASH
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>ARS.CPYLIB>CASH.HIST
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>CPYLIB>EDIT.COM                      ; * T25338
+*COPY>CPYLIB>EDIT.COM.DRIVER               ; * T25338
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+**COPY>CPYLIB>INVOICE
+*COPY>JCS.CPYLIB>JOB
+*COPY>OPS.CPYLIB>ORDER
+*
+*---- SETUP ERRMSG ROUTINE
+*
+   SYS.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC)
+   MAT JOB.REC = ''
+   MAT ORD.REC = ''
+   DIM SAVE.OR.REC(25)
+   EQU SOR.INV.NO   TO SAVE.OR.REC(1)
+   EQU SOR.JOB.NO   TO SAVE.OR.REC(2)
+   EQU SOR.INV.AMT  TO SAVE.OR.REC(3)
+   EQU SOR.CASH.REC TO SAVE.OR.REC(4)
+   EQU SOR.MISC.AMT TO SAVE.OR.REC(5)
+   EQU SOR.GL.ACCT  TO SAVE.OR.REC(6)
+   EQU SOR.OPEN.AMT TO SAVE.OR.REC(7)
+   EQU SOR.PAY.FLG  TO SAVE.OR.REC(8)
+   EQU SOR.MON      TO SAVE.OR.REC(9)
+   EQU SOR.ONACCT   TO SAVE.OR.REC(10)
+   EQU SOR.DIV      TO SAVE.OR.REC(11)
+   EQU SOR.DEPT     TO SAVE.OR.REC(12)
+   EQU SOR.CCTR     TO SAVE.OR.REC(13)
+   EQU SOR.CHG.JOB  TO SAVE.OR.REC(14)
+   EQU SOR.PO.NO    TO SAVE.OR.REC(15)
+   EQU SOR.REV.FLG  TO SAVE.OR.REC(16)
+   EQU SOR.ORDER.FLG TO SAVE.OR.REC(17)
+*T25994v
+   EQU SOR.SHORT.PAY TO SAVE.OR.REC(18)
+   EQU SOR.S.P.DESC  TO SAVE.OR.REC(19)
+*T25994^
+*
+   DIM SAVE.REC(55)
+*
+   MAT OR.REC= '' ; MAT DC.REC = ''; MAT CHR.REC = ''
+   IF CH.NUM = '' THEN CH.NUM = '000000'
+**** MAIN PROCESSING
+   INV.CNT = COUNT(SOR.INV.NO,AM) + (SOR.INV.NO # "")
+*T25338 v
+100 *
+   HOLD.DATA = ''
+   FOR II = 1 TO INV.CNT
+      IF SOR.INV.AMT<II> + SOR.MISC.AMT<II> = 0 AND SOR.PAY.FLG<II> # "" THEN SOR.PAY.FLG<II> = ""
+      IF SOR.PAY.FLG<II> # "" THEN
+         REC.LOCK = 0
+         MATREADU OR.REC FROM OPEN.RECV, CONO:SOR.INV.NO<II> LOCKED REC.LOCK = 1 ELSE
+            RELEASE OPEN.RECV , CONO:SOR.INV.NO<II>
+         END
+         IF REC.LOCK THEN
+            HOLD.DATA<1,-1> = 'OPEN RECEIVABLE RECORD ':SOR.INV.NO<II>:' IS LOCKED BY ANOTHER USER'
+         END
+         JCNT = DCOUNT(SOR.CHG.JOB<II>,VM)
+         FOR J = 1 TO JCNT
+            REC.LOCK = 0
+            IF CO.OPS = 'Y' THEN
+               MATREADU ORD.REC FROM ORDER, CONO:SOR.CHG.JOB<II,J> LOCKED REC.LOCK = 1 ELSE
+                  RELEASE ORDER, CONO:SOR.CHG.JOB<II,J>
+               END
+            END
+            IF REC.LOCK THEN
+               HOLD.DATA<1,-1> = 'ORDER RECORD ':SOR.CHG.JOB<II,J>:' IS LOCKED BY ANOTHER USER'
+            END
+            REC.LOCK = 0
+            MATREADU JOB.REC FROM JOB, CONO:SOR.CHG.JOB<II,J> LOCKED REC.LOCK = 1 ELSE
+               RELEASE JOB, CONO:SOR.CHG.JOB<II,J>
+            END
+            IF REC.LOCK THEN
+               HOLD.DATA<1,-1> = 'JOB RECORD ':SOR.CHG.JOB<II,J>:' IS LOCKED BY ANOTHER USER'
+            END
+         NEXT J
+      END
+   NEXT II
+   IF HOLD.DATA # '' THEN
+      HCNT = DCOUNT(HOLD.DATA<1>,VM)
+      FOR H = 1 TO HCNT
+         ERRMSG = HOLD.DATA<1,H>
+         GOSUB 91000
+      NEXT H
+      X=0;Y=21;TYP=8;O.R='O';DEFAULT='N';PMSG='Do you want to try and reprocess this cash receipt? (Y/N)';MAXL=1
+      CALL EDIT.SUB
+      P_X=0;P_Y=21;P_VALUE='';P_OPT='CL'
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      IF VALUE = 'Y' THEN GOTO 100
+      RETURN
+   END
+*T25338 ^
+   PC = 0 ; DAYS = 0 ; AMT = 0 ; ICNT = 0
+   FOR II = 1 TO INV.CNT
+      IF SOR.INV.AMT<II> + SOR.MISC.AMT<II> = 0 AND SOR.PAY.FLG<II> # "" THEN SOR.PAY.FLG<II> = ""
+      IF SOR.PAY.FLG<II> # "" THEN
+         IF CUST.DET.AR<1,1> # "N" THEN
+            LOCATE SOR.INV.NO<II> IN CUST.INVOICE<1>,1 SETTING PP ELSE PP = 0
+            IF PP = 0 THEN
+               IF SOR.INV.NO<II>[7,2] = "BC" THEN
+                  CINV.CNT = COUNT(CUST.INVOICE,VM) + (CUST.INVOICE # "")
+                  IN.NUM = 0
+                  FOR XCI = CINV.CNT TO 1 STEP -1 UNTIL IN.NUM
+                     INV.SFF = CUST.INVOICE<1,XCI>[7,2]
+                     BEGIN CASE
+                        CASE INV.SFF = "BC"
+                           IN.NUM = XCI
+                        CASE INV.SFF = "AC" OR INV.SFF = "PP" OR INV.SFF = "CM"
+                           IN.NUM = XCI + 1
+                     END CASE
+                  NEXT XCI
+                  IF IN.NUM = 0 THEN IN.NUM = 1
+                  CUST.INVOICE = INSERT(CUST.INVOICE,1,IN.NUM,0,SOR.INV.NO<II>)
+               END ELSE
+                  CUST.INVOICE = INSERT(CUST.INVOICE,1,1,0,SOR.INV.NO<II>)
+               END
+            END
+         END
+         FND.FLG = 1
+         MATREADU OR.REC FROM OPEN.RECV , CONO:SOR.INV.NO<II> ELSE
+            FND.FLG = 0 ;MAT OR.REC = '' ; RELEASE OPEN.RECV , CONO: SOR.INV.NO<II>
+*      MAT IVC.REC = ''
+         END
+         IF FND.FLG = 0 THEN
+            OR.CUST = CUST.NO
+            OR.JOB = SOR.JOB.NO<II>
+            OR.ORDER.FLG = SOR.ORDER.FLG<II>
+            OR.INV.DATE = REC.DATE
+            OR.AS.DATE = DATE()
+            OR.TR.DATE = REC.DATE
+            IF SOR.PAY.FLG<II> = "BC" THEN
+               OR.TYPE = "D"
+            END ELSE
+               OR.TYPE = "C"
+            END
+            IF SOR.MON<II> # "" THEN
+               OR.MON = SOR.MON<II>
+            END
+            OR.INV.AMT = SOR.INV.AMT<II>
+            OR.DISC.DATE = REC.DATE
+            OR.AMT = SOR.INV.AMT<II>
+            OR.BAL = SOR.INV.AMT<II>
+            OR.CHECK = CH.NUM
+            OR.CHK.DATE = REC.DATE
+            OR.CHK.AMT = CH.AMT
+            OR.DIV = SOR.DIV<II>
+            OR.DEPT = SOR.DEPT<II>
+            OR.CCTR = SOR.CCTR<II>
+*              IVC.DATE = REC.DATE
+*              IVC.JOB.NO = OR.JOB
+*              IVC.CUST.NO = OR.CUST
+*              IVC.CUST.NAME = CUST.NAME
+*              IVC.ADDR1 = CUST.ADDR1
+*              IVC.ADDR2 = CUST.ADDR2
+*              IVC.ADDR3 = CUST.ADDR3
+*              IVC.ADDR4 = CUST.ZIP
+*              IVC.CHG.CODE<1,1> = "JOB" ; IVC.CHG.CODE<1,2> = "TOT"
+*              IVC.CHG.CAT = "OTH"
+*              IVC.AMOUNT<1,1> = OR.BAL ;IVC.AMOUNT<1,2> = OR.BAL
+*              IVC.PROC.DATE = DATE()
+*              IVC.PRT.DATE = DATE()
+*              IVC.LAST = "N"
+*              MATWRITE IVC.REC ON INVOICE , CONO:SOR.INV.NO<II>
+         END ELSE
+            TR.CNT = COUNT(OR.TR.DATE, VM) + (OR.TR.DATE # "") + 1
+            OR.TR.DATE<1,TR.CNT> = REC.DATE
+            IF SOR.PAY.FLG<II> = "BC" THEN
+               OR.TYPE<1,TR.CNT> = "D"
+            END ELSE
+               OR.TYPE<1,TR.CNT> = "C"
+            END
+            OR.INV.AMT<1,TR.CNT> = SOR.CASH.REC<II> * (-1)
+            OR.BAL = OR.BAL - (SOR.CASH.REC<II> + SOR.MISC.AMT<II>)
+            IF OR.BAL = 0 AND SOR.INV.NO<II>[7,2] # "BC" AND SOR.INV.NO<II> # "PP" AND SOR.INV.NO<II>[7,2] # "AC" THEN
+               DAYS = DAYS + (REC.DATE - OR.INV.DATE)
+               ICNT = ICNT + 1
+               AMT = AMT + OR.INV.AMT<1,1>
+            END
+            OR.CHECK<1,TR.CNT> = CH.NUM
+            OR.CHK.DATE<1,TR.CNT> = REC.DATE
+            OR.CHK.AMT<1,TR.CNT> = CH.AMT
+            IF SOR.MISC.AMT<II> # "" THEN
+               OR.INV.AMT<1,TR.CNT+1> = SOR.MISC.AMT<II> * (-1)
+               OR.TYPE<1,TR.CNT+1> = "A"
+               OR.TR.DATE<1,TR.CNT+1> = REC.DATE
+            END
+         END
+         INVOICE.AMT = OR.AMT
+         INVOICE.BAL = OR.BAL
+*CSF 18282
+         TEMP.CASH=SOR.CASH.REC<II>
+         TEMP.MISC=SOR.MISC.AMT<II>
+         TEMP.ACCT=SOR.GL.ACCT<II>
+*
+         MATWRITE OR.REC ON OPEN.RECV , CONO:SOR.INV.NO<II>
+*
+         IF SOR.ORDER.FLG<II> = "Y" THEN
+            IF SOR.JOB.NO<II> = "" OR CO.OPS # "Y" THEN
+               JOB.FND = "N"
+               JCNT = 1
+            END ELSE
+               IF SOR.CHG.JOB<II> = "" THEN SOR.CHG.JOB<II> = SOR.JOB.NO<II>
+               JCNT = COUNT(SOR.CHG.JOB<II>,VM) + (SOR.CHG.JOB<II> # "")
+               TOT.LEFT = 0
+*CSF 18282
+               IF SOR.MISC.AMT<II> + 0 # 0 THEN
+                  IF SOR.CASH.REC<II> + 0 # 0 THEN
+                     MPCT = SOR.MISC.AMT<II> / (SOR.CASH.REC<II> + SOR.MISC.AMT<II>)
+                  END ELSE MPCT = 1
+               END ELSE MPCT = 0
+*
+               FOR JPTR = 1 TO JCNT
+                  JOB.FND = "Y"
+                  MATREADU ORD.REC FROM ORDER, CONO:SOR.CHG.JOB<II,JPTR> ELSE
+                     JOB.FND = "N"; RELEASE ORDER, CONO:SOR.CHG.JOB<II,JPTR>
+                  END
+                  IF JOB.FND = "Y" THEN
+                     LOCATE SOR.INV.NO<II> IN ORD.INV.NO<1>,1 SETTING JFND ELSE JFND = 0
+                     IF JFND = 0 THEN
+                        JIC = COUNT(ORD.INV.NO, VM) + (ORD.INV.NO # "") + 1
+                        ORD.INV.NO<1,JIC> = SOR.INV.NO<II>
+                        ORD.INV.DATE<1,JIC> = REC.DATE
+                        ORD.INV.CAT<1,JIC> = SOR.PAY.FLG<II>
+                        ORD.INV.AMT<1,JIC> = SOR.INV.AMT<II>
+                        ORD.INV.BAL<1,JIC> = SOR.INV.AMT<II>
+*                          ORD.TOT.INV = ORD.TOT.INV + SOR.INV.AMT<II>
+*                          ORD.TOT.BAL = ORD.TOT.BAL + SOR.INV.AMT<II>
+                     END ELSE
+                        PBAL = ORD.INV.BAL<1,JFND>
+                        JINVOICE.AMT = 0
+                        ACNT = COUNT(ORD.INV.AMT<1,JFND>,SM) + (ORD.INV.AMT<1,JFND> # "")
+                        FOR A = 1 TO ACNT
+                           JINVOICE.AMT = JINVOICE.AMT + ORD.INV.AMT<1,JFND,A>
+                        NEXT A
+                        BEGIN CASE
+                           CASE INVOICE.BAL = 0
+                              BAL = 0
+                           CASE JPTR = JCNT
+                              BAL = INVOICE.BAL - TOT.LEFT
+                           CASE INVOICE.AMT > 0 AND INVOICE.BAL # 0
+                              BAL = INT(JINVOICE.AMT / INVOICE.AMT * INVOICE.BAL + 0.5)
+                           CASE INVOICE.AMT < 0 AND INVOICE.BAL # 0 
+                              BAL = INT(JINVOICE.AMT / INVOICE.AMT * INVOICE.BAL - 0.5)
+                           CASE 1
+                              BAL = 0
+                        END CASE
+                        ORD.INV.BAL<1,JFND> = BAL
+*                          ORD.TOT.BAL = ORD.TOT.BAL - PBAL + BAL
+*                          ORD.TOT.INV = ORD.TOT.INV - PBAL + BAL
+                        TOT.LEFT = TOT.LEFT + BAL
+*CSF 18282
+                        TEMP = PBAL - BAL ; * AMT OF CASH + MISC APPL
+                        IF MPCT THEN
+                           TEMP.MISC<1,JPTR> = ICONV(TEMP * MPCT, 'MD0')
+                           TEMP.CASH<1,JPTR> = TEMP - TEMP.MISC<1,JPTR>
+                           TEMP.ACCT<1,JPTR> = SOR.GL.ACCT<II>
+                        END ELSE
+                           TEMP.CASH<1,JPTR> = TEMP
+                           TEMP.MISC<1,JPTR> = 0
+                           TEMP.ACCT<1,JPTR> = ''
+                        END
+                        IF JPTR = JCNT THEN
+                           IF SUM(TEMP.CASH) # SOR.CASH.REC<II> + 0 THEN
+                              TEMP.CASH<1,JPTR> = TEMP.CASH<1,JPTR> + SOR.CASH.REC<II> - SUM(TEMP.CASH)
+                           END
+                           IF SUM(TEMP.MISC) # SOR.MISC.AMT<II> + 0 THEN
+                              TEMP.MISC<1,JPTR> = TEMP.MISC<1,JPTR> + SOR.MISC.AMT<II> - SUM(TEMP.MISC)
+                           END
+                        END
+*
+                     END
+                     MATWRITE ORD.REC ON ORDER, CONO:SOR.CHG.JOB<II,JPTR>
+                  END
+               NEXT JPTR
+               SOR.CASH.REC<II> = TEMP.CASH
+               SOR.MISC.AMT<II> = TEMP.MISC
+               SOR.GL.ACCT<II> = TEMP.ACCT
+*                 IF CO.COMMISSION = "Y" THEN
+*                    MAT SAVE.REC = ""
+*                    SAVE.REC(2) = ORD.SLSMN
+*                    SAVE.REC(14) = SOR.INV.NO<II>
+*                    SAVE.REC(25) = REC.DATE
+*                    SAVE.REC(26) = DATE()
+*                    SAVE.REC(27) = SUM(SOR.CASH.REC<II>)
+*                    SAVE.REC(28) = SUM(SOR.MISC.AMT<II>)
+*                    SAVE.REC(52) = SOR.JOB.NO<II>
+*                    PROG.TYPE = "CASH.REC"
+*                    CALL COMMISSION.UPD.SUB(CONO,MAT SAVE.REC,PROG.TYPE)
+*                 END
+            END
+         END ELSE
+            IF SOR.JOB.NO<II> = "" OR CO.JCS # "Y" THEN
+               JOB.FND = "N"
+               JCNT = 1
+            END ELSE
+               IF SOR.CHG.JOB<II> = "" THEN SOR.CHG.JOB<II> = SOR.JOB.NO<II>
+               JCNT = COUNT(SOR.CHG.JOB<II>,VM) + (SOR.CHG.JOB<II> # "")
+               TOT.LEFT = 0
+*CSF 18282
+               IF SOR.MISC.AMT<II> + 0 # 0 THEN
+                  IF SOR.CASH.REC<II> + 0 # 0 THEN
+                     MPCT = SOR.MISC.AMT<II> / (SOR.CASH.REC<II> + SOR.MISC.AMT<II>)
+                  END ELSE MPCT = 1
+               END ELSE MPCT = 0
+*
+               FOR JPTR = 1 TO JCNT
+                  JOB.FND = "Y"
+                  MATREADU JOB.REC FROM JOB, CONO:SOR.CHG.JOB<II,JPTR> ELSE
+                     JOB.FND = "N"; RELEASE JOB, CONO:SOR.CHG.JOB<II,JPTR>
+                  END
+                  IF JOB.FND = "Y" THEN
+                     LOCATE SOR.INV.NO<II> IN JOB.INV.NO<1>,1 SETTING JFND ELSE JFND = 0
+                     IF JFND = 0 THEN
+                        JIC = COUNT(JOB.INV.NO, VM) + (JOB.INV.NO # "") + 1
+                        JOB.INV.NO<1,JIC> = SOR.INV.NO<II>
+                        JOB.INV.DATE<1,JIC> = REC.DATE
+                        JOB.INV.CAT<1,JIC> = SOR.PAY.FLG<II>
+                        JOB.INV.AMT<1,JIC> = SOR.INV.AMT<II>
+                        JOB.INV.BAL<1,JIC> = SOR.INV.AMT<II>
+*                          JOB.TOT.INV = JOB.TOT.INV + SOR.INV.AMT<II>
+                        JOB.TOT.BAL = JOB.TOT.BAL + SOR.INV.AMT<II>
+                     END ELSE
+                        PBAL = JOB.INV.BAL<1,JFND>
+                        JINVOICE.AMT = 0
+                        ACNT = COUNT(JOB.INV.AMT<1,JFND>,SM) + (JOB.INV.AMT<1,JFND> # "")
+                        FOR A = 1 TO ACNT
+                           JINVOICE.AMT = JINVOICE.AMT + JOB.INV.AMT<1,JFND,A>
+                        NEXT A
+                        BEGIN CASE
+                           CASE INVOICE.BAL = 0
+                              BAL = 0
+                           CASE JPTR = JCNT
+                              BAL = INVOICE.BAL - TOT.LEFT
+                           CASE INVOICE.AMT > 0 AND INVOICE.BAL # 0
+                              BAL = INT(JINVOICE.AMT / INVOICE.AMT * INVOICE.BAL + 0.5)
+                           CASE INVOICE.AMT < 0 AND INVOICE.BAL # 0 
+                              BAL = INT(JINVOICE.AMT / INVOICE.AMT * INVOICE.BAL - 0.5)
+                           CASE 1
+                              BAL = 0
+                        END CASE
+                        JOB.INV.BAL<1,JFND> = BAL
+                        JOB.TOT.BAL = JOB.TOT.BAL - PBAL + BAL
+                        TOT.LEFT = TOT.LEFT + BAL
+*CSF 18282
+                        TEMP = PBAL - BAL ; * AMT OF CASH + MISC APPL
+                        IF MPCT THEN
+                           TEMP.MISC<1,JPTR> = ICONV(TEMP * MPCT, 'MD0')
+                           TEMP.CASH<1,JPTR> = TEMP - TEMP.MISC<1,JPTR>
+                           TEMP.ACCT<1,JPTR> = SOR.GL.ACCT<II>
+                        END ELSE
+                           TEMP.CASH<1,JPTR> = TEMP
+                           TEMP.MISC<1,JPTR> = 0
+                           TEMP.ACCT<1,JPTR> = ''
+                        END
+                        IF JPTR = JCNT THEN
+                           IF SUM(TEMP.CASH) # SOR.CASH.REC<II> + 0 THEN
+                              TEMP.CASH<1,JPTR> = TEMP.CASH<1,JPTR> + SOR.CASH.REC<II> - SUM(TEMP.CASH)
+                           END
+                           IF SUM(TEMP.MISC) # SOR.MISC.AMT<II> + 0 THEN
+                              TEMP.MISC<1,JPTR> = TEMP.MISC<1,JPTR> + SOR.MISC.AMT<II> - SUM(TEMP.MISC)
+                           END
+                        END
+*
+                     END
+                     MATWRITE JOB.REC ON JOB, CONO:SOR.CHG.JOB<II,JPTR>
+                  END
+               NEXT JPTR
+               SOR.CASH.REC<II> = TEMP.CASH
+               SOR.MISC.AMT<II> = TEMP.MISC
+               SOR.GL.ACCT<II> = TEMP.ACCT
+               IF CO.COMMISSION = "Y" THEN
+                  MAT SAVE.REC = ""
+                  SAVE.REC(2) = JOB.SLSMN
+                  SAVE.REC(14) = SOR.INV.NO<II>
+                  SAVE.REC(25) = REC.DATE
+                  SAVE.REC(26) = DATE()
+                  SAVE.REC(27) = SUM(SOR.CASH.REC<II>)
+                  SAVE.REC(28) = SUM(SOR.MISC.AMT<II>)
+                  SAVE.REC(52) = SOR.JOB.NO<II>
+                  PROG.TYPE = "CASH.REC"
+                  CALL COMMISSION.UPD.SUB(CONO,MAT SAVE.REC,PROG.TYPE)
+               END
+            END
+         END
+         PC = PC + 1
+         DC.INVOICE<1,PC> = SOR.INV.NO<II>
+         IF SOR.PAY.FLG<II> = "PA" THEN
+*CSF 18282
+            FOR J = 1 TO JCNT
+               IF SOR.CASH.REC<II,J> + 0 # 0 OR SOR.MISC.AMT<II,J> + 0 # 0 THEN
+*T22113                     IF SOR.CASH.REC<II,J> + 0 # 0 THEN
+*T22113                        DC.CASH.APPL<1,PC,J> = SOR.CASH.REC<II,J>
+*T22113                        DC.AMT<1,PC,J> = ''
+*T22113                        DC.ACCT<1,PC,J> = ''
+*T22113                     END
+*T22113                     IF SOR.MISC.AMT<II,J> + 0 # 0 THEN
+*T22113                        DC.CASH.APPL<1,PC,J> = DC.CASH.APPL<1,PC,J> + 0
+*T22113                        DC.AMT<1,PC,J> = SOR.MISC.AMT<II,J>
+*T22113                        DC.ACCT<1,PC,J> = SOR.GL.ACCT<II,J>
+*T22113                     END
+*T22113                     DC.DIV<1,PC,J> = SOR.DIV<II,J>
+*T22113                     DC.DEPT<1,PC,J> = SOR.DEPT<II,J>
+*T22113                     DC.CCTR<1,PC,J> = SOR.CCTR<II,J>
+                  DC.CASH.APPL<1,PC,-1> = SOR.CASH.REC<II,J>
+                  DC.AMT<1,PC,-1> = SOR.MISC.AMT<II,J>
+                  DC.ACCT<1,PC,-1> = SOR.GL.ACCT<II,J>
+                  DC.DIV<1,PC,-1> = SOR.DIV<II,J>
+                  DC.DEPT<1,PC,-1> = SOR.DEPT<II,J>
+                  DC.CCTR<1,PC,-1> = SOR.CCTR<II,J>
+* T22113^
+               END
+            NEXT J
+*
+         END ELSE
+            DC.CASH.APPL<1,PC> = SOR.INV.AMT<II> * (-1)
+            DC.AMT<1,PC> = SOR.MISC.AMT<II>
+            DC.ACCT<1,PC> = SOR.GL.ACCT<II>
+            DC.DIV<1,PC> = SOR.DIV<II>
+            DC.DEPT<1,PC> = SOR.DEPT<II>
+            DC.CCTR<1,PC> = SOR.CCTR<II>
+         END
+*           DC.AMT<1,PC> = SOR.MISC.AMT<II>
+*           DC.ACCT<1,PC> = SOR.GL.ACCT<II>
+*           DC.DIV<1,PC> = SOR.DIV<II>
+*           DC.DEPT<1,PC> = SOR.DEPT<II>
+*           DC.CCTR<1,PC> = SOR.CCTR<II>
+         DC.SHORT.PAY<1,PC> = SOR.SHORT.PAY<II> ; *T25994
+      END
+   NEXT II
+   IF SOR.PAY.FLG # "" THEN
+      IF CH.AMT > 0 THEN
+         CUST.LAST.PMT= REC.DATE:":":CH.AMT
+      END
+      CUST.AR.BAL = TOT.BAL ; CUST.DAYS.TO.PAY = CUST.DAYS.TO.PAY + DAYS
+      CUST.INVOICE.CNT<1,2> = CUST.INVOICE.CNT<1,2> + ICNT
+      MATWRITE CUST.REC ON CUSTOMER , CONO:CUST.NO
+      DC.CASH = CH.AMT
+      DC.BANK.ACCT = GLTB.CASH
+      DC.CHECK = CH.NUM
+*        READU REF.NUM FROM CONTROL , CONO:"CRREF" ELSE REF = 100000
+*        IF REF.NUM > 999999 THEN REF.NUM = 100000
+*        WRITE REF.NUM + 1 ON CONTROL , CONO:"CRREF"
+      REF.NUM = 0
+      MORE = 1
+*22598
+      LOOP
+         REF.NUM = REF.NUM + 1
+         DC.KEY = CUST.NO:"!":REC.DATE:"!":REF.NUM
+         READU DC FROM DAILY.CASH , CONO:DC.KEY ELSE
+            MORE = 0
+         END
+         IF MORE = 1 THEN
+            RELEASE DAILY.CASH , CONO:DC.KEY
+         END
+      WHILE MORE DO REPEAT
+      MATWRITE DC.REC ON DAILY.CASH , CONO:DC.KEY
+      TAG = ''
+      WRITE TAG ON DAILY.CASH.TAG , CONO:DC.KEY
+      CHR.SHORT.PAY = DC.SHORT.PAY ; *T25994
+      CHR.CASH = DC.CASH
+      CHR.INVOICE = DC.INVOICE
+      CHR.CASH.APPL = DC.CASH.APPL
+      CHR.GL.AMT = DC.AMT
+      CHR.GL.NO = DC.ACCT
+      CHR.MISC.DESC = DC.DESC
+      CHR.BANK.NO = DC.BANK.ACCT
+***** T23278 v
+*T29079 v
+*     DIV.CODE = DC.DIV<1,1>
+      DIV.CODE = DC.DIV<1,1,1>
+      IF SECURITY.REC<1> = "Y" AND SECURITY.REC<2> = "Y" THEN
+         LOCATE DIV.CODE IN DIVISION.REC<1>,1 SETTING POS ELSE POS = 1
+      END ELSE
+         POS = 1
+      END
+      PRD = ARCMON<1,POS>
+***** T23278 ^
+      CHR.MON = PRD
+      CHR.DIV = DC.DIV
+      CHR.DEPT = DC.DEPT
+      CHR.CCTR = DC.CCTR
+      REF.NO = 0
+      MORE = 1
+*22598
+      LOOP
+         REF.NO = REF.NO + 1
+         HC.KEY = CUST.NO:"!":REC.DATE:"!":CH.NUM:"!":REF.NO
+         READU HC FROM CASH.HIST , CONO:HC.KEY ELSE
+            MORE = 0
+         END
+         IF MORE = 1 THEN
+            RELEASE CASH.HIST , CONO:HC.KEY
+         END
+      WHILE MORE DO REPEAT
+      MATWRITE CHR.REC ON CASH.HIST, CONO:HC.KEY
+   END ELSE
+      RELEASE CUSTOMER, CONO:CUST.NO
+   END
+   IF CH.NUM # "" THEN
+      WRITEV PRD ON CHECK.XREF , CONO:CUST.NO:"!":REC.DATE:"!":CH.NUM,1
+   END
+*** END OF JOB
+9999 RETURN
+91000 *
+   ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+END

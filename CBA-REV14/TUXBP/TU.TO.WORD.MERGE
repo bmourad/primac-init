@@ -1,0 +1,177 @@
+SUBROUTINE TU.TO.WORD.MERGE(HOSTFILENAME, FIELDLIST, SELECTION, OPTIONS, DOCUMENTNAME, STATUS)
+*
+** SBClient Host 3GL API
+** Copyright (C) Ardent Software Inc. 1998
+** Copyright (C) UniData, Inc. 1996, 1997
+** Copyright (C) System Builder Corporation. 1995
+**
+**      This software is the proprietary property and contains
+**      trade secrets of Ardent Software, Inc. Any unauthorized use,
+**      disclosure or duplication is strictly prohibited.
+**      All rights reserved.
+***************************************************************************
+*-* TU.TO.WORD.MERGE(Pickfilename, Fieldlist, Selection, Options, Documentname,
+*-* Status)
+*-*
+*-* This function will download formatted pick data into a WINWORD
+*-* mailmerge document using a combination of file transfer and OLE or DDE.
+*-* The word document must be created before this function is called.
+*-* The document must define a merge data source which will be another word
+*-* document called "merge.doc". The merge document will be created along
+*-* side the target document.
+*-*
+*-* [P] Pickfilename      The name of the pick file to be downloaded.
+*-*
+*-* [P] Fieldlist         List of dictionary definitions of fields to be
+*-*                       downloaded.
+*-*
+*-* [P] Selection         Selection criteria to locate items to be
+*-*                       downloaded.
+*-*
+*-* [P] Options           This is an array of characters to indicate
+*-*                       minor details of the transfer. Possible values:-
+*-*
+*-*                       I, Do OEM To ANSI conversion
+*-*                       P, print to default printer
+*-*                       R, restore app after transfer
+*-*                       S, save document
+*-*                       X, exit word
+*-*                       0, add duplicate data for correlative
+*-*
+*-* [P] Documentname      This the name of the merge document.
+*-*
+*-* [R] Status            This is an indication of the success or failure
+*-*                       of the subroutine. A successful call will return
+*-*                       with zero Status and failure will return with a
+*-*                       non-zero value.
+***************************************************************************
+*
+ INCLUDE TUBP TU.API.H
+ INCLUDE TUBP SPECIAL.H
+ INCLUDE TUBP USER.INCLUDE.H
+ INCLUDE TUBP HEADER.H
+ INCLUDE TUBP TU.ERRORCODES.H
+ INCLUDE TUBP ROC.H
+*
+DEBUGFLAG = FALSE
+*
+PCFILEPATH = DOCUMENTNAME[1, INDEX(DOCUMENTNAME, "\", COUNT(DOCUMENTNAME, "\"))-1]
+IF PCFILEPATH[LEN(PCFILEPATH), 1] # "\" THEN PCFILEPATH = PCFILEPATH:"\"
+PCFILENAME = PCFILEPATH:"MERGE.DOC"
+*
+IF DEBUGFLAG THEN CRT "Creating Merge Document"
+DOWN.OPTIONS = "CHSX"
+IF INDEX(OPTIONS, "I", 1) THEN DOWN.OPTIONS = DOWN.OPTIONS:"I"
+IF INDEX(OPTIONS, "0", 1) THEN DOWN.OPTIONS = DOWN.OPTIONS:"0"
+CALL TU.TO.WORD(HOSTFILENAME, FIELDLIST, SELECTION, DOWN.OPTIONS, PCFILENAME, STATUS)
+IF STATUS THEN RETURN
+PCFILENAME = DOCUMENTNAME
+*
+*-* Create Word.Application object to find out who we are talking too.
+*
+OFFICE95 = FALSE; * boolean Office95 on client
+HROC = 0; * handle to ROC object
+HWA = 0; * handle to Word.Application object
+*
+GOSUB 100; * OLE Init
+IF STATUS THEN RETURN
+IF OFFICE95 THEN GOSUB 300 ELSE GOSUB 200
+GOSUB 900
+*
+RETURN
+*
+*-* OLE Init
+*
+100 *
+*
+CALL TU.INIT(STATUS)
+IF STATUS THEN RETURN
+ INCLUDE TUBP INIT.WORD.OLE.METHODS.H
+RETURN
+*
+*-* Merge through OLE Automation
+*
+200 *
+*
+ INCLUDE TUBP DOC.WORD.OLE.METHODS.H
+*
+*-* get handle to MailMerge Object
+*
+ATTR = "MailMerge"; HMERGE = 0
+IF DEBUGFLAG THEN CRT "Getting MailMerge Handle"
+CALL ROC.GET(HACTIVEDOC, ATTR, HMERGE, STATUS)
+IF STATUS AND NOT(HMERGE) THEN RETURN
+*
+*-* Set Merge destination and Execute Merge
+*
+ATTR = "Destination"; VALS = 0
+IF DEBUGFLAG THEN CRT "Setting Mail Merge Destination"
+CALL ROC.SET(HMERGE, ATTR, VALS, STATUS)
+IF STATUS THEN RETURN
+*
+*-* Update data source
+*
+ATTR = "DataSource" ; HDATA = 0
+IF DEBUGFLAG THEN CRT "Setting up Mail Merge source"
+CALL ROC.GET(HMERGE, ATTR, HDATA, STATUS)
+IF STATUS AND NOT(HDATA) THEN RETURN
+*
+ATTR = "FirstRecord":ROC.US:"LastRecord"; VALS = 1:ROC.US:-16
+CALL ROC.SET(HDATA, ATTR, VALS, STATUS)
+IF STATUS THEN RETURN
+*
+STRING = "Execute,1"; VALS = ""; OLD = ","; NEW = VM
+ INCLUDE TUBP SWAP.STRINGS.H
+ATTR = STRING
+IF DEBUGFLAG THEN CRT "Executing Mail Merge"
+CALL ROC.GET(HMERGE, ATTR, VALS, STATUS)
+IF STATUS THEN RETURN
+*
+ INCLUDE TUBP COMMON.WORD.OLE.METHODS.H
+*
+RETURN
+*
+*-* Merge through Word Basic
+*
+300 *
+*
+TIMEOUT = 10; HANDLE = 0; SYSTEMHANDLE = 0
+*
+ INCLUDE TUBP INIT.WORD.DDE.FUNCTIONS.H
+*
+*-* Merge Stuff
+*
+MACRO = '[MailMerge .CheckErrors = 1, .Destination = 0, .MailMerge]'
+IF INDEX(OPTIONS, 'R', 1) THEN
+MACRO = MACRO:AM:'[AppRestore]'
+END
+*
+ INCLUDE TUBP COMMON.WORD.DDE.FUNCTIONS.H
+*
+MACRO.COUNT = COUNT(MACRO, AM) + (MACRO # '')
+*
+*-* now do the macro business
+*
+FOR I = 1 TO MACRO.COUNT
+IF DEBUGFLAG THEN CRT "Executing Macro => ":MACRO<I>
+CALL TU.DDE.EXEC.MACRO(HANDLE, TIMEOUT, MACRO<I>, STATUS)
+IF STATUS THEN RETURN
+NEXT I
+RETURN
+*
+*-* Shutdown
+*
+900 *
+*
+IF HWA THEN CALL ROC.DESTROY(HWA, STATUS); * destroy Word.Application object
+IF OFFICE95 THEN
+CALL TU.DDE.DISCONNECT(HANDLE, STATUS)
+CALL TU.DDE.DISCONNECT(SYSTEMHANDLE, STATUS)
+END
+RETURN
+*
+***********************************************************************
+* the End
+***********************************************************************
+END
+*

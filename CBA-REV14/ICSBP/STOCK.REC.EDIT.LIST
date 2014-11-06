@@ -1,0 +1,415 @@
+*********************************************************************
+* REVISION    - [10.3]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - ICSBP
+* PROGRAM     - STOCK.REC.EDIT.LIST
+* BY          - EDVARD PITKA
+* DATE        - 07/30/01
+* DESCRIPTION
+* Thist program prints serial stock receipt edit listing.
+*********************************************************************
+*
+*------------------------ COPY STATEMENTS ---------------------------
+*
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>PO
+*COPY>ICS.CPYLIB>DAILY_STOCK
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>ICS.CPYLIB>PO.RSKI.XREF
+*COPY>ICS.CPYLIB>PO.MAN.XREF
+*COPY>ICS.CPYLIB>INV_SERIAL
+*COPY>ICS.CPYLIB>SAVE.STOCK.REC
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>CPYLIB>SYSCOM
+*COPY>ICS.CPYLIB>CATEGORY
+*COPY>ICS.CPYLIB>WAREHOUSE
+*
+*---------------------------- READ PROC -----------------------------
+*
+PROCREAD X ELSE
+  ERRMSG="THIS REPORT MUST RUN FROM A PROC"
+  GOTO 93000
+END
+CONO=X<1>
+CNAME=X<2>
+RPT.TYPE=X<9>
+*
+*------------------- SETUP FOR SYSTEM ERRMSGS ----------------------
+*
+SYS.TYPE=1
+CALL SYSCOM(MAT SYSCOM.REC)
+*
+*------------------------- OPEN FILES -------------------------------
+*
+OPEN "","INVENTORY" TO INVENTORY ELSE
+  ERRMSG="INVENTORY FILE IS MISSING"
+  GOTO 93000
+END
+OPEN "","INV_SERIAL" TO INV_SERIAL ELSE
+  ERRMSG ="INV_SERIAL FILE IS MISSING"
+  GOTO 93000
+END
+OPEN "","PO.RSKI.XREF" TO PO.RSKI.XREF ELSE
+  ERRMSG ="PO.RSKI.XREF FILE IS MISSING"
+  GOTO 93000
+END
+OPEN "","PO.MAN.XREF" TO PO.MAN.XREF ELSE
+  ERRMSG ="PO.MAN.XREF FILE IS MISSING"
+  GOTO 93000
+END
+OPEN "","CONTROL" TO CONTROL ELSE
+  ERRMSG ="CONTROL FILE IS MISSING"
+  GOTO 93000
+END
+OPEN "","INV.WHSE" TO INV.WHSE ELSE
+  ERRMSG="INV.WHSE FILE IS MISSING"
+  GOTO 93000
+END
+OPEN "","DAILY_STOCK" TO DAILY_STOCK ELSE
+  ERRMSG="DAIL_STOCK FILE IS MISSING"
+  GOTO 93000
+END
+OPEN "","CATEGORY" TO CATEGORY ELSE ERRMSG="CATEGORY FILE IS MISSING";GOTO 93000
+OPEN "","COMPANY" TO COMPANY ELSE ERRMSG="COMPANY FILE IS MISSING";GOTO 93000
+OPEN "","WAREHOUSE" TO WAREHOUSE ELSE ERRMSG="WAREHOUSE FILE IS MISSING";GOTO 93000 
+*
+*------------------------ INITIALIZATION --------------------------
+*
+MATREAD COMP.REC FROM COMPANY, CONO ELSE
+  MAT COMP.REC=""
+END
+LINE.COUNT=99
+END.DATE=""
+PAGE.NO=0
+LINE.CNT=0
+SP1=" "
+SP2="  "
+SP4="    "
+SP5="     "
+SP9=SPACE(9)
+SP12=SPACE(12)
+SP16=SPACE(16)
+SP26=SPACE(26)
+SP67=SPACE(67)
+SP39=SPACE(39)
+SP84=SPACE(84)
+TLV1="Shipment number: "
+TLV2=" Shipment total: "
+TLV3="          Total: "
+TLV4="Prior Posting Total="
+TLV5="Variance    "
+TLV6="PO TOTAL    "
+TLV7="GRAND TOTAL "
+OLD.PO.NO=""
+DATE.TOTAL=0
+LINE.TOTAL=0
+PO.TOTAL=0
+GRAND.TOTAL=0
+PRIOR.POST.TOTAL=""
+*<1> = TOTAL
+*<2> = LINE NUMBER
+VARIANCE=0
+PRINT.LINE=0
+PRINT.PO.TOTAL=0
+PRINT.GRAND.TOTAL=0
+MAT DSR.REC=""
+MAT RSMAN.REC=""
+PRINTER ON
+*
+*------------------------ GET HEADING -------------------------------
+*
+IF RPT.TYPE="EDIT" THEN
+  REPORT.NAME="DAILY.STOCK.RECEIPTS.EDIT.LISTING"
+END ELSE
+  REPORT.NAME="STOCK.RECEIPTS.REJECT.LISTING"
+END
+RNUM=""
+HD1=""
+HD2=""
+CALL GET.PROG.HEAD(CONO,CNAME,REPORT.NAME,RNUM,END.DATE,HD1,HD2)
+*
+*------------------ READ AND PROCESS ALL RECORDS --------------------
+*
+10 *
+LINE.TOTAL=0
+VARIANCE=0
+PRINT.LINE=0
+DONE=0 ; LPTR=0 ; OLD.SEQ=""
+FIRST.TIME=1 ; * C36923
+LOOP
+  READNEXT DSR.ID ELSE
+    DONE=1
+    IF FIRST.TIME THEN
+      IF RPT.TYPE='REJECT' THEN
+        GOSUB PRINT.HEADING
+        PRINT 'NO ITEMS PRESENT'
+        GOTO 99999
+      END
+    END
+  END
+UNTIL (DONE) DO
+  FIRST.TIME=0
+  PO.TOTAL=0
+  GOSUB PRINT.HEADING
+  MATREAD DSR.REC FROM DAILY_STOCK,DSR.ID THEN
+    DSR.STATUS<1,PP>=""
+    DSR.LOC.STATUS<1,PP>=""
+    MATREAD RSMAN.REC FROM PO.MAN.XREF,DSR.ID THEN 
+      GOSUB CALC.PRIOR.POST.TOTAL
+      MAN.NO=DSR.SHPMNT.NO
+      MAN.TOT=DSR.SHPMNT.TOT
+      DSR.EDIT.DATE=DATE()
+      PROD.CNT=DCOUNT(DSR.PROD,VM)
+      FOR PP=1 TO PROD.CNT
+        RECV.QTY = SUM(DSR.QTY<1,PP>)
+        IF RECV.QTY > 0 THEN
+          LINE.TOTAL=0
+          PROD=DSR.PROD<1,PP>
+          WHSE=DSR.WHSE<1,PP>
+          CONO=DSR.ID[1,3]
+          INV.ID = CONO:PROD
+          IWH.ID = INV.ID:"!":WHSE
+          MATREAD INV.REC FROM INVENTORY,INV.ID THEN
+            CATG.ID = CONO:INV.LINE
+            MATREAD CATG.REC FROM CATEGORY,CATG.ID THEN
+              MATREAD IWH.REC FROM INV.WHSE,IWH.ID THEN
+                GOSUB CHECK.SERIAL
+              END ELSE
+                DSR.STATUS<1,PP>="INV.WHSE ":IWH.ID:" IS MISSING." 
+              END
+            END ELSE
+              DSR.STATUS<1,PP>="CATEGORY ":INV.LINE:" IS MISSING."
+            END
+          END ELSE
+            DSR.STATUS<1,PP>="INVENTORY ":PROD:" IS MISSING."
+          END
+        END ELSE
+          DSR.STATUS<1,PP>="Qty. must be greater than 0."  
+        END
+      NEXT PP
+      GOSUB CALC.PRIOR.POST.TOTAL
+      GOSUB PRINT.DETAIL.LINE
+    END ELSE
+      GOSUB PRINT.HEADING
+      PRINT "Manifest record ":DSR.ID:" is missing."
+    END
+  END
+REPEAT
+GOSUB PRINT.PO.TOTAL
+GOSUB PRINT.GRAND.TOTAL
+GOTO 99999
+*
+*
+**************************************************************************
+**** S U B R O U T I N E S ***********************************************
+**************************************************************************
+*
+**************
+CHECK.SERIAL: 
+**************
+*
+S.CNT = DCOUNT(DSR.SERIAL<1,PP>,SVM)
+FOR SS=1 TO S.CNT
+  IF DSR.QTY<1,PP,SS> > 0 THEN
+    ISTK.ID = DSR.SERIAL<1,PP,SS>
+    MATREAD ISTK.REC FROM INV_SERIAL,ISTK.ID THEN
+      IF ISTK.POST.DATE#"" THEN
+        DSR.LOC.STATUS<1,PP,SS> := "Serial already received"
+      END ELSE
+        IF ISTK.PO.NO # "" THEN
+          IF ISTK.PO.NO # DSR.PO THEN
+            DSR.LOC.STATUS<1,PP,SS>:="Serial belongs to PO ":ISTK.PO.NO
+          END ELSE
+            IF ISTK.PO.LINE # DSR.PO.LINE<1,PP,SS> THEN
+              DSR.LOC.STATUS<1,PP,SS>="Serial belongs to PO line. ":ISTK.PO.LINE
+            END ELSE
+              IF DSR.QTY<1,PP,SS>+0#0 AND DSR.DIAM<1,PP,SS>+0=0 THEN 
+                IF INV.PAP.TYPE#'SHEET' AND INV.PAP.TYPE#'REGULAR' THEN  
+                  DSR.LOC.STATUS<1,PP,SS>:='Diameter is zero'             
+                END                                                      
+              END                                                      
+            END
+          END
+        END
+      END
+    END ELSE
+      MAT ISTK.REC=""
+    END
+  END ELSE
+    DSR.LOC.STATUS<1,PP,SS>= "Qty. must be greater than 0."
+  END
+  IF RPT.TYPE="EDIT" THEN ISTK.EDIT.DATE=DATE()
+  MATWRITE ISTK.REC ON INV_SERIAL, ISTK.ID
+NEXT SS
+RETURN
+*
+******************
+PRINT.DETAIL.LINE: 
+******************
+*
+LINE.QTY=0
+P.LINE = PROD"L#15":SP1:INV.FULL.DESC"L#45":SP39:DSR.STATUS<1,PP>"L#30"
+LINE.CNT +=1
+FOR SS = 1 TO S.CNT
+  IF LINE.CNT > 55 THEN 
+    GOSUB PRINT.HEADING
+  END
+  LOC = DSR.LOC<1,PP,SS>
+  SERIAL = DSR.SERIAL<1,PP,SS>
+  MILL.ID = DSR.MILL.ID<1,PP,SS>
+  UN.PRICE=DSR.UN.PRICE<1,PP>
+  UOM=DSR.UOM<1,PP>
+  QTY = DSR.QTY<1,PP,SS>
+  LINE.QTY +=QTY
+  STATUS=DSR.LOC.STATUS<1,PP,SS>
+*
+  D.LINE=SP16:WHSE"L#4":SP1:LOC"L#4":SP1:SERIAL"L#15"
+  D.LINE:=SP1:MILL.ID"L#15":SP1:OCONV(DSR.DATE,"D2/")"L#8"
+  D.LINE:=SP1:DSR.PERIOD"L#6":SP1:OCONV(UN.PRICE,"MD4")"R#9"
+  D.LINE:=SP1:QTY"R#11":SP1:UOM"L3"
+  D.LINE:=SP1:STATUS"L#30"
+  PRINT D.LINE
+  LINE.CNT +=1
+NEXT SS
+RETURN
+*
+*********************
+CALC.PRIOR.POST.TOTAL: 
+*********************
+*
+CNT = DCOUNT(RSMAN.RS.NO,VM)
+FOR CC=1 TO CNT
+  MATREAD ISTK.REC FROM INV_SERIAL,CONO:RSMAN.RS.NO<1,CC> THEN
+    LOCATE RSMAN.LINE.NO<1,CC> IN PRIOR.POST.TOTAL<2> SETTING POS ELSE PRIOR.POST.TOTAL<1,POS>=0
+    PRIOR.POST.TOTAL<1,POS> +=ISTK.ORG.QTY
+  END
+NEXT CC
+RETURN
+*
+*******************
+CHECK.WGT.VARIANCE: 
+*******************
+*
+IF RSMAN.MAN.TOT.WGT # "" THEN
+  VARIANCE=ABS(RSMAN.MAN.TOT.WGT - LINE.TOTAL)
+  IF VARIANCE # 0 THEN
+    RSMAN.STATUS=2
+    SEQ.CNT = DCOUNT(RSMAN.RS.NO,VM)
+    FOR A=1 TO SEQ.CNT
+      MATREADU ISTK.REC FROM INV_SERIAL, CONO: RSMAN.RS.NO<1,A> THEN
+        IF ISTK.STATUS="" AND ISTK.POST.DATE="" AND ISTK.ENTRY.DATE # "" AND ISTK.LBS.ENTERED # 0 THEN ISTK.STATUS="Shipment var."
+        MATWRITE ISTK.REC ON INV_SERIAL, CONO: RSMAN.RS.NO<1,A>
+      END ELSE
+        RELEASE INV_SERIAL, CONO: RSMAN.RS.NO<1,A>
+      END
+    NEXT A
+  END
+END
+RETURN
+*
+*****************
+PRINT.LINE.TOTAL: 
+*****************
+*
+T.LINE=SP84: "==========="
+PRINT T.LINE
+T.LINE=TLV1:MAN.NO "L#20":' ':TLV2: OCONV(MAN.TOT,"MD2") "R#12"
+T.LINE=T.LINE:TLV3:OCONV(LINE.TOTAL/10,"MD2") "R#11"
+IF PRIOR.POST.TOTAL<1,PP> # 0 THEN
+  T.LINE=T.LINE:SP4:TLV4:OCONV(PRIOR.POST.TOTAL<1,PP>/10,"MD2") "R#11"
+END
+PRINT T.LINE
+IF VARIANCE # 0 THEN
+  T.LINE=SP67:TLV5:OCONV(VARIANCE/10,"MD2")"R#11"
+  T.LINE=T.LINE:SP5:"*********** VARIANCE ***********"
+  PRINT T.LINE
+END
+IF RSMAN.MAN.TOT.WGT + 0=0 THEN
+  PO.TOTAL=PO.TOTAL + (LINE.TOTAL/10) + (PRIOR.POST.TOTAL<1,PP>/10)
+END ELSE
+  PO.TOTAL=PO.TOTAL + RSMAN.MAN.TOT.WGT
+END
+RETURN
+*
+***************
+PRINT.PO.TOTAL: 
+***************
+PRINT
+T.LINE=''
+T.LINE=SP39:TLV6:OCONV(PO.TOTAL,"MD2") "R#11"
+PRINT T.LINE
+PRINT
+GRAND.TOTAL=GRAND.TOTAL + PO.TOTAL
+RETURN
+*
+******************
+PRINT.GRAND.TOTAL: 
+******************
+*
+T.LINE=''
+T.LINE=SP39:TLV7:OCONV(GRAND.TOTAL,"MD2") "R#11"
+PRINT T.LINE
+RETURN
+*
+*--------------------- PRINT HEADINGS ------------------------------
+*
+*************
+PRINT.HEADING: 
+**************
+*
+PRINT CHAR(12)
+PAGE.NO=PAGE.NO + 1
+H.LINE=""
+H.LINE=HD1:PAGE.NO
+PRINT H.LINE
+H.LINE=""
+H.LINE=HD2
+PRINT H.LINE
+H.LINE=""
+PRINT
+SHD3="PO Number : "
+SHD4="Vendor Number : " 
+TLV1="Shipment number: "
+TLV2=" Shipment total: "
+IF CO.LOT.TRACK="Y" THEN
+  SHD7="Product / Desc  Whse Loc   Serial Number  Mill Roll/Lot # Rec Date Period UnitPrice   Quantity  UOM            Status    "
+END ELSE
+  SHD7="Product / Desc  Whse Loc   Serial Number   Mill Roll ID   Rec Date Period UnitPrice   Quantity  UOM            Status    "
+END
+UL=  "--------------- ---- ---- --------------- --------------- -------- ------ --------- ----------- --- ------------------------------"
+SH.LINE=""
+SH.LINE=SHD3:DSR.PO
+SH.LINE=SH.LINE:"     ":SHD4:DSR.VEND      ;*T24023
+PRINT SH.LINE
+PRINT
+SH.LINE=""
+SH.LINE=SHD7
+PRINT SH.LINE
+SH.LINE=""
+SH.LINE=UL
+PRINT SH.LINE
+LINE.COUNT=8
+IF PRINT.PO.TOTAL=0 AND RPT.TYPE='REJECT' ELSE GOSUB CHECK.SERIAL
+RETURN
+*
+*---------------------- CALLS FOR SYSCOM ----------------------------
+*
+91000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC)
+RETURN
+92000 ERR.TYPE=2;CALL SYSCOM(MAT SYSCOM.REC)
+RETURN
+93000 ERR.TYPE=3;CALL SYSCOM(MAT SYSCOM.REC)
+*
+99990 *
+PROCWRITE "END"
+*
+*----------------------- END OF JOB ---------------------------------
+*
+99999 *
+PRINTER CLOSE
+PRINTER OFF
+STOP
+END

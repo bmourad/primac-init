@@ -1,0 +1,342 @@
+SUBROUTINE POSPOM_POSTREAD2
+********************************************************************************
+*   Program name :- REQMAINT_POSTREAD2
+*   Created:- 9/17/2003
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE PMC.CPYLIB PO
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB INV.CNV
+$INCLUDE CPYLIB CHAR
+$INCLUDE ICS.CPYLIB CATEGORY
+
+OPEN '','INVENTORY' TO INVENTORY ELSE 
+	ERRMSG = 'INVENTORY FILE IS MISSING'; GOTO 93000
+END
+OPEN '','CATEGORY' TO CATEGORY ELSE 
+	ERRMSG = 'CATEGORY FILE IS MISSING'; GOTO 93000
+END
+
+OPEN '','PO' TO PO ELSE 
+	ERRMSG = 'PO FILE IS MISSING'; GOTO 93000
+END
+
+ID = ''
+LINES = ''
+RETURN_VALUE = ''
+DIFF.UM = ''
+ERRMSG = ''
+NCNT = 1
+PO.TOT.CANCEL2 = ''
+P_VALUE.AMT.CANCEL = ''
+P_VALUE.AMT.ONORD = ''
+P_VALUE.AMT.OPEN = ''
+P_VALUE.UNIT.FLG = ''
+P_VALUE.TOT.ONORD = ''
+P_VALUE.TOT.CANCEL = ''
+P_VALUE.WHSE = ''
+P_VALUE.QTY.OPEN = ''
+P_VALUE.DISCOUNT = ''
+PO.DISCOUNT = ''
+PO.QTY.OPEN = ''
+PO.WHSE = ''
+PO.TOT.CANCEL = ''
+PO.TOT.ONORD = ''
+TermsDis = ''
+Discount = ''
+TotOnOrd = ''
+PORolls=''
+
+STATUS = RBO.getProperty('','ID',ID)
+STATUS = RBO.getProperty('','ProdNum',PO.PROD.NUM)
+STATUS = RBO.getProperty('','TermsDis',TermsDis)
+STATUS = RBO.getProperty('','Discount',Discount)
+STATUS = RBO.getProperty('','TotOnOrd',TotOnOrd)
+STATUS = RBO.getProperty('','JBOnOrd',PO.JB.ONORD)
+STATUS = RBO.getProperty('','JBReceved',PO.JB.RECEVED)
+STATUS = RBO.getProperty('','JBOpen',PO.JB.OPEN)
+STATUS =RBO.getProperty('','JobNo',PO.JOB.NO)
+
+CONO = ID[1,3]
+
+* CHECK FOR THE COST/STK CONVERSIONS HERE
+
+MAT INV.CNV.REC = ""
+
+*THIS IS FOR TERMS.DIS; ADD CODE FOR %DIS OVER HERE
+	*IF TermsDis # '' THEN
+	*	TermsDis = OCONV(TermsDis,'MD2')
+	*END
+*	IF Discount # '' THEN
+*		Discount = OCONV(Discount,'MD2')
+*	END
+     
+
+	IF Discount # '' THEN
+	NCNT = 1
+		*Discount = OCONV(Discount,'MD2')
+		NCNT = DCOUNT(Discount,@VM)
+		FOR LN = 1 TO NCNT
+			Discount<1,LN> = OCONV(Discount<1,LN> ,'MD2') 
+		*	Discount<1,LN> = Discount<1,LN> 
+		NEXT LN
+		LN = 1
+		NCNT = 1
+	END
+*END
+
+	IF TotOnOrd # '' THEN	
+	NCNT = 1
+		*Discount = OCONV(Discount,'MD2') 
+		NCNT = DCOUNT(TotOnOrd,@VM)
+		FOR LN = 1 TO NCNT
+			TotOnOrd<1,LN> = OCONV(TotOnOrd<1,LN>,ICR.CNV)
+*			TotOnOrd<1,LN> = OCONV(TotOnOrd<1,LN>,'MD2')
+*			TotOnOrd<1,LN> = TotOnOrd<1,LN> * 100.00
+*			TotOnOrd<1,LN> = TotOnOrd<1,LN> / 100.00
+		*	TotOnOrd<1,LN> = OCONV(P_VALUE.TOT.ONORD<1,LN>,'MD2')
+		NEXT LN
+		LN = 1
+	NCNT = 1
+	END
+
+MATREAD PO.REC FROM PO, ID THEN
+	LINES = DCOUNT(PO.PROD.NUM,@VM)
+	FOR LN = 1 TO LINES
+		MATREAD INV.REC FROM INVENTORY, CONO:PO.PROD.NUM<1,LN> THEN
+                MATREAD CATG.REC FROM CATEGORY,CONO:INV.LINE THEN
+			IF CATG.TRK.LVL='S' AND CATG.BARCODE='Y' THEN
+                       BEGIN CASE
+                     
+			         CASE INV.PAP.TYPE = "ROLL" OR INV.PAP.TYPE = "LROLL" OR INV.PAP.TYPE = "PCOAT"
+ 				     RETURN_VALUE<1,LN> = "# Rolls"
+			         CASE 1	
+				     RETURN_VALUE<1,LN> = "# Skids"
+                      END CASE
+                    END ELSE
+                         RETURN_VALUE<1,LN>=""
+                    END
+                END
+              END
+             PO.UNIT.FLG<1,LN>=INV.UNIT<1,1>
+
+		GOSUB 4000
+              GOSUB 10000
+		*END
+PORolls<1,LN>=PO.NO.OF.ROLLS<1,LN>
+	NEXT LN
+END
+
+
+*GOSUB 4000
+
+COUNT=''
+*HERE CONVERT PO.GROS.PRICE, PO.TOT.ONORD, PO.TOT.CANCEL, PO.QTY.OPEN
+*STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+COUNT = DCOUNT(PO.PROD.NUM,VM)
+FOR I = 1 TO COUNT
+MATREAD INV.REC FROM INVENTORY,CONO:PO.PROD.NUM<1,I> THEN
+   $INCLUDE ICSBP INV.UM.CNV
+  SUBCOUNT=DCOUNT(PO.JOB.NO<1,I>,SVM)
+   FOR J=1 TO SUBCOUNT
+    IF(PO.JB.ONORD<1,I,J> > 0) THEN
+          GOSUB 4000
+          IF ICR.CNV<LN,1>="MD0" THEN
+            PO.JB.ONORD<1,I,J>=INT(((PO.JB.ONORD<1,I,J>/ICR.DV1<LN,1>)*ICR.MT1<LN,1>)/ICR.DV2<LN,1> + .5)         
+          END ELSE
+            PO.JB.ONORD<1,I,J> =OCONV(INT(PO.JB.ONORD<1,I,J>/10), "MD2")
+          END
+    END
+    IF(PO.JB.RECEVED<1,I,J> > 0) THEN
+          GOSUB 4000
+           IF ICR.CNV<LN,1>="MD0" THEN
+             PO.JB.RECEVED<1,I,J>=INT(((PO.JB.RECEVED<1,I,J>/ICR.DV1<LN,1>)*ICR.MT1<LN,1>)/ICR.DV2<LN,1> + .5)       
+           END ELSE
+             PO.JB.RECEVED<1,I,J> =OCONV(INT(PO.JB.RECEVED<1,I,J>/10), "MD2")
+           END
+    END
+    IF(PO.JB.OPEN<1,I,J> > 0) THEN
+          GOSUB 4000
+          IF ICR.CNV<LN,1>="MD0" THEN
+             PO.JB.OPEN<1,I,J>=INT(((PO.JB.OPEN<1,I,J>/ICR.DV1<LN,1>)*ICR.MT1<LN,1>)/ICR.DV2<LN,1> + .5)         
+          END ELSE
+             PO.JB.OPEN<1,I,J> =OCONV(INT(PO.JB.OPEN<1,I,J>/10), "MD2")
+          END
+    END
+  NEXT J
+  PO.ITEM.COMM<1,I>=PO.ITEM.COMM<1,I>
+  END
+NEXT I
+STATUS = RBO.setProperty('','JBOnOrd',PO.JB.ONORD)
+STATUS = RBO.setProperty('','JBReceved',PO.JB.RECEVED)
+STATUS = RBO.setProperty('','JBOpen',PO.JB.OPEN)
+STATUS = RBO.setProperty('','ItemComm',PO.ITEM.COMM)
+STATUS = RBO.setProperty('','RollType',RETURN_VALUE)
+STATUS = RBO.setProperty('','GrosPrice',PO.GROS.PRICE)
+STATUS=RBO.setProperty('','NoOfRolls',PORolls)
+	STATUS = RBO.setProperty('','QtyOpen',P_VALUE.QTY.OPEN)
+	STATUS = RBO.setProperty('','TotOnOrd',P_VALUE.TOT.ONORD)
+	STATUS = RBO.setProperty('','TotCancel',P_VALUE.TOT.CANCEL)
+
+*STATUS = RBO.setProperty('','TotOnOrd',TotOnOrd)
+
+*STATUS = RBO.setProperty('','TEMP_CANCEL',P_VALUE.AMT.CANCEL)
+*STATUS = RBO.setProperty('','TEMP_ONORD',P_VALUE.AMT.ONORD)
+*STATUS = RBO.setProperty('','TEMP_OPEN',P_VALUE.AMT.OPEN)
+STATUS = RBO.setProperty('','TermsDis',TermsDis)
+STATUS = RBO.setProperty('','Discount',Discount)
+******************************************************************************
+
+* End of method code
+RETURN
+
+10000:
+	N = LN
+	*FOR N = 1 TO LINES
+		PO.DEL.DATE<1,N> = OCONV(PO.DEL.DATE<1,N>, "D2/")
+		PO.GROS.PRICE<1,N> = OCONV(PO.GROS.PRICE<1,N> , "MD4")
+              PO.DISCOUNT<1,N>= OCONV(PO.DISCOUNT<1,N>,"MD2")
+
+		IF DIFF.UM<N> = "Y" THEN
+			PO.JB.UNITS<1,N> = PO.JB.UNITS<1,N>
+          
+                           P_VALUE.AMT.ONORD<1,N> = ''
+				P_VALUE.AMT.CANCEL<1,N> = ''
+				P_VALUE.AMT.OPEN<1,N> = ''
+			IF ICR.CNV<N,1> = "MD0" THEN
+                           P_VALUE.AMT.ONORD<1,N> = ''
+				P_VALUE.AMT.CANCEL<1,N> = ''
+				P_VALUE.AMT.OPEN<1,N> = ''
+
+				TEMP.TOT.ONORD = ICONV(((PO.TOT.ONORD<1,N>/ICR.DV1<N,1>)*ICR.MT1<N,1>)/ICR.DV2<N,1>,'MD0')
+				TEMP.TOT.CANCEL = ICONV(((PO.TOT.CANCEL<1,N>/ICR.DV1<N,1>)*ICR.MT1<N,1>)/ICR.DV2<N,1>,'MD0')
+				TEMP.QTY.OPEN = ICONV(((PO.QTY.OPEN<1,N>/ICR.DV1<N,1>)*ICR.MT1<N,1>)/ICR.DV2<N,1>,'MD0')
+
+				P_VALUE.TOT.ONORD<1,N> = TEMP.TOT.ONORD
+				P_VALUE.TOT.CANCEL<1,N> = TEMP.TOT.CANCEL
+				P_VALUE.QTY.OPEN<1,N> = TEMP.QTY.OPEN
+			END ELSE
+				P_VALUE.TOT.ONORD<1,N> = OCONV(INT(PO.TOT.ONORD<1,N>/10), ICR.CNV<LN,2>)
+				P_VALUE.TOT.CANCEL<1,N> = OCONV(INT(PO.TOT.CANCEL<1,N>/10), ICR.CNV<LN,2>)
+				P_VALUE.QTY.OPEN<1,N> = OCONV(INT(PO.QTY.OPEN<1,N>/10), ICR.CNV<LN,2>)
+                           
+				
+			END
+			P_VALUE.WHSE<1,N> = PO.WHSE<1,N>
+
+			P_VALUE.DISCOUNT<1,N> = OCONV(PO.DISCOUNT<1,N> , ICR.CNV)
+			P_VALUE.UNIT.FLG<1,N> = PO.UNIT.FLG<1,N>
+			IF ICR.CNV<N,2> = "MD0" THEN
+				P_VALUE.AMT.ONORD<1,N> = ''
+				P_VALUE.AMT.CANCEL<1,N> = ''
+				P_VALUE.AMT.OPEN<1,N> = ''
+
+				TEMP.TOT.ONORD = ICONV(((PO.TOT.ONORD<1,N>/ICR.DV1<N,2>)*ICR.MT1<N,2>)/ICR.DV2<N,2>,ICR.CNV<LN,1>)
+				P_VALUE.TOT.ONORD<1,N> = TEMP.TOT.ONORD
+
+				TEMP.TOT.CANCEL = ICONV(((PO.TOT.CANCEL<1,N>/ICR.DV1<N,2>)*ICR.MT1<N,2>)/ICR.DV2<N,2>,ICR.CNV<LN,1>)
+				P_VALUE.TOT.CANCEL<1,N> = TEMP.TOT.CANCEL
+
+				TEMP.QTY.OPEN = ICONV(((PO.QTY.OPEN<1,N>/ICR.DV1<N,2>)*ICR.MT1<N,2>)/ICR.DV2<N,2>,ICR.CNV<LN,1>)
+				P_VALUE.QTY.OPEN<1,N> = TEMP.QTY.OPEN
+			END ELSE
+				IF ICR.CNV<N,1> = "MD0" THEN
+	
+					P_VALUE.TOT.ONORD<1,N> = OCONV(INT(PO.TOT.ONORD<1,N>/10),ICR.CNV<LN,2>)
+					P_VALUE.TOT.CANCEL<1,N> = OCONV(INT(PO.TOT.CANCEL<1,N>/10),ICR.CNV<LN,2>)
+					P_VALUE.QTY.OPEN<1,N> = OCONV(INT(PO.QTY.OPEN<1,N>/10),ICR.CNV<LN,2>)
+					
+				END ELSE
+					P_VALUE.AMT.ONORD<1,N> = OCONV(INT((PO.TOT.ONORD<1,N>/10)/ICR.MT1<N,1>), ICR.CNV<LN,2>)
+					P_VALUE.AMT.CANCEL<1,N> = OCONV(INT((PO.TOT.CANCEL<1,N>/10)/ICR.MT1<N,1>),ICR.CNV<LN,2>)
+					P_VALUE.AMT.OPEN<1,N> = OCONV(INT((PO.QTY.OPEN<1,N>/10)/ICR.MT1<N,1>), ICR.CNV<LN,2>)
+
+				END
+			END
+			
+		END ELSE
+			P_VALUE.UNIT.FLG<1,N> = PO.UNIT.FLG<1,N>
+			IF ICR.CNV<N,1> = "MD0" THEN
+				P_VALUE.AMT.ONORD<1,N> = ''
+				P_VALUE.AMT.CANCEL<1,N> = ''
+				P_VALUE.AMT.OPEN<1,N> = ''
+
+				TEMP.TOT.ONORD = ICONV(((PO.TOT.ONORD<1,N>/ICR.DV1<N,1>)*ICR.MT1<N,1>)/ICR.DV2<N,1>,ICR.CNV<LN,1>)
+				P_VALUE.TOT.ONORD<1,N> = TEMP.TOT.ONORD
+
+				TEMP.TOT.CANCEL = ICONV(((PO.TOT.CANCEL<1,N>/ICR.DV1<N,1>)*ICR.MT1<N,1>)/ICR.DV2<N,1>,ICR.CNV<LN,1>)
+				P_VALUE.TOT.CANCEL<1,N> = TEMP.TOT.CANCEL
+
+				TEMP.QTY.OPEN = ICONV(((PO.QTY.OPEN<1,N>/ICR.DV1<N,1>)*ICR.MT1<N,1>)/ICR.DV2<N,1>,ICR.CNV<LN,1>)
+				P_VALUE.QTY.OPEN<1,N> = TEMP.QTY.OPEN
+			END ELSE
+				P_VALUE.AMT.ONORD<1,N> = ''
+				P_VALUE.AMT.CANCEL<1,N> = ''
+				P_VALUE.AMT.OPEN<1,N> = ''
+                          
+				P_VALUE.TOT.ONORD<1,N> = OCONV(INT(PO.TOT.ONORD<1,N>/10),ICR.CNV<LN,2>)
+				P_VALUE.TOT.CANCEL<1,N> = OCONV(INT(PO.TOT.CANCEL<1,N>/10),ICR.CNV<LN,2>)
+				P_VALUE.QTY.OPEN<1,N> = OCONV(INT(PO.QTY.OPEN<1,N>/10),ICR.CNV<LN,2>)
+                          * STATUS=RBO.setProperty('','ORDVAL',P_VALUE.TOT.ONORD<1,N>)
+			END
+			P_VALUE.WHSE<1,N> = PO.WHSE<1,N>
+			P_VALUE.DISCOUNT<1,N> = OCONV(PO.DISCOUNT<1,N>,ICR.CNV)
+
+		END
+	*NEXT N
+
+
+*	STATUS = RBO.setProperty('','Reference',ICR.DV1)
+*	STATUS = RBO.setProperty('','Reference', P_VALUE.AMT.OPEN) 
+
+
+RETURN
+
+
+4000:
+  BEGIN CASE
+   CASE INV.UNIT<1,2> = "SHT" AND INV.UNIT<1,3> = "LBS"
+     ICR.CNV<LN,1> = "MD0"; ICR.DV2<LN,1> = 1
+     ICR.DV1<LN,1> = INV.M.WT; ICR.MT1<LN,1> = 1
+    CASE INV.UNIT<1,2> = "PC" AND INV.UNIT<1,3> = "MSI"
+      ICR.CNV<LN,1> = "MD0"; ICR.DV2<LN,1> = 1
+      ICR.DV1<LN,1> = INV.PAP.WIDTH/100; ICR.MT1<LN,1> = 10
+    CASE INV.UNIT<1,2> = "FT" AND INV.UNIT<1,3> = "MSI"
+      ICR.CNV<LN,1> = "MD0"; ICR.DV2<LN,1> = 12
+      ICR.DV1<LN,1> = INV.PAP.WIDTH/100; ICR.MT1<LN,1> = 100
+    CASE 1
+      ICR.CNV<LN,1> = "MD2"; ICR.DV2<LN,1> = 1
+      ICR.DV1<LN,1> = 10; ICR.MT1<LN,1> = INV.SBR
+  END CASE
+  BEGIN CASE
+    CASE PO.UNIT.FLG<1,LN> = "SHT" AND INV.UNIT<1,3> = "LBS"
+      ICR.CNV<LN,2> = "MD0"; ICR.DV2<LN,2> = 1
+      ICR.DV1<LN,2> = INV.M.WT; ICR.MT1<LN,2> = 1
+    CASE PO.UNIT.FLG<1,LN> = "PC" AND INV.UNIT<1,3> = "MSI"
+      ICR.CNV<LN,2> = "MD0"; ICR.DV2<LN,2> = 1
+      ICR.DV1<LN,2> = INV.PAP.WIDTH/100; ICR.MT1<LN,2> = 10
+    CASE PO.UNIT.FLG<1,LN> = "FT" AND INV.UNIT<1,3> = "MSI"
+      ICR.CNV<LN,2> = "MD0"; ICR.DV2<LN,2> = 12
+      ICR.DV1<LN,2> = INV.PAP.WIDTH/100; ICR.MT1<LN,2> = 100
+    CASE 1
+      ICR.CNV<LN,2> = "MD2"; ICR.DV2<LN,2> = 1
+      ICR.DV1<LN,2> = 10; ICR.MT1<LN,2> = 1
+  END CASE
+  IF PO.UNIT.FLG<1,LN> # INV.UNIT<1,2> THEN DIFF.UM<LN> = "Y" ELSE DIFF.UM<LN> = "N"
+RETURN
+
+
+93000 
+  STATUS = RBO.setProperty('','ServerStatus',1)        
+  STATUS = RBO.setProperty('','ServerMessage',ERRMSG) 
+RETURN

@@ -1,0 +1,172 @@
+SUBROUTINE getGridDatas
+********************************************************************************
+*   Program name :- getGridDatas
+*   Created:- 7/30/2003 by Zubair.S
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+* CustomerNumber
+*
+* Out Properties:
+* ---------------
+*  customerName,TrackLastDate,TrackLastTime,COSTCENTER,OPERATION,HOURSWORKED,COUNT_QTY,FLAG
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE JCS.CPYLIB JOB
+$INCLUDE PMC.CPYLIB CUSTOMER
+$INCLUDE JCS.CPYLIB JOB.TRACKING
+$INCLUDE JCS.CPYLIB JOB.TRANS
+$INCLUDE PMC.CPYLIB COST.CNTR
+$INCLUDE JCS.CPYLIB OPERATION
+
+
+* Insert method code here
+OPEN '','JOB' TO JOB ELSE ERRMSG='JOB FILE IS MISSING';GOTO 99999
+OPEN '','CUSTOMER' TO CUSTOMER ELSE ERRMSG='CUSTOMER FILE IS MISSING';GOTO 99999
+OPEN '','JOB.TRACKING' TO JOB.TRACKING ELSE ERRMSG = 'CANNOT OPEN JOB.TRACKING FILE';GOTO 99999
+OPEN '','JOB.TRANS' TO JOB.TRANS ELSE ERRMSG = "CANNOT OPEN JOB.TRANS FILE";GOTO 99999
+OPEN '','COST.CNTR' TO COST.CNTR ELSE ERRMSG = "CANNOT OPEN COST.CNTR FILE";GOTO 99999
+OPEN '','OPERATION' TO OPERATION ELSE ERRMSG = "CANNOT OPEN OPERATION FILE";GOTO 99999
+
+JobDescription = '' 
+
+STATUS=RBO.getProperty('','PMCProperty',PMCProperty)
+CONO = PMCProperty<1,4>
+
+STATUS = RBO.getProperty('','JOB_NO',JOB.NO) 
+STATUS = RBO.getProperty('','CustomerNumber',JOB.CUST)
+STATUS = RBO.getProperty('','JobDescription',JOB.DESC)
+
+*READING THE CUSTOMER TABLE AND GETTING THE NAME OF THE CUSTOMER
+
+MATREADU CUST.REC FROM CUSTOMER, CONO:JOB.CUST ELSE
+	CUST.NAME = "???????????????"
+END
+
+
+* METHOD OF SUBROUTINE JOB.TRACKING.INQ
+* CALL JOBTRI_TRACKING_INQ (CONO, JOB.NO, JOB.CUST, CUST.NAME, JOB.DESC<1,1>)
+
+*LINE.COUNT = 0
+     JFLAGS = ""
+      MATREAD JTRK.REC FROM JOB.TRACKING, CONO:JOB.NO ELSE
+         MAT JTRK.REC = ""
+      END
+      MATREAD JTRN.REC FROM JOB.TRANS, CONO:JOB.NO ELSE
+         MAT JTRN.REC = ""
+      END
+      LC = DCOUNT(JTRN.TIME.STAMP,@VM)
+      FOR LP = 1 TO LC
+         TS = JTRN.TIME.STAMP<1,LP>
+         LOCATE TS+1 IN JTRK.TIME.STAMP<1>,1 BY "AR" SETTING P ELSE NULL
+         JTRK.TIME.STAMP = INSERT(JTRK.TIME.STAMP,1,P,0,TS)
+         JTRK.DEPT = INSERT(JTRK.DEPT,1,P,0,JTRN.DEPT<1,LP>)
+         JTRK.CCTR = INSERT(JTRK.CCTR,1,P,0,JTRN.CCTR<1,LP>)
+         JTRK.OPER = INSERT(JTRK.OPER,1,P,0,JTRN.OPER<1,LP>)
+         JTRK.HRS = INSERT(JTRK.HRS,1,P,0,JTRN.HRS<1,LP>)
+         JTRK.IMP = INSERT(JTRK.IMP,1,P,0,JTRN.IMP<1,LP>)
+		*T24924 v
+		IF JTRN.POST.FLAG<1,LP> = "" THEN
+       	  JFLAGS = INSERT(JFLAGS,1,P,0,"*")
+		END ; *T24924
+      NEXT LP
+      PREV.CCTR = "!@#$%"
+      PREV.OPER = "!@#$%"
+      CCTRS = ""
+      OPERS = ""
+      HOURS = ""
+      COUNT = ""
+      FLAGS = ""
+      LP = 0
+      LCNT = DCOUNT(JTRK.TIME.STAMP,@VM)
+      FOR LPTR = 1 TO LCNT
+         CCTR = JTRK.CCTR<1,LPTR>
+         OPER = JTRK.OPER<1,LPTR>
+         HRS = JTRK.HRS<1,LPTR>
+         CNT = JTRK.IMP<1,LPTR>
+         FLG = JFLAGS<1,LPTR>
+         IF CCTR = PREV.CCTR AND OPER = PREV.OPER THEN
+            HOURS<1,LP> = HOURS<1,LP> + HRS
+            COUNT<1,LP> = COUNT<1,LP> + CNT
+            IF FLG = "*" THEN FLAGS<1,LP> = "*"
+         END ELSE
+            LP = LP + 1
+            CCTRS<1,LP> = CCTR
+            OPERS<1,LP> = OPER
+            HOURS<1,LP> = HRS
+            COUNT<1,LP> = CNT
+            FLAGS<1,LP> = FLG
+            PREV.CCTR = CCTR
+            PREV.OPER = OPER
+         END
+      NEXT LPTR
+
+      LINE.CNT = DCOUNT(CCTRS,@VM)
+
+      JC = DCOUNT(JTRK.TIME.STAMP,@VM)
+      IF JC = 0 THEN
+         LAST_DATE = "" 
+         LAST_TIME = "" 
+      END ELSE
+         LAST.DATE = INT(JTRK.TIME.STAMP<1,JC>/100000)		
+         LAST.TIME = MOD(JTRK.TIME.STAMP<1,JC>,100000)
+         *LAST_DATE = LAST.DATE  ;  *S$DATA(6)<S$SCR> = LAST.DATE 
+	  LAST_DATE = OCONV(LAST.DATE,"D2/")
+         LAST_TIME = OCONV(LAST.TIME,"MTS") ; *S$DATA(7)<S$SCR> = OCONV(LAST.TIME,"MTS")
+      END
+
+      COST_CENTER = "" 
+      JOB_OPERTATION = "" 
+      JOB_HRS_WORKED = "" 
+      COUNT_QTY = ""
+      DATA_FLAG = ""
+
+      PREV.CCTR = "!@#$%"
+      PREV.OPER = "!@#$%"
+      LC = DCOUNT(CCTRS,@VM)
+*STATUS =  RBO.getProperty('','ServerMessage',"COST COUNT :" : LC)
+*RETURN
+      FOR LP = 1 TO LC
+         *IF CCTRS<1,LP> = PREV.CCTR AND MOD((LP-1),LINE.COUNT)+1 > 1 THEN
+	*STATUS =  RBO.getProperty('','ServerMessage',"COSTCENTER :" : CCTRS<1,LP>)
+	*RETURN
+	  IF CCTRS<1,LP> = PREV.CCTR THEN
+            MAT CCTR.REC = ""
+         END ELSE
+            MATREAD CCTR.REC FROM COST.CNTR, CONO:CCTRS<1,LP> ELSE
+               MAT CCTR.REC = ""
+               CCTR.DESC = "???????????????"
+            END
+            PREV.CCTR = CCTRS<1,LP>
+         END
+         MATREAD OPER.REC FROM OPERATION, CONO:OPERS<1,LP> ELSE
+            MAT OPER.REC = ""
+            OPER.DESC = "???????????????"
+         END
+         COST_CENTERS<1,LP> = CCTR.DESC ;   * $DATA(12)<S$SCR,LP> = CCTR.DESC
+         JOB_OPERTATION<1,LP> = OPER.DESC ; * S$DATA(13)<S$SCR,LP> = OPER.DESC
+*T21153 v
+         JOB_HRS_WORKED<1,LP> =OCONV(HOURS<1,LP>,"MD2")  ;  *$DATA(14)<S$SCR,LP> = HOURS<1,LP>  ;* The screen will use MD2
+*T21153 ^
+         COUNT_QTYS<1,LP> = OCONV(INT(COUNT<1,LP>/100+0.5),"MD0Z") ; * $DATA(15)<S$SCR,LP> = OCONV(INT(COUNT<1,LP>/100+0.5),"MD0Z")
+         DATA_FLAG<1,LP> = FLAGS<1,LP>  ; * $DATA(16)<S$SCR,LP> = FLAGS<1,LP>
+      NEXT LP
+
+STATUS = RBO.setProperty('','CUST_NAME',CUST.NAME) ; * CUSTOMER NAME
+STATUS = RBO.setProperty('','LAST_DATE',LAST_DATE) ; * LAST DATE
+STATUS = RBO.setProperty('','LAST_TIME',LAST_TIME) ; * LAST TIME
+
+STATUS = RBO.setProperty('','COST_CENTERS',COST_CENTERS) ; * COST CENTER
+STATUS = RBO.setProperty('','JOB_OPERTATION',JOB_OPERTATION) ; * OPERATION 
+STATUS = RBO.setProperty('','JOB_HRS_WORKED',JOB_HRS_WORKED) ; * HOURS
+STATUS = RBO.setProperty('','COUNT_QTYS',COUNT_QTYS) ; * COUNT
+STATUS = RBO.setProperty('','DATA_FLAG',DATA_FLAG) ; * FLAG 
+
+RETURN
+* End of method code
+99999*
+STATUS = RBO.setProperty('','ServerStatus',1)
+STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+RETURN

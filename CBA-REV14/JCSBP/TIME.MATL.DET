@@ -1,0 +1,681 @@
+   SUBROUTINE TIME.MATL.SUB (MODE,CONO,REF.NO,MAT TEMP.REC,SHEET.OK,DEPT.WHSE,ESTAT,JOB.CUST)
+*********************************************************************
+* REVISION - [08.1B]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM   - PRIMAC
+* SOURCE   - JCSBP
+* PROGRAM  - TIME.MATL.DET
+* AUTHOR   - NICK AMENDOLA, COMPUTER BUSINESS ASSOCIATES
+* DATE     - 12/10/90
+* DESCRIPTION
+* This program is used to review and/or maintain material detail
+* from within the Time/Material maintenance function.
+* C26470 GAT 08.08.96 * FIX WR QUANTITY ALLOW ENTRY OF 0
+*T26334 epitka 12/17/2001 * REV12
+*T26274 cm 01/22/2002 * Do not allow "0" as a valid product id when the
+*                       matl req'd flag is set to "Y" in Operation
+*T26556 cmykleb 05/30/2002 * Rev12 correction.
+*                       Maintenance.
+*********************************************************************
+*
+*---- FILE COPY STATEMENTS
+*
+*COPY>CPYLIB>COM1
+*COPY>JCS.CPYLIB>TMCOM
+*COPY>PMC.CPYLIB>COST.CNTR
+*COPY>JCS.CPYLIB>OPERATION
+*COPY>JCS.CPYLIB>DAILY.TIME.MATL
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>ICS.CPYLIB>INV.WHSE.LOC
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>ICS.CPYLIB>CATEGORY
+*COPY>ICS.CPYLIB>INV_SERIAL
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+*
+   DEFFUN CALC.STK.QTY(COST.QTY,MAT INV.CNV.REC,ROND,LN)
+   DEFFUN CALC.COST.QTY(STK.QTY,MAT INV.CNV.REC,ROND,LN)
+*
+   MAT SYSCOM.REC =  ""; SYS.TYPE = 2
+*
+*---- DEFINE DIMENSIONED VARIABLES
+*
+   DIM TEMP.REC(25)
+   EQU TYPE        TO TEMP.REC(1)
+   EQU JOB.NO      TO TEMP.REC(2)
+   EQU OSJ.FLAG    TO TEMP.REC(3)
+   EQU JINIT       TO TEMP.REC(4)
+   EQU CCTR        TO TEMP.REC(5)
+   EQU OPER        TO TEMP.REC(6)
+   EQU TCODE       TO TEMP.REC(7)
+   EQU JTYPE       TO TEMP.REC(8)
+   EQU SPOIL.CODE  TO TEMP.REC(9)
+   EQU STRT        TO TEMP.REC(10)
+   EQU STPT        TO TEMP.REC(11)
+   EQU IMP         TO TEMP.REC(12)
+   EQU PROD        TO TEMP.REC(13)
+   EQU WHSE        TO TEMP.REC(14)
+   EQU LOCAT       TO TEMP.REC(15)
+   EQU SERIAL      TO TEMP.REC(16)
+   EQU ED.LS.FLG   TO TEMP.REC(17)
+   EQU STATUS      TO TEMP.REC(18)
+   EQU QTY         TO TEMP.REC(19)
+   EQU STK.QTY       TO TEMP.REC(20)
+   EQU PMT.FLG     TO TEMP.REC(21)
+   EQU QTYPE       TO TEMP.REC(22)
+   EQU DATE.USED   TO TEMP.REC(23)
+   EQU TIME.USED   TO TEMP.REC(24)
+*
+*---- INITIALIZATION
+*
+   TYPE = DTM.TYPE<1,REF.NO>
+   PROD = DTM.PROD<1,REF.NO>
+   WHSE = DTM.WHSE<1,REF.NO>
+   LOCAT = DTM.LOC<1,REF.NO>
+   SERIAL = DTM.SERIAL<1,REF.NO>
+   QTYPE = DTM.RS.QTYPE<1,REF.NO>
+   QTY = DTM.QTY<1,REF.NO>
+   STK.QTY = DTM.STK.QTY<1,REF.NO>
+   TS = DTM.TIME.STAMP<1,REF.NO>
+   IF TS = "" THEN
+      DATE.USED = ""
+      TIME.USED = ""
+   END ELSE
+      DATE.USED = INT(TS/100000)
+      TIME.USED = MOD(TS,100000)
+   END
+   ED.LS.FLG=DTM.ED.LS.FLG<1,REF.NO>
+   STATUS=DTM.STATUS<1,REF.NO>
+*
+   ECD.ACTION=6;CALL SCRN.EDIT
+   ESTAT=""
+*
+   OPEN "","INV_SERIAL" TO INV_SERIAL ELSE
+      ERRMSG="CANNOT OPEN INV_SERIAL FILE"
+      GOSUB 90000
+      GOTO 10990
+   END
+   GOSUB 80000
+*
+*---- GET OPERATOR REQUEST
+*
+500 *
+   BEGIN CASE
+      CASE TYPE = "M"
+         ECD.NUM=21
+      CASE TYPE = "T" AND OPER.MATL.REQ # "N"
+         ECD.NUM=21
+      CASE TYPE = "C" AND OPER.MATL.REQ # "N"
+         ECD.NUM=21
+      CASE 1
+         ECD.NUM=22
+   END CASE
+   ECD.ACTION=4;CALL SCRN.EDIT
+   OPT = ECD.RET.VALUE
+   BEGIN CASE
+      CASE OPT = "E" OR OPT = "END"
+         GOTO 99999
+      CASE NUM(OPT)
+         ON OPT GOSUB 10100,10400,10500
+   END CASE
+   GOTO 500
+*
+*---- GET PRODUCT INFORMATION
+*
+10100 *
+   TMP.PROD = ""
+   TMP.WHSE = ""
+   TMP.LOCAT = ""
+   TMP.SERIAL = ""
+   TMP.QTYPE = ""
+   TMP.QTY = ""
+   TMP.STK.QTY = ""
+   TMP.ED.LS.FLG = ""
+   TMP.STATUS = ""
+   SCV.REC(2)<2>=SERIAL
+   ECD.NUM=2; ECD.ACTION=4;CALL SCRN.EDIT
+   IF ECD.RET.VALUE="END" THEN GOTO 10390
+   IF ECD.RET.VALUE # "" THEN
+      MATREAD ISTK.REC FROM INV_SERIAL,CONO:ECD.RET.VALUE THEN
+         INV.ID=CONO:ISTK.PROD
+         MATREAD INV.REC FROM INVENTORY,INV.ID THEN
+            CATG.ID=CONO:INV.LINE
+            MATREAD CATG.REC FROM CATEGORY,CATG.ID THEN
+               IF CATG.RSV.SERIAL='Y' THEN
+                  LOCATE JOB.NO IN ISTK.JOB<1> SETTING JUNK ELSE
+                     ERRMSG='WARNING, This serial has not been reserved on this job.'
+                     GOSUB 90000
+                  END
+               END
+            END
+         END
+         TMP.SERIAL=ECD.RET.VALUE
+         TMP.PROD=ISTK.PROD
+         TMP.WHSE=ISTK.WHSE
+         TMP.LOCAT=ISTK.LOC
+      END ELSE
+         IF PROD = "" THEN
+            ERRMSG="Invalid Serial number"
+            GOSUB 90000
+            GOTO 10100
+         END
+      END
+   END
+   IF TMP.PROD = "" THEN
+      SCV.REC(3)<2>=PROD
+      ECD.NUM=3; ECD.ACTION=4;CALL SCRN.EDIT
+      IF ECD.RET.VALUE="END" THEN GOTO 10390
+      TMP.PROD=ECD.RET.VALUE
+   END ELSE
+      SCV.REC(3)<2>=TMP.PROD
+      ECD.NUM=3;ECD.ACTION=5;CALL SCRN.EDIT
+   END
+   TMP.ED.LS.FLG = ""
+   BEGIN CASE
+      CASE TYPE="M" AND TMP.PROD=""
+         TMP.ED.LS.FLG="Y"
+         TMP.STATUS="MATERIAL REQUIRED"
+         DFLAG=1
+      CASE OPER.MATL.REQ="Y" AND TMP.PROD="" AND TYPE # "C"
+         TMP.ED.LS.FLG="Y"
+         TMP.STATUS="MATERIAL REQUIRED"
+         DFLAG=1
+      CASE TYPE = "C" AND TMP.PROD = ""
+         DFLAG=1
+*T26274 v
+*        CASE OPER.MATL.REQ="Y" AND TMP.PROD="0"
+*           DFLAG=1
+*T26274 ^
+      CASE OPER.MATL.REQ="" AND TMP.PROD=""
+         DFLAG=1
+      CASE 1
+         MATREAD INV.REC FROM INVENTORY,CONO:TMP.PROD ELSE
+            ERRMSG="Invalid product ID. Try again! "
+            GOSUB 90000
+            GOTO 10100
+         END
+         IF INV.CUST # "" THEN
+            IF "X":INV.CUST # "X":JOB.CUST THEN
+               ERRMSG="CUSTOMER ":INV.CUST:" OWNS THIS INVENTORY"
+               GOSUB 90000
+               GOTO 10100
+            END
+         END
+         BEGIN CASE
+            CASE INV.PAP.TYPE="REGULAR"
+            CASE INV.PAP.TYPE="SHEET" AND SHEET.OK
+            CASE INV.PAP.TYPE="ROLL"
+            CASE INV.PAP.TYPE="PCOAT" AND SHEET.OK
+            CASE INV.PAP.TYPE="LROLL" AND SHEET.OK
+            CASE 1
+               ERRMSG="Invalid product type. Try again! "
+               GOSUB 90000
+               GOTO 10100
+         END CASE
+         IF INV.M.LINE="FNGD" THEN
+            ERRMSG="Product is part of finished goods inventory. Try again! "
+            GOSUB 90000
+            GOTO 10100
+         END
+         IF OPER.MATL.REQ="Y" AND OPER.PLINE # "" THEN
+            LOCATE INV.LINE IN OPER.PLINE<1>,1 SETTING PL ELSE PL=0
+            IF PL=0 THEN
+               ERRMSG="Invalid product for this operation. Try again! "
+               GOSUB 90000
+               GOTO 10100
+            END
+         END
+         MATREAD CATG.REC FROM CATEGORY,CONO:INV.LINE ELSE
+            ERRMSG="Cannot locate product line. Try again! "
+            GOSUB 90000
+            GOTO 10100
+         END
+         IF CATG.TRACK.QOH # "Y" AND (CATG.COST.TYPE="FI" OR CATG.COST.TYPE="LC") THEN
+            ERRMSG=CATG.COST.TYPE:" is not a valid costing method when PLINE does not track QOH"
+            GOSUB 90000
+            GOTO 10100
+         END
+         SCV.REC(4)<2>=INV.FULL.DESC
+         ECD.NUM=4;ECD.ACTION=5;CALL SCRN.EDIT
+10130 *
+         IF TMP.WHSE="" THEN
+            WH.CNT=DCOUNT(INV.WHSE.CODE,VM)
+            BEGIN CASE
+               CASE WH.CNT=1
+                  TMP.WHSE=INV.WHSE.CODE
+               CASE INV.PAP.TYPE="SHEET" AND SHEET.OK AND DEPT.WHSE # ""
+                  LOCATE CCTR.DEPT IN DEPT.WHSE<1>,1 SETTING W ELSE
+                     ERRMSG="Cannot locate warehouse for specified department. Try again! "
+                     GOSUB 90000
+                     GOTO 10100
+                  END
+                  TMP.WHSE=DEPT.WHSE<2,W>
+               CASE INV.PAP.TYPE="PCOAT" AND SHEET.OK AND DEPT.WHSE # ""
+                  LOCATE CCTR.DEPT IN DEPT.WHSE<1>,1 SETTING W ELSE
+                     ERRMSG="Cannot locate warehouse for specified department. Try again! "
+                     GOSUB 90000
+                     GOTO 10100
+                  END
+                  TMP.WHSE=DEPT.WHSE<2,W>
+               CASE INV.PAP.TYPE="LROLL" AND SHEET.OK AND DEPT.WHSE # ""
+                  LOCATE CCTR.DEPT IN DEPT.WHSE<1>,1 SETTING W ELSE
+                     ERRMSG="Cannot locate warehouse for specified department. Try again! "
+                     GOSUB 90000
+                     GOTO 10100
+                  END
+                  TMP.WHSE=DEPT.WHSE<2,W>
+               CASE 1
+                  SCV.REC(5)<2>=WHSE
+                  ECD.NUM=5;ECD.ACTION=4;CALL SCRN.EDIT
+                  IF ECD.RET.VALUE="END" THEN GOTO 10390
+                  LOCATE ECD.RET.VALUE IN INV.WHSE.CODE<1>,1 SETTING FND ELSE
+                     ERRMSG="Invalid Warehouse. Try again! "
+                     GOSUB 90000
+                     GOTO 10130
+                  END
+                  TMP.WHSE=ECD.RET.VALUE
+            END CASE
+         END
+         SCV.REC(5)<2>=TMP.WHSE
+         ECD.NUM=5;ECD.ACTION=5;CALL SCRN.EDIT
+         MATREAD IWH.REC FROM INV.WHSE,CONO:TMP.PROD:"!":TMP.WHSE ELSE
+            MAT IWH.REC=""
+            ERRMSG="Cannot locate warehouse item. Try again! "
+            GOSUB 90000
+            TMP.WHSE=""
+            TMP.LOCAT=""
+            GOTO 10130
+         END
+         IF IWH.ON.HAND+0=0 AND CATG.TRACK.QOH="Y" THEN
+            ERRMSG="Quantity on-hand is zero. Try again! "
+            GOSUB 90000
+            GOTO 10100
+         END
+10140 *
+         IF TMP.LOCAT="" THEN
+            LO.CNT=DCOUNT(IWH.LOC,VM)
+            BEGIN CASE
+               CASE LO.CNT=1
+                  TMP.LOCAT=IWH.LOC
+               CASE 1
+                  SCV.REC(6)<2>=LOCAT
+                  ECD.NUM=6;ECD.ACTION=4;CALL SCRN.EDIT
+                  IF ECD.RET.VALUE="END" THEN GOTO 10390
+                  LOCATE ECD.RET.VALUE IN IWH.LOC<1>,1 SETTING FND ELSE
+                     ERRMSG="Invalid Location. Try again! "
+                     GOSUB 90000
+                     GOTO 10140
+                  END
+                  TMP.LOCAT=ECD.RET.VALUE
+            END CASE
+         END
+         SCV.REC(6)<2>=TMP.LOCAT
+         ECD.NUM=6;ECD.ACTION=5;CALL SCRN.EDIT
+         MATREAD IWLO.REC FROM INV.WHSE.LOC,CONO:TMP.PROD:"!":TMP.WHSE:"!":TMP.LOCAT ELSE
+            MAT IWLO.REC=""
+         END
+10150 *
+         RFND=0
+         IF TMP.SERIAL="" AND CATG.TRK.LVL='S' THEN
+            RS.CNT=DCOUNT(IWLO.SERIAL,VM)
+            BEGIN CASE
+               CASE RS.CNT=0
+                  RFND=0
+               CASE RS.CNT=1
+                  TMP.SERIAL=IWLO.SERIAL
+                  RFND=1
+               CASE 1
+                  SCV.REC(2)<2>=SERIAL
+                  ECD.NUM=2;ECD.ACTION=4;CALL SCRN.EDIT
+                  IF ECD.RET.VALUE="END" THEN GOTO 10100
+                  LOCATE ECD.RET.VALUE IN IWLO.SERIAL<1>,1 SETTING RFND ELSE
+                     ERRMSG='Invalid Serial number. Try again!'
+                     GOSUB 90000
+                     GOTO 10150
+                  END
+                  TMP.SERIAL=ECD.RET.VALUE
+            END CASE
+         END ELSE
+            IF CATG.TRK.LVL = 'S' THEN ; * T26556
+               LOCATE TMP.SERIAL IN IWLO.SERIAL<1>,1 SETTING RFND ELSE
+                  ERRMSG="Invalid Serial number. Try again! "
+                  TMP.SERIAL=""
+                  GOSUB 90000
+                  GOTO 10150
+               END
+            END ; * T26556
+         END
+         SCV.REC(2)<2>=TMP.SERIAL
+         ECD.NUM=2;ECD.ACTION=5;CALL SCRN.EDIT
+   END CASE
+*---- GET QTYPE
+*
+10200 *
+   BEGIN CASE
+*T26274 v
+*        CASE TMP.PROD='' OR TMP.PROD='0'
+      CASE TMP.PROD=''
+*T26274 ^
+      CASE INV.PAP.TYPE='ROLL'
+         IF QTYPE[1,1]="W" OR QTYPE="DR" THEN
+            SCV.REC(7)<2>=QTYPE
+         END ELSE
+            SCV.REC(7)<2>=""
+         END
+         ECD.NUM=7; ECD.VALDAT="WU,WR,DR"; ECD.DEFAULT="WU"
+         ECD.HMSG='WU = Weight used, WR = Weight remaining, DR = Diameter remaining'
+         ECD.ACTION=4; CALL SCRN.EDIT
+         IF ECD.RET.VALUE='END' THEN  GOTO 10390
+         TMP.QTYPE=ECD.RET.VALUE
+      CASE INV.PAP.TYPE='LROLL' OR INV.PAP.TYPE='PCOAT'
+         IF QTYPE[1,1]="S" OR QTYPE="DR" THEN
+            SCV.REC(7)<2>=QTYPE
+         END ELSE
+            SCV.REC(7)<2>=""
+         END
+         ECD.NUM=7; ECD.VALDAT="SU,DR"; ECD.DEFAULT="SU"
+         ECD.HMSG='SU = Quantity used, DR = Diameter remaining'
+         ECD.ACTION=4; CALL SCRN.EDIT
+         IF ECD.RET.VALUE='END' THEN  GOTO 10390
+         TMP.QTYPE=ECD.RET.VALUE
+      CASE INV.PAP.TYPE='SHEET'
+         IF QTYPE[1,1] = "S" THEN
+            SCV.REC(7)<2>=QTYPE
+         END ELSE
+            SCV.REC(7)<2>=""
+         END
+         ECD.NUM=7; ECD.VALDAT="SU,SR"; ECD.DEFAULT="SU"
+         ECD.HMSG='SU = Stock used, SR = Stock remaining' 
+         ECD.ACTION=4; CALL SCRN.EDIT
+         IF ECD.RET.VALUE='END' THEN GOTO 10390
+         TMP.QTYPE=ECD.RET.VALUE
+      CASE 1
+         TMP.QTYPE = ""
+         SCV.REC(7)<2>=""
+         ECD.NUM=7;ECD.ACTION=5;CALL SCRN.EDIT
+   END CASE
+   BEGIN CASE
+      CASE TMP.QTYPE = "WU"
+         SCV.REC(9)<2> = "Weight used"
+      CASE TMP.QTYPE = "WR"
+         SCV.REC(9)<2> = "Weight remaining"
+      CASE TMP.QTYPE = "DR"
+         SCV.REC(9)<2> = "Diameter remaining"
+      CASE TMP.QTYPE[2,1]="U" AND INV.UNIT<1,2>="FT"
+         SCV.REC(9)<2>="Feet used"
+      CASE TMP.QTYPE[2,1]="U" AND INV.UNIT<1,2>="PC"
+         SCV.REC(9)<2>="Press counts used"
+      CASE TMP.QTYPE = "SU"
+         SCV.REC(9)<2> = "Stock used"
+      CASE TMP.QTYPE = "SR"
+         SCV.REC(9)<2> = "Stock remaining"
+      CASE 1
+         SCV.REC(7)<2> = ""
+         ECD.NUM=7;ECD.ACTION=5;CALL SCRN.EDIT
+         SCV.REC(9)<2> = "Quantity used"
+   END CASE
+   ECD.SUB.NUM = 2
+   ECD.NUM=9;ECD.ACTION=5;CALL SCRN.EDIT
+*
+*---- GET MATERIAL QUANTITY
+*
+10300 *
+   BEGIN CASE
+*T26274 v
+*        CASE TMP.PROD="" OR TMP.PROD="0"
+      CASE TMP.PROD=""
+*T26274 ^
+      CASE 1
+         GOSUB 85000
+         IF RFND AND TMP.QTYPE[2,1]="U" THEN
+            ECD.O.R="O"
+            ECD.DEFAULT=ISTK.CUR.QTY
+            ECD.DEFAULT=CALC.STK.QTY(ECD.DEFAULT,MAT INV.CNV.REC,'.5','')
+            ECD.DEFAULT=OCONV(ECD.DEFAULT,ICR.CNV)
+         END
+         BEGIN CASE
+            CASE TMP.QTYPE="DR"
+               ECD.PATRN="0N,0N.1N,0N.2N"
+               ECD.NUM=8;ECD.ACTION=4;CALL SCRN.EDIT
+               IF ECD.RET.VALUE="END" THEN GOTO 10390
+               ECD.RET.VALUE=ECD.RET.VALUE*1000
+            CASE 1
+               IF ICR.CNV='MD0' THEN
+                  ECD.PATRN="0N"
+               END ELSE
+                  ECD.PATRN="0N,0N.1N,0N.2N"
+               END
+               ECD.NUM=8;ECD.ACTION=4;CALL SCRN.EDIT
+               IF ECD.RET.VALUE="END" THEN GOTO 10390
+               ECD.RET.VALUE=ICONV(ECD.RET.VALUE,ICR.CNV)
+         END CASE
+         BEGIN CASE
+            CASE ECD.RET.VALUE > 0 AND ECD.RET.VALUE <= 9999999
+            CASE TMP.QTYPE="DR" AND ECD.RET.VALUE=0
+            CASE TMP.QTYPE="WR" AND ECD.RET.VALUE=0
+            CASE 1
+               ERRMSG = "*** OUT OF RANGE ***"
+               GOSUB 90000;GOTO 10300
+         END CASE
+         IF CATG.TRACK.QOH = "Y" THEN
+            BEGIN CASE
+               CASE QTYPE="DR"
+               CASE RFND
+* R.S.AVAIL=CALC.STK.QTY(ISTK.CUR.QTY,MAT INV.CNV.REC,'.5','')
+                  IF CATG.RSV.SERIAL='Y' THEN
+                     LOCATE JOB.NO IN ISTK.JOB<1> SETTING JPOS THEN 
+                        R.S.AVAIL=ISTK.RSVB.QTY + ISTK.JRSVD.QTY<1,JPOS> 
+                     END ELSE 
+                        R.S.AVAIL=ISTK.RSVB.QTY 
+                     END
+                  END ELSE 
+                     R.S.AVAIL=ISTK.RSVB.QTY 
+                  END
+                  R.S.AVAIL=CALC.STK.QTY(R.S.AVAIL,MAT INV.CNV.REC,'.5','') 
+                  IF ECD.RET.VALUE > R.S.AVAIL THEN
+                     ERRMSG="Maximum Quantity Available For Serial - ":OCONV(R.S.AVAIL,ICR.CNV)
+                     GOSUB 90000;GOTO 10300
+                  END
+               CASE 1
+                  LOC.AVAIL=CALC.STK.QTY(IWLO.LOC.ON.HAND,MAT INV.CNV.REC,'.5','')
+                  IF (TMP.QTYPE="" OR TMP.QTYPE[2,1]="U") AND ECD.RET.VALUE > LOC.AVAIL THEN
+                     ERRMSG="Maximum Quantity Available For Location - ":OCONV(LOC.AVAIL,ICR.CNV)
+                     GOSUB 90000;GOTO 10300
+                  END
+            END CASE
+         END
+         BEGIN CASE
+            CASE TMP.QTYPE="DR"
+               TMP.QTY=ECD.RET.VALUE
+               TMP.STK.QTY=""
+               SCV.REC(8)<2>=OCONV(INT(TMP.QTY/10),"MD2")
+            CASE TMP.QTYPE[2,1]="R"
+               TMP.QTY=CALC.COST.QTY(ECD.RET.VALUE,MAT INV.CNV.REC,'.99','')
+               TMP.STK.QTY=CALC.STK.QTY(TMP.QTY,MAT INV.CNV.REC,'.5','')
+               SCV.REC(8)<2>= OCONV(TMP.STK.QTY,ICR.CNV)
+            CASE 1
+               TMP.QTY=CALC.COST.QTY(ECD.RET.VALUE,MAT INV.CNV.REC,'.5','') 
+               TMP.STK.QTY=CALC.STK.QTY(TMP.QTY,MAT INV.CNV.REC,'.5','')
+               SCV.REC(8)<2>= OCONV(TMP.STK.QTY,ICR.CNV)
+         END CASE
+         ECD.NUM=8;ECD.ACTION =5;CALL SCRN.EDIT
+   END CASE
+   PROD = TMP.PROD
+   WHSE = TMP.WHSE
+   LOCAT = TMP.LOCAT
+   SERIAL = TMP.SERIAL
+   QTYPE = TMP.QTYPE
+   QTY = TMP.QTY
+   BEGIN CASE
+*T26274 v
+*        CASE PROD = "" OR PROD = "0"
+      CASE PROD = ""
+*T26274 ^
+         STK.QTY=""
+      CASE INV.UNIT<1,2>="SHT" AND INV.UNIT<1,3>="LBS"
+         STK.QTY=TMP.STK.QTY
+      CASE INV.UNIT<1,2>='PC' AND INV.UNIT<1,3>='MSI'
+         STK.QTY=TMP.STK.QTY
+      CASE INV.UNIT<1,2>='FT' AND INV.UNIT<1,3>='MSI'
+         STK.QTY=TMP.STK.QTY
+      CASE 1
+         STK.QTY=""
+   END CASE
+   ED.LS.FLG = TMP.ED.LS.FLG
+   STATUS = TMP.STATUS
+   IF DFLAG THEN GOSUB 80000
+   RETURN
+*
+*---- BACKOUT ENTERED DATA
+*
+10390 *
+   GOSUB 80000
+   RETURN
+*
+*---- GET TRANSACTION DATE AND TIME
+*
+*
+*---- GET DATE USED  
+*
+10400 *
+   IF CATG.BARCODE = "Y" THEN BARCODE.FLAG = 1 ELSE BARCODE.FLAG = 0
+   IF BARCODE.FLAG THEN
+      SCV.REC(10)<2> = DATE.USED
+      ECD.NUM=10; ECD.ACTION=4; CALL SCRN.EDIT
+      IF ECD.RET.VALUE='END' THEN RETURN
+      IF ECD.RET.VALUE > DATE() THEN
+         ERRMSG = "Date out of range. Try again! "
+         GOSUB 90000
+         GOTO 10400
+      END
+      DATE.USED=ECD.RET.VALUE
+   END
+   RETURN
+*
+*---- GET TIME USED
+*
+10500 *
+   IF CATG.BARCODE = "Y" THEN BARCODE.FLAG = 1 ELSE BARCODE.FLAG = 0
+   IF BARCODE.FLAG THEN
+      IF TIME.USED = "" THEN
+         SCV.REC(11)<2> = ""
+      END ELSE
+         TSTIME = OCONV(TIME.USED,"MTS")
+         SCV.REC(11)<2> = TSTIME[1,2]:TSTIME[4,2]
+      END
+      ECD.NUM=11; ECD.ACTION=4; CALL SCRN.EDIT
+      IF ECD.RET.VALUE='END' THEN RETURN
+      HH=ECD.RET.VALUE[1,2]; MM=ECD.RET.VALUE[3,4]
+      IF HH < 0 OR HH > 23 OR MM < 0 OR MM > 59 THEN
+         ERRMSG = 'Invalid time. Enter "HHMM" '
+         GOSUB 90000
+         GOTO 10500
+      END
+      TIME.USED=ICONV((HH:":":MM:":00"),"MTS")
+   END
+   RETURN
+*
+*---- ERROR EXIT
+*
+10990 *
+   ESTAT="END"
+   GOTO 99999
+*
+*---- LOAD SCREEN DATA
+*
+80000 *
+*T26274 v
+*     IF PROD="" OR PROD="0" THEN
+   IF PROD="" THEN
+*T26274 ^
+      MAT INV.REC = ""
+      MAT CATG.REC = ""
+      MAT IWH.REC = ""
+      MAT IWLO.REC = ""
+      MAT ISTK.REC = ""
+      ECD.ACTION=6;CALL SCRN.EDIT
+   END ELSE
+      MATREAD INV.REC FROM INVENTORY, CONO:PROD ELSE
+         MAT INV.REC = ""
+      END
+      MATREAD CATG.REC FROM CATEGORY,CONO:INV.LINE ELSE
+         MAT CATG.REC = ""
+      END
+      MATREAD IWH.REC FROM INV.WHSE,CONO:PROD:"!":WHSE ELSE
+         MAT IWH.REC=""
+      END
+      MATREAD IWLO.REC FROM INV.WHSE.LOC,CONO:PROD:"!":WHSE:"!":LOCAT ELSE
+         MAT IWLO.REC=""
+      END
+      MATREAD ISTK.REC FROM INV_SERIAL,CONO:SERIAL THEN
+         MAT ISTK.REC = ""
+      END
+      GOSUB 85000
+   END
+   SCV.REC(1)<2> = DATE()
+   SCV.REC(2)<2> = SERIAL
+   SCV.REC(3)<2> = PROD
+   SCV.REC(4)<2> = INV.FULL.DESC
+   SCV.REC(5)<2> = WHSE
+   SCV.REC(6)<2> = LOCAT
+   SCV.REC(7)<2> = QTYPE
+   IF QTY = "" THEN
+      SCV.REC(8)<2> = ""
+   END ELSE
+      IF QTYPE="DR" THEN
+         SCV.REC(8)<2>=OCONV(INT(QTY/10),"MD2")
+      END ELSE
+         SCV.REC(8)<2>=OCONV(CALC.STK.QTY(QTY,MAT INV.CNV.REC,'.5',''),ICR.CNV)
+      END
+   END
+   BEGIN CASE
+      CASE QTYPE = "WU"
+         SCV.REC(9)<2> = "Weight used"
+      CASE QTYPE = "WR"
+         SCV.REC(9)<2> = "Weight remaining"
+      CASE QTYPE = "DR"
+         SCV.REC(9)<2> = "Diameter remaining"
+      CASE QTYPE[2,1]="U" AND INV.UNIT<1,2>="FT"
+         SCV.REC(9)<2>="Feet used"
+      CASE QTYPE[2,1]="U" AND INV.UNIT<1,2>="PC"
+         SCV.REC(9)<2>="Press counts used"
+      CASE QTYPE = "SU"
+         SCV.REC(9)<2> = "Stock used"
+      CASE QTYPE = "SR"
+         SCV.REC(9)<2> = "Stock remaining"
+      CASE 1
+         SCV.REC(9)<2> = "Quantity used"
+   END CASE
+   SCV.REC(10)<2> = DATE.USED
+   IF TIME.USED = "" THEN
+      SCV.REC(11)<2> = ""
+   END ELSE
+      TSTIME = OCONV(TIME.USED,"MTS")
+      SCV.REC(11)<2> = TSTIME[1,2]:TSTIME[4,2]
+   END
+   SCV.REC(20)<2> = STATUS
+80050 *
+   ECD.ACTION=3; CALL SCRN.EDIT
+   DFLAG = 0
+   RETURN
+*
+*---- GET QUANTITY CONVERSION
+*
+85000 *
+*COPY>ICSBP>INV.UM.CNV
+   RETURN
+*
+*---- ERROR ROUTINE
+*
+90000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+*
+*---- END OF PROGRAM
+*
+99999 *
+   ECD.ACTION=99;CALL SCRN.EDIT
+   RETURN
+END

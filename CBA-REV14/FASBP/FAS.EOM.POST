@@ -1,0 +1,469 @@
+*COPY>CPYLIB>COM1
+*********************************************************************
+* REVISION    - [08.1]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - FASBP
+* PROGRAM     - FAS.EOM.POST
+* BY          - ZIAD YAMOUT, C.B.A
+* DATE        - 01/11/89
+* DESCRIPTION -
+* TASK
+*     18573 6/95 1-52 WEEK ACCOUNTING
+*
+*T21177 diane 01/23/1997 * REV11 UPG ADD CLOSE
+*T21919 lanny 05/10/1997 * Do not carry sub-dept to G/L.
+*T23278 markt 12/11/1998 * Make fiscal data multi-value by division.
+*T26685 lhelms 07/03/2002 * REV12 DIVISION SECURITY
+*ENDDOC
+*********************************************************************
+*
+***** INSERT FILE EQUETE
+*
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>GLTABLE
+*COPY>PMC.CPYLIB>SALESDATES
+*COPY>PMC.CPYLIB>FISCAL
+*COPY>PMC.CPYLIB>COA
+*COPY>PMC.CPYLIB>EOM.TRANS
+*COPY>FAS.CPYLIB>ASSETS
+*COPY>FAS.CPYLIB>ASSETS.DEPR
+*COPY>FAS.CPYLIB>DEP.MAST
+*COPY>FAS.CPYLIB>CLASS
+*COPY>FAS.CPYLIB>MAN.DEPR.CTL
+*COPY>FAS.CPYLIB>UOP.DEPR.CTL
+*COPY>PMC.CPYLIB>POST.REJECTS
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*
+**** INTITIALIZATION
+*
+      MAT FILE.VARS=""
+      MAT EDIT.COM.DRIVER=""
+*
+***** SETUP ERRMSG ROUTINE
+*
+      SYS.TYPE=1
+      CALL SYSCOM(MAT SYSCOM.REC)
+*
+*--- PROCREAD
+*
+      PROCREAD INBUFF ELSE
+         ERRMSG = "MUST RUN FROM PROC"
+         GOSUB 91000; GOTO 99999
+      END
+      CONO = INBUFF<1>
+      FR.NEXT.PER = ""
+      DIV.CODE = INBUFF<7>;* T23278
+*
+***** OPEN FILES
+*
+      OPEN "","COMPANY" TO COMPANY ELSE ERRMSG="COMPANY FILE MISSING";GOTO 93000
+      OPEN "","CONTROL" TO CONTROL ELSE ERRMSG="CONTROL FILE MISSING";GOTO 93000
+      OPEN "","PMC.SCREENS" TO M.SCREENS ELSE ERRMSG="M.SCREENS FILE IS MISSING";GOTO 93000
+      OPEN "","COA" TO COA ELSE ERRMSG="COA FILE IS MISSING";GOTO 93000
+      OPEN "","ASSETS" TO ASSETS ELSE ERRMSG="ASSETS FILE IS MISSING";GOTO 93000
+      OPEN "","ASSETS.DEPR" TO ASSETS.DEPR ELSE ERRMSG="ASSETS.DEPR FILE IS MISSING";GOTO 93000
+      OPEN "","DEP.MAST" TO DEP.MAST ELSE ERRMSG="DEP.MAST FILE IS MISSING";GOTO 93000
+      OPEN "","CLASS" TO CLASS ELSE ERRMSG="CLASS FILE IS MISSING";GOTO 93000
+      OPEN "",INBUFF<3> TO EOM.TRANS ELSE ERRMSG=INBUFF<3>:" FILE MISSING";GOTO 93000
+      OPEN "",INBUFF<4> TO POST.REJECTS ELSE ERRMSG=INBUFF<4>:" FILE IS MISSING";GOTO 93000
+      OPEN "","EOD.HIST" TO EOD.HIST ELSE ERRMSG="EOD.HIST FILE IS MISSING";GOTO 93000
+*
+***** GET CONO
+*
+      MATREAD COMP.REC FROM COMPANY, CONO ELSE
+         ERRMSG = "COMPANY RECORD IS MISSING"
+         GOTO 93000
+      END
+      READ PERIOD.REC FROM CONTROL, CONO:"ACCT.PERIODS" ELSE
+         PERIOD.REC = ""
+         PERIOD.REC<1> = 12
+      END
+      NUM.PERIODS = PERIOD.REC<1>
+      SYS.FISCAL = "FAFISCAL"
+      STMT.HEAD = "FIXED ASSETS"
+*COPY>PMCBP>EOD.POST
+      IF ECD.RET.VALUE = "END" THEN
+         ECD.ACTION = 99 ; CALL SCRN.EDIT
+         GOTO 99000
+      END
+      CLEARFILE EOM.TRANS
+      CLEARFILE POST.REJECTS
+      PRR.SEQ = 10000
+***** T23278 v
+*      CUR.YR = FR.CURR.PER[1,4]
+*      CUR.MN = FR.CURR.PER[5,2]
+      CUR.YR = FR.CURR.PER<1,POS>[1,4]
+      CUR.MN = FR.CURR.PER<1,POS>[5,2]
+***** T23278 ^
+      MATREADU MAN.DEPR.CTL FROM CONTROL, CONO:"MANUAL.DEPR" THEN
+***** T23278 v
+*         IF MDC.CUR.PER = FR.CURR.PER AND MDC.PRT.FLG = "P" THEN
+         IF MDC.CUR.PER<1,POS> = FR.CURR.PER<1,POS> AND MDC.PRT.FLG<1,POS> = "P" THEN
+***** T23278  ^
+            NO.MAN.DEPR = 0
+         END ELSE
+            NO.MAN.DEPR = 1
+         END
+      END ELSE
+         MAT MAN.DEPR.CTL = ""
+         NO.MAN.DEPR = 1
+      END
+      MATREADU UOP.DEPR.CTL FROM CONTROL, CONO:"UOP.DEPR" THEN
+***** T23278 v
+*         IF UDC.CUR.PER = FR.CURR.PER AND UDC.PRT.FLG = "P" THEN
+         IF UDC.CUR.PER<1,POS> = FR.CURR.PER<1,POS> AND UDC.PRT.FLG<1,POS> = "P" THEN
+***** T23278 ^
+            NO.UOP.DEPR = 0
+         END ELSE
+            NO.UOP.DEPR = 1
+         END
+      END ELSE
+         MAT UOP.DEPR.CTL = ""
+         NO.UOP.DEPR = 1
+      END
+      P.Y = "X"
+      FOR I = 2 TO 52
+         P.Y<1,I> = "X"
+      NEXT I
+      OLD.CLASS = "!@#$%^&*"
+      OLD.CLS.DESC = "UNKNOWN"
+      MATREAD COA.REC FROM COA, CONO : GLTB.DEPR.ALLOW ELSE COA.LEVEL = 0
+      FA.ALW.ACCT = GLTB.DEPR.ALLOW
+      FA.ALW.LEVEL = COA.LEVEL
+      MATREAD COA.REC FROM COA, CONO : GLTB.DEPR.EXP ELSE COA.LEVEL = 0
+      FA.EXP.ACCT = GLTB.DEPR.EXP
+      FA.EXP.LEVEL = COA.LEVEL
+      DATA = 1
+      UOP.ERROR = 0; MAN.ERROR = 0
+      LOOP
+         READNEXT AST.ID ELSE DATA = 0
+      WHILE DATA DO
+         IF CONO # AST.ID[1,3] THEN GOTO 999
+         AST.NO = AST.ID[4,99]
+         MATREADU AST.REC FROM ASSETS, AST.ID ELSE
+            MAT PRR.REC = ""
+            PRR.FILE = "ASSETS"
+            PRR.ERR = "CANNOT LOCATE"
+            PRR.ID = AST.NO
+            PRR.SEQ = PRR.SEQ + 1
+            MATWRITE PRR.REC ON POST.REJECTS, PRR.SEQ
+            RELEASE ASSETS, AST.ID
+            GOTO 999
+         END
+         U.O.P = 0
+         BEGIN CASE
+***** T23278 v
+*            CASE AST.FISCAL.MON = FR.CURR.PER
+            CASE AST.FISCAL.MON = FR.CURR.PER<1,POS>
+***** T23278 ^
+               RELEASE ASSETS, AST.ID
+               GOTO 999
+***** T23278 v
+*            CASE AST.FST.PER<1,1> > FR.CURR.PER
+            CASE AST.FST.PER<1,1> > FR.CURR.PER<1,POS>
+***** T23278 ^
+               RELEASE ASSETS, AST.ID
+               GOTO 999
+            CASE AST.DEPR.METHOD<1,1>[1,1] = "U"
+               BEGIN CASE
+                  CASE AST.CUM.UNITS<1,1> >= AST.UNITS<1,1>
+                     RELEASE ASSETS, AST.ID
+                     GOTO 999
+                  CASE NO.UOP.DEPR
+                     UOP.ERROR = 1
+                     MAT PRR.REC = ""
+                     PRR.FILE = "ASSETS"
+                     PRR.ERR = "Units Of Production was not updated"
+                     PRR.ID = AST.NO
+                     PRR.SEQ = PRR.SEQ + 1
+                     MATWRITE PRR.REC ON POST.REJECTS, PRR.SEQ
+                     RELEASE ASSETS, AST.ID
+                     GOTO 999
+               END CASE
+***** T23278 v
+*               D.DATE = UDC.CUR.DATE
+               D.DATE = UDC.CUR.DATE<1,POS>
+***** T23278 ^
+               D.UNITS = AST.CUR.UNITS<1,1>
+               U.O.P = 1
+***** T23278 v
+*            CASE AST.LST.PER<1,1> < FR.CURR.PER
+            CASE AST.LST.PER<1,1> < FR.CURR.PER<1,POS>
+***** T23278 ^
+               RELEASE ASSETS, AST.ID
+               GOTO 999
+            CASE AST.DEPR.METHOD<1,1> = "M"
+               IF NO.MAN.DEPR THEN
+                  MAN.ERROR = 1
+                  MAT PRR.REC = ""
+                  PRR.FILE = "ASSETS"
+                  PRR.ERR = "Manual Depreciation was not updated"
+                  PRR.ID = AST.NO
+                  PRR.SEQ = PRR.SEQ + 1
+                  MATWRITE PRR.REC ON POST.REJECTS, PRR.SEQ
+                  RELEASE ASSETS, AST.ID
+                  GOTO 999
+               END
+***** T23278 v
+*               D.DATE = MDC.CUR.DATE
+               D.DATE = MDC.CUR.DATE<1,POS>
+***** T23278 ^
+               D.UNITS = ""
+            CASE 1
+               D.DATE = ""
+               D.UNITS = ""
+         END CASE
+         ADR.ID = AST.ID : "B" : CUR.YR
+         MATREAD ADR.REC FROM ASSETS.DEPR, ADR.ID ELSE
+            MAT PRR.REC = ""
+            PRR.FILE = "ASSETS"
+            PRR.ERR = "Cannot locate the depreciation amounts"
+            PRR.ID = AST.NO
+            PRR.SEQ = PRR.SEQ + 1
+            MATWRITE PRR.REC ON POST.REJECTS, PRR.SEQ
+            RELEASE ASSETS, AST.ID
+            GOTO 999
+         END
+         MATREAD DEPR.REC FROM DEP.MAST, CONO:AST.DEPR.METHOD<1,1> ELSE
+            MAT DEPR.REC = ""
+            DEPR.ACQ.PER = P.Y
+            DEPR.SVC.PER = P.Y
+            DEPR.DSP.PER = P.Y
+         END
+         BEGIN CASE
+            CASE AST.FST.PER<1,1>[1,4] = CUR.YR
+               V.P = DEPR.ACQ.PER
+            CASE U.O.P
+               V.P = DEPR.SVC.PER
+            CASE AST.LST.PER<1,1>[1,4] = CUR.YR
+               V.P = DEPR.DSP.PER
+            CASE 1
+               V.P = DEPR.SVC.PER
+         END CASE
+         IF V.P<1,CUR.MN> = "" THEN GOTO 999
+         DEPR.AMT = ADR.REC(CUR.MN) + ADR.REC(CUR.MN+52)
+         MN = CUR.MN - 1
+         LOOP WHILE MN > 0 AND V.P<1,MN> = "" DO
+            DEPR.AMT = ADR.REC(MN) + ADR.REC(MN+52)
+            MN = MN - 1
+         REPEAT
+         IF DEPR.AMT = 0 THEN GOTO 999
+         AST.CUR.DEPR.AMT<1,1> = DEPR.AMT
+         IF OLD.CLASS # AST.CLASS THEN
+            MATREAD CLS.REC FROM CLASS, CONO : AST.CLASS ELSE
+               MAT PRR.REC = ""
+               PRR.JOB = AST.NO
+               PRR.FILE = "CLASS"
+               PRR.ERR = "CANNOT LOCATE"
+               PRR.ID = AST.CLASS
+               PRR.SEQ = PRR.SEQ + 1
+               MATWRITE PRR.REC ON POST.REJECTS, PRR.SEQ
+               RELEASE ASSETS, AST.ID
+               GOTO 999
+            END
+            OLD.CLASS = AST.CLASS
+            OLD.CLS.DESC = CLS.DESC
+            NEW.REC = 0; NEW.PTR = 0
+         END
+         P_X  = 3 ; P_Y = 23 ; P_VALUE = "NOW PROCESSING ASSET NUMBER - ":AST.NO "L#10" ; P_OPT = "CL"
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+*
+*--- Update the FAS.EOM.TRANS file
+*
+         BEGIN CASE
+            CASE AST.DIV = ""
+               DVNO = GEN.DIV
+               DPNO = GEN.DEPT
+               CCNO = GEN.CCTR
+            CASE AST.DEPT = ""
+               DVNO = AST.DIV
+               DPNO = GEN.DEPT
+               CCNO = GEN.CCTR
+            CASE AST.CCTR = ""
+               DVNO = AST.DIV
+*T21919 v
+               DPNO = AST.DEPT[1,2]
+*T21919 ^
+               CCNO = GEN.CCTR
+            CASE 1
+               DVNO = AST.DIV
+*T21919 v
+               DPNO = AST.DEPT[1,2]
+*T21919 ^
+               CCNO = AST.CCTR
+         END CASE
+         BEGIN CASE
+            CASE AST.DEPR.EXP = FA.EXP.ACCT
+            CASE AST.DEPR.EXP # ""
+               AST.DEPR.EXP = AST.DEPR.EXP : STR("0",IN.ACCT.LEN-LEN(AST.DEPR.EXP))
+               AST.DEPR.EXP = AST.DEPR.EXP[1,IN.ACCT.LEN]
+               MATREAD COA.REC FROM COA, CONO : AST.DEPR.EXP ELSE COA.LEVEL = 0
+               FA.EXP.ACCT = AST.DEPR.EXP
+               FA.EXP.LEVEL = COA.LEVEL
+            CASE CLS.EXP.ACCT = FA.EXP.ACCT
+            CASE CLS.EXP.ACCT # ""
+               CLS.EXP.ACCT = CLS.EXP.ACCT : STR("0",IN.ACCT.LEN-LEN(CLS.EXP.ACCT))
+               CLS.EXP.ACCT = CLS.EXP.ACCT[1,IN.ACCT.LEN]
+               MATREAD COA.REC FROM COA, CONO : CLS.EXP.ACCT ELSE COA.LEVEL = 0
+               FA.EXP.ACCT = CLS.EXP.ACCT
+               FA.EXP.LEVEL = COA.LEVEL
+            CASE GLTB.DEPR.EXP = FA.EXP.ACCT
+            CASE 1
+               MATREAD COA.REC FROM COA, CONO : GLTB.DEPR.EXP ELSE COA.LEVEL = 0
+               FA.EXP.ACCT = GLTB.DEPR.EXP
+               FA.EXP.LEVEL = COA.LEVEL
+         END CASE
+         BEGIN CASE
+            CASE FA.EXP.LEVEL < 1
+               T.ACCT = GEN.DIV : GEN.DEPT : GEN.CCTR : FA.EXP.ACCT
+            CASE FA.EXP.LEVEL < 2
+               T.ACCT = DVNO : GEN.DEPT : GEN.CCTR : FA.EXP.ACCT
+            CASE FA.EXP.LEVEL < 3
+               T.ACCT = DVNO : DPNO : GEN.CCTR : FA.EXP.ACCT
+            CASE 1
+               T.ACCT = DVNO : DPNO : CCNO : FA.EXP.ACCT
+         END CASE
+         GOSUB 1000
+         BEGIN CASE
+            CASE AST.DEPR.ALLOW = FA.ALW.ACCT
+            CASE AST.DEPR.ALLOW # ""
+               AST.DEPR.ALLOW = AST.DEPR.ALLOW : STR("0",IN.ACCT.LEN-LEN(AST.DEPR.ALLOW))
+               AST.DEPR.ALLOW = AST.DEPR.ALLOW[1,IN.ACCT.LEN]
+               MATREAD COA.REC FROM COA, CONO : AST.DEPR.ALLOW ELSE COA.LEVEL = 0
+               FA.ALW.ACCT = AST.DEPR.ALLOW
+               FA.ALW.LEVEL = COA.LEVEL
+            CASE CLS.ALW.ACCT = FA.ALW.ACCT
+            CASE CLS.ALW.ACCT # ""
+               CLS.ALW.ACCT = CLS.ALW.ACCT : STR("0",IN.ACCT.LEN-LEN(CLS.ALW.ACCT))
+               CLS.ALW.ACCT = CLS.ALW.ACCT[1,IN.ACCT.LEN]
+               MATREAD COA.REC FROM COA, CONO : CLS.ALW.ACCT ELSE COA.LEVEL = 0
+               FA.ALW.ACCT = CLS.ALW.ACCT
+               FA.ALW.LEVEL = COA.LEVEL
+            CASE GLTB.DEPR.ALLOW = FA.ALW.ACCT
+            CASE 1
+               MATREAD COA.REC FROM COA, CONO : GLTB.DEPR.ALLOW ELSE COA.LEVEL = 0
+               FA.ALW.ACCT = GLTB.DEPR.ALLOW
+               FA.ALW.LEVEL = COA.LEVEL
+         END CASE
+         BEGIN CASE
+            CASE FA.ALW.LEVEL < 1
+               T.ACCT = GEN.DIV : GEN.DEPT : GEN.CCTR : FA.ALW.ACCT
+            CASE FA.ALW.LEVEL < 2
+               T.ACCT = DVNO : GEN.DEPT : GEN.CCTR : FA.ALW.ACCT
+            CASE FA.ALW.LEVEL < 3
+               T.ACCT = DVNO : DPNO : GEN.CCTR : FA.ALW.ACCT
+            CASE 1
+               T.ACCT = DVNO : DPNO : CCNO : FA.ALW.ACCT
+         END CASE
+         GOSUB 2000
+         IF NEW.PTR THEN
+            NEW.REC = NEW.REC + 1
+            NEW.PTR = 0
+         END
+         MATWRITE AST.REC ON ASSETS, AST.ID
+999   REPEAT
+      IF UOP.ERROR THEN
+***** T23278 v
+*         IF UDC.CUR.PER = FR.CURR.PER THEN
+         IF UDC.CUR.PER<1,POS> = FR.CURR.PER<1,POS> THEN
+***** T23278 ^
+            ERRMSG = "Must print the Units Of Production report before End Of Period"
+         END ELSE
+            ERRMSG = "Must execute the Units Of Production process before End Of Period"
+         END
+         GOSUB 91000
+***** T23278 v
+*         UDC.EOM.PER = ""
+         UDC.EOM.PER<1,POS> = ""
+***** T23278 ^
+      END ELSE
+***** T23278 v
+*         UDC.EOM.PER = FR.CURR.PER
+         UDC.EOM.PER<1,POS> = FR.CURR.PER<1,POS>
+***** T23278 ^
+      END
+      MATWRITE UOP.DEPR.CTL ON CONTROL, CONO:"UOP.DEPR"
+      IF MAN.ERROR THEN
+***** T23278 v
+*         IF MDC.CUR.PER = FR.CURR.PER THEN
+         IF MDC.CUR.PER<1,POS> = FR.CURR.PER<1,POS> THEN
+***** T23278 ^
+            ERRMSG = "Must print the Manual Depreciation report before End Of Period"
+         END ELSE
+            ERRMSG = "Must execute the Manual Depreciation process before End Of Period"
+         END
+         GOSUB 91000
+***** T23278 v
+*         MDC.EOM.PER = ""
+         MDC.EOM.PER<1,POS> = ""
+***** T23278 ^
+      END ELSE
+***** T23278 v
+*         MDC.EOM.PER = FR.CURR.PER
+         MDC.EOM.PER<1,POS> = FR.CURR.PER<1,POS>
+***** T23278 ^
+      END
+      MATWRITE MAN.DEPR.CTL ON CONTROL, CONO:"MANUAL.DEPR"
+      ECD.ACTION = 99 ; CALL SCRN.EDIT
+      GOTO 99999
+1000  BEGIN CASE
+         CASE DEPR.AMT > 0
+            ETR.ID = CONO : T.ACCT : OLD.CLASS : "!D*" : NEW.REC
+         CASE DEPR.AMT + 0 < 0
+            ETR.ID = CONO : T.ACCT : OLD.CLASS : "!C*" : NEW.REC
+         CASE 1
+            GOTO 1999
+      END CASE
+      MATREAD ETR.REC FROM EOM.TRANS, ETR.ID ELSE
+         MAT ETR.REC = ""
+      END
+      ETR.AMT = ETR.AMT + DEPR.AMT
+      LOCATE AST.NO IN ETR.TRAN<1>,1 BY "AR" SETTING PTR ELSE NULL
+      INS AST.NO BEFORE ETR.TRAN<1,PTR>
+      INS D.DATE BEFORE ETR.DATE<1,PTR>
+      INS DEPR.AMT BEFORE ETR.TAMT<1,PTR>
+      INS D.UNITS BEFORE ETR.REF<1,PTR>
+      ETR.RDATE = OLD.CLS.DESC
+      IF PTR > 99 THEN NEW.PTR = 1
+      MATWRITE ETR.REC ON EOM.TRANS, ETR.ID
+1999  RETURN
+2000  BEGIN CASE
+         CASE DEPR.AMT > 0
+            ETR.ID = CONO : T.ACCT : OLD.CLASS : "!C*" : NEW.REC
+         CASE DEPR.AMT + 0 < 0
+            ETR.ID = CONO : T.ACCT : OLD.CLASS : "!D*" : NEW.REC
+         CASE 1
+            GOTO 2999
+      END CASE
+      MATREAD ETR.REC FROM EOM.TRANS, ETR.ID ELSE
+         MAT ETR.REC = ""
+      END
+      ETR.AMT = ETR.AMT - DEPR.AMT
+      LOCATE AST.NO IN ETR.TRAN<1>,1 BY "AR" SETTING PTR ELSE NULL
+      INS AST.NO BEFORE ETR.TRAN<1,PTR>
+      INS D.DATE BEFORE ETR.DATE<1,PTR>
+      INS (0 - DEPR.AMT) BEFORE ETR.TAMT<1,PTR>
+      INS D.UNITS BEFORE ETR.REF<1,PTR>
+      ETR.RDATE = OLD.CLS.DESC
+      IF PTR > 99 THEN NEW.PTR = 1
+      MATWRITE ETR.REC ON EOM.TRANS, ETR.ID
+2999  RETURN
+91000 ERR.TYPE = 1
+      CALL SYSCOM(MAT SYSCOM.REC)
+      RETURN
+93000 ERR.TYPE = 3; CALL SYSCOM(MAT SYSCOM.REC)
+99000 *
+***** T23278 v
+* IF FR.NEXT.PER = "" THEN
+ IF FR.NEXT.PER<1,POS> = "" THEN
+***** T23278 ^
+         INBUFF<5> = "END"
+         PROCWRITE INBUFF
+      END
+*** END OF JOB ***
+99999 END

@@ -1,0 +1,227 @@
+SUBROUTINE QTY_CHANGE_SUB(CONO,PO.CODE,MAT IWH.REC,MAT INV.REC,MAT PO.REC,DEPL.METHOD,RECP.NO,DATE,PERIOD,DIFF.QTY,PRICE,TYPE,ERRMSG,RET.ARR,ID)
+*********************************************************************
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - EPRIMAC
+* SOURCE      - ICSBP
+* PROGRAM     - QTY_CHANGE_SUB
+* BY          - KHAJA ZIAUDDIN
+* DATE        - 06/16/2003  (mm/dd/yyyy)
+* DESCRIPTION
+* CALL ICS.IWH.SUB SUBROUTINE WITH ACTION 1 BEFORE CALLING THIS SUB.
+* upon all receipts for this product as stored in the FIFO buckets.
+*
+*T27801 lross 12/05/2003 * Error in postive FNGD adjusts. Also
+*                          incomplete code for reduction of raw matl
+*                          using 'AC' depl method.---REV12 CHANGE
+*T27801 Faheem 03/10/05 
+* 
+*ENDDOC
+*********************************************************************
+
+
+$INCLUDE WWINSERT RBO.H
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE PMC.CPYLIB PO
+$INCLUDE ICS.CPYLIB INV.WHSE
+$INCLUDE CPYLIB CHAR
+
+
+OPEN "","CONTROL" TO CONTROL ELSE
+   ERRMSG = "CANNOT OPEN CONTROL FILE";GOTO 93000
+END
+OPEN "","PO" TO PO ELSE
+   ERRMSG = "CANNOT OPEN PO FILE"; GOTO 93000
+END
+OPEN "","INVENTORY" TO INVENTORY ELSE
+   ERRMSG = "CANNOT OPEN INVENTORY FILE";GOTO 93000
+END
+OPEN "","INV.WHSE" TO INV.WHSE ELSE
+   ERRMSG = "INV.WHSE IS MISSING"; GOTO 93000 
+END
+
+
+*
+
+RET.ARR = ""
+IF DATE='' THEN DATE=DATE()
+*
+ERRMSG = ''
+TOT.COST = 0
+TRANS.COST = ""
+TRANS.UN.PRICE = ""
+TRANS.QTY = ""
+*
+*MATREAD IWH.REC FROM INV.WHSE,ID THEN
+ *  WRITE PO.CODE ON CONTROL,"ID" 
+*END
+BEGIN CASE
+  CASE DIFF.QTY > 0
+    IF TYPE='R' THEN
+      PTR=DCOUNT(IWH.RECV.FI,@VM)+1
+    END ELSE
+      PTR = 1
+    END
+
+
+  
+    LOOP
+*      LOCATE DATE IN IWH.RECV.FI<1>,PTR SETTING FND ELSE
+*        IWH.RECV.FI<1,FND> = DATE
+*        IWH.PO.NO.FI<1,FND> = PO.CODE
+*        IWH.VDR.FI<1,FND> = PO.VEND.NO
+*        IWH.QTY.FI<1,FND> = 0
+*        IWH.ORG.FI<1,FND> = 0
+*        IWH.RSV.FI<1,FND> = 0
+*        IWH.COST.FI<1,FND> = PRICE
+*      END
+*T27801 v
+            IF INV.M.LINE # 'FNGD' OR TYPE = 'R' OR RECP.NO = '' THEN
+
+               LOCATE DATE IN IWH.RECV.FI<1>,PTR SETTING FND ELSE
+ 
+                  IWH.RECV.FI<1,FND> = DATE
+                  IWH.PO.NO.FI<1,FND> = PO.CODE
+                  IWH.VDR.FI<1,FND> = PO.VEND.NO
+                  IWH.QTY.FI<1,FND> = 0
+                  IWH.ORG.FI<1,FND> = 0
+                  IWH.RSV.FI<1,FND> = 0
+                  IWH.COST.FI<1,FND> = PRICE
+               END
+
+            END ELSE
+               LOCATE RECP.NO IN IWH.RECP.NO<1>,PTR SETTING FND ELSE
+                  ERRMSG = 'Cannot locate Receipt ':RECP.NO:' in INV.WHSE record.'
+                  PTR = 0
+                  EXIT
+               END
+            END
+*T27801 ^
+      BEGIN CASE
+        CASE PRICE # IWH.COST.FI<1,FND>
+          PTR = FND + 1
+        CASE PO.VEND.NO # IWH.VDR.FI<1,FND>
+          PTR = FND + 1
+        CASE PO.CODE # IWH.PO.NO.FI<1,FND>
+          PTR = FND + 1
+*        CASE TYPE='R'
+*          IF IWH.RECP.PERIOD<1,FND> # '' THEN
+*            IF IWH.RECP.PERIOD<1,FND>#PERIOD THEN
+*            PTR=FND+1
+*            END ELSE
+*              PTR=0
+*            END
+*          END ELSE
+*            PTR=0
+*          END
+        CASE 1
+          PTR = 0
+      END CASE
+    WHILE PTR DO REPEAT
+  IF ERRMSG = '' THEN ;*T27801
+    IWH.QTY.FI<1,FND> = IWH.QTY.FI<1,FND> + DIFF.QTY
+    IWH.ORG.FI<1,FND> = IWH.ORG.FI<1,FND> + DIFF.QTY
+    IWH.RSV.FI<1,FND> = IWH.RSV.FI<1,FND> + DIFF.QTY
+**STATUS = RBO.setProperty('','testProp',"From qtyChang 33 ":IWH.RSV.FI<1,FND> )
+    TOT.COST = (IWH.COST.FI<1,FND>/10000)*(DIFF.QTY/10)
+    TOT.COST = TOT.COST/(INV.COST.WT/100)
+    TOT.COST = INT(TOT.COST+.5)
+    TP = DCOUNT(TRANS.COST,@VM)+1
+    TMP = ((IWH.COST.FI<1,FND>/10000)*(DIFF.QTY/10))
+    TMP = TMP/(INV.COST.WT/100)
+    TRANS.COST<1,TP>  =  INT(TMP+.5)
+    TRANS.UN.PRICE<1,TP> = IWH.COST.FI<1,FND>
+    TRANS.QTY<1,TP> = DIFF.QTY
+    RET.ARR<1>=TOT.COST
+    RET.ARR<2>=TRANS.COST
+    RET.ARR<3>=TRANS.UN.PRICE
+    RET.ARR<3>=TRANS.QTY
+  END
+*T27801 ^
+  CASE DIFF.QTY < 0
+*STATUS = RBO.setProperty('','testProp',"From qtyChang ":DIFF.QTY: " IWH.RESV : ":IWH.RESV :"IWH.ON.HAND: ":IWH.ON.HAND)
+ 
+   IF IWH.ON.HAND + DIFF.QTY < IWH.RESV THEN
+      ERRMSG = 'NOT ENOUGH NET AVAILABLE QTY'
+    END ELSE
+      BEGIN CASE
+        CASE DEPL.METHOD = "FI"
+          SUB.QTY = 0-DIFF.QTY
+          QCNT = DCOUNT(IWH.QTY.FI,@VM)
+	*STATUS = RBO.setProperty('','xy',"PERIOD " : PERIOD)
+	*RETURN
+          FOR Q = 1 TO QCNT WHILE SUB.QTY <> 0
+            IF PERIOD>=IWH.RECP.PERIOD<1,Q> THEN
+              BEGIN CASE
+                CASE IWH.RSV.FI<1,Q> = 0
+                CASE SUB.QTY > IWH.RSV.FI<1,Q>
+                  TP = DCOUNT(TRANS.COST,@VM)+1
+                  TOT.COST -=(IWH.COST.FI<1,Q>/10000)*((IWH.RSV.FI<1,Q>/10)/(INV.COST.WT/100))
+                  TMP = 0-INT((IWH.COST.FI<1,Q>/10000)*((IWH.RSV.FI<1,Q>/10)/(INV.COST.WT/100))+.5)
+                  TRANS.COST<1,TP> = TMP
+                  TRANS.UN.PRICE<1,TP> = IWH.COST.FI<1,Q>
+                  TRANS.QTY<1,TP> = 0-IWH.RSV.FI<1,Q>
+                  SUB.QTY = SUB.QTY-IWH.RSV.FI<1,Q>
+                  IWH.QTY.FI<1,Q> = IWH.QTY.FI<1,Q>-IWH.RSV.FI<1,Q>
+                  IWH.RSV.FI<1,Q> = 0
+                CASE 1
+                  TP = DCOUNT(TRANS.COST,@VM)+1
+                  TOT.COST -=(IWH.COST.FI<1,Q>/10000)*((SUB.QTY/10)/(INV.COST.WT/100))
+                  TMP = 0-INT((IWH.COST.FI<1,Q>/10000)*((SUB.QTY/10)/(INV.COST.WT/100))+.5)
+                  TRANS.COST<1,TP> = TMP
+                  TRANS.UN.PRICE<1,TP> = IWH.COST.FI<1,Q>
+                  TRANS.QTY<1,TP> = 0-SUB.QTY
+                  IWH.RSV.FI<1,Q> = IWH.RSV.FI<1,Q>-SUB.QTY
+                  IWH.QTY.FI<1,Q> = IWH.QTY.FI<1,Q>-SUB.QTY
+                  SUB.QTY = 0
+              END CASE
+            END
+          NEXT Q
+          IF SUB.QTY <> 0 THEN
+            ERRMSG = 'NOT ENOUGH NET AVAILABLE FI QTY. QTY IS EITHER RESERVED OR POSTED TO A FUTURE PERIOD.'
+          END ELSE
+            TOT.COST=INT(TOT.COST+.5)
+            RET.ARR<1>=TOT.COST     
+            RET.ARR<2>=TRANS.COST   
+            RET.ARR<3>=TRANS.UN.PRICE
+            RET.ARR<3>=TRANS.QTY     
+          END
+        CASE DEPL.METHOD='AC'
+
+          LOCATE RECP.NO IN IWH.RECP.NO<1> SETTING RPOS THEN
+
+            IF PERIOD<IWH.RECP.PERIOD<1,RPOS> THEN
+              ERRMSG='QTY. IS POST POSTED TO A FUTURE PERIOD.'
+            END ELSE
+              IF ABS(DIFF.QTY)>IWH.RSV.FI<1,RPOS> THEN
+                ERRMSG='NOT ENOUGH AVAILABLE QTY'
+              END ELSE
+*T27653 v                  TOT.COST=IWH.COST.FI<1,RPOS>
+                           TOT.COST = INT((IWH.COST.FI<1,RPOS>/10000)*((DIFF.QTY/10)/(INV.COST.WT/100)) - .5)
+*T27801 v
+                           IWH.RSV.FI<1,RPOS> += DIFF.QTY
+                           IWH.QTY.FI<1,RPOS> += DIFF.QTY
+                           RET.ARR<1>=TOT.COST     
+                           RET.ARR<2>=TOT.COST   
+                           RET.ARR<3>=IWH.COST.FI<1,RPOS>
+                           RET.ARR<4>=DIFF.QTY     
+*T27801 ^
+              END
+            END
+          END ELSE
+
+            ERRMSG='CANNOT LOCATE AVAILABLE QTY. FOR ': RECP.NO
+          END
+      END CASE
+    END
+END CASE
+
+RETURN
+
+93000
+   STATUS = RBO.setProperty('','ServerStatus',1)
+STATUS = RBO.setProperty('','ServerMessage',HERRMSG )
+RETURN
+
+
+
+

@@ -1,0 +1,124 @@
+SUBROUTINE JCS_GETJOBMATERIAL(CONO, JOBID,FLAG,ERRMSG, STRXML)
+STRXML='<Job><ProductId></ProductId><ProductDescription></ProductDescription><WarehouseId></WarehouseId><Type></Type><ReservedDate></ReservedDate><UnitOfMeasurement></UnitOfMeasurement><AllocatedQuantity></AllocatedQuantity><ReservedQuantity></ReservedQuantity><UsedQuantity></UsedQuantity><RequiredDate></RequiredDate><UnitPrice></UnitPrice><RequiredQuantity></RequiredQuantity><Balance></Balance></Job>'
+FLAG="1"
+$INCLUDE JCS.CPYLIB JOB
+$INCLUDE PMC.CPYLIB CUSTOMER
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB INV.CNV
+$INCLUDE ICS.CPYLIB INV.JOB.STATS
+*IF CONO = "" THEN
+*  ERRMSG = "COMPANY NUMBER CANNOT BE BLANK"; GOSUB 9999
+*  RETURN
+*END
+*IF JOBID = "" THEN
+*  ERRMSG = "JOBID CANNOT BE BLANK"
+*  RETURN
+*END
+OPEN '','JOB' TO JOB ELSE
+  ERRMSG = 'CANNOT OPEN JOB FILE'  
+  GOTO 99999 
+END
+OPEN '','CUSTOMER' TO CUSTOMER ELSE
+  ERRMSG = 'CANNOT OPEN CUSTOMER FILE'  
+  GOTO 99999  
+END
+OPEN '','INVENTORY' TO INVENTORY ELSE
+  ERRMSG = 'CANNOT OPEN INVENTORY FILE' 
+  GOTO 99999 
+END
+OPEN '','INV.JOB.STATS' TO INV.JOB.STATS ELSE
+  ERRMSG = 'CANNOT OPEN INV.JOB.STATS FILE'  
+  GOTO 99999  
+END
+*
+* INITIALIZE VARIABLE
+*
+JOB_TYPE=""
+C=""
+*
+* MAIN PROCESSING
+*
+MATREAD JOB.REC FROM JOB, CONO:JOBID THEN
+          FLAG="0"
+           ERRMSG=""
+           CNT=DCOUNT(JOB.RESV.MATL,@VM)	    
+	   IF CNT > 0 THEN
+           FOR C = 1 TO CNT
+	        BALANCE=0
+               	MAT INV.REC=""
+                MATREAD INV.REC FROM INVENTORY, CONO:JOB.RESV.MATL<1,C> ELSE
+                           ERRMSG = 'PRODUCT NUMBER ':JOB.RESV.MATL<1,C>:' IS MISSING'; GOSUB 99999
+                END 
+		REQD=JOB.RESV.QTY<1,C>
+		$INCLUDE ICSBP INV.UM.CNV
+		ECD.SCALER = "MD0"
+		ECD.SCALER = ICR.CNV1
+		IF C = 1 THEN
+		  STRXML = '<Job>'
+		END ELSE
+                  STRXML := '<Job>'
+		END
+                STRXML := '<ProductId>' : JOB.RESV.MATL<1,C> : '</ProductId>'
+                STRXML := '<ProductDescription>' : INV.FULL.DESC : '</ProductDescription>'
+                STRXML := '<WarehouseId>' : JOB.RESV.WHSE<1,C>  : '</WarehouseId>'
+                STRXML := '<Type>' : INV.PAP.TYPE : '</Type>'
+		STRXML := '<ReservedDate>' : OCONV(JOB.RESV.DATE<1,C>,"D4/") : '</ReservedDate>'	
+	        STRXML := '<UnitOfMeasurement>' : INV.UNIT<1,2> : '</UnitOfMeasurement>'
+		GOSUB 7000
+                STRXML := '<AllocatedQuantity>' : OCONV(JOB.ALOC.QTY<1,C>,ECD.SCALER)"R#11"  : '</AllocatedQuantity>'
+                STRXML := '<ReservedQuantity>' : OCONV(JOB.RESV.QTY<1,C>,ECD.SCALER)"R#11"  : '</ReservedQuantity>'
+                STRXML := '<UsedQuantity>' : OCONV(JOB.USED.QTY<1,C>,ECD.SCALER)"R#11"  : '</UsedQuantity>'
+*Material Requirement data
+		JSTAT.ID = JOB.RESV.MATL<1,C>:"!":JOB.RESV.WHSE<1,C>:"!":JOBID
+                MATREAD INV.JS.REC FROM INV.JOB.STATS,CONO:JSTAT.ID ELSE
+                     MAT INV.JS.REC = ''
+                END
+		STRXML := '<RequiredDate>' : OCONV(IJS.REQ.DATE<1,1>,"D4/")  : '</RequiredDate>'
+                STRXML := '<UnitPrice>' : OCONV(IJS.REQ.AMT,"MD4") : '</UnitPrice>'
+		REQDQ = INT(((IJS.REQ.QTY/ICR.DV1)*ICR.MT1)/ICR.DV2 + .5)
+		STRXML := '<RequiredQuantity>' : OCONV(REQDQ,ICR.CNV)"R#11" : '</RequiredQuantity>'		
+		BALANCE = IJS.REQ.QTY - JOB.ALOC.QTY<1,C>-REQD-JOB.USED.QTY<1,C>
+		IF BALANCE >= 0 THEN
+                     BALANCE = INT(((BALANCE/ICR.DV1)*ICR.MT1)/ICR.DV2 + .5)
+		     BALANCE = OCONV(BALANCE,ICR.CNV)
+                END ELSE
+                     BALANCE = 0
+                         BALANCE = INT(((BALANCE/ICR.DV1)*ICR.MT1)/ICR.DV2 - .5)
+		     BALANCE = OCONV(BALANCE,ICR.CNV)
+                END
+		STRXML := '<Balance>' : BALANCE"R#11" : '</Balance>'
+	        STRXML := '</Job>' 
+            NEXT C
+	    END
+END
+RETURN
+*
+*
+* CONVERSION CODE
+*
+7000 *
+         IF JOB.ALOC.QTY<1,C> < 0 THEN
+               JOB.ALOC.QTY<1,C>=INT(((JOB.ALOC.QTY<1,C>/ICR.DV1)*ICR.MT1)/ICR.DV2-.5)
+         END ELSE
+               JOB.ALOC.AMT<1,C>=INT(((JOB.ALOC.AMT<1,C>/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+         END
+	 IF JOB.RESV.QTY<1,C> < 0 THEN
+               JOB.RESV.QTY<1,C>=INT(((JOB.RESV.QTY<1,C>/ICR.DV1)*ICR.MT1)/ICR.DV2-.5)
+         END ELSE
+               JOB.RESV.QTY<1,C>=INT(((JOB.RESV.QTY<1,C>/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+         END
+	 IF JOB.USED.QTY<1,C> < 0 THEN
+               JOB.USED.QTY<1,C>=INT(((JOB.USED.QTY<1,C>/ICR.DV1)*ICR.MT1)/ICR.DV2-.5)
+         END ELSE
+               JOB.USED.QTY<1,C>=INT(((JOB.USED.QTY<1,C>/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+         END	
+    RETURN
+*
+* WRITE ERROR MESSAGE
+*
+99999*
+      IF ERRMSG <> "" THEN
+      ERRMSG = "ERROR FROM JCS_GETJOBMATERIAL --> " : ERRMSG
+      CALL WRITELOG(ERRMSG)
+      END
+   RETURN

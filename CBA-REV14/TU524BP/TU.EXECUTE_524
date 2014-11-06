@@ -1,0 +1,238 @@
+SUBROUTINE TU.EXECUTE_524(VERB, TYPE, OPTIONS, DTA, F.VAR, CAPT, ERNO, SELVAR, ITEMCNT)
+*
+** SBClient Host 3GL API
+** Copyright (C) Ardent Software Inc. 1998
+** Copyright (C) UniData, Inc. 1996, 1997
+** Copyright (C) System Builder Corporation. 1995
+**
+**      This software is the proprietary property and contains
+**      trade secrets of Ardent Software, Inc. Any unauthorized use,
+**      disclosure or duplication is strictly prohibited.
+**      All rights reserved.
+*
+***************************************************************************
+* This subroutine is called from the SBClient 3GL Host API whenever an    *
+* EXECUTE is performed. It is designed to make SBClient more portable in  *
+* this area.                                                              *
+*                                                                         *
+* Passed...                                                               *
+*                                                                         *
+*  VERB   : Verb to be executed                                           *
+*                                                                         *
+*  TYPE   :  1 - Standard execute (EXECUTE VERB)                          *
+*            6 - Select VERB returning ITEMCNT leaving SYSTEM(11) active  *
+*            7 - Execute VERB - preserving DATA stack                     *
+*            8 - Select VERB returning ITEMCNT and SELVAR                 *
+*           20 - Execute OE command (VERB)                                *
+*           10 - Execute VERB - perserving named COMMON                   *
+*           50 - SELECT TO SELVAR                                         *
+*           51 - SELECT F.VAR TO SELVAR                                   *
+*           52 - IF SYSTEM(11) THEN SELECT TO SELVAR                      *
+*           53 - IF SYSTEM(11) THEN SELECT TO SELVAR ELSE SELVAR = ''     *
+*           54 - SELVAR = ''                                              *
+*                                                                         *
+*  OPTIONS: D - Execute VERB after DATA                                   *
+*           C - Execute VERB capturing CAPT                               *
+*           E - Execute VERB returning ERNO                               *
+*                                                                         *
+*  DTA    : Data for DATA statement (delimited by AM)                     *
+*                                                                         *
+*  F.VAR  : File to select (type 51)                                      *
+*                                                                         *
+* Returned...                                                             *
+*                                                                         *
+*  CAPT   : Capture output of verb                                        *
+*                                                                         *
+*  ERNO   : Return error number                                           *
+*                                                                         *
+*  SELVAR : Select handle                                                 *
+*                                                                         *
+*  ITEMCNT: Number of items selected; returned for types: 6, 52 & 53      *
+*           except for UniVerse, Prime & Unidata only when capturing CAPT *
+*                                                                         *
+***************************************************************************
+ INCLUDE TU524BP TU.API.H
+ INCLUDE TU524BP SPECIAL.H
+EQU FALSE TO 0, TRUE TO 1, DQUOTE TO '"'
+*
+OPTIONS = OCONV(OPTIONS,'MCU')
+DTA.FLG = (INDEX(OPTIONS,'D',1) # 0)
+CAPT.FLG = (INDEX(OPTIONS,'C',1) # 0)
+ERR.FLG = (INDEX(OPTIONS,'E',1) # 0)
+SQLATOR.FILE = FALSE
+*
+SEL.FLG = (TYPE > 49); OTHER = ''; DEBUGMODE = FALSE
+FILENAME = FIELD(VERB, " ", 2); !*UDT*!
+OPEN '','VOC' TO F.VOC ELSE RETURN; !*UDT*!
+READ DREC FROM F.VOC, FILENAME ELSE DREC = ''; !*UDT*!
+IF DREC<1> = "FX" THEN SQLATOR.FILE = TRUE; !*UDT*!
+*
+IF DEBUGMODE THEN
+CRT 'VERB:- ':VERB
+CRT 'TYPE:- ':TYPE
+CRT 'OPTIONS:- ':OPTIONS
+CRT 'DATA:- ':DTA
+END
+*
+BEGIN CASE
+CASE TYPE = 1; GOSUB 100; * Execute VERB
+CASE TYPE = 6; GOSUB 600; * Select VERB returning ITEMCNT
+CASE TYPE = 7; GOSUB 700; * Execute VERB preserving DATA stack
+CASE TYPE = 8; GOSUB 800; * Select VERB returning ITEMCNT and SELVAR
+CASE TYPE = 20; GOSUB 2000; * Execute OE command (VERB)
+CASE TYPE = 50; GOSUB 5000; * SELECT TO SELVAR
+CASE TYPE = 51; GOSUB 5100; * SELECT F.VAR TO SELVAR
+CASE TYPE = 52; GOSUB 5200; * IF SYS(11) THEN SELECT TO SELVAR
+CASE TYPE = 53; GOSUB 5300; * IF SYS(11) THEN SELECT TO SELVAR ELSE SELVAR = ''
+CASE TYPE = 54; GOSUB 5400; * SELVAR = ''
+END CASE
+*
+RETURN
+*********************************************************
+* Execute VERB
+*********************************************************
+100 *
+!@! INCLUDE TU524BP ULT.TU.EXECUTE.H ; !*ULT*!
+ INCLUDE TU524BP TU.EXECUTE.INC1.H
+*-* Get number of items
+ITEMCNT = ""
+!@!EXT.SEL = FALSE ; !*UV,ULT,MRX*!
+IF SEL.FLG THEN
+!@! INCLUDE TU524BP UV.TU.EXECUTE.ITEMCNT.H ; !*UV,UP*!
+ INCLUDE TU524BP UDT.TU.EXECUTE.ITEMCNT.H
+!@! INCLUDE TU524BP PR1ME.TU.EXECUTE.ITEMCNT.H ; !*PR1ME,PI/O*!
+ INCLUDE TU524BP TU.EXECUTE.ITEMCNT.H
+END
+!@!IF DTA.FLG THEN VERB = SAVE.VERB ; !*PR1ME*!
+!@!IF DTA > '' THEN ; !*ADDS*!
+!@!DTA = '' ; !*ADDS*!
+!@!DELETE F.MD,'$LIST':PORTNO ; !*ADDS*!
+!@!END ; !*ADDS*!
+RETURN
+*********************************************************
+* Select VERB returning ITEMCNT leaving SYSTEM(11) active
+*********************************************************
+600 *
+CAPT.FLG = TRUE
+SEL.FLG = TRUE
+!@!EXT.SEL = TRUE ; !*UV,ULT,MRX*!
+GOSUB 100; * execute
+RETURN
+*********************************************************
+* Execute VERB - preserving DATA stack
+*********************************************************
+700 *
+DATA.PTR = 0; SAVE.DATA = ''; * Save DATA stack
+LOOP WHILE SYSTEM(10) DO
+INPUT Z:
+DATA.PTR = DATA.PTR+1
+SAVE.DATA<DATA.PTR> = Z
+REPEAT
+!@!EXT.SEL = TRUE ; !*UV,ULT,MRX*!
+GOSUB 100; * execute
+IF DATA.PTR THEN; * Restore DATA stack
+FOR Z = 1 TO DATA.PTR
+DATA SAVE.DATA<Z>
+NEXT Z
+END
+RETURN
+*********************************************************
+* Select VERB returning ITEMCNT and SELVAR
+*********************************************************
+800 *
+CAPT.FLG = TRUE
+SEL.FLG = TRUE
+!@!EXT.SEL = TRUE ; !*UV,ULT,MRX*!
+GOSUB 100; * execute
+GOSUB 5000; * select to selvar
+RETURN
+*********************************************************
+* Execute OE command (VERB)
+*********************************************************
+2000 *
+*-* Unidata, AP, PI/O
+VERB = '! ':VERB; !*UDT,UDTVMS,AP,PI/O*!
+*-* UniVerse
+!@!VERB = 'SH -c ':DQUOTE:VERB:DQUOTE ; !*UV,UP*!
+*-* Prime
+!@!VERB = 'OK, ':VERB ; !*PR1ME*!
+GOSUB 100; * execute
+RETURN
+*********************************************************
+* SELECT TO SELVAR
+*********************************************************
+5000 *
+!@!SELECT TO SELVAR; !*ADDS,ALTOS,AP,SEQ,GA,PICK*!
+*-* UniVerse
+!@!SELECTE TO SELVAR; !*UV,UP*!
+*-* Prime
+!@!READLIST SELVAR FROM 0 THEN ; !*PR1ME,PI/O*!
+!@!CONVERT VM TO CHAR(249) IN SELVAR ; !*PR1ME,PI/O*!
+!@!END ELSE ; !*PR1ME,PI/O*!
+!@!SELVAR = '' ; !*PR1ME,PI/O*!
+!@!END ; !*PR1ME,PI/O*!
+*-* Unidata
+CALL TU.SELVAR.BUILD_524(F.VAR,SELVAR,2) ; !*UDT,UDTVMS*!
+IF SELVAR = '' THEN EXECUTE 'DATE' CAPTURING JUNK ; !*UDT,UDTVMS*!
+*-* MData
+!@!WRITELIST OTHER ON "SELVAR":PORTNO ; !*MRX*!
+!@!PERFORM "WHO" RTNLIST OTHER CAPTURING JUNK ; !*MRX*!
+!@!GETLIST "SELVAR":PORTNO TO SELVAR ELSE PERFORM "WHO" RTNLIST SELVAR CAPTURING JUNK ; !*MRX*!
+*-* Ultimate
+!@!EXECUTE "SAVE-LIST SELVAR":PORTNO, //SELECT. < OTHER, //OUT. > JUNK ; !*ULT*!
+!@!EXECUTE "GET-LIST SELVAR":PORTNO, //SELECT. > SELVAR, //OUT. > JUNK ; !*ULT*!
+RETURN
+*********************************************************
+* SELECT F.VAR TO SELVAR
+*********************************************************
+5100 *
+*** R83,SBOpen,MData,Ultimate ***
+!@!SELECT F.VAR TO SELVAR; !*PI/O,PICK,AP,SEQ,ADDS,MRX,GA,ALTOS,ULT*!
+SELECT F.VAR ; !*UV,UP,PR1ME,UDT,UDTVMS*!
+GOSUB 5000 ; !*UV,UP,PR1ME,UDT,UDTVMS*!
+RETURN
+*********************************************************
+* IF SYS(11) THEN SELECT TO SELVAR
+*********************************************************
+5200 *
+IF VERB > '' THEN
+GOSUB 100; * execute
+END ELSE
+*-* UniVerse
+!@!IF SYSTEM(11) THEN GOSUB 5000 ; !*UV,UP*!
+*-* MData,Ultimate
+!@!IF OTHER > '' THEN GOSUB 5000 ; !*MRX,ULT*!
+END
+IF SYSTEM(11) THEN GOSUB 5000; !*PIO,PR1ME,UDT,UDTVMS,PICK,AP,SEQ,ADDS,GA,ALTOS*!
+RETURN
+*********************************************************
+* IF SYS(11) THEN SELECT TO SELVAR ELSE SELVAR = ''
+*********************************************************
+5300 *
+IF VERB > '' THEN
+GOSUB 100; * execute
+END ELSE
+*-* UniVerse
+!@!GOSUB 5000 ; !*UV,UP*!
+*-* MData,Ultimate
+*-*IF OTHER > '' THEN GOSUB 5000 ELSE GOSUB 5400 ??????????
+END
+IF SYSTEM(11) THEN GOSUB 5000 ELSE GOSUB 5400; !*PI/O,PR1ME,UDT,UDTVMS,PICK,AP,SEQ,ADDS,GA,ALTOS*!
+RETURN
+*********************************************************
+* SELVAR = ''
+*********************************************************
+5400 *
+SELVAR = ''; !*PI/O,PR1ME,UDT,UDTVMS,PICK,AP,SEQ,ADDS,GA,ALTOS,ULT*!
+*-* UniVerse
+!@!EXECUTE 'WHO' RTNLIST SELVAR CAPTURING JUNK ; !*UV,UP*!
+!@!READNEXT ID FROM SELVAR THEN CLEARSELECT SELVAR ; !*UV,UP*!
+*-* MData
+!@!IF SYSTEM(22)<13> < 0 THEN ; !*MRX*!
+!@!PERFORM "WHO" RTNLIST SELVAR CAPTURING JUNK ; !*MRX*!
+!@!END ELSE SELVAR = '' ; !*MRX*!
+RETURN
+*********************************************************
+*    THE END
+*********************************************************
+END

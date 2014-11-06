@@ -1,0 +1,241 @@
+*********************************************************************
+*
+* PROGRAM - COMPUTE.CHECKSUM
+*
+* AUTHOR  - NICK AMENDOLA, VERCOM SOFTWARE, INC.
+*
+* DATE    - 06/02/92
+*
+* DESCRIPTION
+*
+*   Calculate the CHECKSUM of specified item(s) in a specified file.
+*
+*     CHKSUM filename itemname (opt1,opt2)
+*     CHKSUM filename * (opt1,opt2)
+*     CHKSUM filename (opt1,opt2)
+*
+*   Options:  P = send report to printer
+*             N = do not stop after each screen displayed
+*
+*********************************************************************
+*
+*---- DEFINE EQUATES
+*
+      EQU AM  TO CHAR(254)
+      EQU VM  TO CHAR(253)
+      EQU SM  TO CHAR(252)
+*
+*---- PRE-INITIALIZATION
+*
+      PROMPT ""
+      SYSTYPE = "U"
+      BEGIN CASE
+      CASE SYSTYPE = "U"
+         PORT = @TTY
+         IND.POS = INDEX(PORT,"/",1)
+         IF IND.POS = 0 THEN
+            PORT = PORT[4,LEN(PORT)-3]
+         END ELSE
+            PORT = PORT[4,IND.POS-4]
+         END
+         ACCT = @PATH
+      CASE 1
+         PORT = SYSTEM(18)
+         ACCT = SYSTEM(19)
+      END CASE
+      PROCREAD CMD ELSE CMD = ""
+*
+      CALL PARSE.COMMAND("V",1,CMD,FACCT,FDICT,FNAME,FID,OPTS,ERRMSG)
+      IF ERRMSG # "" THEN GOTO 90000
+*
+      IF FNAME = "" THEN ERRMSG = "FILE NAME MISSING"; GOTO 90000
+      IF FACCT = "" THEN
+         FACCT = ACCT
+         OPEN FDICT,FNAME TO FVAR ELSE
+            ERRMSG = "INVALID FILE NAME"; GOTO 90000
+         END
+      END ELSE
+         BEGIN CASE
+         CASE SYSTYPE = "U"
+            OPEN "","VOC" TO MD ELSE
+               ERRMSG = "CANNOT OPEN VOC FILE"; GOTO 90000
+            END
+            BEGIN CASE
+            CASE LEN(FNAME) >= 2 AND FNAME[LEN(FNAME)-1,2] = "BP"
+               QREC = "DIR"
+            CASE LEN(FNAME) >= 6 AND FNAME[LEN(FNAME)-5,6] = "CPYLIB"
+               QREC = "DIR"
+            CASE 1
+               QREC = "F"
+            END CASE
+            QREC<2> = FACCT:"/":FNAME
+            QREC<3> = FACCT:"/D_":FNAME
+         CASE 1
+            OPEN "","MD" TO MD ELSE
+               ERRMSG = "CANNOT OPEN MASTER DICTIONARY"; GOTO 90000
+            END
+            QREC = "Q"
+            QREC<2> = FACCT
+            QREC<3> = FNAME
+         END CASE
+         QFILE = "QFILE*":PORT
+         WRITE QREC ON MD, QFILE
+         OPEN FDICT,QFILE TO FVAR THEN
+            DELETE MD, QFILE
+         END ELSE
+            DELETE MD, QFILE
+            ERRMSG = "INVALID FILE NAME"; GOTO 90000
+         END
+      END
+      BEGIN CASE
+      CASE FID = ""
+      CASE FID = "*"
+      CASE FIELD(FNAME,".",2) = "SCREENS"
+      CASE 1
+         READ REC FROM FVAR, FID ELSE
+            ERRMSG = "INVALID ITEM NAME"; GOTO 90000
+         END
+      END CASE
+*
+      PRT.FLAG = 0
+      HLT.FLAG = 1
+      OCNT = DCOUNT(OPTS,VM)
+      FOR OPTR = 1 TO OCNT
+         OPT = OPTS<1,OPTR>
+         BEGIN CASE
+         CASE OPT = "P"
+            PRT.FLAG = 1
+         CASE OPT = "N"
+            HLT.FLAG = 0
+         CASE 1
+            ERRMSG = "INVALID OPTION - ":OPT
+            GOTO 90000
+         END CASE
+      NEXT OPTR
+*
+*---- INITIALIZATION
+*
+      SLINE.COUNT = 99
+      SLINES.PER.PAGE = 22
+      SPAGE.NO = 0
+      PLINE.COUNT = 99
+      PLINES.PER.PAGE = 55
+      PPAGE.NO = 0
+      SYSDATE = OCONV(DATE(),"D2/")
+*
+*---- MAIN PROCESSING
+*
+100 *
+      BEGIN CASE
+      CASE FID = "" OR FID = "*"
+         IF FID = "*" THEN SELECT FVAR
+         PRINT "Please stand-by. Sort in progress..."
+         FIDS = ""
+         MAXL = 0
+         DONE = 0
+         LOOP
+            READNEXT FID ELSE DONE = 1
+         UNTIL DONE DO
+            IF FID[1,1] # "$" AND FID[1,1] # "_" THEN
+               LOCATE FID IN FIDS,1 BY "AL" SETTING P ELSE NULL
+               FIDS = INSERT(FIDS,P,0,0,FID)
+               IF LEN(FID) > MAXL THEN MAXL = LEN(FID)
+            END
+         REPEAT
+      CASE 1
+         FIDS = FID
+         MAXL = LEN(FID)
+      END CASE
+*
+*---- PROCESS SORTED LIST
+*
+      CRT
+      IF PRT.FLAG THEN
+         PRINTER ON
+      END
+      BRK.FLAG = 0
+      ICNT = DCOUNT(FIDS,AM)
+      FOR IPTR = 1 TO ICNT UNTIL BRK.FLAG
+         FID = FIDS<IPTR>
+         READ REC FROM FVAR, FID THEN GOSUB 1000
+         DOTS = STR(".",(MAXL+3-LEN(FID)))
+         PDATA = FID:" ":DOTS:OCONV(CSUM,"MD0,")"R#11"
+         IF (SLINE.COUNT+1) > SLINES.PER.PAGE THEN GOSUB 10000
+         CRT IPTR"R#3":SPACE(5):PDATA
+         SLINE.COUNT = SLINE.COUNT + 1
+         IF PRT.FLAG THEN
+            IF (PLINE.COUNT + 1) > PLINES.PER.PAGE THEN GOSUB 20000
+            PRINT IPTR"R#3":SPACE(5):PDATA
+            PLINE.COUNT = PLINE.COUNT + 1
+         END
+      NEXT IPTR
+      IF NOT(BRK.FLAG) THEN GOSUB 15000
+      IF PRT.FLAG THEN
+         PRINTER OFF
+         PRINTER CLOSE
+      END
+      GOTO 99999
+*
+*---- CALCULATE MODIFIED CHECKSUM
+*
+1000 *
+      CSUM = 0
+      C2 = DCOUNT(REC,AM)
+      FOR C = 1 TO C2
+         ILINE = TRIM(REC<C>)
+         IF ILINE[1,1] # "*" THEN
+            CSUM = CSUM + CHECKSUM(ILINE)
+         END
+      NEXT C
+      RETURN
+*
+*---- PRINT SCREEN HEADINGS
+*
+10000 *
+      GOSUB 15000
+      CRT @(-1):
+      SPAGE.NO = SPAGE.NO + 1
+      SLINE = "Checksum for items in ":FNAME:" on ":SYSDATE
+      SLINE = SLINE"L#60":"   Page: ":SPAGE.NO
+      CRT SLINE
+      CRT
+      SLINE.COUNT = 2
+      RETURN
+*
+*---- PRINT SCREEN FOOTING
+*
+15000 *
+      IF SPAGE.NO > 0 AND HLT.FLAG THEN
+         CRT @(0,23):@(-4):"Press <RETURN> to Continue: ":
+         INPUT REPLY,1
+         BEGIN CASE
+         CASE REPLY = CHAR(27)
+            BRK.FLAG = 1
+         CASE REPLY = "Q"
+            BRK.FLAG = 1
+         END CASE
+      END
+      RETURN
+*
+*---- PRINT PAGE HEADINGS
+*
+20000 *
+      PRINT CHAR(12)
+      PPAGE.NO = PPAGE.NO + 1
+      PLINE = "Checksum for items in ":FNAME:" on ":SYSDATE
+      PLINE = PLINE"L#60":"   Page: ":PPAGE.NO
+      PRINT PLINE
+      PRINT
+      PLINE.COUNT = 2
+      RETURN
+*
+*---- PRINT ERROR MESSAGE AND TERMINATE
+*
+90000 *
+      CRT ERRMSG
+*
+*---- END OF PROGRAM
+*
+99999 *
+      STOP
+   END

@@ -1,0 +1,234 @@
+SUBROUTINE getValidJobNo
+********************************************************************************
+*   Program name :- getValidJobNo
+*   Created:- 7/25/2003 by Zubair.S
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+*  CONO(PMCProperty),JOBNO
+*
+* Out Properties:
+* ---------------
+*   ERRMSG,JOB_STATUS_PROP(job status),CR_CUST_NAME,CR_CUST_NO
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE JCS.CPYLIB JOB
+$INCLUDE OPS.CPYLIB JOB.FNGD.STATS
+$INCLUDE PMC.CPYLIB CUSTOMER
+
+*$INCLUDE ICS.CPYLIB INVENTORY ;  * INVENTORY COPY LIB NOT INCLUDED IN PROGRAM
+
+OPEN '','JOB' TO JOB ELSE ERRMSG='JOB FILE IS MISSING';GOTO 99999
+OPEN '','JOB.FNGD.STATS' TO JOB.FNGD.STATS ELSE ERRMSG='JOB.FNGD.STATS FILE IS MISSING';GOTO 99999
+OPEN '','INVENTORY' TO INVENTORY ELSE ERRMSG='INVENTORY FILE IS MISSING';GOTO 99999
+OPEN '','CUSTOMER' TO CUSTOMER ELSE ERRMSG='CUSTOMER FILE IS MISSING';GOTO 99999
+
+JOB.MASTER=""
+
+
+DIM JOB.MAST.REC(JOB.REC.SIZE)
+DIM JOB.SUB.REC(JOB.REC.SIZE)
+OPS.FLG = 0
+
+
+* Insert method code here
+*STATUS = RBO.getProperty('','CONO',CONO)
+
+STATUS=RBO.getProperty('','PMCProperty',PMCProperty)
+CONO = PMCProperty<1,4>
+STATUS = RBO.getProperty('','JOBNO',JOB_NO)
+
+STATUS = RBO.setProperty('','ServerMessage',"")
+STATUS = RBO.setProperty('','ServerStatus',"")
+
+
+	MATREADU JOB.REC FROM JOB, CONO:JOB_NO ELSE 
+           MAT JOB.REC = ""
+           ERRMSG = JOB_NO : " IS NOT ON FILE TRY AGAIN !"
+           GOTO 99999
+       END
+
+      *DIV.CODE = JOB.DIV; USER.ID = UPCASE(@LOGNAME); ERRMSG = ''
+      *CALL CH_DIV_SEC_SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+      * IF ERRMSG # '' THEN
+      *  GOTO 99999
+      * END
+
+	IF JOB_NO # JOB.MASTER THEN
+		ERRMSG="This is a sub job. Customer must be changed using master job #:":JOB.MASTER
+		GOTO 99999
+	END	
+
+      IF JOB.INV.NO # "" THEN
+        RELEASE JOB,CONO:JOB_NO
+        ERRMSG = "Job Has Been Invoiced"
+        GOTO 99999
+      END
+	
+      IF OPS.FLG THEN
+        MATREAD JFS.REC FROM JOB.FNGD.STATS, CONO:JOB_NO THEN
+          IF JFS.ORDER # "" THEN	
+            RELEASE JOB, CONO : JOB_NO
+            ERRMSG = "THERE ARE ORDERS LINKED TO THIS JOB"
+	     GOTO 99999
+          END
+
+        END
+      END
+
+*  CAF 21174
+      GOSUB 1000
+*
+      RESV.HIT=0
+      USED.HIT=0
+
+      RESV.CNT = DCOUNT(JOB.RESV.MATL,@VM)
+      FOR RESVLP = 1 TO RESV.CNT UNTIL RESV.HIT
+        IF JOB.RESV.QTY<1,RESVLP> > 0 THEN
+          RESV.ID = JOB.RESV.MATL<1,RESVLP>
+          READV INV.CUST FROM INVENTORY,CONO:RESV.ID,19 THEN
+            IF INV.CUST # "" THEN RESV.HIT = 1
+          END
+        END
+      NEXT RESVLP
+*
+      USED.CNT = DCOUNT(JOB.MT.PROD,@VM)
+      FOR USEDLP = 1 TO USED.CNT UNTIL USED.HIT
+        USED.ID = JOB.MT.PROD<1,USEDLP>
+        READV INV.CUST FROM INVENTORY,CONO:USED.ID,19 THEN
+          IF INV.CUST # "" THEN USED.HIT = 1
+        END
+      NEXT USEDLP
+
+      BEGIN CASE
+        CASE RESV.HIT AND USED.HIT
+          ERRMSG = "Job Has Customer Owned Stock Reserved and Used"
+          GOTO 99999
+        CASE RESV.HIT
+          ERRMSG = "Job Has Customer Owned Stock Reserved"
+          GOTO 99999
+        CASE USED.HIT
+          ERRMSG = "Job Has Customer Owned Stock Used"
+          GOTO 99999
+      END CASE
+
+** READING FROM CUSTOMER
+      MATREADU CUST.REC FROM CUSTOMER, CONO:JOB.CUST ELSE
+       RELEASE JOB, CONO : JOB_NO
+       RELEASE CUSTOMER, CONO : JOB.CUST
+       ERRMSG = "CANNOT LOCATE CUSTOMER - " : JOB.CUST
+	GOTO 99999
+      END
+
+BEGIN CASE
+    CASE JOB.STATUS<1,1>=""
+      JOB_STATUS_PROP="BOOKED"
+    CASE JOB.STATUS<1,1>="9"
+      JOB_STATUS_PROP="CANCELLED"
+    CASE JOB.STATUS<1,1>="7"
+      JOB_STATUS_PROP="READY TO PURGE"
+    CASE JOB.STATUS<1,1>="8"
+      JOB_STATUS_PROP="WAS PURGED"
+    CASE JOB.TRACK.DATE<1,10> # ""
+      BEGIN CASE
+        CASE JOB.STATUS<1,1> = "1"
+          JOB_STATUS_PROP = "IN PROCESS"
+        CASE JOB.STATUS<1,1> = "3"
+          JOB_STATUS_PROP = "INVOICED"
+        CASE JOB.STATUS<1,1> = "5" 
+          JOB_STATUS_PROP="REOPENED"
+        CASE 1
+          JOB_STATUS_PROP = "COMPLETED"
+      END CASE
+    CASE JOB.TRACK.DATE<1,9> # ""
+      BEGIN CASE
+        CASE JOB.STATUS<1,1> = "1"
+          JOB_STATUS_PROP = "IN PROCESS"
+        CASE JOB.STATUS<1,1> = "5"
+          JOB_STATUS_PROP="REOPENED"
+        CASE 1
+          JOB_STATUS_PROP = "INVOICED"
+      END CASE
+    CASE JOB.TRACK.DATE<1,8> # ""
+      JOB_STATUS_PROP="COSTED"
+    CASE JOB.TRACK.DATE<1,7> # ""
+      JOB_STATUS_PROP="RDY-TO-BILL"
+    CASE JOB.TRACK.DATE<1,6> # ""
+      JOB_STATUS_PROP="DELIVERED"
+    CASE JOB.TRACK.DATE<1,5> # ""
+      JOB_STATUS_PROP="IN PROCESS"
+    CASE JOB.TRACK.DATE<1,3> # ""
+      JOB_STATUS_PROP="IN PROCESS"
+    CASE JOB.STATUS<1,1>="1"
+      JOB_STATUS_PROP="IN PROCESS"
+    CASE JOB.STATUS<1,1>="3"
+      JOB_STATUS_PROP="INVOICED"
+    CASE 1
+      JOB_STATUS_PROP="UNKNOWN"
+  END CASE
+
+*IF JOB.SP.SEQ # "" THEN
+*    ERRMSG = "WARNING !!! JOB HAS SHIPMENT ENTRIES"
+*    GOTO 99999
+*END
+
+STATUS = RBO.setProperty('','JOB_STATUS',JOB_STATUS_PROP)
+STATUS = RBO.setProperty('','CR_CUST_NAME',CUST.NAME)
+STATUS = RBO.setProperty('','CR_CUST_NO',JOB.CUST)
+RETURN	
+*----------
+1000 * CHECK JOB STRUCTURE FOR STATUS
+  IF JOB.MASTER = JOB_NO THEN
+    IF JOB.SUBS = "" THEN 
+      GOSUB 2000
+    END ELSE
+      GOSUB 2000
+      GOSUB 3000
+    END
+  END ELSE
+    GOSUB 2000
+    GOSUB 3000
+  END
+  RETURN
+*
+2000 * Check Master Job
+
+  MATREAD JOB.MAST.REC FROM JOB,CONO:JOB.MASTER ELSE
+    ERRMSG = "Master job does not exist for this job"
+    GOTO 99999
+  END
+  IF JOB.MAST.REC(40) # "" THEN
+    ERRMSG = "Master job has been invoiced you cannot change customer"    
+    GOTO 99999
+  END ELSE
+    RETURN
+  END
+  RETURN
+*
+
+3000 * CHECK SUB JOBS
+  CNT = DCOUNT(JOB.MAST.REC(26),@VM)
+  SUB.JOB = JOB.MAST.REC(26)
+  FOR Y = 1 TO CNT
+    JOB.SUB.NO = CONO:SUB.JOB<1,Y>
+    MATREAD JOB.SUB.REC FROM JOB, JOB.SUB.NO ELSE
+      ERRMSG= "Cannot find sub job in job file"
+      GOTO 99999
+    END
+    IF JOB.SUB.REC(40) # "" THEN
+      ERRMSG = "Sub jobs have been invoiced. Change customer at your own risk"
+      GOTO 99999
+    END ELSE
+      RETURN
+    END
+  NEXT Y
+  RETURN
+
+* End of method code
+99999*
+STATUS = RBO.setProperty('','ServerStatus',1)
+STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+RETURN
+

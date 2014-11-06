@@ -1,0 +1,333 @@
+************************************************************
+* REVISION    - [08.1]
+* SOURCE      - FASBP
+* PROGRAM     - MAN.DEPR.MAINT
+* BY          - JIM PAROSKI C.B.A
+* DATE        - 04/23/89
+* DESCRIPTION - Maintains Manual Depreciation Records
+*T23278 markt 01/15/1999 * Make fiscal data multi-value by division.
+*T23559 markt 01/18/1999 * Use correct error routine for no data.
+*T25978 adelgado 02/13/2002 * Add the use of prompts (S,SR,SB,ST).
+*ENDDOC
+************************************************************
+*
+*--- COPY LIBRARY
+*
+*COPY>CPYLIB>COM1
+*COPY>FAS.CPYLIB>ASSETS
+*COPY>FAS.CPYLIB>ASSETS.DEPR
+*COPY>FAS.CPYLIB>MAN.DEPR.CTL
+*COPY>PMC.CPYLIB>FISCAL
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+  MAT SYSCOM.REC =  ""; SYS.TYPE = 2
+*
+  DIM UPD.FLG(2)
+*
+*---- Get buffer
+*
+  PROCREAD BUFFER ELSE
+    ERRMSG = "Must be executed from a PROC"
+    GOTO 93000
+  END
+  CONO = BUFFER<1>
+  DIV.CODE = BUFFER<3>;* T23278
+*
+*---- OPEN FILES
+*
+  MAT FILE.VARS = ""
+  OPEN "","FAS.SCREENS" TO M.SCREENS ELSE
+    ERRMSG = "Cannot locate the FAS.SCREENS file"; GOTO 93000
+  END
+  OPEN "","CONTROL" TO CONTROL ELSE
+    ERRMSG = "Cannot locate the CONTROL file"; GOTO 93000
+  END
+  OPEN "","ASSETS" TO ASSETS ELSE
+    ERRMSG = "Cannot locate the ASSETS file"; GOTO 93000
+  END
+  OPEN "","ASSETS.DEPR" TO ASSETS.DEPR ELSE
+    ERRMSG = "Cannot locate the ASSETS.DEPR file"; GOTO 93000
+  END
+*
+*------ GET FISCAL PERIOD
+*
+  MATREAD FISCAL.REC FROM CONTROL, CONO : "FAFISCAL" ELSE
+    ERRMSG = "Cannot locate CONTROL, ":CONO:"FAFISCAL"
+    GOTO 93000
+  END
+***** T23278 v
+*
+  READ SECURITY.REC FROM CONTROL, CONO:"DIV.SECURITY" ELSE
+    ERRMSG = "DIV.SECURITY RECORD NOT FOUND IN CONTROL FILE"
+    GOTO 93000
+  END
+  READ DIVISION.REC FROM CONTROL, CONO:"DIVISIONS" ELSE
+    ERRMSG = "CANNOT LOCATE CONTROL, DIVISIONS"
+    GOTO 93000
+  END
+  IF SECURITY.REC<1> = "Y" AND SECURITY.REC<2> = "Y" THEN
+    LOCATE DIV.CODE IN DIVISION.REC<1>,1 SETTING POS ELSE 
+      ERRMSG = "Division ":DIV.CODE:" not found on Control File DIVISIONS Record"
+      GOTO 93000
+    END
+  END ELSE
+    POS = 1
+  END
+*
+*      YR = FR.CURR.PER[1,4]
+*      MN = FR.CURR.PER[5,2]
+  YR = FR.CURR.PER<1,POS>[1,4]
+  MN = FR.CURR.PER<1,POS>[5,2]
+***** T23278 ^
+  CTL.ID = CONO:"MANUAL.DEPR"
+  MATREADU MAN.DEPR.CTL FROM CONTROL, CTL.ID ELSE
+    MAT MAN.DEPR.CTL = ""
+  END
+*
+*---- INITIALIZATION
+*
+  MAT EDIT.COM.DRIVER = ""
+  ECD.SCRN.CNT = 1
+  ECD.SCRN.NAME = "MAN.DEPR.MAINT"
+  ECD.SCRN.NO = 1
+  ECD.ACTION = 1; CALL SCRN.EDIT
+*     MAT EDIT.COM = ""
+*     TYP = 0
+*     CALL EDIT.SUB
+  FILL = "#"
+  LINE.SPACE = 1
+  PAGE.SIZE = 14
+  BEGIN.PAGE = 6
+  MAT SCV.REC = ""
+***** T23278 v
+*      SCV.REC(1) = FR.CURR.PER
+*      SCV.REC(2) = MDC.CUR.PER
+*      SCV.REC(3) = MDC.CUR.DATE
+  SCV.REC(1) = FR.CURR.PER<1,POS>
+  SCV.REC(2) = MDC.CUR.PER<1,POS>
+  SCV.REC(3) = MDC.CUR.DATE<1,POS>
+***** T23278 ^
+  ECD.ACTION = 3; CALL SCRN.EDIT
+  AST.NO = ""
+  BOOK.AMT = ""; BOOK.FLG = ""
+  TAX.AMT = ""; TAX.FLG = ""
+  DATA = 1; LINES = 0
+  LOOP
+    READNEXT AST.ID ELSE DATA = 0
+  WHILE DATA DO
+    MATREAD AST.REC FROM ASSETS, AST.ID THEN
+      MAT UPD.FLG = 0
+      FOR BT = 1 TO 2
+        BEGIN CASE
+          CASE AST.DEPR.METHOD<1,BT> # "M"
+***** T23278 v
+*               CASE AST.LST.PER<1,BT> < FR.CURR.PER
+*               CASE AST.FST.PER<1,BT> > FR.CURR.PER
+          CASE AST.LST.PER<1,BT> < FR.CURR.PER<1,POS>
+          CASE AST.FST.PER<1,BT> > FR.CURR.PER<1,POS>
+***** T23278 ^
+          CASE 1
+            UPD.FLG(BT) = 1
+        END CASE
+      NEXT BT
+      IF UPD.FLG(1) OR UPD.FLG(2) THEN
+        LINES = LINES + 1
+        AST.NO<LINES> = AST.ID[4,99]
+      END
+      IF UPD.FLG(1) THEN
+        BOOK.FLG<LINES> = 1
+        BOOK.AMT<LINES> = AST.CUR.DEPR.AMT<1,1> + 0
+      END
+      IF UPD.FLG(2) THEN
+        TAX.FLG<LINES> = 1
+        TAX.AMT<LINES> = AST.CUR.DEPR.AMT<1,2> + 0
+      END
+    END
+  REPEAT
+  IF LINES = 0 THEN
+    RELEASE CONTROL, CTL.ID
+    ERRMSG = "No manual depreciation items selected"
+***** T23599 v
+*         GOTO 93000
+    GOSUB 91000; GOTO 99999
+***** T23599 ^
+  END
+  LN = 1; OLD.START.LINE = 0
+  GOSUB 1900
+*
+*---- MAIN PROCESSING
+*
+  MORE = 1
+  LOOP
+    ECD.NUM = 31; SCV.REC(ECD.NUM) = ""
+    ECD.ACTION = 4; CALL SCRN.EDIT
+    ACTION = ECD.RET.VALUE
+    BEGIN CASE
+      CASE ACTION = "END" OR ACTION = "E" OR ACTION = ""
+        RELEASE CONTROL, CTL.ID
+        MORE = 0
+      CASE ACTION = "F"
+        FOR I = 1 TO LINES
+          AST.ID = CONO:AST.NO<I>
+          MATREADU AST.REC FROM ASSETS, AST.ID THEN
+            IF BOOK.FLG<I> THEN
+              ADR.ID = AST.ID:"B":YR
+              MATREADU ADR.REC FROM ASSETS.DEPR, ADR.ID ELSE
+                MAT ADR.REC = ""
+              END
+              ADR.REC(MN) = BOOK.AMT<I>
+              MATWRITE ADR.REC ON ASSETS.DEPR, ADR.ID
+              AST.CUR.DEPR.AMT<1,1> = BOOK.AMT<I>
+            END
+            IF TAX.FLG<I> THEN
+              ADR.ID = AST.ID:"T":YR
+              MATREADU ADR.REC FROM ASSETS.DEPR, ADR.ID ELSE
+                MAT ADR.REC = ""
+              END
+              ADR.REC(MN) = TAX.AMT<I>
+              MATWRITE ADR.REC ON ASSETS.DEPR, ADR.ID
+              AST.CUR.DEPR.AMT<1,2> = TAX.AMT<I>
+            END
+            MATWRITE AST.REC ON ASSETS, AST.ID
+          END ELSE
+            RELEASE ASSETS, AST.ID
+          END
+        NEXT I
+        MAT MAN.DEPR.CTL = ""
+***** T23278 v
+*            MDC.CUR.PER = FR.CURR.PER
+*            MDC.CUR.DATE = DATE()
+        MDC.CUR.PER<1,POS> = FR.CURR.PER<1,POS>
+        MDC.CUR.DATE<1,POS> = DATE()
+***** T23278 ^
+        MATWRITE MAN.DEPR.CTL ON CONTROL, CTL.ID
+        MORE = 0
+      CASE ACTION = "S"
+        LN = 1 + INT((LN-1)/PAGE.SIZE) * PAGE.SIZE + PAGE.SIZE
+        IF LN > LINES THEN LN = 1
+        GOSUB 1900
+      * T25978 v
+      CASE ACTION = 'SR'
+        LN = 1 + INT((LN-1)/PAGE.SIZE) * PAGE.SIZE - PAGE.SIZE
+        IF LN < 1 THEN LN = 1
+        GOSUB 1900
+      CASE ACTION = 'ST'
+        LN = 1
+        GOSUB 1900
+      CASE ACTION = 'SB'
+        LN = LINES
+        GOSUB 1900
+      * T25978 ^
+      CASE NOT(NUM(ACTION))
+        ERRMSG = "Invalid entry, please re-enter"
+        GOSUB 91000
+      CASE ACTION < 1 OR ACTION > LINES
+        ERRMSG = "Out of range, please re-enter"
+        GOSUB 91000
+      CASE 1
+        LN = ACTION
+        GOSUB 1000
+    END CASE
+  WHILE MORE DO REPEAT
+  GOTO 99999
+*
+*---- ENTER LINE NUMBER
+*
+1000*
+  GOSUB 1900
+  SLN = BEGIN.PAGE + LINE.SPACE * MOD(LN-1,PAGE.SIZE)
+*
+*---- ENTER BOOK TAX
+*
+1010 IF NOT(BOOK.FLG<LN>) THEN GOTO 1020
+1015 X = 50; Y = SLN; TYP = 4; SCALER = 2; MAXL = 10
+  IF BOOK.AMT<LN> # "" THEN
+    O.R = "O"
+    DEFAULT = OCONV(BOOK.AMT<LN>,"MD2")
+  END
+  CALL EDIT.SUB
+  IF VALUE = "END" THEN
+    P_X  = 50 ; P_Y = SLN ; P_VALUE = OCONV(BOOK.AMT<LN>,"MD2") "R#10" ; P_OPT = ""
+    CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+    GOTO 1099
+  END
+  BOOK.AMT<LN> = VALUE
+*
+*---- ENTER TAX AMT
+*
+1020 IF NOT(TAX.FLG<LN>) THEN GOTO 1099
+1025 X = 68; Y = SLN; TYP = 4; MAXL = 10
+  IF TAX.AMT<LN> # "" THEN
+    O.R = "O"
+    DEFAULT = OCONV(TAX.AMT<LN>,"MD2")
+  END
+  CALL EDIT.SUB
+  IF VALUE = "END" THEN
+    P_X  = 68 ; P_Y = SLN ; P_VALUE = OCONV(TAX.AMT<LN>,"MD2") "R#10" ; P_OPT = ""
+    CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+    IF BOOK.FLG<LN> THEN GOTO 1015
+    GOTO 1099
+  END
+  TAX.AMT<LN> = VALUE
+1099*
+  RETURN
+*
+*---- SCROLLING ROUTINE
+*
+1900*
+  START.LINE = 1 + INT((LN-1)/PAGE.SIZE)*PAGE.SIZE
+  LAST.LINE = START.LINE + PAGE.SIZE - 1
+  IF LAST.LINE > LINES THEN LAST.LINE = LINES
+  IF START.LINE = OLD.START.LINE THEN GOTO 1990
+  OLD.START.LINE = START.LINE
+  CNT = 1
+  FOR N = START.LINE TO LAST.LINE
+    MATREAD AST.REC FROM ASSETS, CONO:AST.NO<N> ELSE
+      MAT AST.REC = ""
+      AST.DESC = "UNKNOWN"
+    END
+    SLN = BEGIN.PAGE + LINE.SPACE * MOD(N-1,PAGE.SIZE)
+    P_X  = 0 ; P_Y = SLN ; P_VALUE = N "R#3" ; P_OPT = "CL"
+    P_X  := AM:4 ; P_Y := AM:SLN ; P_VALUE := AM:AST.NO<N> "L#7"
+    P_X  := AM:12 ; P_Y := AM:SLN ; P_VALUE := AM:AST.DESC "L#30"
+    CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+    IF BOOK.FLG<N> THEN
+      P_X  = 43 ; P_Y = SLN ; P_VALUE = AST.FST.PER<1,1> "R#6" ; P_OPT = ""
+      P_X  := AM:50 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(BOOK.AMT<N>,"MD2") "R#10"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+    END
+    IF TAX.FLG<N> THEN
+      P_X  = 61 ; P_Y = SLN ; P_VALUE = AST.FST.PER<1,2> "R#6" ; P_OPT = ""
+      P_X  := AM:68 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(TAX.AMT<N>,"MD2") "R#10"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+    END
+    CNT = CNT + 1
+  NEXT N
+  FOR M = CNT TO PAGE.SIZE
+    SLN = BEGIN.PAGE + LINE.SPACE * MOD(M-1,PAGE.SIZE)
+    P_X  = 0 ; P_Y = SLN ; P_VALUE = "" ; P_OPT = "CL"
+    CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+  NEXT M
+1990 RETURN
+*
+*---- ERROR MESSAGE ROUTINE
+*
+91000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+* 91000 PRINT @(0,23) : ERRMSG : CL :
+*       INPUT XX :
+*       PRINT @(0,23) : CL :
+*       RETURN
+*
+93000 ERR.TYPE=3;CALL SYSCOM(MAT SYSCOM.REC)
+* 93000 PRINT @(0,23) : ERRMSG : CL :
+*       INPUT XX :
+*       PRINT @(0,23) : CL :
+*
+*---- END OF JOB
+*
+99999*
+  ECD.ACTION = 99 ; CALL SCRN.EDIT
+END

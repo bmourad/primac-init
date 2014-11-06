@@ -1,0 +1,430 @@
+      SUBROUTINE JRS.OS.SUM
+*COPY>JCS.CPYLIB>COM.JRS
+*********************************************************************
+*
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates(Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - JCSBP
+* PROGRAM     - JRS.OS.SUM
+* BY          - TOM PENNY
+* DATE        - 12/05/90
+* DESCRIPTION - This program produces a Job Outside Purchases Posted
+* report comparing estimates to actuals on a cost center, 
+* department and total level.
+*T21885 gat 05/07/1997 * FIX JOB LENGTH
+*T26556 ajibaly 05/08/2002 * Use report # and GET.PROG.HEAD.
+*T28964 wvaughan 08/07/2006 * Extend JOB.QTY field to display 8 numbers.
+*********************************************************************
+*COPY>PMC.CPYLIB>VEND
+*COPY>JCS.CPYLIB>JOB.OSP
+*COPY>PMC.CPYLIB>DEPARTMENT
+*COPY>JCS.CPYLIB>JOB
+*COPY>JCS.CPYLIB>OPERATION
+*COPY>JCS.CPYLIB>JOB.RPT.SET
+*COPY>JCS.CPYLIB>JOB.RPT.SUM
+*COPY>PMC.CPYLIB>COST.CNTR
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*
+*---- INITIALIZATION
+*
+      PAGE.NO = 0
+*T26556 v
+*     RPT.NO="XXXX"
+      HD1 = ""; HD2 = ""
+      RPT.NAME = ""
+      RPT.DATE = DATE()
+      CALL GET.PROG.HEAD(CONO,C.CO.NAME,RPT.NAME,RPT.NO,RPT.DATE,HD1,HD2)
+      PRINTER ON
+*T26556 ^
+      CCTR.TOT = 0
+      CCTR.QTY = 0
+      CCTR.E.R.COST=0
+      CCTR.E.R.QTY=0
+      DEPT.E.R.QTY=0
+      DEPT.E.R.COST=0
+      GRAND.E.R.QTY=0
+      GRAND.E.R.COST=0
+      DEPT.TOT = 0
+      DEPT.QTY = 0
+      GRAND.TOT = 0
+      GRAND.QTY = 0
+      PREV.VEND = ''
+      FIRST.JOS = 1
+*
+*---- MAIN PROCESSING
+*
+      JOB.COUNT = DCOUNT(JRS.IDS,AM)
+      PTR = 0
+      FIRST.OSP = 1
+      DONE=0
+      LP.CNT=0
+      LOOP
+         LP.CNT=LP.CNT+1
+      UNTIL LP.CNT > JOB.COUNT DO
+         IF FIELD(JRS.IDS<LP.CNT>,"&",5) = 'P' THEN
+            MATREAD JRS.REC FROM JOB.RPT.SET,CONO:JOBNO:'&':JRS.IDS<LP.CNT> THEN
+               DPNO = FIELD(JRS.IDS<LP.CNT>,"&",2)
+               CCTR = FIELD(JRS.IDS<LP.CNT>,"&",3)
+               OPNO = FIELD(JRS.IDS<LP.CNT>,"&",4)
+               IF FIRST.OSP THEN
+                  PREV.DPNO = DPNO
+                  PREV.CCTR = CCTR
+                  GOSUB 7000
+                  GOSUB 7500
+                  FIRST.OSP = 0
+               END
+               IF JRS.SEQ = "" THEN
+                  EST.FLG=1
+               END ELSE
+                  EST.FLG=0
+               END
+               BEGIN CASE
+               CASE PREV.DPNO # DPNO
+                  GOSUB 4000; *CCTR TOT
+                  GOSUB 5000; *DEPT TOT
+                  GOSUB 7500
+                  GOSUB 3000; *DETAIL 
+               CASE PREV.CCTR # CCTR
+                  GOSUB 4000; *CCTR TOT
+                  GOSUB 3000; *DETAIL
+               CASE 1
+                  GOSUB 3000; *DETAIL
+               END CASE
+            END
+         END
+      REPEAT
+      IF NOT(FIRST.OSP) THEN
+         GOSUB 4000
+         GOSUB 5000
+         GOSUB 6000
+      END
+      GOTO 99999
+*
+3000 *-----DETAIL
+*
+      IF EST.FLG THEN
+         IF JRS.E.R.QTY # "" THEN CCTR.E.R.QTY=CCTR.E.R.QTY+SUM(JRS.E.R.QTY)
+         IF JRS.E.R.COST # "" THEN CCTR.E.R.COST=CCTR.E.R.COST+SUM(JRS.E.R.COST)
+      END ELSE
+         OSP.CNT=DCOUNT(JRS.SEQ,VM)
+         OSP.LP.CNT=0
+         LOOP
+            OSP.LP.CNT=OSP.LP.CNT+1
+         UNTIL OSP.LP.CNT > OSP.CNT DO
+            SVM.CNT = DCOUNT(JRS.SEQ<1,OSP.LP.CNT>,SM)
+            OS.ID = CONO:JOBNO:"!":DPNO:"!":CCTR:"!"
+            SVM.LP.CNT=0
+            FIRST.JOS=1
+            LOOP
+               SVM.LP.CNT=SVM.LP.CNT+1
+FIRST.VEND = 1
+            UNTIL SVM.LP.CNT > SVM.CNT DO
+               IF JRS.SUB.JOB<1,OSP.LP.CNT,SVM.LP.CNT> # "" THEN
+                  OS.ID = CONO:JRS.SUB.JOB<1,OSP.LP.CNT,SVM.LP.CNT>:'!':DPNO:'!':CCTR:'!'
+               END
+
+               MATREAD JOS.REC FROM JOB.OSP,OS.ID:JRS.SEQ<1,OSP.LP.CNT,SVM.LP.CNT> THEN
+
+IF SVM.LP.CNT = 1 THEN
+PREV.VEND = JOS.VEND
+END
+                  MATREAD VEND.REC FROM VEND,CONO:JOS.VEND ELSE
+                     VEND.DESC = 'UNKNOWN'
+                  END
+                  GOSUB 3500
+               END
+            REPEAT
+         REPEAT
+      END
+      RETURN
+*
+3500 *----ACTUAL DETAIL
+*
+      IF LINE.COUNT+2 >= 56 THEN GOSUB 7000
+      DIFF = JOS.COST - JOS.DCOST
+      IF PREV.VEND # JOS.VEND ! SVM.LP.CNT = 1 THEN
+         PLINE = SPACE(15):VEND.DESC:'  ':JOS.VEND
+         PRINT PLINE
+         LINE.COUNT = LINE.COUNT + 1
+         PREV.VEND=JOS.VEND
+      END
+IF SVM.LP.CNT = 1 THEN
+      MATREAD OPER.REC FROM OPERATION,CONO:OPNO ELSE
+         OPER.DESC = 'UNKNOWN'
+      END
+      PLINE=SPACE(10):OPNO:" ":OPER.DESC
+      PRINT PLINE
+      LINE.COUNT = LINE.COUNT + 1
+END
+      PLINE = SPACE(15):JOS.DESC "L#59":'    '
+      FIRST.JOS=0
+*     PLINE = PLINE:TYPE "L#2":' '
+      PLINE = PLINE:OCONV(JOS.DATE,"D2-") "L#5":' '
+      PLINE = PLINE:JOS.PO "L#8":' '
+      PLINE = PLINE:OCONV(JOS.INV.DATE,"D2-") "L#8":' '
+      BEGIN CASE
+      CASE JOS.TYPE = 'S'
+         PLINE = PLINE:SPACE(16)
+         IF JOS.QTY > 0 THEN
+            PLINE = PLINE:OCONV(INT((JOS.QTY/100)+.5),"MDZ")"R#7":' '
+         END ELSE
+            PLINE = PLINE:OCONV(INT((JOS.QTY/100)-.5),"MDZ")"R#7":' '
+         END
+         IF JOS.DCOST > 0 THEN
+            PLINE = PLINE:OCONV(INT((JOS.DCOST/100)+.5),"MDZ")"R#6"
+         END ELSE
+            PLINE = PLINE:OCONV(INT((JOS.DCOST/100)-.5),"MDZ")"R#6"
+         END
+      CASE JOS.TYPE = 'CO'
+         IF JOS.QTY > 0 THEN
+            PLINE = PLINE:OCONV(INT((JOS.QTY/100)+.5),"MDZ")"R#7":'  '
+         END ELSE
+            PLINE = PLINE:OCONV(INT((JOS.QTY/100)-.5),"MDZ")"R#7":'  '
+         END
+         IF JOS.DCOST > 0 THEN
+            PLINE = PLINE:OCONV(INT((JOS.DCOST/100)+.5),"MDZ")"R#6"
+         END ELSE
+            PLINE = PLINE:OCONV(INT((JOS.DCOST/100)-.5),"MDZ")"R#6"
+         END
+         CCTR.TOT = CCTR.TOT + JOS.COST
+         CCTR.QTY = CCTR.QTY + JOS.QTY
+      CASE 1
+         IF JOS.QTY > 0 THEN
+            PLINE = PLINE:OCONV(INT((JOS.QTY/100)+.5),"MDZ")"R#7":'  '
+         END ELSE
+            PLINE = PLINE:OCONV(INT((JOS.QTY/100)-.5),"MDZ")"R#7":'  '
+         END
+         IF JOS.DCOST > 0 THEN
+            PLINE = PLINE:OCONV(INT((JOS.DCOST/100)+.5),"MDZ")"R#6"
+         END ELSE
+            PLINE = PLINE:OCONV(INT((JOS.DCOST/100)-.5),"MDZ")"R#6"
+         END
+         CCTR.TOT = CCTR.TOT + JOS.COST
+         CCTR.QTY = CCTR.QTY + JOS.QTY
+      END CASE
+      PRINT PLINE
+      LINE.COUNT = LINE.COUNT + 1
+      IF DIFF # 0 THEN
+         PLINE = SPACE(76):'IND'
+         IF DIFF > 0 THEN
+            PLINE = PLINE:SPACE(32):OCONV(INT((DIFF/100)+.5),"MDZ")"R#6"
+         END ELSE
+            PLINE = PLINE:SPACE(32):OCONV(INT((DIFF/100)-.5),"MDZ")"R#6"
+         END
+         PRINT PLINE
+         LINE.COUNT = LINE.COUNT + 1
+      END
+      RETURN
+*
+4000 *-----CCTR TOTAL
+*
+      IF LINE.COUNT >= 56 THEN GOSUB 7000
+      MATREAD CCTR.REC FROM COST.CNTR,CONO:PREV.CCTR ELSE
+         CCTR.DESC = ""
+      END
+      IF CCTR.QTY # 0 AND CCTR.TOT # 0 THEN
+         PLINE = SPACE(102):'-------  ------'
+         PRINT PLINE
+      END
+      PLINE = SPACE(5):PREV.CCTR "L#4":' ':CCTR.DESC "L#91"
+      PLINE = PLINE:OCONV(INT((CCTR.QTY/100)+.5),"MD0")"R#8":' '
+      PLINE = PLINE:OCONV(INT((CCTR.TOT/100)+.5),"MD0")"R#7":' '
+      PRINT PLINE
+      ADJ.LINE=0
+      PLINE = SPACE(88):'ESTIMATE     '
+      IF CCTR.E.R.QTY = "" THEN CCTR.E.R.QTY = 0
+      IF CCTR.E.R.COST = "" THEN CCTR.E.R.COST = 0
+      PLINE = PLINE:OCONV(INT((CCTR.E.R.QTY/100)+.5),"MD0")"R#8":' '
+      PLINE = PLINE:OCONV(INT((CCTR.E.R.COST/100)+.5),"MD0")"R#7":' '
+      PRINT PLINE
+      IF CCTR.QTY="" THEN CCTR.QTY=0
+      IF CCTR.E.R.QTY="" THEN CCTR.E.R.QTY=0
+      IF CCTR.TOT="" THEN CCTR.TOT=0
+      IF CCTR.E.R.COST="" THEN CCTR.E.R.COST=0
+      IF CCTR.QTY > CCTR.E.R.QTY THEN
+         CCTR.VAR.QTY = CCTR.QTY-CCTR.E.R.QTY
+      END ELSE
+         CCTR.VAR.QTY = CCTR.E.R.QTY-CCTR.QTY
+      END
+      IF CCTR.TOT > CCTR.E.R.COST THEN
+         CCTR.VAR.COST = CCTR.TOT-CCTR.E.R.COST
+      END ELSE
+         CCTR.VAR.COST = CCTR.E.R.COST-CCTR.TOT
+      END
+      PLINE = SPACE(102):'=======  ======'
+      PRINT PLINE
+      PLINE = SPACE(76):'COST CENTER VARIANCE     '
+      PLINE = PLINE:OCONV(INT((CCTR.VAR.QTY/100)+.5),"MD0")"R#8":' '
+      PLINE = PLINE:OCONV(INT((CCTR.VAR.COST/100)+.5),"MDZ")"R#7":' '
+      PRINT PLINE
+      ADJ.LINE = 3
+      PRINT;PRINT
+      LINE.COUNT = LINE.COUNT + 4 + ADJ.LINE
+      DEPT.QTY = DEPT.QTY + CCTR.QTY
+      DEPT.TOT = DEPT.TOT + CCTR.TOT
+      DEPT.E.R.QTY=DEPT.E.R.QTY+CCTR.E.R.QTY
+      DEPT.E.R.COST=DEPT.E.R.COST+CCTR.E.R.COST
+      CCTR.QTY = 0
+      CCTR.TOT = 0
+      CCTR.E.R.QTY=0
+      CCTR.E.R.COST=0
+      PREV.CCTR = CCTR
+* PREV.DPNO=DPNO
+      RETURN
+*
+5000 *----DEPT TOTAL
+*
+*     MATREAD DEPT.REC FROM DEPARTMENT,CONO:PREV.DPNO ELSE DEPT.DESC = 'UNKNOWN'
+      IF LINE.COUNT >= 56 THEN GOSUB 7000
+      PLINE = SPACE(102):'-------  ------'
+      PRINT PLINE
+      PLINE = '** ':DEPT.DESC:' DEPARTMENT TOTAL'
+      PLINE = PLINE "L#40"
+      PLINE = PLINE:SPACE(51):'TOTAL     '
+      PLINE = PLINE:OCONV(INT((DEPT.QTY/100)+.5),"MD0") "R#8":' '
+      PLINE = PLINE:OCONV(INT((DEPT.TOT/100)+.5),"MD0") "R#7":' '
+      PRINT PLINE
+      ADJ.LINE=0
+      IF DEPT.E.R.QTY = "" THEN DEPT.E.R.QTY = 0
+      IF DEPT.E.R.COST = "" THEN DEPT.E.R.COST = 0
+      PLINE = SPACE(88):'ESTIMATE     '
+      PLINE = PLINE:OCONV(INT((DEPT.E.R.QTY/100)+.5),"MD0") "R#8":' '
+      PLINE = PLINE:OCONV(INT((DEPT.E.R.COST/100)+.5),"MD0") "R#7":' '
+      PRINT PLINE
+      IF DEPT.QTY="" THEN DEPT.QTY=0
+      IF DEPT.E.R.QTY="" THEN DEPT.E.R.QTY=0
+      IF DEPT.TOT="" THEN DEPT.TOT=0
+      IF DEPT.E.R.COST="" THEN DEPT.E.R.COST=0
+      IF DEPT.QTY > DEPT.E.R.QTY THEN
+         DEPT.VAR.QTY = DEPT.QTY-DEPT.E.R.QTY
+      END ELSE
+         DEPT.VAR.QTY = DEPT.E.R.QTY-DEPT.QTY
+      END
+      IF DEPT.TOT > DEPT.E.R.COST THEN
+         DEPT.VAR.COST = DEPT.TOT-DEPT.E.R.COST
+      END ELSE
+         DEPT.VAR.COST = DEPT.E.R.COST-DEPT.TOT
+      END
+      PLINE = SPACE(102):'=======  ======'
+      PRINT PLINE
+      PLINE = SPACE(77):'DEPARTMENT VARIANCE     '
+      PLINE = PLINE:OCONV(INT((DEPT.VAR.QTY/100)+.5),"MD0") "R#8":' '
+      PLINE = PLINE:OCONV(INT((DEPT.VAR.COST/100)+.5),"MD0") "R#7":' '
+      PRINT PLINE
+      ADJ.LINE=3
+      PRINT;PRINT
+      LINE.COUNT = LINE.COUNT + 3 + ADJ.LINE
+      GRAND.QTY = GRAND.QTY + DEPT.QTY
+      GRAND.TOT = GRAND.TOT + DEPT.TOT
+      GRAND.E.R.QTY=GRAND.E.R.QTY+DEPT.E.R.QTY
+      GRAND.E.R.COST=GRAND.E.R.COST+DEPT.E.R.COST
+      DEPT.QTY = 0
+      DEPT.TOT = 0
+      DEPT.E.R.QTY=0
+      DEPT.E.R.COST=0
+      PREV.DPNO=DPNO
+      RETURN
+*
+6000 *-----GRAND TOTALS
+*
+      IF LINE.COUNT >= 56 THEN GOSUB 7000
+      PRINT SPACE(102):'-------  ------'
+      PRINT
+      PLINE = '*** GRAND TOTALS ***':SPACE(71)
+      PLINE = PLINE:'TOTAL      '
+      PLINE = PLINE:OCONV(INT((GRAND.QTY/100)+.5),"MD0")"R#7":' '
+      PLINE = PLINE:OCONV(INT((GRAND.TOT/100)+.5),"MD0")"R#7":' '
+      PRINT PLINE
+      PLINE = SPACE(88):'ESTIMATE      '
+      IF GRAND.E.R.QTY = "" THEN GRAND.E.R.QTY = 0
+      IF GRAND.E.R.COST = "" THEN GRAND.E.R.COST = 0
+      PLINE = PLINE:OCONV(INT((GRAND.E.R.QTY/100)+.5),"MD0")"R#7":' '
+      PLINE = PLINE:OCONV(INT((GRAND.E.R.COST/100)+.5),"MD0")"R#7":' '
+      PRINT PLINE
+      IF GRAND.QTY="" THEN GRAND.QTY=0
+      IF GRAND.E.R.QTY="" THEN GRAND.E.R.QTY=0
+      IF GRAND.TOT="" THEN GRAND.TOT=0
+      IF GRAND.E.R.COST="" THEN GRAND.E.R.COST=0
+      IF GRAND.QTY > GRAND.E.R.QTY THEN
+         GRAND.VAR.QTY = GRAND.QTY-GRAND.E.R.QTY
+      END ELSE
+         GRAND.VAR.QTY = GRAND.E.R.QTY-GRAND.QTY
+      END
+      IF GRAND.TOT > GRAND.E.R.COST THEN
+         GRAND.VAR.COST = GRAND.TOT-GRAND.E.R.COST
+      END ELSE
+         GRAND.VAR.COST = GRAND.E.R.COST-GRAND.TOT
+      END
+      PLINE = SPACE(102):'=======  ======'
+      PRINT PLINE
+      PLINE = SPACE(82):'TOTAL VARIANCE      '
+      PLINE = PLINE:OCONV(INT((GRAND.VAR.QTY/100)+.5),"MD0")"R#7":' '
+      PLINE = PLINE:OCONV(INT((GRAND.VAR.COST/100)+.5),"MD0")"R#7":' '
+      PRINT PLINE
+      RETURN
+*
+7000 *---- PRINT HEADINGS
+*
+      PRINT CHAR(12)
+      PAGE.NO = PAGE.NO + 1
+      IF JRSD.CONS = "Y" THEN
+         CONSOL = "CONSOLIDATED"
+      END ELSE
+         CONSOL = "            "
+      END
+      PLINE = '#':JOBNO "L#8":CONSOL:' REPORT NO: ':RPT.NO "L#4":SPACE(6)
+      N = SPACE((50-LEN(C.CO.NAME))/2)
+      PLINE = PLINE:N:C.CO.NAME:N:SPACE(8):OCONV(DATE(),"D2/")"R#8"
+      PLINE = PLINE:SPACE(12):'PAGE: ':PAGE.NO
+*T26556 v
+*     PRINT PLINE
+*     PLINE = JOB.CUST "L#8":SPACE(34):'O U T S I D E   P U R C H A S E S   P O S T E D'
+*     PRINT PLINE
+      PRINT HD1:PAGE.NO
+      PRINT HD2
+      PRINT "Job Number: ":JOBNO "L#8":SPACE(1):CONSOL
+      PRINT JOB.CUST "L#8"
+*T26556 ^
+      PLINE = C.CUST.NAME
+      PRINT PLINE
+      *T28964   PLINE = JOB.QTY<1,1>"L#7":SPACE(45):'FOR ITEMS THROUGH: ':OCONV(JRSD.DATE,"D2-")
+      PLINE = JOB.QTY<1,1>"L#8":SPACE(45):'FOR ITEMS THROUGH: ':OCONV(JRSD.DATE,"D2-");*T28964
+      PRINT PLINE
+      PLINE = JOB.DESC "L#30":SPACE(22):'DATE LAST ENTRY  : ':OCONV(JRSD.OS.DATE,"D2-")
+      PRINT PLINE
+      PLINE = 'SM: ':C.SALS.NAME "L#27":' '
+      PLINE = PLINE:'SALES CODE: ':JOB.SALES.CODE
+      PRINT PLINE
+      PLINE = SPACE(106):'ACT/EST        SPOILAGE'
+      PRINT PLINE
+      PLINE = 'DEPT CCTR OPER VENDOR/DESCRIPTION':SPACE(45)
+      PLINE = PLINE:'DATE   PO NUM  INV DATE   QTY     COST    QTY    COST'
+      PRINT PLINE
+      PLINE = '---- ---- ---- ':STR('-',59):'    ----- -------- --------'
+      PLINE = PLINE:' -------  ------ ------- ------'
+      PRINT PLINE
+*T26556 v
+*     LINE.COUNT = 9
+      LINE.COUNT = 11
+*T26556 ^
+      RETURN
+*
+7500 *---- PRINT DEPT DESCRIPTION
+*
+      IF LINE.COUNT+2 >= 50 THEN GOSUB 7000
+      MATREAD DEPT.REC FROM DEPARTMENT,CONO:DPNO ELSE DEPT.DESC = 'UNKNOWN'
+      PLINE = DEPT.DESC:'  ':DPNO
+      PRINT PLINE
+      DEPT.LNG = LEN(DEPT.DESC) + LEN(DPNO) + 2
+*     PLINE = STR('-',DEPT.LNG)
+*     PRINT PLINE
+      LINE.COUNT = LINE.COUNT + 2
+      RETURN
+*
+99999 *
+*
+      PRINTER OFF
+      RETURN
+      END

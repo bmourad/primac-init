@@ -1,0 +1,260 @@
+*********************************************************************
+*
+* PROGRAM  - HNP.DATA.INQ
+*
+* AUTHOR   - NICK AMENDOLA, NASTech
+*
+* DATE     - 01/14/94
+*
+* DESCRIPTION
+*
+* This program is used to inquire against a specified file and key.
+*
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>CPYLIB>SCOMMON1
+*COPY>NDC.CPYLIB>DOWNLOAD
+*COPY>CPYLIB>SCREEN.COM
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+MAT SYSCOM.REC =  ""; SYS.TYPE = 2
+*
+*---- OPEN ALL FILES
+*
+      OPEN "","CONTROL" TO CONTROL ELSE
+         ERRMSG = "CANNOT OPEN CONTROL FILE"
+         GOSUB 90000
+         STOP
+      END
+      OPEN "","DOWNLOAD" TO DOWNLOAD ELSE
+         ERRMSG = "CANNOT OPEN DOWNLOAD FILE"
+         GOSUB 90000
+         STOP
+      END
+      OPEN "","CMD.QUEUE" TO CMD.QUEUE ELSE
+         ERRMSG = "CANNOT OPEN CMD.QUEUE FILE"
+         GOSUB 90000
+         STOP
+      END
+      OPEN "","NDC.SCREENS" TO M.SCREENS ELSE
+         ERRMSG = "CANNOT OPEN NDC.SCREENS FILE"
+         GOSUB 90000
+         STOP
+      END
+*
+*---- INITIALIZATION
+*
+      SCREEN INIT;#
+      S$SCR = 1
+      SCREEN DEFINE;HNP.DATA.INQ
+      SCREEN COUNT;;11
+      LINE.COUNT = S$LCNT
+      LINE.SPACE = S$LSPC
+      SCREEN FORMAT
+      LINE.CNT = 0
+      REF.NO = 1
+      CURR.REF.NO = ""
+      NETID = ""
+      FNAME = ""
+      FID = ""
+      GOTO 110
+*
+*---- MAIN PROCESSING
+*
+100 *
+      SCREEN CLEAR
+110 *
+      S$DATA(1)<S$SCR> = DATE()
+      SCREEN DISPLAY;;1
+      S$DATA(2)<S$SCR> = NETID
+      SCREEN FIELD;;2
+      SCREEN INPUT;;2;GOTO 99999
+      NETID = S$VALUE+0
+      MATREAD DLOAD.REC FROM DOWNLOAD, NETID ELSE
+         ERRMSG = "Invalid Network ID. Try again! "
+         GOSUB 90000
+         GOTO 100
+      END
+      READU TREC FROM CONTROL, "HNP.SERVER.LOCK.":DLOAD.PORT LOCKED
+         NULL
+      END ELSE
+         RELEASE CONTROL, "HNP.SERVER.LOCK.":DLOAD.PORT
+         ERRMSG = "Network Communications not active! "
+         GOSUB 90000
+         GOTO 100
+      END
+      MSG = "GETDATE"
+      CALL HNP.ADDQUEUE(NETID,MSG,CMD.QUEUE,QPTR,ERRMSG)
+      IF ERRMSG # "" THEN
+         GOSUB 90000
+         GOTO 100
+      END
+      GOSUB 1000
+      IF ERRMSG # "" THEN
+         GOSUB 90000
+         GOTO 100
+      END
+      S$DATA(3)<S$SCR> = FNAME
+      SCREEN FIELD;;3
+      SCREEN INPUT;;3;GOTO 100
+      FNAME = S$VALUE
+*
+      S$DATA(4)<S$SCR> = FID
+      SCREEN FIELD;;4
+      SCREEN INPUT;;4;GOTO 100
+      FID = S$VALUE
+*
+      BEGIN CASE
+      CASE FNAME[1,7] = "CONTROL"
+         MSG = "GET^92^":FID
+      CASE FNAME[1,4] = "HOST"
+         MSG = "GET^95^":FID
+      CASE 1
+         MSG = "GET-KEY^!":FNAME:"^":FID
+      END CASE
+      CALL HNP.ADDQUEUE(NETID,MSG,CMD.QUEUE,QPTR,ERRMSG)
+      IF ERRMSG # "" THEN GOSUB 90000; GOTO 100
+      GOSUB 1000
+      IF ERRMSG # "" THEN GOSUB 90000; GOTO 100
+*
+      IF FIELD(RESPONSE,"^",1) = "ERROR" THEN
+         ERRMSG = "ERROR - ":FIELD(RESPONSE,"^",2)
+         GOSUB 90000
+         GOTO 100
+      END
+*
+      REC = FIELD(RESPONSE,"^",2)
+      LINE.CNT = DCOUNT(REC,"\")
+      FOR N = 1 TO LINE.CNT
+         S$DATA(12)<S$SCR,N> = FIELD(REC,"\",N)
+      NEXT N
+      REF.NO = 1
+      CURR.REF.NO = ""
+      GOSUB 50000
+*
+*---- GET OPERATOR REPLY
+*
+500 *
+      SCREEN FIELD;;21
+      SCREEN INPUT;;21
+      OPT = S$VALUE
+510 *
+      BEGIN CASE
+      CASE OPT = "E" OR OPT = "END"
+         GOTO 100
+      CASE OPT = "PRI"
+         PRINTER ON
+         PAGE.NO = 0
+         LINES = 99
+         PDATE = OCONV(DATE(),"D2-")
+         PTIME = OCONV(TIME(),"MTS")"L#5"
+         FOR LPTR = 1 TO LINE.CNT
+            IF LINES > 55 THEN GOSUB 70000
+            PLINE = LPTR"R#4"
+            PLINE = PLINE:"  ":S$DATA(12)<S$SCR,LPTR>
+            PRINT PLINE
+            LINES = LINES + 1
+         NEXT LPTR
+         PRINTER OFF
+         PRINTER CLOSE
+         ERRMSG = "Completed. Press <RETURN> to continue."
+         GOSUB 90000
+      CASE OPT = "S" OR OPT = "SF"
+         REF.NO = CURR.REF.NO + LINE.COUNT
+         IF REF.NO > LINE.CNT THEN REF.NO = 1
+         GOSUB 50000
+      CASE OPT = "SR"
+         REF.NO = CURR.REF.NO - LINE.COUNT
+         IF REF.NO < 1 THEN REF.NO = 1
+         GOSUB 50000
+      CASE OPT = "ST"
+         REF.NO = 1
+         GOSUB 50000
+      CASE OPT = "SB"
+         REF.NO = LINE.CNT
+         IF REF.NO < 1 THEN REF.NO = 1
+         GOSUB 50000
+      END CASE
+      GOTO 500
+*
+*---- GET NETWORK RESPONSE
+*
+1000 *
+      ERRMSG = ""
+      STIME = TIME()
+      DTIME = 4
+      LOOP
+         READ REC FROM CMD.QUEUE, NETID:"!":QPTR ELSE REC = ""
+         ETIME = TIME() - STIME
+         IF ETIME < 0 THEN ETIME = ETIME + 86400
+      WHILE REC<4> = "" AND ETIME < DTIME DO
+      REPEAT
+      IF REC<4> = "" THEN
+         ERRMSG = "NETWORK TIMEOUT"
+      END ELSE
+         IF REC<6>[1,9] = "GETSTATS" THEN
+            RESP = REC<6>[10,999]
+         END ELSE
+            RESP = REC<6>
+         END
+         RESPONSE = ""
+         FOR N = 1 TO LEN(RESP)
+            CH = RESP[N,1]
+            CV = SEQ(CH)
+            IF CV >= 32 AND CV <= 127 THEN
+               RESPONSE = RESPONSE : CH
+            END
+         NEXT N
+      END
+      RETURN
+*
+*---- PRINT PAGE HEADINGS
+*
+70000 *
+      PAGE.NO = PAGE.NO + 1
+      PRINT CHAR(12)
+      HLINE = ("Network ID: ":NETID)"L#30"
+      HLINE = HLINE:("File Name: ":FNAME)"L#30"
+      HLINE = HLINE:("Record ID: ":FID)"L#30"
+      HLINE = HLINE:(PDATE:"  ":PTIME)"L#30"
+      HLINE = HLINE:("Page: ":PAGE.NO)
+      PRINT HLINE
+      PRINT
+      PRINT
+      SH1 = "Line"
+      SH1 = SH1:"  ":SPACE(20):"Record Content"
+      SH2 = "----"
+      SH2 = SH2:"  ":STR("-",120)
+      PRINT SH1
+      PRINT SH2
+      LINES = 6
+      RETURN
+*
+*---- MULTI-LINE SCROLL ROUTINE
+*
+50000 *
+      START.REF.NO = 1 + INT((REF.NO-1)/LINE.COUNT)*LINE.COUNT
+      IF START.REF.NO = CURR.REF.NO THEN RETURN
+      CURR.REF.NO = START.REF.NO
+      S$VAL = START.REF.NO
+      S$CNT = DCOUNT(S$DATA(12)<S$SCR>,VM)
+      SCREEN MULTI;;C;11;12
+      RETURN
+*
+*---- ERROR ROUTINE
+*
+90000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+* 90000 *
+*       PRINT @(0,23):@(-4):ERRMSG:
+*       INPUT REPLY:
+*       PRINT @(0,23):@(-4):
+*       RETURN
+*
+*---- END OF PROGRAM
+*
+99999 *
+      PRINT @(-1)
+   END

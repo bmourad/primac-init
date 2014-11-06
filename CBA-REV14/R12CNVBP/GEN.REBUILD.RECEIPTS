@@ -1,0 +1,90 @@
+* this programs will rebuild IRW's  original,current and reservable
+* quantities based on the quantites in ISTK records.
+* It is to be used only for generaly tracked products. Do not use
+* to rebuild receipts for serially tracked products
+*
+*COPY>ICS.CPYLIB>INV_RECEIPTS
+*COPY>ICS.CPYLIB>INV_SERIAL
+*COPY>ICS.CPYLIB>INV_RECP_WHSE
+*COPY>ICS.CPYLIB>INVENTORY
+*
+OPEN '','INV_RECEIPTS' TO INV_RECEIPTS ELSE STOP 201
+OPEN '','INV_RECP_WHSE' TO INV_RECP_WHSE ELSE STOP 201
+OPEN '','INV_SERIAL' TO INV_SERIAL ELSE STOP 201
+OPEN '','CONVERSION.ERRORS' TO CONVERSION.ERRORS ELSE STOP 201
+OPEN '','INVENTORY' TO INVENTORY ELSE STOP 201
+*
+PRINT @(-1)
+PRINT @(1,5):'SELECTING INV_RECP_WHSE':@(-4)
+CMD ="SELECT INV_RECP_WHSE"
+UDTEXECUTE CMD CAPTURING MSG
+PRINT @(1,5):'REBUILDING INV_RECP_WHSE RECORD':@(-4)
+*
+ERR="";ERR.CNT=0
+DONE = 0 ; CNT=0
+LOOP
+  READNEXT IRW.ID ELSE DONE=1
+UNTIL DONE DO
+CNT+=1
+IF REM(CNT,100)=0 THEN   
+  PRINT @(45,5):CNT:@(-4)
+END                      
+  ERRMSG=''
+  CONO=IRW.ID[1,3]
+  INVR.ID=OCONV(IRW.ID,"G!1")
+  MATREAD INVR.REC FROM INV_RECEIPTS,INVR.ID THEN
+    PROD=INVR.PROD
+    INV.ID=CONO:PROD
+    MATREAD INV.REC FROM INVENTORY,INV.ID THEN
+      IF INV.PAP.TYPE='REGULAR' AND INV.M.LINE#'FNGD' THEN
+        CATG=INV.LINE
+        CATG.ID = CONO:INV.LINE
+        MATREAD IRW.REC FROM INV_RECP_WHSE,IRW.ID THEN
+          CONO = IRW.ID[1,3]
+          S.CNT = DCOUNT(IRW.SERIAL.NO,@VM)
+          ORG.QTY=0
+          CUR.QTY=0
+          RSV.QTY=0
+          FOR S=1 TO S.CNT
+            ISTK.ID = CONO:IRW.SERIAL.NO<1,S>
+            MATREAD ISTK.REC FROM INV_SERIAL,ISTK.ID THEN  
+              ORG.QTY += ISTK.ORG.QTY
+              CUR.QTY += ISTK.CUR.QTY
+              RSV.QTY += ISTK.RSVB.QTY
+            END
+          NEXT S
+            IF IRW.ORG.QTY # ORG.QTY THEN
+              ERRMSG<-1>="Original IRW.ORG.QTY=":IRW.ORG.QTY:" Recalculated to":ORG.QTY:" (":IRW.ID:")"
+            END
+          IF IRW.CUR.QTY # CUR.QTY THEN
+            ERRMSG<-1> = "Original IRW.CUR.QTY=":IRW.CUR.QTY:" Recalculated to":CUR.QTY:" (":IRW.ID:")"
+          END
+          IF IRW.RSVB.QTY # RSV.QTY THEN
+            ERRMSG<-1> = "Original IRW.RSVB.QTY=":IRW.RSVB.QTY:" Recalculated to":RSV.QTY:" (":IRW.ID:")"
+          END
+          ORG.DIF=ORG.QTY-IRW.ORG.QTY
+          INVR.ORG.QTY+=ORG.DIF
+          IRW.ORG.QTY=ORG.QTY
+          IRW.CUR.QTY=CUR.QTY
+          IRW.RSVB.QTY=RSV.QTY
+          MATWRITE IRW.REC ON INV_RECP_WHSE,IRW.ID
+          MATWRITE INVR.REC ON INV_RECEIPTS,INVR.ID
+        END
+        IF ERRMSG THEN
+          IWH.ID=CONO:INVR.PROD:"!":OCONV(IRW.ID,"G1!1")
+          FIND IWH.ID IN ERR SETTING FLD THEN
+            CONVERT @AM TO @VM IN ERRMSG
+            ERR<FLD>=ERR<FLD>:@VM:ERRMSG
+          END ELSE
+            ERR.CNT+=1
+            ERR<ERR.CNT>=ERRMSG
+            ERR=INSERT(ERR,ERR.CNT,1,0,IWH.ID)
+          END
+        END
+      END
+    END
+  END
+REPEAT
+WRITE ERR ON CONVERSION.ERRORS,"GEN.REBUILD.RECEIPTS"
+CALL CONV.RPT("GEN.REBUILD.RECEIPTS")
+END

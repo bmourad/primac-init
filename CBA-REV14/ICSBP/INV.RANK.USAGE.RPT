@@ -1,0 +1,308 @@
+*********************************************************************
+* REVISION    - [12.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - ICSBP
+* PROGRAM     - INV.RANK.USAGE.RPT
+* DATE        - 01/10/84
+* BY          - WALID YAMOUT , CBA
+* DESCRIPTION - This program list inventory ranking by sales.
+*T21638 doug 02/26/1997 * Add quantity conversion for FNGD
+*T26493 cmykleb 03/22/2002 * Change report to use rpt # from proc.
+*T26090 ajibaly 04/02/2002 * CONVERT TO REV12
+*********************************************************************
+*ENDDOC
+*** INSERT EQUATE FROM CPYLIB
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>CPYLIB>SYSCOM
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>CPYLIB>CHAR
+*COPY>ICS.CPYLIB>WAREHOUSE
+*** INITIALIZATION
+*
+*T26090 v
+*- FUNCTION DEFINES:
+   DEFFUN CALC.YTD(CONO,PROD,WHSE,PERIOD)
+   DEFFUN CURRENT.PERIOD(CONO,CONTROL.FILE,DIV.POS,FISCAL.FLAG)
+   DEFFUN DIVISION.POSITION (CONO,CONTROL.FILE,DIV.CODE)
+*
+   GEN.DIV = "00"
+*T26090 ^
+   LINE.COUNT = 99 ; PAGE.NO = 0 ; PRT.FLG = 1 ; QTY.FLG = 1 ; PRT.FLG1 = 1
+   PREV.PRO = "" ; PREV.LINE = "" ; TOT.COST = 0 ; TOT.SALE = 0 ; RANK = 1 ; PREV.QTY = 0 ; PREV.WHSE = ""
+   SP1 = " " ; SP2 = "  " ; SP4 =  "     "
+*** SET UP THE ERRMSG ROUTINE FOR SYSCOM
+   SYS.TYPE = 1
+   CALL SYSCOM(MAT SYSCOM.REC)
+*** OPEN THE FILE
+   OPEN '','INV.WHSE' TO INV.WHSE ELSE
+      ERRMSG = 'INV.WHSE FILE IS MISSING'
+      GOTO 93000
+   END
+   OPEN '','INVENTORY' TO INVENTORY ELSE
+      ERRMSG = 'INVENTORY FILE IS MISSING'
+      GOTO 93000
+   END
+   OPEN '','CONTROL' TO CONTROL ELSE
+      ERRMSG = 'CONTROL FILE IS MISSING'
+      GOTO 93000
+   END
+   OPEN '','WAREHOUSE' TO WAREHOUSE ELSE
+      ERRMSG = 'WAREHOUSE FILE IS MISSING'
+      GOTO 93000
+   END
+*** READ COMPANY NAME 
+   PROCREAD ID ELSE
+      ERRMSG = ' CANNOT PERFORM PROCREAD'
+      GOTO 93000
+   END
+   CONO = ID<1>
+*T26493 v
+*  CONO.NAME = ID<2>
+*  REPORT.NAME = "INVENTORY.RANKING.BY.USAGE.REPORT"
+*  REPORT.NUMBER = "XXXX"
+   REPORT.NUMBER = ID<2>
+   REPORT.NAME = ""
+   CONO.NAME = ""
+*T26493 ^
+   REPORT.DATE = DATE()
+   HD1 = "" ; HD2 = ""
+   CALL GET.PROG.HEAD(CONO,CONO.NAME,REPORT.NAME,REPORT.NUMBER,REPORT.DATE,HD1,HD2)
+*** PUT PRINTER ON
+   PRINTER ON
+*** READ AND PROCESS FIRST RECORD
+100*
+   READNEXT KEY ELSE GOTO 999999
+   GOSUB 200
+*** READ THE THREE FILE
+   MATREAD IWH.REC FROM INV.WHSE,KEY THEN
+*T26090 v
+      GOSUB GET.PERIOD
+      YTD = CALC.YTD(CONO,PROD,WHSE,CUR.PERIOD)
+      IWH.YTD.SALE     = ABS(YTD<5>)
+      IWH.YTD.SALE.AMT = ABS(YTD<6>)
+      IF IWH.YTD.SALE = 0 THEN
+         MAT IWH.REC = ''
+         GOTO 100
+      END
+*T26090 ^
+   END ELSE
+      MAT IWH.REC = ''
+      GOTO 100
+   END
+   MATREAD INV.REC FROM INVENTORY,PROD.KEY ELSE
+      MAT INV.REC = ''
+   END
+*** SET THE PRODUCT NUMBER
+   PREV.PRO = PROD
+   PREV.DESC = INV.FULL.DESC
+   PREV.LINE = INV.LINE
+   PREV.WHSE = WHSE
+*** SET THE HEADING LINES
+   HH.LINE = ""
+   HH.LINE = "MLINE   PLINE  PRODUCT NUMBER                 FULL DESCRIPTION               U/M COSTWT RNK  TOTAL QTY  TOTAL AMT "
+   DH.LINE = "------- ------ --------------- --------------------------------------------- --- ------ --- ----------- ----------"
+   DT.LINE = "                                                                                            ---------- ----------"
+*** PROCESS THE FILE
+   GOSUB 1000
+*** READ AND PROCESS ALL THE FILES
+   DATA = 0
+   LOOP
+      READNEXT KEY ELSE DATA = 1
+   WHILE DATA = 0 DO
+      GOSUB 200
+*** READ THE THREE FILES
+      MATREAD IWH.REC FROM INV.WHSE,KEY THEN
+*T26090 v
+         YTD = CALC.YTD(CONO,PROD,WHSE,CUR.PERIOD)
+         IWH.YTD.SALE     = ABS(YTD<5>)
+         IWH.YTD.SALE.AMT = ABS(YTD<6>)
+         IF IWH.YTD.SALE = 0 THEN
+            MAT IWH.REC = ''
+            GOTO 111
+         END
+*T26090 ^
+      END ELSE
+         MAT IWH.REC = ''
+         GOTO 111
+      END
+      MATREAD INV.REC FROM INVENTORY,PROD.KEY ELSE
+         MAT INV.REC = ''
+      END
+*** PROCESS THE RECORD
+      GOSUB 1000
+111*
+   REPEAT
+*** PRINT TOTALS FOR LAST PRODUCT
+*  GOSUB 25000
+*** END OF JOB
+   GOTO 999999
+*T26090 v
+GET.PERIOD:
+   MATREAD WHSE.REC FROM WAREHOUSE,CONO:WHSE ELSE 
+      ERRMSG='Warehouse record ':WHSE:' is missing.'
+      GOSUB 93000
+   END
+   IF WHS.DIV='' THEN WHS.DIV=GEN.DIV
+   DIV.POS=DIVISION.POSITION(CONO,CONTROL,WHS.DIV)
+   BEGIN CASE                                              
+      CASE DIV.POS<1,1>=''                                  
+         DIV.POS=DIV.POS<1,2>                                
+         CUR.PERIOD=CURRENT.PERIOD(CONO,CONTROL,DIV.POS,"IC")
+         IF CUR.PERIOD<1,1>='' THEN                          
+            CUR.PERIOD=CUR.PERIOD<1,2>                        
+         END ELSE                                            
+            IF CUR.PERIOD<1,2>='-2' THEN                      
+               ERRMSG=CUR.PERIOD<1,2>                          
+               GOSUB 93000                                     
+            END                                               
+         END                                                 
+      CASE DIV.POS<1,1>='-1'                                
+         ERRMSG=DIV.POS<1,2>                                 
+         GOSUB 91000                                         
+      CASE DIV.POS<1,1>='-2'                                
+         ERRMSG=DIV.POS<1,2>                                 
+         GOSUB 93000                                         
+   END CASE                                                
+RETURN
+*T26090 ^
+*** SEPERATE THE KEY TO PRODUCT, WHSE 
+200*
+   PROD.KEY = FIELD(KEY,"!",1)
+   PROD = PROD.KEY[4,99]
+   WHSE = FIELD(KEY,"!",2)
+   RETURN
+*** PROCESS THE RECORD
+1000*
+   IF PROD # PREV.PRO THEN
+*     GOSUB 25000
+      PRT.FLG = 1
+      PREV.PRO = PROD
+      PREV.DESC = INV.FULL.DESC
+      IF INV.LINE # PREV.LINE THEN
+         PRT.FLG1 = 1
+         PREV.LINE = INV.LINE
+         PRINT
+         LINE.COUNT = LINE.COUNT + 1
+         QTY.FLG = 1
+      END
+   END
+   IF PREV.WHSE # WHSE THEN
+      PRT.FLG1 = 1
+      PREV.WHSE = WHSE
+      LINE.COUNT = 99
+   END
+   GOSUB 60000
+   IF INV.COST.WT*1 = 0 THEN INV.COST.WT = 100
+*   STAND = INT(((IWH.STD.COST / 100) * (IWH.YTD.SALE/INV.COST.WT/100))/100)
+   IF IWH.YTD.SALE > 0 THEN
+      IWH.YTD.SALE=INT((((IWH.YTD.SALE / ICR.DV1) * ICR.MT1) / ICR.DV2) + .5)
+   END ELSE
+      IWH.YTD.SALE=INT((((IWH.YTD.SALE / ICR.DV1) * ICR.MT1) / ICR.DV2) - .5)
+   END
+   IF QTY.FLG = 1 THEN
+      RANK = 1
+      QTY.FLG = 0
+   END ELSE
+      IF PREV.QTY # IWH.YTD.SALE THEN
+         PREV.QTY = IWH.YTD.SALE
+         RANK = RANK + 1
+      END
+   END
+   TOT.SALE = TOT.SALE + IWH.YTD.SALE
+   TOT.COST = TOT.COST + IWH.YTD.SALE.AMT
+   GOSUB 20000
+   RETURN
+*** ROUTINE TO PRINT THE RECORD
+20000*
+   IF LINE.COUNT + 2 > 54 THEN
+      PRT.FLG = 1
+      PRT.FLG1 = 1
+      GOSUB 80000
+   END
+   LINE.COUNT = LINE.COUNT + 1
+   IF PRT.FLG = 1 THEN
+      PRT.FLG = 0
+      IF PRT.FLG1 = 1 THEN
+         PRT.FLG1 = 0
+         H.LINE = INV.M.LINE "L#7":SP1:INV.LINE "L#6":SP1
+      END ELSE
+         H.LINE = SPACE(15)
+      END
+      H.LINE = H.LINE:PREV.PRO "L#15":SP1
+      H.LINE = H.LINE:INV.FULL.DESC "L#45":SP1
+      H.LINE = H.LINE:INV.UNIT<1,2> "L#3":SP1
+      H.LINE = H.LINE:OCONV(INV.COST.WT, "MD2") "R#6":SP1
+   END ELSE
+      H.LINE = SPACE(88)
+   END
+   H.LINE = H.LINE:RANK "R#3":SP1
+   H.LINE = H.LINE : OCONV((IWH.YTD.SALE*1) , ICR.CNV) "R#11" :SP1
+   H.LINE = H.LINE :OCONV((IWH.YTD.SALE.AMT*1), "MD2") "R#10"
+   PRINT H.LINE
+   RETURN
+*** ROUTINE TO PRINT THE TOTAL VALUES
+25000*
+   IF LINE.COUNT + 3 > 54 THEN
+      GOSUB 80000
+      PRT.FLG1 = 1
+   END
+   LINE.COUNT = LINE.COUNT + 3
+   H.LINE = SPACE(97)
+   H.LINE = H.LINE : OCONV(TOT.SALE, ICR.CNV) "R#10" :SP1
+   H.LINE = H.LINE : OCONV(TOT.COST, 'MD2') "R#10"
+   PRINT DT.LINE
+   PRINT H.LINE
+   PRINT
+*** CLEARING THE TOTAL VALUES
+   TOT.COST = 0
+   TOT.SALE = 0
+   RETURN
+*** CONVERT SHEET/WGHT/QTY
+60000*
+*COPY>ICSBP>INV.UM.CNV
+*  MAT INV.CNV.REC = ''
+*  BEGIN CASE
+*  CASE INV.UNIT<1,2> = 'SHT' AND INV.UNIT<1,3> = 'LBS'
+*     ICR.CNV = "MD0"
+*     ICR.DV1 = INV.M.WT; ICR.MT1 = 1; ICR.DV2 = 1
+*  CASE INV.UNIT<1,2> = 'PC' AND INV.UNIT<1,3> = 'MSI'
+*     ICR.CNV = "MD0"
+*     ICR.DV1 = INV.PAP.WIDTH/100; ICR.MT1 = 10; ICR.DV2 = 1
+*  CASE INV.UNIT<1,2> = 'FT' AND INV.UNIT<1,3> = 'MSI'
+*     ICR.CNV = "MD0"
+*     ICR.DV1 = INV.PAP.WIDTH/100; ICR.MT1 = 100; ICR.DV2 = 12
+*  CASE 1
+*     ICR.CNV = "MD2"
+*     ICR.DV1 = 10; ICR.MT1 = 1; ICR.DV2 = 1
+*  END CASE
+   RETURN
+*** ROUTINE TO PRINT HEADINGS
+80000*
+   PRINT CHAR(12)
+   PAGE.NO = PAGE.NO + 1
+   PRINT HD1:PAGE.NO
+   PRINT HD2
+   PRINT
+   PRINT "WAREHOUSE : ":PREV.WHSE
+   PRINT
+   PRINT HH.LINE
+   PRINT DH.LINE
+   LINE.COUNT = 8
+   RETURN
+*** CALLS FOR SYSCOM
+91000*
+   ERR.TYPE = 1
+   CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+92000*
+   ERR.TYPE = 2
+   CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+93000*
+   ERR.TYPE = 3
+   CALL SYSCOM(MAT SYSCOM.REC)
+999999*
+   PRINTER OFF
+END

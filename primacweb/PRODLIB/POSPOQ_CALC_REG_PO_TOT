@@ -1,0 +1,137 @@
+SUBROUTINE POSPOQ_CALC_REG_PO_TOT
+********************************************************************************
+*   Program name :- POSPOQ_CALC_REG_PO_TOT
+*   Created:- 1/2/2003
+*------------------------------------------------------------------------------
+*
+*
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+
+* Insert method code here
+$INCLUDE PMC.CPYLIB COMPANY
+$INCLUDE PMC.CPYLIB PO
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE CPYLIB CHAR
+$INCLUDE ICS.CPYLIB INV.CNV
+
+* Open files
+OPEN 'COMPANY' TO COMPANY ELSE
+  ERRMSG  = 'COMPANY FILE IS MISSING'
+END
+OPEN 'INVENTORY' TO INVENTORY ELSE
+  ERRMSG  = 'INVENTORY FILE IS MISSING'
+END
+*ADDED NEW
+OPEN 'PO' TO PO ELSE
+  ERRMSG  = 'PO FILE IS MISSING'
+END
+*END
+
+IF ERRMSG THEN
+  CALL RBO_ERROR_SUB(ERRMSG)
+  RETURN
+END
+
+* Get properties
+STATUS = RBO.getProperty('','ID',ID)
+*STATUS = RBO.getProperty('','PO_PROD_NUM',PO.PROD.NUM)
+
+* Get CONO
+CONO = ID[1,3]
+MATREAD COMP.REC FROM COMPANY, CONO ELSE
+  ERRMSG = 'Invalid Company ID (':CONO:').'
+  CALL RBO_ERROR_SUB(ERRMSG); RETURN
+END
+
+* Initializations
+*ADDED NEW
+MATREAD PO.REC FROM PO, ID THEN
+PROD.CNT = DCOUNT(PO.PROD.NUM,VM)
+*STATUS = RBO.setProperty('','ServerMessage',PROD.CNT)
+*RETURN
+TOT.ORD.AMT = 0
+TOT.QTY = 0
+MAT INV.CNV.REC = ""
+DIFF.UM = ""
+*RETVAL = ""
+SAV.INV.COST.WT = 100
+MENU.FLAG = "P"
+GOSUB GET.CONVERSIONS
+
+* Loop through the products
+FOR LN = 1 TO PROD.CNT
+  PO.TOT.ONORD<1,LN> -= PO.TOT.CANCEL<1,LN>
+*  RETVAL<1,LN> = PO.TOT.ONORD<1,LN> : "~" : PO.TOT.CANCEL<1,LN> : "~" : DIFF.UM<LN> : "~"
+  IF DIFF.UM<LN> = "Y" THEN
+    IF ICR.CNV<LN> = "MD0" THEN
+      TEMP = INT(((PO.TOT.ONORD<1,LN>/ICR.DV1<LN>)*ICR.MT1<LN>)/ICR.DV2<LN> + .5)
+      TEMP1 = INT(PO.TOT.ONORD<1,LN>/10)
+    END ELSE
+      TEMP = INT((PO.TOT.ONORD<1,LN>/10)/ICR.DV1<LN>)
+      TEMP1 = TEMP
+    END
+  END ELSE
+    IF ICR.CNV<LN> = "MD0" THEN
+      TEMP = INT(((PO.TOT.ONORD<1,LN>/ICR.DV1<LN>)*ICR.MT1<LN>)/ICR.DV2<LN> + .5)
+      TEMP1 = INT(PO.TOT.ONORD<1,LN>/10)
+    END ELSE
+      TEMP = INT(PO.TOT.ONORD<1,LN>/10)
+      TEMP1 = INT(PO.TOT.ONORD<1,LN>/10)
+    END
+  END
+  PO.TOT.ONORD<1,LN> += PO.TOT.CANCEL<1,LN>
+  IF PO.DISCOUNT<1,LN>+0#0 THEN
+    NET=OCONV(PO.GROS.PRICE<1,LN>,"MD4")*OCONV(PO.DISCOUNT<1,LN>,"MD4")
+    NET=OCONV(PO.GROS.PRICE<1,LN>,"MD4")-NET
+  END ELSE NET=OCONV(PO.GROS.PRICE<1,LN>,"MD4")
+  NET=ICONV(NET,"MD4")
+  EXT = OCONV(NET, "MD4") * (OCONV(TEMP1, "MD2") / OCONV(SAV.INV.COST.WT<LN>, "MD2"))
+  TOT.ORD.AMT = TOT.ORD.AMT + EXT
+NEXT LN
+PO.TOT.AMOUNT = ICONV(TOT.ORD.AMT,"MD2") ; * 25593
+TOT.ORD.AMT = TOT.ORD.AMT * 100
+
+* Set properties
+*END FOR THE MATREAD
+END
+IF MENU.FLAG # "R" THEN
+	TOT.ORD.AMT = OCONV(TOT.ORD.AMT,"MD2")
+END
+
+STATUS = RBO.setProperty('','TOT_ORD_AMT',TOT.ORD.AMT)
+*STATUS = RBO.setProperty('','ServerMessage',RETVAL)
+* End of method code
+RETURN
+
+GET.CONVERSIONS: 
+FOR LN = 1 TO PROD.CNT
+  MATREAD INV.REC FROM INVENTORY, CONO:PO.PROD.NUM<1,LN> THEN 
+    IF INV.COST.WT + 0 = 0 THEN INV.COST.WT = 100
+    IF INV.SBR + 0 = 0 THEN INV.SBR = 1
+    SAV.INV.COST.WT<LN> = INV.COST.WT
+    BEGIN CASE
+      CASE PO.UNIT.FLG<1,LN> = "SHT" AND INV.UNIT<1,3> = "LBS"
+        ICR.CNV<LN> = "MD0"; ICR.DV2<LN> = 1
+        ICR.DV1<LN> = INV.M.WT; ICR.MT1<LN> = 1
+      CASE PO.UNIT.FLG<1,LN> = "PC" AND INV.UNIT<1,3> = "MSI"
+        ICR.CNV<LN> = "MD0"; ICR.DV2<LN> = 1
+        ICR.DV1<LN> = INV.PAP.WIDTH/100; ICR.MT1<LN> = 10
+      CASE PO.UNIT.FLG<1,LN> = "FT" AND INV.UNIT<1,3> = "MSI"
+        ICR.CNV<LN> = "MD0"; ICR.DV2<LN> = 12
+        ICR.DV1<LN> = INV.PAP.WIDTH/100; ICR.MT1<LN> = 100
+      CASE 1
+        ICR.CNV<LN> = "MD2"; ICR.DV2<LN> = 1
+        ICR.DV1<LN> = INV.SBR; ICR.MT1<LN> = 1
+    END CASE
+    IF PO.UNIT.FLG<1,LN> # INV.UNIT<1,2> THEN DIFF.UM<LN> = "Y" ELSE DIFF.UM<LN> = "N"
+  END
+NEXT LN
+RETURN

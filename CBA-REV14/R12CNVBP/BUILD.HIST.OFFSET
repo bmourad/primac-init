@@ -1,0 +1,208 @@
+*COPY>ICS.CPYLIB>INV_SERIAL
+*COPY>ICS.CPYLIB>INV_RECEIPTS
+*COPY>ICS.CPYLIB>INV_AUDIT_HIST
+*COPY>ICS.CPYLIB>WAREHOUSE
+*COPY>ICS.CPYLIB>INVENTORY
+*
+OPEN '','INV_SERIAL' TO INV_SERIAL ELSE STOP 'INV_SERIAL'
+OPEN '','INV_RECEIPTS' TO INV_RECEIPTS ELSE STOP 'INV_RECEIPTS'
+OPEN '','INV_AUDIT_HIST' TO INV_AUDIT_HIST ELSE STOP 'INV_AUDIT_HIST'
+OPEN '','CONTROL' TO CONTROL ELSE STOP 'CONTROL'
+OPEN '','INVENTORY' TO INVENTORY ELSE STOP 'INVENTORY'
+OPEN '','WAREHOUSE' TO WAREHOUSE ELSE STOP WAREHOUSE
+*
+DEFFUN DIVISION.POSITION(CONO,CONTROL.FILE,DIV.CODE)
+DEFFUN CURRENT.PERIOD(CONO,CONTROL.FILE,DIV.POS,FISCAL.FLAG)
+DEFFUN GET.INAH.SEQ(CONO,CONTROL.FILE,INV_AUDIT_HIST.FILE) 
+*
+GEN.DIV='00'
+*
+PRINT @(-1)
+PRINT @(1,5):'Building history offset records'
+SELECT INV_SERIAL
+DONE=0 ; CNT=0
+LOOP
+  READNEXT ISTK.ID ELSE DONE=1
+UNTIL DONE DO
+  CNT+=1                   
+  IF REM(CNT,100)=0 THEN   
+    PRINT @(45,5):CNT:@(-4)
+  END                      
+  MATREAD ISTK.REC FROM INV_SERIAL,ISTK.ID THEN
+    CONO=ISTK.ID[1,3]
+    INV.ID=CONO:ISTK.PROD
+    MATREAD INV.REC FROM INVENTORY,INV.ID ELSE MAT INV.REC=''
+    IF INV.COST.WT + 0 = 0 THEN INV.COST.WT = 100 
+    GOSUB GET.PERIOD
+    ;*
+    ACNT=DCOUNT(ISTK.AUDIT.NO<1>,@VM)
+    QTY=0;COST=0
+    SKIP=1
+    FOR A=1 TO ACNT
+      INAH.ID=CONO:ISTK.AUDIT.NO<1,A>
+      MATREAD INAH.REC FROM INV_AUDIT_HIST,INAH.ID THEN
+        QTY+=INAH.QTY
+        IF INAH.EXT.COST#'' THEN
+          COST+=INAH.EXT.COST
+        END ELSE
+          COST+=INT((INAH.UNIT.COST/10000)*((INAH.QTY/10)/(INV.COST.WT/100))+.5)
+        END
+      END
+    NEXT A
+    ;* check to see if we have a receipt transaction
+    ;* in INV.HIST.CNV only positive transactions are converted.
+    BEGIN CASE 
+      CASE ACNT=0
+        GOSUB SET.INAH
+        INAH.SRC='CI'                                              
+        INAH.QTY=ISTK.ORG.QTY
+        INAH.UNIT.COST=ISTK.UNIT.COST
+        INAH.EXT.COST=INT((INAH.UNIT.COST/10000)*((INAH.QTY/10)/(INV.COST.WT/100))+.5)
+        INAH.DATE=ISTK.ENTRY.DATE
+        INAH.PERIOD=ISTK.RECP.PERIOD
+        INAH.DESC='positive offset linked to serial or receipt'
+        INAH.SEQ=GET.INAH.SEQ(CONO,CONTROL,INV_AUDIT_HIST) 
+        RELEASE INV_AUDIT_HIST,CONO:INAH.SEQ
+        INAH.SEQ="C":INAH.SEQ
+        INAH.ID=CONO:INAH.SEQ                                       
+        MATWRITE INAH.REC ON INV_AUDIT_HIST,INAH.ID                 
+        ISTK.AUDIT.NO<1,-1>=INAH.SEQ                    
+        MATWRITE ISTK.REC ON INV_SERIAL,ISTK.ID         
+        INVR.ID=CONO:ISTK.RECP                          
+        MATREAD INVR.REC FROM INV_RECEIPTS,INVR.ID THEN 
+          INVR.AUDIT.NO<1,-1>=INAH.SEQ                  
+          MATWRITE INVR.REC ON INV_RECEIPTS,INVR.ID     
+        END                                             
+        ;*
+        INAH.SRC='CO'                                             
+        INAH.QTY=-INAH.QTY
+        INAH.EXT.COST=-INAH.EXT.COST
+        INAH.DESC='negative offset not linked to serial or receipt'
+        INAH.SEQ=GET.INAH.SEQ(CONO,CONTROL,INV_AUDIT_HIST) 
+        RELEASE INV_AUDIT_HIST,CONO:INAH.SEQ
+        INAH.SEQ="C":INAH.SEQ
+        INAH.ID=CONO:INAH.SEQ                                      
+        MATWRITE INAH.REC ON INV_AUDIT_HIST,INAH.ID                
+      CASE ISTK.ORG.QTY-QTY>0
+        GOSUB SET.INAH
+        INAH.QTY=ISTK.ORG.QTY-QTY
+        SER.COST=INT((ISTK.UNIT.COST/10000)*((ISTK.ORG.QTY/10)/(INV.COST.WT/100))+.5)
+        COST.DIFF=SER.COST-COST
+        INAH.EXT.COST=COST.DIFF
+        INAH.SRC='CI'                                              
+        INAH.DATE=ISTK.ENTRY.DATE     
+        INAH.PERIOD=ISTK.RECP.PERIOD
+        INAH.DESC='positive offset linked to serial or receipt'
+        INAH.SEQ=GET.INAH.SEQ(CONO,CONTROL,INV_AUDIT_HIST) 
+        RELEASE INV_AUDIT_HIST,CONO:INAH.SEQ
+        INAH.SEQ="C":INAH.SEQ
+        INAH.ID=CONO:INAH.SEQ                                       
+        MATWRITE INAH.REC ON INV_AUDIT_HIST,INAH.ID                 
+        ISTK.AUDIT.NO<1,-1>=INAH.SEQ                    
+        MATWRITE ISTK.REC ON INV_SERIAL,ISTK.ID         
+        INVR.ID=CONO:ISTK.RECP                          
+        MATREAD INVR.REC FROM INV_RECEIPTS,INVR.ID THEN 
+          INVR.AUDIT.NO<1,-1>=INAH.SEQ                  
+          MATWRITE INVR.REC ON INV_RECEIPTS,INVR.ID     
+        END                                             
+        ;*
+        INAH.SRC='CO'                                             
+        INAH.QTY=-INAH.QTY
+        INAH.EXT.COST=-INAH.EXT.COST
+*        INAH.DATE=DATE()
+*        INAH.PERIOD=CUR.PERIOD
+        INAH.DESC='negative offset not linked to serial or receipt'
+        INAH.SEQ=GET.INAH.SEQ(CONO,CONTROL,INV_AUDIT_HIST) 
+        RELEASE INV_AUDIT_HIST,CONO:INAH.SEQ
+        INAH.SEQ="C":INAH.SEQ
+        INAH.ID=CONO:INAH.SEQ                                      
+        MATWRITE INAH.REC ON INV_AUDIT_HIST,INAH.ID                
+      CASE 1
+        NULL
+    END CASE
+    ;*
+    DIFF=ISTK.CUR.QTY-ISTK.ORG.QTY
+    IF DIFF<0 THEN
+      GOSUB SET.INAH
+      ;* create negative offset that is linked to the 
+      ;* serial and receipt.
+      ;* this is because we cannot backtrack from what receipt(bucket)
+      ;* quantity came. So we are lupming usage into one 
+      ;* offset history record that is linked to the serial and receipt.
+      ;* we will also have to create one positive offset that will
+      ;* bring transaction history on the product level to balance.
+      INAH.SRC='CI'
+      INAH.QTY=ABS(DIFF)
+      INAH.EXT.COST=INT((ISTK.UNIT.COST/10000)*((INAH.QTY/10)/(INV.COST.WT/100))+.5)
+      INAH.EXT.COST=ABS(INAH.EXT.COST)
+      INAH.DATE=DATE()
+      INAH.PERIOD=CUR.PERIOD
+      INAH.DESC='positive offset not linked to serial or receipt'
+      INAH.SEQ=GET.INAH.SEQ(CONO,CONTROL,INV_AUDIT_HIST) 
+      RELEASE INV_AUDIT_HIST,CONO:INAH.SEQ
+      INAH.SEQ="C":INAH.SEQ
+      INAH.ID=CONO:INAH.SEQ
+      MATWRITE INAH.REC ON INV_AUDIT_HIST,INAH.ID
+      ;*
+      INAH.SEQ=GET.INAH.SEQ(CONO,CONTROL,INV_AUDIT_HIST) 
+      RELEASE INV_AUDIT_HIST,CONO:INAH.SEQ
+      INAH.SEQ="C":INAH.SEQ
+      INAH.SRC="CO"
+      INAH.DESC='negative offset linked to serial or receipt'
+      INAH.QTY=DIFF
+      INAH.EXT.COST=-INAH.EXT.COST
+      INAH.DATE=DATE()
+      INAH.PERIOD=CUR.PERIOD
+      INAH.ID=CONO:INAH.SEQ
+      MATWRITE INAH.REC ON INV_AUDIT_HIST,INAH.ID
+      ISTK.AUDIT.NO<1,-1>=INAH.SEQ
+      MATWRITE ISTK.REC ON INV_SERIAL,ISTK.ID
+      INVR.ID=CONO:ISTK.RECP
+      MATREAD INVR.REC FROM INV_RECEIPTS,INVR.ID THEN
+        INVR.AUDIT.NO<1,-1>=INAH.SEQ
+        MATWRITE INVR.REC ON INV_RECEIPTS,INVR.ID
+      END
+    END
+  END
+REPEAT
+*
+GOTO 99999
+**************************************************************************
+************
+GET.PERIOD: 
+************
+*
+WHSE.ID=CONO:ISTK.WHSE
+MATREAD WHSE.REC FROM WAREHOUSE,WHSE.ID THEN
+  IF WHS.DIV='' THEN WHS.DIV=GEN.DIV
+  DIV.POS=DIVISION.POSITION(CONO,CONTROL,WHS.DIV)
+  IF DIV.POS<1,1>='' THEN DIV.POS=DIV.POS<1,2> ELSE
+    STOP DIV.POS<1,1>
+  END
+  CUR.PERIOD=CURRENT.PERIOD(CONO,CONTROL,DIV.POS,'IC')
+  IF CUR.PERIOD<1,1>='' THEN CUR.PERIOD=CUR.PERIOD<1,2> ELSE
+    STOP CUR.PERIOD<1,1>
+  END
+END
+RETURN
+*
+*
+**************
+SET.INAH: 
+**************
+*
+MAT INAH.REC=''
+INAH.TYPE="C"
+INAH.PROD=ISTK.PROD
+INAH.WHSE=ISTK.WHSE
+INAH.LOC=ISTK.LOC
+INAH.RECP.NO=ISTK.RECP
+INAH.SERIAL=ISTK.ID[4,99]
+INAH.JOB="CNV"
+INAH.SYS.DATE=DATE()
+INAH.SYS.TIME=TIME()
+INAH.OPER.ID="CONV"
+INAH.TRAN="CNV"
+RETURN
+99999 
+END

@@ -1,0 +1,262 @@
+**************************************************************************
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM     - PRIMAC
+* SOURCE     - GLSBP
+* PROGRAM    - POST.JE
+* BY         - WALID YAMOUT , C.B.A
+* DATE       - 09/09/85
+* DESCRIPTION-
+* LAST COMPILE  - 259
+*T21126 gat 10/24/1996 * FIX CODE TAKEN OUT BY MISTAKE
+*T23278 markt 01/20/1999 * Make fiscal data multi-value by division.
+*T26635 lhelms 06/19/2002 * CHECK TO SEE IF THE AMOUNTS IN JE RECORD ARE
+*                           ACTUALLY IN BALANCE; FOR EXAMPLE SOMEONE
+*                           WENT INTO THE EDITOR AND CHANGED A JE NOT TO
+*                           BE IN BALANCE
+*T26685 lhelms 07/08/2002 * REV12 DIVISION SECURITY
+*T26911 cmykleb 10/15/2002 * Error in updating STATUS control record when
+*                            DIV SEC<2> = "Y".
+*T27935 cmykleb 03/18/2004 * Write posted journal to a posted journal file
+*                            which will allow the ability to reverse a
+*                            journal.
+*ENDDOC
+**************************************************************************
+*
+*--- INSERT FILES EQUETES
+*
+*COPY>CPYLIB>SYSCOM
+*COPY>GLS.CPYLIB>JE
+*COPY>GLS.CPYLIB>POSTED.JE ; * T27935
+*COPY>PMC.CPYLIB>DEPARTMENT
+*COPY>PMC.CPYLIB>DIVISION
+*COPY>PMC.CPYLIB>COA
+*COPY>PMC.CPYLIB>COST.CNTR
+*COPY>GLS.CPYLIB>GLA
+*COPY>CPYLIB>CHAR
+   ERRMSG = ""
+***** SETUP ERRMSG ROUTINE
+   SYS.TYPE = 1
+   CALL SYSCOM(MAT SYSCOM.REC)
+*
+*--- GET COMPANY
+*
+   PROCREAD INBUFF ELSE ERRMSG = "MUST RUN FROM PROC"; GOSUB 91000; GOTO 999999
+   CONO = INBUFF<1>
+   CO.NAME = INBUFF<2>
+   PERIOD = INBUFF<3>
+   DIV.CODE = INBUFF<4>;* T23278
+*
+*--- OPEN FILES
+*
+   OPEN '','CONTROL' TO CONTROL ELSE ERRMSG = 'CONTROL FILE IS MISSING'; GOSUB 91000; GOTO 999999
+   OPEN '','JE' TO JE ELSE ERRMSG = 'JE FILE IS MISSING'; GOSUB 91000; GOTO 999999
+   OPEN '','DIVISION' TO DIVISION ELSE ERRMSG = 'DIVISION FILE IS MISSING'; GOSUB 91000; GOTO 999999
+   OPEN '','DEPARTMENT' TO DEPARTMENT ELSE ERRMSG = 'DEPARTMENT FILE IS MISSING'; GOSUB 91000; GOTO 999999
+   OPEN '','COST.CNTR' TO COST.CNTR ELSE ERRMSG = 'COST.CNTR FILE IS MISSING'; GOSUB 91000; GOTO 999999
+   OPEN '','GLA' TO GLA ELSE ERRMSG = 'GLA FILE IS MISSING'; GOSUB 91000; GOTO 999999
+   OPEN '','COA' TO COA ELSE ERRMSG = 'COA FILE IS MISSING'; GOSUB 91000; GOTO 999999
+*T27935 v
+   OPEN 'POSTED.JE' TO POSTED.JE ELSE ERRMSG = 'POSTED.JE FILE IS MISSING'; GOSUB 91000; GOTO 999999
+*T27935 ^
+*
+*--- INITIALIZATION
+*
+   TODAY = DATE()
+*
+***** T23278 v
+   READ DIVISION.REC FROM CONTROL, CONO:"DIVISIONS" ELSE
+      ERRMSG = "CANNOT LOCATE CONTROL - DIVISONS"; GOTO 93000
+   END
+   READ SECURITY.REC FROM CONTROL, CONO:"DIV.SECURITY" ELSE
+      ERRMSG = "CANNOT LOCATE CONTROL - DIV.SECURITY"; GOTO 93000
+   END
+*
+* T26685
+* IF SECURITY.REC<1> = "Y" AND SECURITY.REC<2> = "Y" THEN
+   IF SECURITY.REC<1> = "Y" AND SECURITY.REC<2> = "Y" AND (DIV.CODE # '00' AND DIV.CODE # 'ALL') THEN
+      LOCATE DIV.CODE IN DIVISION.REC<1>,1 SETTING POS ELSE
+         ERRMSG = "Division ":DIV.CODE:" not found on Control File DIVISIONS Record."
+         GOTO 93000
+      END
+   END ELSE
+      POS = 1
+   END
+***** T23278 ^
+*
+*--- MAIN PROCESS
+*
+1000*
+   READNEXT ID ELSE GOTO 999999
+   IF CONO # ID[1,3] THEN GOTO 1000
+   JE.NO = ID[4,8]
+   MATREADU JE.REC FROM JE, ID ELSE
+      RELEASE JE, ID
+      GOTO 1000
+   END
+   IF JE.PERIOD # PERIOD THEN
+      RELEASE JE, ID
+      GOTO 1000
+   END
+   JE.STATUS = ""
+* T26635 v
+   SUM.DB = 0
+   SUM.CR = 0
+   SUM.DB = SUM(JE.DB.AMT)
+   SUM.CR = SUM(JE.CR.AMT)
+   IF SUM.DB # SUM.CR THEN
+      JE.STATUS = "ERROR ENTRY OUT OF BALANCE"
+      GOTO 5001
+   END
+* T26635 ^
+   CNT = COUNT(JE.ACCT,VM) + (JE.ACCT # "")
+*
+*--- CHECK THE RECORD
+*
+   FOR I = 1 TO CNT UNTIL JE.STATUS # ""
+      MATREAD COA.REC FROM COA, CONO : JE.ACCT<1,I> ELSE
+         MAT COA.REC = ""
+         JE.STATUS = "ACOUNT ":JE.ACCT<1,I>:" IS MISSING"
+         GOTO 5000
+      END
+      BEGIN CASE
+         CASE COA.LEVEL = 0
+            IF JE.DIV<1,I> # "00" THEN
+               JE.STATUS = "ACCOUNT BREAK DOWN = 0 AND DIVISION # '00' LINE - ":I
+               GOTO 5000
+            END
+         CASE COA.LEVEL = 1
+            IF JE.DEPT<1,I> # "00" THEN
+               JE.STATUS = "ACCOUNT BREAK BOWN = 1 AND DEPARTMENT # '00' LINE - ":I
+               GOTO 5000
+            END
+         CASE COA.LEVEL = 2
+            IF JE.CCTR<1,I> # "000" THEN
+               JE.STATUS = "ACCOUNT BREAK BOWN = 2 AND COST CENTER # '000' LINE - ":I
+               GOTO 5000
+            END
+         CASE 1
+      END CASE
+      BEGIN CASE
+         CASE JE.DIV<1,I> = "00"
+            IF JE.DEPT<1,I> # "00" THEN
+               JE.STATUS = "DIVISION = '00' AND DEPARTMENT # '00' LINE - ":I
+               GOTO 5000
+            END
+            IF JE.CCTR<1,I> # "000" THEN
+               JE.STATUS = "DIVISION = '00' AND COST CENTER # '000' LINE - ":I
+               GOTO 5000
+            END
+         CASE JE.DEPT<1,I> = "00"
+            IF JE.CCTR<1,I> # "000" THEN
+               JE.STATUS = "DEPARTMENT = '00' AND COST CENTER # '000' LINE - ":I
+               GOTO 5000
+            END
+      END CASE
+      IF JE.DIV<1,I> # "00" THEN
+         MATREAD DIV.REC FROM DIVISION, CONO:JE.DIV<1,I> ELSE
+            JE.STATUS = "DIVISION IS NOT ON FILE LINE - ":I
+            GOTO 5000
+         END
+         IF JE.DEPT<1,I> # "00" THEN
+            LOCATE JE.DEPT<1,I> IN DIV.DEPT<1>,1 SETTING FND ELSE
+               JE.STATUS = "DEPARTMENT IS NOT UNDER DIVISION LINE - ":I
+               GOTO 5000
+            END
+            MATREAD DEPT.REC FROM DEPARTMENT, CONO : JE.DEPT<1,I> ELSE
+               JE.STATUS = "DEPARTMENT IS NOT ON FILE LINE - ":I
+               GOTO 5000
+            END
+            IF JE.CCTR<1,I> # "000" THEN
+               LOCATE JE.CCTR<1,I> IN DEPT.CCTRS<1>,1 SETTING FND ELSE
+                  JE.STATUS = "COST CENTER IS NOT UNDER DEPARTMENT LINE - ":I
+                  GOTO 5000
+               END
+               MATREAD CCTR.REC FROM COST.CNTR, CONO : JE.CCTR<1,I> ELSE
+                  JE.STATUS = "COST CENTER IS NOT ON FILE LINE - ":I
+                  GOTO 5000
+               END
+            END
+         END
+      END
+5000*
+   NEXT I
+*
+5001*
+*
+   IF JE.STATUS = "" THEN
+      READU NEXT.NO FROM CONTROL, CONO : "GLACOUNTER" ELSE NEXT.NO = 1
+      NEXT.NO = NEXT.NO + 1
+      FOR I = 1 TO CNT
+         MAT GLA.REC = ""
+         GLA.DATE = JE.DATE
+         GLA.REF = JE.NO
+*T21126
+         GLA.DESC = JE.CMT<1,I> ;* CAF1 15973
+*
+         GLA.SRC = "JE"
+         GLA.MON = JE.PERIOD
+         IF JE.CR.AMT<1,I> + 0 = 0 THEN
+            GLA.AMT = JE.DB.AMT<1,I>
+         END ELSE
+            GLA.AMT = JE.CR.AMT<1,I> * (-1)
+         END
+         KEY = CONO:JE.DIV<1,I>:JE.DEPT<1,I>:JE.CCTR<1,I>:JE.ACCT<1,I>
+         FND = 1
+         LOOP
+         WHILE FND DO
+            GLA.NO = NEXT.NO
+            IF GLA.NO > 999999 THEN GLA.NO = 1
+            NEXT.NO = GLA.NO + 1
+            GLA.NO = STR("0",6-LEN(GLA.NO)):GLA.NO
+            READU REC FROM GLA, KEY : GLA.NO ELSE
+               REC = ""; FND = 0
+            END
+            IF FND THEN RELEASE GLA, KEY : GLA.NO
+         REPEAT
+         MATWRITE GLA.REC ON GLA, KEY : GLA.NO
+      NEXT I
+      WRITE NEXT.NO ON CONTROL, CONO:"GLACOUNTER"
+*T26911 v
+      IF SECURITY.REC<2>='Y' AND DIV.CODE='ALL' AND JE.HEAD.DIV # '00' THEN
+         LOCATE JE.HEAD.DIV IN DIVISION.REC<1>,1 SETTING POS ELSE POS = 1
+      END
+*T26911 ^
+*T27935 v
+      IF JE.REV.NO # "" THEN
+         MATREAD PJE.REC FROM POSTED.JE, CONO:JE.REV.NO THEN
+            PJE.REV.DATE = TODAY
+            MATWRITE PJE.REC ON POSTED.JE, CONO:JE.REV.NO
+         END
+         JE.REV.NO = ""
+      END
+      MATWRITE JE.REC ON POSTED.JE,ID:'!':JE.PERIOD
+*T27935 ^
+      DELETE JE, ID
+      RELEASE JE, ID
+      READU FISCAL.REC FROM CONTROL,CONO:"JE":JE.PERIOD ELSE FISCAL.REC=""
+      FISCAL.REC<4,POS> = FISCAL.REC<4,POS> - 1
+      BEGIN CASE
+         CASE FISCAL.REC<4,POS> < 1
+            FISCAL.REC<1,POS> = "CLOSED"
+            FISCAL.REC<2,POS> = TODAY
+            FISCAL.REC<3,POS> = ""
+            FISCAL.REC<4,POS> = ""
+         CASE FISCAL.REC<3,POS> < 1
+            FISCAL.REC<1,POS> = "PRINTED"
+            FISCAL.REC<3,POS> = ""
+         CASE 1
+            FISCAL.REC<1,POS> = "ENTERED"
+      END CASE
+      WRITE FISCAL.REC ON CONTROL, CONO : "JE" : JE.PERIOD
+   END ELSE
+      MATWRITE JE.REC ON JE, ID
+   END
+   GOTO 1000
+*   
+*--- ERROR ROUTINE
+*   
+91000 ERR.TYPE = 1; CALL SYSCOM(MAT SYSCOM.REC); RETURN
+93000 ERR.TYPE = 3; CALL SYSCOM(MAT SYSCOM.REC)
+999999 PRINT @(-1)
+END   

@@ -1,0 +1,224 @@
+   SUBROUTINE SP.DEST.ASSIGN(FLAG,CONO,USER,MENU,OPTION,SET.DONE,MAT USER.REC,MAT TCC.PORT.REC)
+*********************************************************************
+* REVISION     - [08.0]
+* Copyright 1993 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM       - PRIMAC
+* SOURCE       - CBABP
+* PROGRAM      - SP.DEST.ASSIGN
+* BY           - DUANE GREEN, COMPUTER BUSINESS ASSOCIATES
+* DATE         - 05/07/93
+* DESCRIPTION  - This program sets the default printer queue assignment
+*                Based on the menu option selected and it's corresponding
+*                queue assignment as defined program 'PRINT.QUEUE.ASSIGN'.
+*                --> Called From 'EASY.MENU' Program.
+*T21361 rick 01/09/1997 * Problem with menu short cuts that do not
+*                         properly assign special form queues when short
+*                         cuts are used.
+*T21177 diane 02/13/1997 * REV11 UPG
+*T21487 diane 02/13/1997 * Suspend printing job number
+*T22081 stefanie 09/23/1997 * Set laser flag in security file so
+*                             programs can use laser forms settings.
+*T22426 stefanie 02/03/1998 * Allow reports to print to the screen.
+*T24431 edvard 09/24/1999 * RESET PRINTER TO MODE 1
+*T24819 edvard 02/11/2000 * Fix the problem with forms printer
+*                           assignment when in GUI mode using mouse to
+*                           choose option. 
+*T25665 gat 06/04/2001 * CHANGE TO USE SCREEN AND CALL PROGRAM
+*T26206 ajibaly 11/09/2001 * REPORT EMAILING CAPABILITY
+*T26090 adelgado 03/11/2002 * Make change for PRINT/VIEW/EMAIL/ETC
+*                             options.
+*T26090 wyamout 04/11/2002 * Eliminate call to PJOB.CONTROL
+*T28191 thompson 04/07/2005 * Add View function to REV12A  task 28073
+*T29032 cmyklebu 01/01/2007 * Move pgm from rev12 to rev14.
+*ENDDOC
+*********************************************************************
+*
+**************************
+* DIMENSIONS AND EQUATES *
+**************************
+*
+*COPY>PMC.CPYLIB>SECURITY
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>PORT.CONTROL
+*COPY>CPYLIB>TCC
+*COPY>PMC.CPYLIB>PMC_PROCESS
+*COPY>PMC.CPYLIB>PMC_PROCESS_XREF
+*COPY>PMC.CPYLIB>PMC_PRINTERS
+*
+**************
+* OPEN FILES *
+**************
+   OPEN '','SECURITY' TO SECURITY ELSE GO 99999
+   OPEN '','EASY.MENUS' TO PRIMAC.MENUS ELSE
+      OPEN '','PRIMAC.MENUS' TO PRIMAC.MENUS ELSE GO 99999
+   END
+   OPEN '','CONTROL' TO CONTROL ELSE GO 99999
+   OPEN '','_HOLD_' TO HOLD.FILE ELSE GO 99999 
+   OPEN '','PMC_PROCESS_XREF' TO PMC_PROCESS_XREF ELSE GO 99999 
+   OPEN '','PMC_PROCESS' TO PMC_PROCESS ELSE GO 99999 
+*  OPEN '','WIN.PRINTERS' TO WIN.PRINTERS ELSE GO 99999 
+   OPEN '','PMC_PRINTERS' TO PMC_PRINTERS ELSE GO 99999 
+   *
+   SYSVAR = 'TTY'
+   CALL SYSVARS.SUB(SYSVAR)
+   HF_NAME = SYSVAR:'_':OCONV(@LOGNAME,'MCU')
+1 *
+   LASER = ''        ;* T22081 <
+   POPT  = 'P'       ;* T22426 <
+   BEGIN CASE
+      CASE FLAG = 'S'
+         GOSUB 1000
+      CASE FLAG = 'R'
+         GOSUB 2000
+      CASE 1
+         GO 99999
+   END CASE
+   GO 99999
+*
+1000 *
+   OLD.OPTION = OPTION
+   IF INDEX(OPTION," ",1) AND COUNT(OPTION," ") = 1 THEN
+      OPTION = FIELD(OPTION," ",2)
+   END
+   MATREAD SEC.REC FROM SECURITY,CONO:USER ELSE GOTO 99999
+   MATREAD PPSX.REC FROM PMC_PROCESS_XREF,USER.VERB THEN
+      MATREAD PPS.REC FROM PMC_PROCESS,PPSX.PROCESS.ID ELSE GOTO 99999
+   END ELSE
+      MATREAD PPS.REC FROM PMC_PROCESS,USER.VERB ELSE GOTO 99999
+   END
+   READ MENU.REC FROM PRIMAC.MENUS,MENU ELSE MENU.REC = ''
+   IF PC.PORT.TYPE = 'termulator' OR NOT(INDEX(USER.VERB,".",1)) THEN
+      UVERB = PPS.VOC
+   END ELSE
+      UVERB = USER.VERB
+   END
+   FIND UVERB IN MENU.REC,1 SETTING MENU.POS ELSE MENU.POS = 1
+   IF NUM(OPTION) THEN
+      SKIP = 1 ; *T24819
+   END ELSE
+      OPTION = MENU.POS
+      SKIP = 0 ; *T24819
+   END
+* T26090 v
+* BEGIN CASE
+*   CASE PPS.PREPROCESS = 'O' AND PPS.REPORTS # ''
+*     CALL PJOB.CONTROL(POPT)  
+*     IF POPT = 'V' OR POPT = 'M' THEN GOTO 1050
+*   CASE PPS.PREPROCESS = 'R' AND PPS.REPORTS # ''
+*     WRITEV PPS.REPORTS ON CONTROL, HF_NAME,1
+*   CASE 1
+* END CASE
+* T26090 ^
+   QUEUE = SEC.DFLT.QUEUE
+   IF NOT(SKIP) THEN
+      OPTION.CNT = 0
+* count the real action lines and disregard comment lines to get the real
+* option number instead of the line number in MENU.REC. This is necessary
+* because of the way GUI works. If the option on the menu is picked up 
+* with mouse option number is not passed to the program and MENU.POS above
+* that is assigned OPTION variable is not real option but position
+* in MENU.REC file.
+      FOR LINE = 2 TO MENU.POS
+* take two first character and then trim it to exclude only the lines that
+* are truly comments and not menus that start with C.
+         IF TRIM(MENU.REC<LINE,1>[1,2]) = "C" THEN 
+            NULL
+         END ELSE
+            OPTION.CNT +=1
+         END
+      NEXT LINE
+      OPTION = OPTION.CNT
+   END
+*T24819 ^
+   FOR A = 1 TO DCOUNT(SEC.MENUS.LIST,VM)
+      IF SEC.MENUS.LIST<1,A> = MENU AND SEC.MENU.OPTIONS<1,A> = OPTION THEN
+         QUEUE = SEC.MENU.QUEUES<1,A>
+         LASER = SEC.MENU.QUEUE.LSR<1,A>      ;* T22081 <
+         GO 1050
+      END
+   NEXT A
+   IF QUEUE # '' THEN GO 1050     ;* T22426 <
+   OPTION = OLD.OPTION
+   RETURN
+*
+1050 *
+*
+   IF POPT = 'P' THEN
+      SYS.PLATFORM = UPCASE(SYSTEM(33))[1,7]
+      BEGIN CASE
+         CASE SYS.PLATFORM = "WINDOWS"
+            MATREAD PRTRS.REC FROM PMC_PRINTERS, QUEUE THEN
+               ERRMSG = ""; CALL PMC_SETPTR(QUEUE,'','',ERRMSG)
+            END ELSE
+               NULL
+            END
+*     READ WIN.PRINTERS.REC FROM WIN.PRINTERS,QUEUE THEN
+*     FORMATSTR = "Orientation=":WIN.PRINTERS.REC<2>
+*    FORMATSTR := ",Font=":WIN.PRINTERS.REC<3>
+*    FORMATSTR := ",FontSize=":WIN.PRINTERS.REC<4>
+*    FORMATSTR := ",TopMargin=":WIN.PRINTERS.REC<5>
+*    FORMATSTR := ",BottomMargin=":WIN.PRINTERS.REC<6>
+*END
+*     CMD = 'SETPTR 0,132,,,,1,AT ':WIN.PRINTERS.REC<1>:',"':FORMATSTR:'",NHEAD,BRIEF'
+         CASE SYS.PLATFORM = "UNIX"
+*     CMD = 'SETPTR ,,,,,,NHEAD,BRIEF,DEST ':QUEUE:',NOMESSAGE'
+            ERRMSG = ""; CALL PMC_SETPTR(QUEUE,'','',ERRMSG)
+         CASE 1
+      END CASE      
+   END ELSE
+      CMD = 'SETPTR ,,,,,3,BRIEF,BANNER ':HF_NAME:',NOMESSAGE,NHEAD'
+      WRITEV POPT ON CONTROL, HF_NAME, 1
+      EXECUTE CMD CAPTURING JUNK
+   END
+   IF LASER = 'Y' THEN
+      SEC.TEMP = 'Menu: ':MENU:', Option: ':OPTION:', Queue: ':QUEUE:', on ':OCONV(@DATE,'D2/')
+      WRITE SEC.TEMP ON SECURITY, CONO:USER:'!LASER'
+   END
+   SET.DONE = 1
+   RETURN
+*
+2000 *
+   MATREAD SEC.REC FROM SECURITY,CONO:USER ELSE RETURN
+   READV POPT FROM CONTROL,HF_NAME,1 ELSE POPT = 'P'
+   READ HOLD.REC FROM HOLD.FILE, HF_NAME ELSE HOLD.REC = ''
+   IF (POPT = 'V' OR POPT = 'M') AND HOLD.REC # '' THEN
+      DR = ''
+      DR<1> = HF_NAME
+      DR<2> = SEC.DFLT.QUEUE
+      DR<3> = POPT ;*T26206
+      WRITE DR ON CONTROL,HF_NAME
+      IF POPT = "M" OR SEC.GUI.VIEW = "" THEN ;* T28073
+         CMD = 'SCREEN.DISPLAY'
+         IF PC.PORT.TYPE = "termulator" THEN
+            P_TITLE = CMD
+            PROGID = USER.VERB
+            PPS.CEO = ""
+            CALL EXE_CEOSCRN(CMD,GUIFORM,P_TITLE,PPS.CEO,PROGID,ERROR)
+         END ELSE
+            UDTEXECUTE CMD
+         END
+* T28073 v
+      END ELSE
+         IN_PARAM = CONO
+         IN_PARAM<3> = HF_NAME
+         IN_PARAM<4> = USER.V.DSP
+         IN_PARAM<5> = PC.PORT.TYPE
+         IN_PARAM<6> = SEC.GUI.VIEW
+         CALL REPORT.VIEW.SUB(ERRMSG,IN_PARAM,OUT_PARAM,HOLD.FILE,MAT FILE.VARS)
+      END
+* T28073 ^
+      DELETE CONTROL,HF_NAME
+   END
+   IF POPT = 'P' THEN DELETE CONTROL,HF_NAME
+   IF SEC.DFLT.QUEUE = '' THEN RETURN
+*   CMD = 'SETPTR ,,,,,1,NHEAD,BRIEF,DEST ':SEC.DFLT.QUEUE:',NOMESSAGE'
+*   EXECUTE CMD CAPTURING JUNK
+   ERRMSG = ""; CALL PMC_SETPTR(SEC.DFLT.QUEUE,'','',ERRMSG)
+   READ SEC.TEMP FROM SECURITY, CONO:USER:'!LASER' THEN
+      DELETE SECURITY, CONO:USER:'!LASER'
+   END
+   RETURN
+*
+99999 *
+END

@@ -1,0 +1,626 @@
+**************************************************************************
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM     - PRIMAC
+* SOURCE     - GLSBP
+* PROGRAM    - COA.DIST.CAL.UPDATE
+* BY         - WALID YAMOUT , C.B.A
+* DATE       - 09/09/85
+* DESCRIPTION-
+*
+* T27933 cmykleb 09/29/2004 * Allow re-distribution process to be run
+*                             more than once in a period for % type
+*                             distribution records.
+* T28032 cmykleb 12/28/2006 * Move pgm from rev12 to rev14.
+*ENDDOC
+**************************************************************************
+*
+*--- INSERT FILES EQUETES
+*
+*COPY>GLS.CPYLIB>COA.DIST
+*COPY>GLS.CPYLIB>GLA
+*COPY>PMC.CPYLIB>DEPARTMENT
+*COPY>PMC.CPYLIB>DIVISION
+*COPY>PMC.CPYLIB>COA
+*COPY>GLS.CPYLIB>COA.BAL
+*COPY>GLS.CPYLIB>COA.BAL.SUM ;*T27933
+*COPY>PMC.CPYLIB>COST.CNTR
+*COPY>CPYLIB>CHAR
+   ERRMSG = ""
+*
+*--- GET COMPANY
+*
+   PROCREAD INBUFF ELSE ERRMSG = "MUST RUN FROM PROC"; GOTO 91000
+   CONO = INBUFF<1>
+   CO.NAME = INBUFF<2>
+   PERIOD = INBUFF<3>
+   RUN.FLAG = INBUFF<5> ; * T27933
+   MON = PERIOD[5,2]
+*
+*--- OPEN FILES
+*
+   OPEN '','CONTROL' TO CONTROL ELSE ERRMSG = 'CONTROL FILE IS MISSING'; GOTO 91000
+   OPEN '','COA.DIST' TO COA.DIST ELSE ERRMSG = 'COA.DIST FILE IS MISSING'; GOTO 91000
+   OPEN '','DIVISION' TO DIVISION ELSE ERRMSG = 'DIVISION FILE IS MISSING'; GOTO 91000
+   OPEN '','DEPARTMENT' TO DEPARTMENT ELSE ERRMSG = 'DEPARTMENT FILE IS MISSING'; GOTO 91000
+   OPEN '','COST.CNTR' TO COST.CNTR ELSE ERRMSG = 'COST.CNTR FILE IS MISSING'; GOTO 91000
+   OPEN '','COA.DIST.CAL' TO COA.DIST.CAL ELSE ERRMSG = 'COA.DIST.CAL FILE IS MISSING'; GOTO 91000
+   OPEN '','COA' TO COA ELSE ERRMSG = 'COA FILE IS MISSING'; GOTO 91000
+   OPEN '','CO.COA.BAL' TO CO.COA.BAL ELSE ERRMSG = 'CO.COA.BAL FILE IS MISSING'; GOTO 91000
+   OPEN '','DV.COA.BAL' TO DV.COA.BAL ELSE ERRMSG = 'DV.COA.BAL FILE IS MISSING'; GOTO 91000
+   OPEN '','DP.COA.BAL' TO DP.COA.BAL ELSE ERRMSG = 'DP.COA.BAL FILE IS MISSING'; GOTO 91000
+   OPEN '','CC.COA.BAL' TO CC.COA.BAL ELSE ERRMSG = 'CC.COA.BAL FILE IS MISSING'; GOTO 91000
+   OPEN '','GLA' TO GLA ELSE ERRMSG = 'GLA FILE IS MISSING'; GOTO 91000
+*
+*--- INITIALIZATION
+*
+   READ PERIOD.REC FROM CONTROL, CONO:"ACCT.PERIODS" ELSE
+      PERIOD.REC = ""
+      PERIOD.REC<1> = 12
+   END
+   NUM.PERIODS = PERIOD.REC<1>
+*
+   IF MON < 1 OR MON > NUM.PERIODS THEN
+      ERRMSG = "ERROR IN THE PERIOD"; GOTO 91000
+   END
+*T27933 v
+   MATREAD CBS.REC FROM CONTROL, 'COA.BAL.SUM' ELSE
+      ERRMSG = 'CANNOT LOCATE CONTROL, COA.BAL.SUM'
+      GOSUB 91000; GOTO 999999
+   END
+*T27933 ^
+*
+   TODAY = DATE()
+   FIRST = 1
+   WRITE.CNT=0
+*
+*--- MAIN PROCESS
+*
+1000*
+   READNEXT ID ELSE
+*     IF FIRST = 0 THEN
+      IF FIRST = 0 AND WRITE.CNT THEN
+         READU REC FROM CONTROL, CONO:"COA.DIST" ELSE NULL
+         REC = ""
+         REC<1> = "PRINTED"
+         REC<2> = TODAY
+         REC<3> = PERIOD
+         WRITE REC ON CONTROL, CONO:"COA.DIST"
+      END
+      GOTO 999999
+   END
+   IF CONO # ID[1,3] THEN GOTO 1000
+   MATREADU CDR.REC FROM COA.DIST, ID ELSE
+      RELEASE COA.DIST, ID
+      GOTO 1000
+   END
+*T27933 v
+*  IF CDR.PERIOD = PERIOD THEN
+IF @LOGNAME='lross' THEN DEBUG
+   IF CDR.PERIOD = PERIOD AND RUN.FLAG # "Y" THEN
+*T27933 ^
+      RELEASE COA.DIST, ID
+      GOTO 1000
+   END
+   IF FIRST THEN FIRST = 0
+   F.DIV = ID[4,2]
+   F.DEPT = ID[6,2]
+   F.CCTR = ID[8,3]
+   ACCT.NO = ID[11,99]
+   CDR.STATUS = ""
+   AMOUNT = 0
+   T.AMOUNT = ""
+   P.AMOUNT = ""
+   TOT.AMOUNT = 0
+   P.PCNT = ""
+   MATREAD COA.REC FROM COA, CONO:ACCT.NO ELSE
+      CDR.STATUS = "SOURCE ACCOUNT IS NOT ON COA FILE"
+      GOTO 6000
+   END
+   TYPE = COA.TYPE
+   BEGIN CASE
+      CASE COA.LEVEL = 0
+         IF F.DIV # "00" THEN
+            CDR.STATUS = "SOURCE - ACCOUNT BREAK DOWN = 0 AND DIVISION # '00'"
+            GOTO 6000
+         END
+      CASE COA.LEVEL = 1
+         IF F.DEPT # "00" THEN
+            CDR.STATUS = "SOURCE - ACCOUNT BREAK DOWN = 1 AND DEPARTMENT # '00'"
+            GOTO 6000
+         END
+      CASE COA.LEVEL = 2
+         IF F.CCTR # "000" THEN
+            CDR.STATUS = "SOURCE - ACCOUNT BREAK DOWN = 2 AND COST CENTER # '000'"
+            GOTO 6000
+         END
+      CASE 1
+   END CASE
+   BEGIN CASE
+      CASE F.DIV = "00"
+         IF F.DEPT # "00" THEN
+            CDR.STATUS = "SOURCE - DIVISION = '00' AND DEPARTMENT # '00'"
+            GOTO 6000
+         END
+         IF F.CCTR # "000" THEN
+            CDR.STATUS = "SOURCE - DIVISION = '00' AND COST CENTER # '000'"
+            GOTO 6000
+         END
+      CASE F.DEPT = "00"
+         IF F.CCTR # "000" THEN
+            CDR.STATUS = "SOURCE - DEPARTMENT = '00' AND COST CENTER # '000'"
+            GOTO 6000
+         END
+   END CASE
+   IF F.DIV # "00" THEN
+      MATREAD DIV.REC FROM DIVISION, CONO : F.DIV ELSE
+         CDR.STATUS = "SOURCE - DIVISION IS NOT ON FILE"
+         GOTO 6000
+      END
+      IF F.DEPT # "00" THEN
+         LOCATE F.DEPT IN DIV.DEPT<1>,1 SETTING FND ELSE
+            CDR.STATUS = "SOURCE - DEPARTMENT IS NOT UNDER DIVISION"
+            GOTO 6000
+         END
+         MATREAD DEPT.REC FROM DEPARTMENT, CONO : F.DEPT ELSE
+            CDR.STATUS = "SOURCE - DEPARTMENT IS NOT ON FILE"
+            GOTO 6000
+         END
+         IF F.CCTR # "000" THEN
+            LOCATE F.CCTR IN DEPT.CCTRS<1>,1 SETTING FND ELSE
+               CDR.STATUS = "SOURCE - COST CENTER IS NOT UNDER DEPARTMENT"
+               GOTO 6000
+            END
+            MATREAD CCTR.REC FROM COST.CNTR, CONO : F.CCTR ELSE
+               CDR.STATUS = "SOURCE - COST CENTER IS NOT ON FILE"
+               GOTO 6000
+            END
+         END
+      END
+   END
+   MATREAD CB.REC FROM CC.COA.BAL, ID ELSE
+      RELEASE COA.DIST, ID
+      GOTO 1000
+   END
+   AMOUNT = CB.REC(CB.OPN+MON+1) - CB.REC(CB.OPN+MON)
+*T27933 v
+   IF AMOUNT = 0 THEN GOTO 1000
+*LMR v Comment out - we will redistribute only bal that has not already
+*                    been redistributed. Also eliminate any unposted GLA's
+*  IF RUN.FLAG = 'Y' AND CDR.TYPE = '%' THEN
+*    LOCATE 'DJ' IN CBS.CODE<1>,1 SETTING DFND THEN
+*      AMOUNT += (CB.REC(CB.SDB+(MON * 2))<1,DFND> - CB.REC(CB.SCR+(MON * 2))<1,DFND>)
+*    END
+GLASUM=0 ;GLIST=''
+*  END
+CMD='SELECT GLA WITH CONO = "':CONO:'" AND WITH PERIOD = "':PERIOD:'" AND WITH ACCT = "':ACCT.NO:'" AND WITH DIV = "':F.DIV:'" AND WITH DEPT = "':F.DEPT:'" AND WITH CCTR = "':F.CCTR:'"'
+UDTEXECUTE CMD CAPTURING JUNK RETURNING MSG
+IF SYSTEM(11) > 0 THEN
+  SELECT GLA TO GLIST
+  MORE2=1
+  LOOP
+    READNEXT GLAID FROM GLIST ELSE MORE2 = 0
+  WHILE MORE2
+    MATREAD GLA.REC FROM GLA, GLAID THEN
+      GLASUM += GLA.AMT
+    END
+  REPEAT
+END
+AMOUNT += GLASUM
+IF AMOUNT = 0 THEN GOTO 1000
+*T27933 ^
+*LMR ^
+   IF CDR.TYPE = "%" AND CDR.F.PCNT # "10000" THEN
+      CDR.STATUS = "DISTRIBUTION TYPE = % AND PERCENTAGE # 100.00"
+      GOTO 6000
+   END
+   CNT = COUNT(CDR.ACCT,VM) + (CDR.ACCT # "")
+   IF CNT < 1 THEN
+      CDR.STATUS = "NO OBJECT ACCOUNTS"
+   END
+*
+*--- CHECK THE RECORD
+*
+   T.TYPE = ""
+   T.NORM = ""
+   P.TYPE = ""
+   P.NORM = ""
+   FOR I = 1 TO CNT UNTIL CDR.STATUS # ""
+      PTR = 1
+      LOOP
+         LOCATE CDR.ACCT<1,I> IN CDR.ACCT<1>,PTR SETTING FND ELSE FND = 0
+         IF FND THEN
+            IF FND = I THEN
+               PTR = FND + 1
+            END ELSE
+               IF CDR.DIV<1,I> = CDR.DIV<1,FND> AND CDR.DEPT<1,I> = CDR.DEPT<1,FND> AND CDR.CCTR<1,I> = CDR.CCTR<1,FND> THEN
+                  PTR = 0
+               END ELSE
+                  PTR = FND + 1
+               END
+            END
+         END
+      WHILE PTR AND FND DO REPEAT
+      IF PTR = 0 THEN
+         CDR.STATUS = "OBJECT ACCOUNT LINE - ":I:" IS DUPLICATED AT LINE - ":FND
+         GOTO 5000
+      END
+*T27933 v
+*     IF RUN.FLAG = "Y" THEN
+*        IF CDR.ACCT<1,I> = ACCT.NO THEN
+*           IF CDR.DIV<1,I> = F.DIV THEN
+*              IF CDR.DEPT<1,I> = F.DEPT THEN
+*                 IF CDR.CCTR<1,I> = F.CCTR THEN
+*                    RELEASE COA.DIST, ID
+*                    GOTO 1000
+*                 END
+*              END
+*           END
+*        END
+*     END
+*T27933 ^
+      MATREAD COA.REC FROM COA, CONO : CDR.ACCT<1,I> ELSE
+         CDR.STATUS = "OBJECT ACCOUNT ":CDR.ACCT<1,I>:" IS NOT ON COA FILE"
+         GOTO 5000
+      END
+      IF I = 1 THEN
+         IF COA.TYPE # TYPE THEN
+            CDR.STATUS = "OBJECT ACCOUNT TYPE MISMATCH SOURCE ACCOUNT TYPE LINE ":I
+            GOTO 5000
+         END
+         T.TYPE = COA.TYPE
+         T.NORM = COA.NORM
+      END
+      IF COA.TYPE # T.TYPE THEN
+         CDR.STATUS = "OBJECT ACCOUNT TYPE MISMATCH OTHER OBJECT ACCOUNTS TYPE LINE ":I
+         GOTO 5000
+      END
+      IF COA.NORM # T.NORM THEN
+         CDR.STATUS = "OBJECT ACCOUNT NORM MISMATCH OTHER OBJECT ACCOUNTS NORM LINE ":I
+         GOTO 5000
+      END
+      BEGIN CASE
+         CASE COA.LEVEL = 0
+            IF CDR.DIV<1,I> # "00" THEN
+               CDR.STATUS = "OBJECT - ACCOUNT BREAK DOWN = 0 AND DIVISION # '00' LINE - ":I
+               GOTO 5000
+            END
+         CASE COA.LEVEL = 1
+            IF CDR.DEPT<1,I> # "00" THEN
+               CDR.STATUS = "OBJECT - ACCOUNT BREAK DOWN = 1 AND DEPARTMENT # '00' LINE - ":I
+               GOTO 5000
+            END
+         CASE COA.LEVEL = 2
+            IF CDR.CCTR<1,I> # "000" THEN
+               CDR.STATUS = "OBJECT - ACCOUNT BREAK DOWN = 2 AND COST CENTER # '000' LINE - ":I
+               GOTO 5000
+            END
+         CASE 1
+      END CASE
+      BEGIN CASE
+         CASE CDR.DIV<1,I> = "00"
+            IF CDR.DEPT<1,I> # "00" THEN
+               CDR.STATUS = "OBJECT - DIVISION = '00' AND DEPARTMENT # '00' LINE - ":I
+               GOTO 5000
+            END
+            IF CDR.CCTR<1,I> # "000" THEN
+               CDR.STATUS = "OBJECT - DIVISION = '00' AND COST CENTER # '000' LINE - ":I
+               GOTO 5000
+            END
+         CASE CDR.DEPT<1,I> = "00"
+            IF CDR.CCTR<1,I> # "000" THEN
+               CDR.STATUS = "OBJECT - DEPARTMENT = '00' AND COST CENTER # '000' LINE - ":I
+               GOTO 5000
+            END
+      END CASE
+      IF CDR.DIV<1,I> # "00" THEN
+         MATREAD DIV.REC FROM DIVISION, CONO : CDR.DIV<1,I> ELSE
+            CDR.STATUS = "OBJECT - DIVISION IS NOT ON FILE LINE - ":I
+            GOTO 5000
+         END
+         IF CDR.DEPT<1,I> # "00" THEN
+            LOCATE CDR.DEPT<1,I> IN DIV.DEPT<1>,1 SETTING FND ELSE
+               CDR.STATUS = "OBJECT - DEPARTMENT IS NOT UNDER DIVISION LINE - ":I
+               GOTO 5000
+            END
+            MATREAD DEPT.REC FROM DEPARTMENT, CONO : CDR.DEPT<1,I> ELSE
+               CDR.STATUS = "OBJECT - DEPARTMENT IS NOT ON FILE LINE - ":I
+               GOTO 5000
+            END
+            IF CDR.CCTR<1,I> # "000" THEN
+               LOCATE CDR.CCTR<1,I> IN DEPT.CCTRS<1>,1 SETTING FND ELSE
+                  CDR.STATUS = "OBJECT - COST CENTER IS NOT UNDER DEPARTMENT LINE - ":I
+                  GOTO 5000
+               END
+               MATREAD CCTR.REC FROM COST.CNTR, CONO : CDR.CCTR<1,I> ELSE
+                  CDR.STATUS = "OBJECT - COST CENTER IS NOT ON FILE LINE - ":I
+                  GOTO 5000
+               END
+            END
+         END
+      END
+      IF CDR.TYPE = "%" THEN
+         T.AMOUNT<1,I> = INT(((AMOUNT / 100) * CDR.PCNT<1,I>) / 100)
+         TOT.AMOUNT = TOT.AMOUNT + T.AMOUNT<1,I>
+      END ELSE
+         IF ACCT.NO = CDR.P.ACCT<1,I> THEN
+            CDR.STATUS = "PROPORTION ACCOUNT AT LINE - ":I:" IS THE SAME AS SOURCE ACCOUNT"
+            GOTO 5000
+         END
+         PTR = 1
+         LOOP
+            LOCATE CDR.P.ACCT<1,I> IN CDR.P.ACCT<1>,PTR SETTING FND ELSE FND = 0
+            IF FND THEN
+               IF FND = I THEN
+                  PTR = FND + 1
+               END ELSE
+                  IF CDR.P.DIV<1,I> = "S" OR CDR.P.DIV<1,FND> = "S" THEN
+                     PTR = 0
+                  END ELSE
+                     IF CDR.P.DIV<1,I> = CDR.P.DIV<1,FND> THEN
+                        IF CDR.P.DEPT<1,I> = "S" OR CDR.P.DEPT<1,FND> = "S" THEN
+                           PTR = 0
+                        END ELSE
+                           IF CDR.P.DEPT<1,I> = CDR.P.DEPT<1,FND> THEN
+                              IF CDR.P.CCTR<1,I> = "S" OR CDR.P.CCTR<1,FND> = "S" THEN
+                                 PTR = 0
+                              END ELSE
+                                 IF CDR.P.CCTR<1,I> = CDR.P.CCTR<1,FND> THEN PTR = 0 ELSE PTR = FND + 1
+                              END
+                           END ELSE
+                              PTR = FND + 1
+                           END
+                        END
+                     END ELSE
+                        PTR = FND + 1
+                     END
+                  END
+               END
+            END
+         WHILE PTR AND FND DO REPEAT
+         IF PTR = 0 THEN
+            CDR.STATUS = "PROPORTION ACCOUNT LINE - ":I:" IS DUPLICATED AT LINE - ":FND
+            GOTO 5000
+         END
+         PTR = 1
+         LOOP
+            LOCATE CDR.P.ACCT<1,I> IN CDR.ACCT<1>,PTR SETTING FND ELSE FND = 0
+            IF FND THEN
+               IF CDR.P.DIV<1,I> = "S" THEN
+                  PTR = 0
+               END ELSE
+                  IF CDR.P.DIV<1,I> = CDR.DIV<1,FND> THEN
+                     IF CDR.P.DEPT<1,I> = "S" THEN
+                        PTR = 0
+                     END ELSE
+                        IF CDR.P.DEPT<1,I> = CDR.DEPT<1,FND> THEN
+                           IF CDR.P.CCTR<1,I> = "S" THEN
+                              PTR = 0
+                           END ELSE
+                              IF CDR.P.CCTR<1,I> = CDR.CCTR<1,FND> THEN PTR = 0 ELSE PTR = FND + 1
+                           END
+                        END ELSE
+                           PTR = FND + 1
+                        END
+                     END
+                  END ELSE
+                     PTR = FND + 1
+                  END
+               END
+            END
+         WHILE PTR AND FND DO REPEAT
+         IF PTR = 0 THEN
+            CDR.STATUS = "PROPORTION ACCOUNT LINE - ":I:" WAS ENTERED AS OBJECT ACCOUNT LINE - ":FND
+            GOTO 5000
+         END
+         LINE.LEVEL = COA.LEVEL
+         MATREAD COA.REC FROM COA, CONO : CDR.P.ACCT<1,I> ELSE
+            CDR.STATUS = "PROPORTION ACCOUNT ":CDR.P.ACCT<1,I>:" IS NOT ON COA FILE"
+            GOTO 5000
+         END
+         IF I = 1 THEN
+            P.TYPE = COA.TYPE
+            P.NORM = COA.NORM
+         END
+         IF COA.TYPE # P.TYPE THEN
+            CDR.STATUS = "PROPORTION ACCOUNT TYPE MISMATCH OTHER PROPORTION ACCOUNTS TYPE LINE ":I
+            GOTO 5000
+         END
+         IF COA.NORM # P.NORM THEN
+            CDR.STATUS = "PROPORTION ACCOUNT NORM MISMATCH OTHER PROPORTION ACCOUNTS NORM LINE ":I
+            GOTO 5000
+         END
+         BEGIN CASE
+            CASE LINE.LEVEL = 0
+               IF CDR.P.DIV<1,I> # "S" THEN
+                  CDR.STATUS = "PROPORTION DIVISION MUST BE 'S' (SUMMARY) LINE - ":I
+                  GOTO 5000
+               END
+            CASE COA.LEVEL = 0
+               IF CDR.P.DIV<1,I> # "00" THEN
+                  CDR.STATUS = "PROPORTION - ACCOUNT BREAK DOWN = 0 AND DIVISION # '00' LINE - ":I
+                  GOTO 5000
+               END
+            CASE LINE.LEVEL = 1
+               IF CDR.P.DEPT<1,I> # "S" THEN
+                  CDR.STATUS = "PROPORTION DEPARTMENT MUST BE 'S' (SUMMARY) LINE - ":I
+                  GOTO 5000
+               END
+            CASE COA.LEVEL = 1
+               IF CDR.P.DEPT<1,I> # "00" THEN
+                  CDR.STATUS = "PROPORTION - ACCOUNT BREAK DOWN = 1 AND DEPARTMENT # '00' LINE - ":I
+                  GOTO 5000
+               END
+            CASE LINE.LEVEL = 2
+               IF CDR.P.CCTR<1,I> # "S" THEN
+                  CDR.STATUS = "PROPORTION COST CENTER MUST BE 'S' (SUMMARY) LINE - ":I
+                  GOTO 5000
+               END
+            CASE COA.LEVEL = 2
+               IF CDR.P.CCTR<1,I> # "000" THEN
+                  CDR.STATUS = "PROPORTION - ACCOUNT BREAK DOWN = 2 AND COST CENTER # '000' LINE - ":I
+                  GOTO 5000
+               END
+            CASE 1
+         END CASE
+         BEGIN CASE
+            CASE CDR.P.DIV<1,I> = "S"
+               IF CDR.P.DEPT<1,I> # "" THEN
+                  CDR.STATUS = "PROPORTION - DIVISION = 'S' AND DEPARTMENT # '' LINE - ":I
+                  GOTO 5000
+               END
+               IF CDR.P.CCTR<1,I> # "" THEN
+                  CDR.STATUS = "PROPORTION - DIVISION = 'S' AND COST CENTER # '' LINE - ":I
+                  GOTO 5000
+               END
+            CASE CDR.P.DEPT<1,I> = "S"
+               IF CDR.P.CCTR<1,I> # "" THEN
+                  CDR.STATUS = "PROPORTION - DEPARTMENT = 'S' AND COST CENTER # '' LINE - ":I
+                  GOTO 5000
+               END
+         END CASE
+         BEGIN CASE
+            CASE CDR.P.DIV<1,I> = "00"
+               IF CDR.P.DEPT<1,I> # "00" THEN
+                  CDR.STATUS = "PROPORTION - DIVISION = '00' AND DEPARTMENT # '00' LINE - ":I
+                  GOTO 5000
+               END
+               IF CDR.P.CCTR<1,I> # "000" THEN
+                  CDR.STATUS = "PROPORTION - DIVISION = '00' AND COST CENTER # '000' LINE - ":I
+                  GOTO 5000
+               END
+            CASE CDR.P.DEPT<1,I> = "00"
+               IF CDR.P.CCTR<1,I> # "000" THEN
+                  CDR.STATUS = "PROPORTION - DEPARTMENT = '00' AND COST CENTER # '000' LINE - ":I
+                  GOTO 5000
+               END
+         END CASE
+         IF CDR.P.DIV<1,I> # "00" AND CDR.P.DIV<1,I> # "S" THEN
+            MATREAD DIV.REC FROM DIVISION, CONO : CDR.P.DIV<1,I> ELSE
+               CDR.STATUS = "PROPORTION - DIVISION IS NOT ON FILE LINE - ":I
+               GOTO 5000
+            END
+            IF CDR.P.DEPT<1,I> # "00" AND CDR.P.DEPT<1,I> # "S" THEN
+               LOCATE CDR.P.DEPT<1,I> IN DIV.DEPT<1>,1 SETTING FND ELSE
+                  CDR.STATUS = "PROPORTION - DEPARTMENT IS NOT UNDER DIVISION LINE - ":I
+                  GOTO 5000
+               END
+               MATREAD DEPT.REC FROM DEPARTMENT, CONO : CDR.P.DEPT<1,I> ELSE
+                  CDR.STATUS = "PROPORTION - DEPARTMENT IS NOT ON FILE LINE - ":I
+                  GOTO 5000
+               END
+               IF CDR.P.CCTR<1,I> # "000" AND CDR.P.CCTR<1,I> # "S" THEN
+                  LOCATE CDR.P.CCTR<1,I> IN DEPT.CCTRS<1>,1 SETTING FND ELSE
+                     CDR.STATUS = "PROPORTION - COST CENTER IS NOT UNDER DEPARTMENT LINE - ":I
+                     GOTO 5000
+                  END
+                  MATREAD CCTR.REC FROM COST.CNTR, CONO : CDR.P.CCTR<1,I> ELSE
+                     CDR.STATUS = "PROPORTION - COST CENTER IS NOT ON FILE LINE - ":I
+                     GOTO 5000
+                  END
+               END
+            END
+         END
+         BEGIN CASE
+            CASE CDR.P.DIV<1,I> = "S"
+               KEY = CONO:CDR.P.ACCT<1,I>
+               MATREAD CB.REC FROM CO.COA.BAL, KEY ELSE MAT CB.REC = ""
+            CASE CDR.P.DEPT<1,I> = "S"
+               KEY = CONO:CDR.P.DIV<1,I>:CDR.P.ACCT<1,I>
+               MATREAD CB.REC FROM DV.COA.BAL, KEY ELSE MAT CB.REC = ""
+            CASE CDR.P.CCTR<1,I> = "S"
+               KEY = CONO:CDR.P.DIV<1,I>:CDR.P.DEPT<1,I>:CDR.P.ACCT<1,I>
+               MATREAD CB.REC FROM DP.COA.BAL, KEY ELSE MAT CB.REC = ""
+            CASE 1
+               KEY = CONO:CDR.P.DIV<1,I>:CDR.P.DEPT<1,I>:CDR.P.CCTR<1,I>:CDR.P.ACCT<1,I>
+               MATREAD CB.REC FROM CC.COA.BAL, KEY ELSE MAT CB.REC = ""
+         END CASE
+         P.AMOUNT<1,I> = ABS(CB.REC(CB.OPN+MON+1) - CB.REC(CB.OPN+MON))
+         TOT.AMOUNT = TOT.AMOUNT + P.AMOUNT<1,I>
+      END
+5000*
+   NEXT I
+   IF CDR.STATUS = "" AND CDR.TYPE # "%" THEN
+      BEGIN CASE
+         CASE TOT.AMOUNT = 0
+            TEMP = INT(AMOUNT/CNT)
+            TOT.AMOUNT = 0
+            FOR I = 1 TO CNT
+               T.AMOUNT<1,I> = TEMP
+               TOT.AMOUNT = TOT.AMOUNT + TEMP
+            NEXT I
+         CASE 1
+            TEMP = AMOUNT / (TOT.AMOUNT / 1000)
+            TOT.AMOUNT = 0
+            FOR I = 1 TO CNT
+               T.AMOUNT<1,I> = INT((P.AMOUNT<1,I> / 1000) * TEMP)
+               TOT.AMOUNT = TOT.AMOUNT + T.AMOUNT<1,I>
+            NEXT I
+      END CASE
+   END
+6000*
+   IF CDR.STATUS = "" THEN
+      IF AMOUNT # TOT.AMOUNT THEN
+         PTR = 1
+         FOR I = 1 TO CNT
+            IF ABS(T.AMOUNT<1,I>) >= ABS(T.AMOUNT<1,PTR>) THEN PTR = I
+         NEXT I
+         T.AMOUNT<1,PTR> = T.AMOUNT<1,PTR> + AMOUNT - TOT.AMOUNT
+      END
+      READU NEXT.NO FROM CONTROL, CONO:"COA.DIST.CAL" ELSE NEXT.NO = 1
+      MAT GLA.REC = ""
+      GLA.DATE = TODAY
+      GLA.SRC = "DJ"
+      GLA.MON = PERIOD
+      GLA.AMT = AMOUNT * (-1)
+      GLA.DESC = "DISTRIBUTION SOURCE ACCOUNT ":ACCT.NO
+      GLA.REF = ID
+      FND = 1
+      LOOP
+      WHILE FND DO
+         CDCR.NO = NEXT.NO
+         IF CDCR.NO > 999999 THEN CDCR.NO = 1
+         NEXT.NO = CDCR.NO + 1
+         IF NEXT.NO > 999999 THEN NEXT.NO = 1
+         CDCR.NO = STR("0",6-LEN(CDCR.NO)):CDCR.NO
+         READU REC FROM COA.DIST.CAL, ID:"!":CDCR.NO ELSE FND = 0
+         IF FND THEN RELEASE COA.DIST.CAL, ID:"!":CDCR.NO
+      REPEAT
+      MATWRITE GLA.REC ON COA.DIST.CAL, ID:"!":CDCR.NO
+      FOR I = 1 TO CNT
+         KEY = CONO:CDR.DIV<1,I>:CDR.DEPT<1,I>:CDR.CCTR<1,I>:CDR.ACCT<1,I>
+         MAT GLA.REC = ""
+         GLA.DATE = TODAY
+         GLA.SRC = "DJ"
+         GLA.MON = PERIOD
+         GLA.AMT = T.AMOUNT<1,I>
+         GLA.DESC = "DIST. FROM ACCOUNT ":ACCT.NO:" TO ACCOUNT ":CDR.ACCT<1,I>
+         GLA.REF = ID
+         FND = 1
+         LOOP
+         WHILE FND DO
+            CDCR.NO = NEXT.NO
+            IF CDCR.NO > 999999 THEN CDCR.NO = 1
+            NEXT.NO = CDCR.NO + 1
+            CDCR.NO = STR("0",6-LEN(CDCR.NO)):CDCR.NO
+            READU REC FROM COA.DIST.CAL, KEY:"!":CDCR.NO ELSE FND = 0
+            IF FND THEN RELEASE COA.DIST.CAL, KEY:"!":CDCR.NO
+         REPEAT
+         MATWRITE GLA.REC ON COA.DIST.CAL, KEY:"!":CDCR.NO
+      NEXT I
+      WRITE NEXT.NO ON CONTROL, CONO:"COA.DIST.CAL"
+   END
+   WRITE.CNT += 1
+   MATWRITE CDR.REC ON COA.DIST, ID
+   GOTO 1000
+*
+*--- ERROR ROUTINE
+*
+91000*
+   P_X  = 0 ; P_Y = 23 ; P_VALUE = ERRMSG ; P_OPT = "CL"
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   INPUT REPLY,1 :
+   P_X  = 0 ; P_Y = 23 ; P_VALUE = "" ; P_OPT = "CL"
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+999999*
+END

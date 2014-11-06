@@ -1,0 +1,238 @@
+      SUBROUTINE UNSCHED.JOB.SUB(CONO,ACTION,JOB.NUM,TODAY,SPTR,EPTR,SDATE,ALL.FLG)
+*COPY>CPYLIB>SCOMMON1
+*COPY>PSS.CPYLIB>COM.PSS.FILE.VARS
+*COPY>PSS.CPYLIB>COM.CCTR.SCHED
+*COPY>PSS.CPYLIB>COM.JOB.SCHED
+*COPY>PMC.CPYLIB>COM.COMPANY
+*COPY>PMC.CPYLIB>COM.DIVISION
+*COPY>JES.CPYLIB>COM.ESTIMATE
+*COPY>JCS.CPYLIB>COM.JOB
+*********************************************************************
+* REVISION - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM   - PRIMAC
+* SOURCE   - PSSBP
+* PROGRAM  - UNSCHED.JOB.SUB
+* AUTHOR   - WALID YAMOUT, COMPUTER BUSINESS ASSOCIATES
+* DATE     - 05/04/86
+* DESCRIPTION
+* This program will unschedule all operations from JOB.SCHED record
+* and update CCTR.SCHED file.
+*T22102 12/23/1997 renee * Trying to find out why the program
+*                          is blowing up.
+*ENDDOC
+*********************************************************************
+*
+*---- FILE COPY STATEMENTS
+*
+*COPY>PSS.CPYLIB>JOB.SCHED
+*COPY>PSS.CPYLIB>CCTR.SCHED
+*COPY>PSS.CPYLIB>PSS.FILE.VARS
+*COPY>PMC.CPYLIB>DEPARTMENT
+*COPY>PMC.CPYLIB>COST.CNTR
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>SCREEN.COM
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+*
+*---- SET UP SYSCOM
+*
+      SYS.TYPE = 1
+      CALL SI_SYSCOM(MAT SYSCOM.REC)
+*
+*--- INITIALIZATION
+*
+      IF ACTION = "W" THEN WIN.MODE = 1 ELSE WIN.MODE = 0
+      ACTION = ""
+      READ TP.DIV FROM PSS.LOCK, @TTY ELSE TP.DIV = ""
+*
+*---- MAIN PROCESSING
+*
+P_X  = 3 ; P_Y = 23 ; P_VALUE = "NOW PROCESSING UNSCHEDULE ROUTINE" ; P_OPT = "CL"
+CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      TR.CNT = DCOUNT(JBS.DEPT,VM)
+      IF SPTR + 0 = 0 THEN SPTR = 1
+      IF EPTR + 0 = 0 THEN EPTR = TR.CNT
+      FOR TR = EPTR TO SPTR STEP - 1
+         ADATE = JBS.SCH.DATE<1,TR>
+         BDATE = JBS.EXP.DATE<1,TR>
+         BEGIN CASE
+         CASE JBS.CCTR.STATUS<1,TR> = "C"
+            GOTO 1999
+         CASE JBS.CCTR.STATUS<1,TR> = "I"
+            GOTO 1999
+         CASE ADATE = "" OR BDATE = ""
+            GOTO 1999
+         CASE JBS.TRAN<1,TR> = ""
+            GOTO 1999
+         END CASE
+P_X  = 3 ; P_Y = 23 ; P_VALUE = "Dept - ":JBS.DEPT<1,TR> "L#5":" , Cctr - ":JBS.CCTR<1,TR> "L#5" ; P_OPT = "CL"
+CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         CCTR = JBS.CCTR<1,TR>
+         IF TR = SPTR THEN
+*T22102     IF ADATE < SDATE THEN ADATE = SDATE
+            IF ADATE < SDATE THEN ADATE = ICONV(SDATE,'D2/') ; * T22102 -  Iconv SDATE
+         END
+*        IF ADATE < TODAY THEN ADATE = TODAY
+         FOR XDATE = BDATE TO ADATE STEP - 1
+            MATREADU CCTR.SCHED.REC FROM CCTR.SCHED, CONO : CCTR : "*" : XDATE ELSE
+               MAT CCTR.SCHED.REC = ""
+               RELEASE CCTR.SCHED, CONO : CCTR : "*" : XDATE
+               JBS.EXP.DATE<1,TR> = XDATE - 1
+               JBS.EXP.SHIFT<1,TR> = 3
+               IF JBS.EXP.DATE<1,TR> < JBS.SCH.DATE<1,TR> THEN
+                  JBS.EXP.DATE<1,TR> = JBS.SCH.DATE<1,TR>
+               END
+               GOTO 1099
+            END
+            PTR = 1
+            LOOP
+               LOCATE JOB.NUM IN CCS.JOB<1>,PTR SETTING TFND ELSE TFND = 0
+               BEGIN CASE
+               CASE TFND = 0
+               CASE CCS.TRAN<1,TFND> # JBS.TRAN<1,TR>
+                  PTR = TFND + 1
+               CASE 1
+                  JOB.HRS = CCS.JOB.HRS<1,TFND>
+                  SFT = CCS.JOB.SHIFT<1,TFND>
+                  MLT = CCS.JOB.EQUIP<1,TFND>
+                  CCS.SCH.HRS = CCS.SCH.HRS - JOB.HRS
+                  CCS.REM.HRS = CCS.REM.HRS + JOB.HRS
+                  CCS.SCH.SM.HRS<1,SFT,MLT> = CCS.SCH.SM.HRS<1,SFT,MLT> - JOB.HRS
+                  IF CCS.SCH.SM.HRS<1,SFT,MLT> = 0 THEN CCS.SCH.SM.HRS<1,SFT,MLT> = ""
+                  CCS.REM.SM.HRS<1,SFT,MLT> = CCS.REM.SM.HRS<1,SFT,MLT> + JOB.HRS
+                  IF CCS.REM.SM.HRS<1,SFT,MLT> = 0 THEN CCS.REM.SM.HRS<1,SFT,MLT> = ""
+                  CCS.TRAN = DELETE(CCS.TRAN,1,TFND,0)
+                  CCS.JOB = DELETE(CCS.JOB,1,TFND,0)
+                  CCS.OPER = DELETE(CCS.OPER,1,TFND,0)
+                  CCS.OPER.STATUS = DELETE(CCS.OPER.STATUS,1,TFND,0)
+                  CCS.OPER.HRS = DELETE(CCS.OPER.HRS,1,TFND,0)
+                  CCS.JOB.HRS = DELETE(CCS.JOB.HRS,1,TFND,0)
+                  CCS.JOB.SHIFT = DELETE(CCS.JOB.SHIFT,1,TFND,0)
+                  CCS.JOB.EQUIP = DELETE(CCS.JOB.EQUIP,1,TFND,0)
+                  CCS.OPER.SHIFT = DELETE(CCS.OPER.SHIFT,1,TFND,0)
+                  CCS.OPER.EQUIP = DELETE(CCS.OPER.EQUIP,1,TFND,0)
+                  JBS.USD.HRS<1,TR> = JBS.USD.HRS<1,TR> - JOB.HRS
+                  PTR = TFND
+               END CASE
+            WHILE TFND DO
+            REPEAT
+            JBS.OPER.SCH.DATE<1,TR> = ""
+            JBS.OPER.EXP.DATE<1,TR> = ""
+            JBS.OPER.REV.DATE<1,TR> = ""
+            JBS.EXP.DATE<1,TR> = XDATE - 1
+            JBS.EXP.SHIFT<1,TR> = 3
+            IF JBS.EXP.DATE<1,TR> < JBS.SCH.DATE<1,TR> THEN
+               JBS.EXP.DATE<1,TR> = JBS.SCH.DATE<1,TR>
+            END
+***         MATWRITE CCTR.SCHED.REC ON CCTR.SCHED, CONO : CCTR : "*" : XDATE
+            TPFID = CONO:CCTR:"*":XDATE
+            MATBUILD TPREC FROM CCTR.SCHED.REC
+            CALL TRANSACTION.WRITE("WRITE",CONO,TP.DIV,"CCTR.SCHED",TPFID,TPREC,CCTR.SCHED,PSS.JOURNAL,ERRMSG)
+**********************************************************************
+1099*
+         NEXT XDATE
+         IF JBS.USD.HRS<1,TR> <= 0 THEN
+            JBS.USD.HRS<1,TR> = ""
+            JBS.TRAN<1,TR> = ""
+            JBS.SCH.DATE<1,TR> = ""
+            JBS.EXP.DATE<1,TR> = ""
+            JBS.SCH.SHIFT<1,TR> = ""
+            JBS.EXP.SHIFT<1,TR> = ""
+            JBS.REV.DATE<1,TR> = ""
+         END ELSE
+*
+*--- FIND LAST SCHEDULE DATE AND SHIFT
+*
+            CK = 0
+            BDATE = JBS.EXP.DATE<1,TR>
+            ADATE = JBS.SCH.DATE<1,TR>
+            FOR XDATE = BDATE TO ADATE STEP - 1 UNTIL CK
+               MATREAD CCTR.SCHED.REC FROM CCTR.SCHED, CONO:CCTR:"*":XDATE ELSE
+                  MAT CCTR.SCHED.REC = ""
+               END
+               PTR = 1
+               LOOP
+               WHILE PTR DO
+                  LOCATE JOB.NUM IN CCS.JOB<1>,PTR SETTING TFND ELSE
+                     TFND = 0
+                     PTR = 0
+                  END
+                  BEGIN CASE
+                  CASE PTR = 0
+                  CASE CCS.TRAN<1,TFND> # JBS.TRAN<1,TR>
+                     PTR = TFND + 1
+                  CASE CK = 0
+                     CK = CCS.JOB.SHIFT<1,TFND>
+                     PTR = TFND + 1
+                  CASE CCS.JOB.SHIFT<1,TFND> > CK
+                     CK = CCS.JOB.SHIFT<1,TFND>
+                     PTR = TFND + 1
+                  CASE 1
+                     PTR = TFND + 1
+                  END CASE
+               REPEAT
+               IF CK THEN
+                  JBS.EXP.DATE<1,TR> = XDATE
+                  JBS.EXP.SHIFT<1,TR> = CK
+               END
+            NEXT XDATE
+            IF CK = 0 THEN
+               JBS.USD.HRS<1,TR> = ""
+               JBS.TRAN<1,TR> = ""
+               JBS.SCH.DATE<1,TR> = ""
+               JBS.EXP.DATE<1,TR> = ""
+               JBS.SCH.SHIFT<1,TR> = ""
+               JBS.EXP.SHIFT<1,TR> = ""
+               JBS.REV.DATE<1,TR> = ""
+            END
+         END
+P_X  = 0 ; P_Y = 23 ; P_VALUE = "" ; P_OPT = "CL"
+CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+1999*
+      NEXT TR
+      TEMP.TRAN = 0
+      FOR TR = 1 TO TR.CNT
+         IF JBS.TRAN<1,TR> # "" AND JBS.TRAN<1,TR> > TEMP.TRAN THEN
+            TEMP.TRAN = JBS.TRAN<1,TR>
+         END
+      NEXT TR
+      JBS.LAST.TRAN = TEMP.TRAN
+***   MATWRITEU JBS.REC ON JOB.SCHED, CONO : JOB.NUM
+      TPFID = CONO:JOB.NUM
+      MATBUILD TPREC FROM JBS.REC
+      CALL TRANSACTION.WRITE("WRITEU",CONO,TP.DIV,"JOB.SCHED",TPFID,TPREC,JOB.SCHED,PSS.JOURNAL,ERRMSG)
+**********************************************************************
+P_X  = 0 ; P_Y = 23 ; P_VALUE = "" ; P_OPT = "CL"
+CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      GOTO 999999
+*-----------------------*
+*---   SUBROUTINES   ---*
+*-----------------------*
+*
+*--- ERROR ROUTINE
+*
+* 90000*
+* P_X  = 0 ; P_Y = 23 ; P_VALUE = ERRMSG ; P_OPT = "CL"
+* CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+*       IF NOT(WIN.MODE) THEN
+*          INPUT REPLY,1 :
+*       END
+* P_X  = 0 ; P_Y = 23 ; P_VALUE = "" ; P_OPT = "CL"
+* CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+*       RETURN
+90000*
+   IF WIN.MODE THEN
+      P_X  = 3 ; P_Y = 23 ; P_VALUE = ERRMSG:" INPUT" ; P_OPT = "CL"
+      CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      P_X  = 3 ; P_Y = 23 ; P_VALUE = "" ; P_OPT = "CL"
+      CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      RETURN
+   END ELSE
+      ERR.TYPE = 1
+      CALL SI_SYSCOM(MAT SYSCOM.REC)
+      RETURN
+   END
+999999*
+      RETURN
+   END

@@ -1,0 +1,1312 @@
+*COPY>CPYLIB>COM1
+*******************************************************************
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* PROGRAM     - CASH.REC.MAINT
+* AUTHOR      - JIHAD YAMOUT, CBA
+* DATE        - 09/04/84
+* DESCRIPTION - This program provides for payment application to
+* open invoices.  Also provided is on-account entries,
+* pre-payment againt job, bad check and credits.  The
+* program has the facility for batch application of
+* cash to outstanding invoices in chronological order.
+**** MODS FOR CSF 18282 LMR 10/15/92
+* MODIFY      - 2/27/89 (RRG) TASK #13812 Fix "NOT ENOUGH WORK SPACE"
+* error by giving ability to enter invoice numbers
+* instead of automatic.
+* MOD -5/24/90 (SFC) TASK 15010 & CSF12534 REVERSE AN WRITE-OFF TO
+* AN INVOICE OR TO AN ON-ACCOUNT TRANS BY USING A CHK # = 000000
+* TASK 20011 - DIVISION
+* TASK 20532 JR EXPAND INVOICE AMOUNT FIELDS TO 8.2
+*T21084 lanny 10/09/1996 * Mods made for lines greater than 999 access.
+*T21177 diane 11/06/1996 * REV11 UPG
+*T21775 lanny 04/04/1997 * Error in DIV default coding.
+*T22756 rik 04/16/1998 * NOT CLEARING MISC AMOUNT FIELD DURING SCROLL.
+* T23278 markt 10/13/1998 * Add division security check
+* T23558 markt 01/14/1999 * Prepayment of a valid job should not
+*                           prompt for div.
+*T23778 cm 03/17/1999 * NOTIFY IF REC DATE IS +/- 30 DAYS - ALLOW OVERRIDE
+*T24432 markt 11/03/1999 * Correct Reversal Processing for Credit Memos.
+*T25685 lanny 03/12/2001 * Period missing from PP cash rec records.
+*T25994 ajibaly 07/23/2001 * Add a short pay reason code field with
+*                            description after entering the misc cash
+*                            amount
+*T25978 adelgado 02/06/2002 * Add the use of prompts (S,SR,SB,ST).
+*T26126 adelgado 02/25/2002 * Implement the LOCKED clause for READU.
+*T27331 lross 03/06/2003 * Disallow Division length not = 2 digits.
+*T27646 thompson 08/18/2003 * ALL FOR MULTI PLATFORM USE
+*T28690 thompson 10/17/2005 * Correct problem on check reversal
+*T29143 lross 12/10/2007 * Error found by Janice Campo (Courier)
+*T29201 lross 06/02/2008 * Error in Division entry (3-pos s/b 2)
+********************************************************************
+*COPY>ARS.CPYLIB>COM.CASH.REC
+*COPY>ARS.CPYLIB>OPEN.RECV
+*COPY>ARS.CPYLIB>DAILY.CASH
+*COPY>PMC.CPYLIB>DIVISION
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>PMC.CPYLIB>COA
+*COPY>PMC.CPYLIB>GLTABLE
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>GEN.XREF.SUB ;*T25994
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>JCS.CPYLIB>JOB
+*COPY>OPS.CPYLIB>ORDER
+*COPY>ARS.CPYLIB>SHORT.PAY.CODE ;*T25994
+*DIM IVC.REC(30)
+   DIM SAVE.OR.REC(25)
+   EQU SOR.INV.NO TO SAVE.OR.REC(1)
+   EQU SOR.JOB.NO TO SAVE.OR.REC(2)
+   EQU SOR.INV.AMT TO SAVE.OR.REC(3)
+   EQU SOR.CASH.REC TO SAVE.OR.REC(4)
+   EQU SOR.MISC.AMT TO SAVE.OR.REC(5)
+   EQU SOR.GL.ACCT TO SAVE.OR.REC(6)
+   EQU SOR.OPEN.AMT TO SAVE.OR.REC(7)
+   EQU SOR.PAY.FLG TO SAVE.OR.REC(8)
+   EQU SOR.MON TO SAVE.OR.REC(9)
+   EQU SOR.ONACCT TO SAVE.OR.REC(10);* NOT USED
+   EQU SOR.DIV TO SAVE.OR.REC(11)
+   EQU SOR.DEPT TO SAVE.OR.REC(12)
+   EQU SOR.CCTR TO SAVE.OR.REC(13)
+   EQU SOR.CHG.JOB TO SAVE.OR.REC(14)
+   EQU SOR.PO.NO TO SAVE.OR.REC(15)
+   EQU SOR.REV.FLG TO SAVE.OR.REC(16)
+   EQU SOR.ORDER.FLG TO SAVE.OR.REC(17)
+   EQU SOR.SHORT.PAY TO SAVE.OR.REC(18) ;* T25994
+   EQU SOR.S.P.DESC TO SAVE.OR.REC(19) ;* T25994
+   MAT SAVE.OR.REC=""
+*
+*---- SETUP ERRMSG ROUTINE
+*
+   SYS.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC)
+*
+*---- OPEN FILES
+*
+   OPEN 'DAILY.CASH' TO DAILY.CASH ELSE ERRMSG="DAILY.CASH FILE IS MISSING";GOTO 93000
+   OPEN 'DAILY.CASH.TAG' TO DAILY.CASH.TAG ELSE ERRMSG="DAILY.CASH.TAG FILE IS MISSING";GOTO 93000
+   OPEN 'DIVISION' TO DIVISION ELSE ERRMSG="DIVISION FILE IS MISSING";GOTO 93000
+   OPEN 'OPEN.RECV' TO OPEN.RECV ELSE ERRMSG="OPEN.RECV FILE IS MISSING";GOTO 93000
+*OPEN 'INVOICE' TO INVOICE ELSE ERRMSG="INVOICE FILE IS MISSING";GOTO 93000
+   OPEN 'CUSTOMER' TO CUSTOMER ELSE ERRMSG="CUSTOMER FILE IS MISSING";GOTO 93000
+   OPEN 'CASH.HIST' TO CASH.HIST ELSE ERRMSG="CASH.HIST FILE IS MISSING";GOTO 93000
+*OPEN 'SALES-JRL' TO SALES.JRL ELSE ERRMSG="SALES-JRL FILE IS MISSING";GOTO 93000
+   OPEN 'CUSTOMER.XREF' TO CUSTOMER.XREF ELSE ERRMSG="CUSTOMER.XREF FILE IS MISSING";GOTO 93000
+   OPEN 'CONTROL' TO CONTROL ELSE ERRMSG="CONTROL FILE IS MISSING";GOTO 93000
+   OPEN 'CHECK.XREF' TO CHECK.XREF ELSE ERRMSG="CHECK.XREF FILE IS MISSING";GOTO 93000
+*T25994 v
+   OPEN 'ARS.SCREENS' TO M.SCREENS ELSE ERRMSG="ARS.SCREENS FILE IS MISSING";GOTO 93000
+   OPEN 'SHORT.PAY.CODE' TO SHORT.PAY.CODE ELSE ERRMSG="SHORT.PAY.CODE FILE IS MISSING";GOTO 93000
+   OPEN 'XREF.DATA' TO XREF.DATA ELSE ERRMSG="XREF.DATA FILES IS MISSING";GOTO 93000
+*T25994 ^
+   OPEN 'COMPANY' TO COMPANY ELSE ERRMSG="COMPANY FILE IS MISSING";GOTO 93000
+   OPEN 'PREFIX' TO PREFIX ELSE ERRMSG='PREFIX FILE IS MISSING';GOTO 93000
+*
+*---- GET CONO
+*
+   MAT COMP.REC=''
+   CONO=''
+   CALL GET.CONO(CONO,MAT COMP.REC)
+   IF CONO="END" THEN GOTO 99999
+   IF CO.GLS="Y" THEN
+   LOGNAME = 'LOGNAME'; CALL SYSVARS.SUB(LOGNAME); *T27646
+      OPEN 'COA' TO COA ELSE ERRMSG='COA FILE IS MISSING';GOTO 93000
+   END
+   IF CO.COMMISSION="Y" THEN
+      OPEN 'COMMISSION' TO COMMISSION ELSE ERRMSG='COMMISSION FILE IS MISSING';GOTO 93000
+   END
+   IF CO.JCS='Y' THEN OPEN 'JOB' TO JOB ELSE ERRMSG="JOB FILE IS MISSING";GOTO 93000
+   IF CO.OPS='Y' THEN OPEN 'ORDER' TO ORDER ELSE ERRMSG="ORDER FILE IS MISSING";GOTO 93000
+   ACCT.LEN=LEN(CO.ACCT.PIC)
+*
+***** T23278 v
+   READ DIVISION.REC FROM CONTROL, CONO:"DIVISIONS" ELSE
+      ERRMSG = "DIVISIONS CONTROL RECORD IS MISSING"
+      GOTO 93000
+   END
+   READ SECURITY.REC FROM CONTROL, CONO:"DIV.SECURITY" ELSE
+      ERRMSG = "DIV.SECURITY CONTROL RECORD IS MISSING"
+      GOTO 93000
+   END
+*
+***** T23278 ^
+*
+*---- SET UP GEN.XREF.REC
+*
+   GXR.HEADING = ''; GXR.ATT = ''; GXR.LEN = ''
+   MAT EDIT.COM.DRIVER='';MAT GEN.XREF.REC=''
+   OLD.NAME='';GXR.CO=CONO;GXR.HEADING<1,2>='DESCRIPTION'
+   GXR.ATT<1,1>=0; GXR.ATT<1,2>=1;GXR.LEN<1,1>=10;GXR.LEN<1,2>=30
+*
+*---- INT
+*
+   BEGIN.PAGE=9;PAGE.SIZE=5;LINE.SPACE=2;LINES=0;OLD.START.LINE=0
+* MAT EDIT.COM=''
+   FILL='#'
+   SP15=SPACE(15)
+   GEN.DIV="00";GEN.DEPT="00";GEN.CCTR="000"
+   FND = 0;* T23558
+*
+*---- MAIN PROCESSING
+*
+   MAT EDIT.COM.DRIVER=''
+   ECD.SCRN.CNT=1
+   ECD.SCRN.NAME<1>="CASH.REC.MAINT"
+   ECD.ACTION=1;CALL SCRN.EDIT
+*
+*---- PRINT SCREEN
+*
+   ECD.SCRN.NO=1
+   MAT SCV.REC=""
+   ECD.ACTION=2;CALL SCRN.EDIT
+*
+*---- CONTROL SUB
+80*
+   INV.FLG=0
+HOLD.INV= '' ; *T28690
+   HOLD.CASH=''
+   HOLD.MISC=''
+   HOLD.ACCT=''
+   LINES=0;OLD.START.LINE=0;APPLY.AMT=0;CH.AMT=0
+   MAT OR.REC='';MAT DC.REC='';MAT CUST.REC=''
+   MAT COA.REC='';MAT SAVE.OR.REC=''
+   MAT SCV.REC="";ECD.ACTION=6;CALL SCRN.EDIT
+   MATREAD GLTABLE.REC FROM CONTROL,CONO:"GLTABLE" ELSE
+      ERRMSG="GLTABLE RECORD IS NOT ON CONTROL FILE";GOTO 93000
+   END
+   READ ARCMON FROM CONTROL,CONO:"ARCFISCAL" ELSE
+      ERRMSG="ARCFISCAL RECORD IS MISSING FROM CONTROL";GOTO 93000
+   END
+*CSF 24339 v
+   READ OPENDATES FROM CONTROL, CONO:"OPENDATES" ELSE OPENDATES = ''
+*  FRSTDAY = OPENDATES<1,ARCMON<1>[5,2]> ;* T23278
+*CSF 24339 ^
+*  PRD=ARCMON<1> ;* T23278
+   FOR I=1 TO 6
+      ON I GOSUB 100,200,300,400,500,600
+      IF ECD.RET.VALUE="END" AND I=1 THEN GOTO 99999
+      IF ECD.RET.VALUE="END" AND I > 1 THEN
+         IF I > 2 THEN RELEASE CUSTOMER, CONO:CUST.NO
+         GOTO 80
+      END
+   NEXT I
+   GOSUB 9000;GOTO 80
+*
+*---- ENTER GL ACCOUNT NO AND PRINT DESCRIPTION
+100*
+   IF CO.GLS="Y" THEN
+      ECD.NUM=1;ECD.MAXL=ACCT.LEN;ECD.VALDAT.CODE='2';ECD.VALDAT.FILE=COA;ECD.PREFIX.ID=CONO
+      ECD.DEFAULT<1,ECD.NUM>=GLTB.CASH;ECD.PATRN=CO.ACCT.MATCH
+      ECD.ACTION=4;CALL SCRN.EDIT
+      IF ECD.RET.VALUE # 'END' THEN
+         GLTB.CASH=ECD.RET.VALUE
+         FOR L=1 TO COA.REC.SIZE;COA.REC(L)=ECD.VALDAT.ITEM<L>;NEXT L
+         SCV.REC(ECD.NUM)<1>=GLTB.CASH CO.ACCT.MASK;ECD.ACTION=5;CALL SCRN.EDIT
+         ECD.NUM=2;SCV.REC(ECD.NUM)<1>=COA.DESC;ECD.ACTION=5;CALL SCRN.EDIT
+      END
+   END ELSE
+      ECD.NUM=1;SCV.REC(ECD.NUM)<1>=GLTB.CASH;ECD.PATRN=CO.ACCT.MATCH
+      ECD.ACTION=5;CALL SCRN.EDIT
+   END
+   RETURN
+*
+*---- ENTER CUSTOMER
+200*
+   ECD.NUM=3;ECD.VALDAT.CODE=5;ECD.VALDAT.FILE=CUSTOMER;ECD.PREFIX.ID=CONO
+   ECD.ACTION=4;CALL SCRN.EDIT
+   CUST.NO=ECD.RET.VALUE
+   BEGIN CASE
+      CASE ECD.RET.VALUE='END'
+         GOTO 201
+      CASE ECD.RET.VALUE # '' AND ECD.VALDAT.ITEM # ""
+      * T26126 v
+         READU TMP.REC FROM CUSTOMER,CONO:ECD.RET.VALUE LOCKED
+            ERRMSG = 'CUSTOMER record is locked by user - ':GETUSERNAME(STATUS())
+            GOSUB 91000;SCV.REC(4)<1>='';GOTO 200 
+         END ELSE NULL
+      * T26126 ^
+         FOR C=1 TO CUST.REC.SIZE
+            CUST.REC(C)=ECD.VALDAT.ITEM<C>
+         NEXT C
+         ECD.NUM=4;SCV.REC(ECD.NUM)<1>=CUST.NAME
+         ECD.ACTION=5;CALL SCRN.EDIT
+      CASE ECD.RET.VALUE=''
+         ECD.NUM=4
+         ECD.ACTION=4;CALL SCRN.EDIT
+         IF ECD.RET.VALUE='' OR ECD.RET.VALUE='END' THEN GOTO 200
+         GXR.XREF=CUSTOMER.XREF
+         GXR.NAME="CUSTOMER"
+         GXR.FILE=CUSTOMER;*GXR.LOC=1;GXR.TOP.LINE='CUSTOMER XREF SEARCH'
+         GXR.HEADING<1,1>='CUSTOMER';GXR.ID='';GXR.SRCH.ID=ECD.RET.VALUE
+         CALL GEN.XREF.SUB(MAT GEN.XREF.REC,PREFIX,XREF.DATA) ;*T25994
+         ECD.ACTION=2;CALL SCRN.EDIT
+         SCV.REC(4)<1>=''
+         ECD.ACTION=3;CALL SCRN.EDIT
+         IF GXR.ID='' THEN GOTO 200
+         CUST.NO=GXR.ID
+      * T26126 v
+         MATREADU CUST.REC FROM CUSTOMER,CONO:GXR.ID LOCKED
+            ERRMSG = 'CUSTOMER record is locked by user - ':GETUSERNAME(STATUS())
+            GOSUB 91000;SCV.REC(4)<1>='';GOTO 200 
+         END ELSE
+      * T26126 ^
+            ERRMSG='Customer is not on file';GOSUB 91000;SCV.REC(4)<1>='';GOTO 200
+         END
+         ECD.NUM=3;SCV.REC(ECD.NUM)<1>=GXR.ID;ECD.ACTION=5;CALL SCRN.EDIT
+         ECD.NUM=4;SCV.REC(ECD.NUM)<1>=CUST.NAME;ECD.ACTION=5;CALL SCRN.EDIT
+   END CASE
+201*
+   RETURN
+*
+*---- ENTER CHECK.NUM
+300*
+   ECD.NUM=6;ECD.ACTION=4;CALL SCRN.EDIT
+   IF ECD.RET.VALUE # "END" THEN
+      IF ECD.RET.VALUE # "" THEN
+         IF NOT(NUM(ECD.RET.VALUE)) AND ECD.RET.VALUE # "CASH" THEN
+            ERRMSG="You must enter a numeric field or (CASH)";GOSUB 91000
+            GOTO 300
+         END
+      END
+      CH.NUM=ECD.RET.VALUE
+   END
+   RETURN
+*
+*---- ENTER REC DATE
+400*
+   ECD.NUM=5;ECD.ACTION=4;CALL SCRN.EDIT
+   IF ECD.RET.VALUE # "END" THEN
+      REC.DATE=ECD.RET.VALUE
+      REVERSE.FLAG="Y"
+      READ CHK FROM CHECK.XREF,CONO:CUST.NO:"!":REC.DATE:"!":CH.NUM ELSE REVERSE.FLAG="N"
+      IF REVERSE.FLAG="Y" THEN
+         ECD.NUM=12;ECD.ACTION=4;CALL SCRN.EDIT
+         IF ECD.RET.VALUE # "END" THEN
+            REVERSE.FLAG=ECD.RET.VALUE
+         END
+      END
+      IF REVERSE.FLAG="N" AND CH.NUM="00000" AND ECD.RET.VALUE # "END" THEN
+         CH.NUM=""
+         ECD.NUM=6;SCV.REC(ECD.NUM)<ECD.SCRN.NO>=CH.NUM;ECD.ACTION=5;CALL SCRN.EDIT
+         REC.DATE=DATE()
+         ECD.NUM=5;SCV.REC(ECD.NUM)<1>=REC.DATE;ECD.ACTION=5;CALL SCRN.EDIT
+      END
+*** T23778 v ***
+      BEGIN CASE
+         CASE REC.DATE GT DATE()+31
+            CHECK.DATE=1
+         CASE REC.DATE LT DATE()-31
+            CHECK.DATE=1
+         CASE 1
+            CHECK.DATE=''
+      END CASE
+401 *
+      IF CHECK.DATE THEN
+         X=0;Y=23;TYP=18;MINL=1;MAXL=1
+         PMSG='THE DATE ':OCONV(REC.DATE,'D4/'):' IS OUT OF RANGE, ACCEPT (Y/N) '
+         CALL EDIT.SUB
+         P_X=0;P_Y=23;P_VALUE='';P_OPT='CL'
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         IF VALUE='Y' OR VALUE='N' THEN NULL ELSE GO 401
+         IF VALUE='N' THEN REC.DATE='';GO 400
+         IF VALUE='Y' THEN NULL
+      END
+*** T23778 ^ ***
+   END
+   RETURN
+*
+*---- ENTER CASH AMOUNT TO BE APPLIED
+500*
+   IF REVERSE.FLAG # "Y" THEN
+      IF CH.NUM # "" THEN
+         ECD.NUM=8
+         ECD.ACTION=4;CALL SCRN.EDIT
+         IF ECD.RET.VALUE # "END" THEN
+            IF ECD.RET.VALUE >= 0 THEN
+               APPLY.AMT=APPLY.AMT - CH.AMT
+               CH.AMT=ECD.RET.VALUE
+               APPLY.AMT=CH.AMT + APPLY.AMT
+            END ELSE
+               ERRMSG="Cash or check amount must be greater than zero";GOSUB 91000
+               GOTO 500
+            END
+         END
+      END ELSE
+         ECD.NUM=8;SCV.REC(ECD.NUM)<1>=0;ECD.ACTION=5;CALL SCRN.EDIT
+      END
+      ECD.NUM=10;SCV.REC(ECD.NUM)<1>=APPLY.AMT;ECD.ACTION=5;CALL SCRN.EDIT
+   END
+   RETURN
+*
+*---- GET AND PRINT LINES INFORMATION
+600*
+   ON.ACCT.BAL = 0
+   IF REVERSE.FLAG="Y" THEN
+      DATA=1
+      REF.NO=0
+      LOOP
+      WHILE DATA DO
+         REF.NO=REF.NO + 1
+         DACH.KEY=CONO:CUST.NO:"!":REC.DATE:"!":REF.NO
+         MATREAD DC.REC FROM DAILY.CASH,DACH.KEY ELSE
+            DATA=0;MAT DC.REC="";GOTO 602
+         END
+         IF DC.BANK.ACCT=GLTB.CASH AND DC.CHECK=CH.NUM THEN
+            CH.AMT=CH.AMT + DC.CASH
+            TRAN.CNT=COUNT(DC.INVOICE,VM) + (DC.INVOICE # "")
+            FOR DAC=1 TO TRAN.CNT
+               IF DC.TYPE="R" THEN
+                  FNDI=0
+                  FOR DI=SA TO 1 STEP -1 UNTIL FNDI
+*T29143 v
+*                    IF DC.INVOICE<1,DAC>=SOR.INV.NO<DI> AND DC.CASH.APPL<1,DAC> + SOR.CASH.REC<DI>=0 THEN
+                     IF DC.INVOICE<1,DAC>=SOR.INV.NO<DI> AND SUM(DC.CASH.APPL<1,DAC>) + SOR.CASH.REC<DI>=0 THEN
+                        DEL SOR.INV.NO<DI>
+                        DEL SOR.JOB.NO<DI>
+                        DEL SOR.PO.NO<DI>
+                        DEL SOR.DIV<DI>
+                        DEL SOR.DEPT<DI>
+                        DEL SOR.CCTR<DI>
+                        DEL SOR.CHG.JOB<DI>
+                        DEL SOR.INV.AMT<DI>
+                        DEL SOR.OPEN.AMT<DI>
+                        DEL SOR.GL.ACCT<DI>
+                        DEL SOR.MISC.AMT<DI>
+                        DEL SOR.SHORT.PAY<DI> ; *T25994
+                        DEL SOR.S.P.DESC<DI> ; *T25994
+                        DEL SOR.CASH.REC<DI>
+                        DEL SOR.PAY.FLG<DI>
+                        DEL SOR.REV.FLG<DI>
+                        DEL SOR.ORDER.FLG<DI>
+                        FNDI=1
+                     END
+                  NEXT DI
+               END ELSE
+                  SA=COUNT(SOR.INV.NO,AM) + (SOR.INV.NO # "") + 1
+                  MATREAD OR.REC FROM OPEN.RECV,CONO:DC.INVOICE<1,DAC> ELSE
+                     MAT OR.REC=""
+                  END
+                  INV.LEN=LEN(DC.INVOICE<1,DAC>)
+                  SUFF=DC.INVOICE<1,DAC>[INV.LEN-1,2]
+                  IF OR.BAL=0 AND OR.INV.AMT<1,1> + SUM(DC.CASH.APPL<1,DAC>)=0 THEN
+                     OR.CNT=COUNT(OR.TYPE,VM) + (OR.TYPE # "")
+                     DF.CK=0
+                     FOR DFCK=1 TO OR.CNT UNTIL DF.CK
+                        IF CH.NUM # OR.CHECK<1,DFCK> THEN DF.CK=1
+                     NEXT DFCK
+                     IF DF.CK THEN GOTO 601
+                  END
+                  IF OR.INV.AMT<1,1> < "0" THEN SOR.REV.FLG<SA>="ALL"
+                  SOR.INV.NO<SA>=DC.INVOICE<1,DAC>
+                  SOR.JOB.NO<SA>=OR.JOB
+                  SOR.ORDER.FLG<SA>=OR.ORDER.FLG
+                  SOR.PO.NO<SA>=OR.PO
+                  JCNT=DCOUNT(DC.DIV<1,DAC>,SM)
+                  HOLD.INV<SA>=DC.INVOICE<1,DAC>; *T28690
+                  FOR J = 1 TO JCNT
+                     SOR.DIV<SA,J>=DC.DIV<1,DAC,J>
+                     SOR.DEPT<SA,J>=DC.DEPT<1,DAC,J>
+                     SOR.CCTR<SA,J>=DC.CCTR<1,DAC,J>
+                     HOLD.CASH<SA,J>=DC.CASH.APPL<1,DAC,J>
+                     HOLD.ACCT<SA,J>=DC.ACCT<1,DAC,J>
+                     HOLD.MISC<SA,J>=DC.AMT<1,DAC,J>
+                  NEXT J
+                  SOR.CHG.JOB<SA>=OR.CHG.JOB
+                  SOR.INV.AMT<SA>=OR.INV.AMT<1,1>
+                  IF OR.TYPE<1,2>="T" OR OR.TYPE<1,2>="S" OR OR.TYPE<1,2>="G" OR OR.TYPE<1,2>="U" OR OR.TYPE<1,2>="M" THEN
+                     SOR.INV.AMT<SA>=SOR.INV.AMT<SA> + OR.INV.AMT<1,2>
+                  END
+                  IF OR.TYPE<1,3>="T" OR OR.TYPE<1,3>="S" OR OR.TYPE<1,3>="G" OR OR.TYPE<1,3>="U" OR OR.TYPE<1,3>="M" THEN
+                     SOR.INV.AMT<SA>=SOR.INV.AMT<SA> + OR.INV.AMT<1,3>
+                  END
+                  IF OR.TYPE<1,4>="T" OR OR.TYPE<1,4>="S" OR OR.TYPE<1,4>="G" OR OR.TYPE<1,4>="U" OR OR.TYPE<1,4>="M" THEN
+                     SOR.INV.AMT<SA>=SOR.INV.AMT<SA> + OR.INV.AMT<1,4>
+                  END
+                  IF OR.TYPE<1,5>="T" OR OR.TYPE<1,5>="S" OR OR.TYPE<1,5>="G" OR OR.TYPE<1,5>="U" OR OR.TYPE<1,5>="M" THEN
+                     SOR.INV.AMT<SA>=SOR.INV.AMT<SA> + OR.INV.AMT<1,5>
+                  END
+                  IF OR.TYPE<1,6>="T" OR OR.TYPE<1,6>="S" OR OR.TYPE<1,6>="G" OR OR.TYPE<1,6>="U" OR OR.TYPE<1,6>="M" THEN
+                     SOR.INV.AMT<SA>=SOR.INV.AMT<SA> + OR.INV.AMT<1,6>
+                  END
+                  SOR.OPEN.AMT<SA>=OR.BAL
+                  SOR.CASH.REC<SA>=SUM(DC.CASH.APPL<1,DAC>)
+                  SOR.GL.ACCT<SA>=DC.ACCT<1,DAC,1>
+                  SOR.MISC.AMT<SA>=SUM(DC.AMT<1,DAC>)
+               END
+601*
+            NEXT DAC
+         END
+602*
+      REPEAT
+      ECD.NUM=8;SCV.REC(ECD.NUM)<1>=CH.AMT;ECD.ACTION=5;CALL SCRN.EDIT
+      LINES=COUNT(SOR.INV.NO,AM) + (SOR.INV.NO # "")
+      LOCATE "ALL" IN SOR.REV.FLG,1 SETTING REV.ALL ELSE REV.ALL=0
+      FOR RSA=1 TO LINES
+         IF REV.ALL # 0 THEN
+            SOR.PAY.FLG<RSA>="REV"
+            SOR.REV.FLG<RSA>="ALL"
+               ***
+               *** TASK 15010 -next eight lines
+* T24432 v
+            SOR.OPEN.AMT<RSA>=SOR.OPEN.AMT<RSA> + (SOR.CASH.REC<RSA> + SOR.MISC.AMT<RSA>)
+*              IF SOR.INV.AMT<RSA> < 0 THEN
+*                  SOR.OPEN.AMT<RSA>=SOR.OPEN.AMT<RSA>
+*              END ELSE
+*                  SOR.OPEN.AMT<RSA>=SOR.OPEN.AMT<RSA> + (SOR.CASH.REC<RSA> + SOR.MISC.AMT<RSA>)
+*              END
+* T24432 ^
+         END
+            ********end of TASK 15010 modification at this location
+      NEXT RSA
+   END ELSE
+      ECD.NUM=7;SCV.REC(ECD.NUM)<1>=CUST.AR.BAL;ECD.ACTION=5;CALL SCRN.EDIT
+      LINES=DCOUNT(CUST.INVOICE,VM)
+      CLINES = LINES
+* CSF 20501 UNIDATA ONLY (LMR) REMOVE 250 INVOICE RESTRICTION.
+*        IF LINES > 250 THEN
+*           CALL CASH.REC.INV (MAT SAVE.OR.REC,ON.ACCT.BAL)
+*           INV.FLG=1
+*           LINES = DCOUNT(SOR.INV.NO,AM)
+*           IF LINES = 0 THEN
+*              ECD.RET.VALUE = "END" ; GOTO 699
+*           END
+*        END ELSE
+      X=3;Y=21;TYP=8;O.R="O";DEFAULT="N";PMSG='Do you want to specify invoices (Y/N)';MAXL=1
+      CALL EDIT.SUB
+      P_X  = 0 ; P_Y = 23 ; P_VALUE = "" ; P_OPT = "CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      IF VALUE='Y' THEN
+*          CALL CASH.REC.INV (MAT SAVE.OR.REC,ON.ACCT.BAL,FRSTDAY) ;* T23278
+         CALL CASH.REC.INV (MAT SAVE.OR.REC,ON.ACCT.BAL) ;* T23278
+         INV.FLG=1
+         LINES = DCOUNT(SOR.INV.NO,AM)
+         IF LINES = 0 THEN
+            ECD.RET.VALUE = "END" ; GOTO 699
+         END
+      END
+*        END
+      IF CLINES = LINES THEN
+         ON.ACCT.BAL=0
+         SON=0
+*CSF 24339 v
+         PP=0
+*CSF 24339 ^
+         FOR SA=1 TO LINES
+            MATREAD OR.REC FROM OPEN.RECV,CONO:CUST.INVOICE<1,SA> ELSE
+               MAT OR.REC=""
+            END
+*CSF 24339 v
+            IF OR.BAL+0 = 0 THEN
+               OKAY=0
+               FOR K = 1 TO DCOUNT(OR.TYPE,VM) UNTIL OKAY
+***** T23278 v
+*                      IF OR.TYPE<1,K> = 'C' OR OR.TYPE<1,K> = 'A' THEN
+*                          IF OR.TR.DATE<1,K> >= FRSTDAY THEN OKAY = 1
+*                      END
+                  IF OR.TYPE<1,K> = 'C' OR OR.TYPE<1,K> = 'A' THEN OKAY = 1
+***** T23278 ^
+               NEXT K
+               IF NOT(OKAY) THEN GOTO 603
+            END
+            PP=PP+1
+*CSF 24339   Following references to <PP> were <SA>
+            SOR.INV.NO<PP>=CUST.INVOICE<1,SA>
+            SOR.JOB.NO<PP>=OR.JOB
+            SOR.ORDER.FLG<PP>=OR.ORDER.FLG
+            SOR.PO.NO<PP>=OR.PO
+            SOR.DIV<PP>=OR.DIV
+            SOR.DEPT<PP>=OR.DEPT
+            SOR.CCTR<PP>=OR.CCTR
+            SOR.CHG.JOB<PP>=OR.CHG.JOB
+            SOR.INV.AMT<PP>=OR.INV.AMT<1,1>
+            IF OR.TYPE<1,2>="T" OR OR.TYPE<1,2>="S" OR OR.TYPE<1,2>="G" OR OR.TYPE<1,2>="U" OR OR.TYPE<1,2>="M" THEN
+               SOR.INV.AMT<PP>=SOR.INV.AMT<PP> + OR.INV.AMT<1,2>
+            END
+            IF OR.TYPE<1,3>="T" OR OR.TYPE<1,3>="S" OR OR.TYPE<1,3>="G" OR OR.TYPE<1,3>="U" OR OR.TYPE<1,3>="M" THEN
+               SOR.INV.AMT<PP>=SOR.INV.AMT<PP> + OR.INV.AMT<1,3>
+            END
+            IF OR.TYPE<1,4>="T" OR OR.TYPE<1,4>="S" OR OR.TYPE<1,4>="G" OR OR.TYPE<1,4>="U" OR OR.TYPE<1,4>="M" THEN
+               SOR.INV.AMT<PP>=SOR.INV.AMT<PP> + OR.INV.AMT<1,4>
+            END
+            IF OR.TYPE<1,5>="T" OR OR.TYPE<1,5>="S" OR OR.TYPE<1,5>="G" OR OR.TYPE<1,5>="U" OR OR.TYPE<1,5>="M" THEN
+               SOR.INV.AMT<PP>=SOR.INV.AMT<PP> + OR.INV.AMT<1,5>
+            END
+            IF OR.TYPE<1,6>="T" OR OR.TYPE<1,6>="S" OR OR.TYPE<1,6>="G" OR OR.TYPE<1,6>="U" OR OR.TYPE<1,6>="M" THEN
+               SOR.INV.AMT<PP>=SOR.INV.AMT<PP> + OR.INV.AMT<1,6>
+            END
+            SOR.CASH.REC<PP>=0
+            SOR.GL.ACCT<PP>=''
+            SOR.OPEN.AMT<PP>=OR.BAL
+            IF SOR.INV.NO<PP>[7,2]="AC" OR SOR.INV.NO<PP>[7,2]="PP" THEN
+               IF OR.BAL < 0 THEN ON.ACCT.BAL=ON.ACCT.BAL + OR.BAL
+            END
+603      NEXT SA
+* CSF 24339 ^
+         STOT.BAL = 0
+      END ELSE
+         STOT.BAL=0
+         FOR SST=1 TO CLINES
+            LOCATE CUST.INVOICE<1,SST> IN SOR.INV.NO,1 SETTING FND ELSE FND = 0
+            IF NOT(FND) THEN
+               MATREAD OR.REC FROM OPEN.RECV, CONO:CUST.INVOICE<1,SST> ELSE
+                  OR.BAL = 0
+               END
+               STOT.BAL = STOT.BAL + OR.BAL
+            END
+         NEXT SST
+      END
+   END
+   ECD.NUM=9;SCV.REC(ECD.NUM)<1>=ON.ACCT.BAL * (-1);ECD.ACTION=5;CALL SCRN.EDIT
+*ECD.NUM=9;ECD.ACTION=5;CALL SCRN.EDIT
+   LN=1
+   GOSUB 10000
+699*
+   RETURN
+*
+*---- ENTER LINE INFORMATION
+700*
+   GOSUB 10000
+   SLN=BEGIN.PAGE + LINE.SPACE * MOD(LN-1,PAGE.SIZE)
+   P_X  = 0 ; P_Y = SLN ; P_VALUE = LN "R#4" ; P_OPT = "CL"
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+*
+*---- PRINT INVOICE #
+705*
+   P_X  = 5 ; P_Y = SLN ; P_VALUE = SOR.INV.NO<LN> "L#8" ; P_OPT = ""
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+*  SOR.MON<LN>=PRD ;* T23278
+*
+*---- ENTER JOB NO
+710*
+   IF OPTION='PP' THEN
+      X=14;Y=SLN;MAXL=8;TYP=1;O.R='R';VALDAT=''
+      IF SOR.JOB.NO<LN> # "" THEN
+         DEFAULT=SOR.JOB.NO<LN>;O.R="O"
+      END
+      CALL EDIT.SUB
+*  IF VALUE="END" THEN PRINT @(13,SLN):SOR.JOB.NO<LN>;GOTO 777
+      IF VALUE="END" THEN
+**********
+         IF SOR.JOB.NO<LN> = "" THEN
+            P_X  = 0 ; P_Y = SLN ; P_VALUE = "" ; P_OPT = "CL"
+            LINES -= 1
+         END ELSE
+            P_X  = 14 ; P_Y = SLN ; P_VALUE = SOR.JOB.NO<LN> ; P_OPT = "" 
+         END
+**********
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         GOTO 777
+      END
+*T25685 There are no PP's in OPS LMR 03/13/01
+*     IF OR.ORDER.FLG = "Y" THEN
+*         IF CO.OPS="Y" THEN
+*             IF VALUE="" THEN GOTO 710
+*             JOB.NO=VALUE
+*T23278*v
+*T25685 ^
+      IF CO.JCS="Y" THEN
+         IF VALUE="" THEN GOTO 710
+         JOB.NO=VALUE
+         FND=1
+         MATREAD JOB.REC FROM JOB,CONO:VALUE ELSE
+            MAT JOB.REC=""
+            X=3;Y=21;TYP=8;PMSG='Job (':VALUE:') not on file. OK to use (Y)es or (N)o ';MAXL=1
+            CALL EDIT.SUB
+            IF VALUE='END' OR VALUE='N' THEN
+               P_X  = 0 ; P_Y = 23 ; P_VALUE = "" ; P_OPT = "CL"
+               CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+               GOTO 710
+            END
+            FND=0
+            JOB.DIV=GEN.DIV
+         END
+         IF CUST.NO # JOB.CUST AND FND THEN
+            ERRMSG='Job number (':JOB.NO:') is not for this customer.';GOSUB 91000;GOTO 710
+         END
+         SOR.DIV<LN>=JOB.DIV
+      END ELSE
+         FND = 0;* T23558
+         JOB.NO=VALUE
+         SOR.DIV<LN>=GEN.DIV
+      END
+*****T23278 v
+      IF FND THEN
+         DIV.CODE = SOR.DIV<LN>; USER.ID = UPCASE(LOGNAME); ERRMSG = ''; *T27646
+         CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+         IF ERRMSG # '' THEN
+            GOSUB 91000; GOTO 710
+         END
+      END
+*****T23278 ^
+      SOR.JOB.NO<LN>=JOB.NO
+*T25685   SOR.ORDER.FLG<LN>=OR.ORDER.FLG
+      SOR.DEPT<LN>=GEN.DEPT
+      SOR.CCTR<LN>=GEN.CCTR
+*T25685 END
+   END
+*
+*--- ENTER DIVISION
+713*
+***** T23558 v
+*  IF OPTION = "PP" OR OPTION = "BC" OR OPTION = "ON" THEN
+   IF OPTION = "BC" OR OPTION = "ON" OR (OPTION = "PP" AND NOT(FND)) THEN
+***** T23558 ^
+*        ECD.NUM=20;ECD.MAXL=3;ECD.VALDAT.CODE='2';ECD.VALDAT.FILE=DIVISION;ECD.PREFIX.ID=CONO
+*T29201 ECD.NUM=20;ECD.MAXL=3
+      ECD.NUM=20;ECD.MAXL=2
+*      IF OPTION = "PP" THEN
+*T21775 ECD.DEFAULT = JOB.DIV
+      ECD.DEFAULT = SOR.DIV<LN>
+*      END
+      IF COA.LEVEL = 0 THEN
+         ECD.DEFAULT = "00"
+      END
+      ECD.ACTION = 4; CALL SCRN.EDIT
+      IF ECD.RET.VALUE # "END" THEN
+         IF COA.LEVEL = 0 THEN
+*T21775 v
+            IF 'X':ECD.RET.VALUE # 'X00' THEN
+               ERRMSG = 'Cash Account is set to level 0 Division changed to 00'
+               GOSUB 91000
+            END
+*T21775 ^
+            SOR.DIV<LN> = '00'
+         END ELSE
+*T27331 v
+*           IF ECD.RET.VALUE # "00" THEN
+            IF "X":ECD.RET.VALUE:"X" # "X00X" THEN
+               MATREAD DIV.REC FROM DIVISION,CONO:ECD.RET.VALUE ELSE
+                  ERRMSG = 'Not a Valid Division'
+                  GOSUB 91000; GOTO 713
+               END
+            END
+*T23278 v
+            DIV.CODE = ECD.RET.VALUE; USER.ID = UPCASE(LOGNAME); ERRMSG = ''; *T27646
+            CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+            IF ERRMSG # '' THEN
+               GOSUB 91000; GOTO 713
+            END
+*             IF SECURITY.REC<1> = "Y" AND SECURITY.REC<2> = "Y" THEN
+*                 IF DIV.CODE = "00" OR DIV.CODE = "ALL" THEN
+*                     ERRMSG = " 'ALL' OR '00' INVALID WHEN DIVISION-LEVEL POSTING & CLOSING IS SELECTED"
+*                     GOSUB 91000; GOTO 99999
+*                 END
+*                 LOCATE DIV.CODE IN DIVISION.REC<1>,1 SETTING POS ELSE
+*                     ERRMSG = "Division ":DIV.CODE:" not found in DIVISIONS Control Record"
+*                     GOTO 93000
+*                 END
+*             END ELSE
+*                 POS = 1
+*             END
+*             PRD = ARCMON<1,POS>
+*             SOR.MON<LN> = PRD
+*T23278 ^
+            SOR.DIV<LN> = ECD.RET.VALUE
+         END
+      END ELSE
+         IF SOR.DIV<LN> = "" THEN
+            DEL SOR.JOB.NO<LN>
+            DEL SOR.DIV<LN>
+            DEL SOR.DEPT<LN>
+            DEL SOR.CCTR<LN>
+            DEL SOR.MON<LN>
+            P_X  = 0 ; P_Y = SLN ; P_VALUE = "" ; P_OPT = "CL"
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            LINES -= 1
+         END
+         GOTO 777
+      END
+      P_X  = 0 ; P_Y = 21 ; P_VALUE = "" ; P_OPT = "CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      P_X  = 0 ; P_Y = 23 ; P_VALUE = "" ; P_OPT = "CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   END
+*T25685 v
+   IF SOR.DIV<LN> # '' THEN
+      IF SECURITY.REC<1> = "Y" AND SECURITY.REC<2> = "Y" THEN
+         IF DIV.CODE = "00" OR DIV.CODE = "ALL" THEN
+            ERRMSG = " 'ALL' OR '00' INVALID WHEN DIVISION-LEVEL POSTING & CLOSING IS SELECTED"
+            GOSUB 91000; GOTO 99999
+         END
+         LOCATE DIV.CODE IN DIVISION.REC<1>,1 SETTING POS ELSE
+            ERRMSG = "Division ":DIV.CODE:" not found in DIVISIONS Control Record"
+            GOTO 93000
+         END
+      END ELSE
+         POS = 1
+      END
+      PRD = ARCMON<1,POS>
+      SOR.MON<LN> = PRD
+   END
+*T25685 ^
+*
+*---- ENTER INVOICE AMT
+715*
+   IF SOR.INV.AMT<LN> < 0 THEN ON.ACCT.BAL=ON.ACCT.BAL - SOR.INV.AMT<LN>
+   X=23;Y=SLN;MAXL=12;TYP=4;SCALER=2;O.R='O'
+   IF SOR.INV.AMT<LN>="" THEN DEFAULT=OCONV(APPLY.AMT,"MD2")
+   IF SOR.INV.AMT<LN> # '' THEN DEFAULT=OCONV(SOR.INV.AMT<LN>,"MD2")
+   SCV.REC(9)<1>=SCV.REC(9)<1> - SOR.INV.AMT<LN>
+   CALL EDIT.SUB
+*IF VALUE="END" THEN PRINT @(22,SLN):OCONV(SOR.INV.AMT<LN>,"MD2") "R#10";GOTO 777
+   IF VALUE="END" THEN
+**********
+      IF SOR.INV.AMT<LN> + 0 = 0 THEN
+         P_X  = 0 ; P_Y = SLN ; P_VALUE = "" ; P_OPT = "CL"
+         LINES -= 1
+      END ELSE
+         P_X  = 23 ; P_Y = SLN ; P_VALUE = OCONV(SOR.INV.AMT<LN>,"MD2") "R#12" ; P_OPT = ""
+      END
+**********
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      GOTO 777
+   END
+   IF VALUE > 0 AND SOR.PAY.FLG<LN> # "BC" THEN VALUE=VALUE * (-1)
+   SOR.INV.AMT<LN>=VALUE
+   P_X  = 23 ; P_Y = SLN ; P_VALUE = OCONV(SOR.INV.AMT<LN>,"MD2") "R#12" ; P_OPT = ""
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   SOR.OPEN.AMT<LN>=SOR.INV.AMT<LN>
+   IF SOR.INV.AMT<LN> < 0 THEN
+      ON.ACCT.BAL=ON.ACCT.BAL + SOR.INV.AMT<LN>
+   END
+   ECD.NUM=9;SCV.REC(ECD.NUM)<1>=ON.ACCT.BAL * (-1);ECD.ACTION=5;CALL SCRN.EDIT
+   GOSUB 800;GOTO 777
+*
+*---- ENTER CASH.RECVD
+720*
+   X=36;Y=SLN;MAXL=12;TYP=4;SCALER=2;O.R='O'
+   SOR.OPEN.AMT<LN>=SOR.OPEN.AMT<LN> + (SOR.CASH.REC<LN> + SOR.MISC.AMT<LN>)
+   SOR.MISC.AMT<LN>='';SOR.GL.ACCT<LN>=''
+   IF SOR.INV.NO<LN>[7,2]="AC" OR SOR.INV.NO<LN>[7,2]="PP" THEN
+      IF SOR.INV.AMT<LN> < 0 THEN ON.ACCT.BAL=ON.ACCT.BAL + SOR.CASH.REC<LN>
+   END
+   IF SOR.INV.AMT<LN> < 0 THEN MAXV=0;MINV=SOR.OPEN.AMT<LN>
+   IF SOR.INV.AMT<LN> > 0 THEN MAXV=SOR.OPEN.AMT<LN>;MINV=0
+   IF SOR.CASH.REC<LN>="0" THEN
+      IF SOR.OPEN.AMT<LN> > APPLY.AMT THEN
+         DEFAULT=OCONV(APPLY.AMT,"MD2")
+      END ELSE
+         DEFAULT=OCONV(SOR.OPEN.AMT<LN>,"MD2")
+      END
+   END
+   IF SOR.CASH.REC<LN> # "0" THEN DEFAULT=OCONV(SOR.CASH.REC<LN>,"MD2")
+   CALL EDIT.SUB
+*IF VALUE='END' THEN PRINT @(35,SLN):OCONV(SOR.CASH.REC<LN>,"MD2") "R#12";GOTO 777
+   IF VALUE='END' THEN
+      P_X  = 36 ; P_Y = SLN ; P_VALUE = OCONV(SOR.CASH.REC<LN>,"MD2") "R#12" ; P_OPT = ""
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      GOTO 777
+   END
+   IF VALUE # 0 AND SOR.OPEN.AMT<LN> = 0 THEN
+      X=3; Y=21; TYP=1; MAXL=1; O.R='O'
+      PMSG='** OUT OF RANGE**'
+      CALL EDIT.SUB
+      P_X  = 0 ; P_Y = 23 ; P_VALUE = "" ; P_OPT = "CL"
+      P_X  := AM:36 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(SOR.CASH.REC<LN>,"MD2") "R#12"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      GOTO 777
+   END
+   IF SOR.INV.NO<LN>[7,2]="AC" OR SOR.INV.NO<LN>[7,2]="PP" THEN
+      IF SOR.INV.AMT<LN> < 0 THEN
+         ON.ACCT.BAL=ON.ACCT.BAL - VALUE
+         ECD.NUM=9;SCV.REC(ECD.NUM)<1>=ON.ACCT.BAL * (-1);ECD.ACTION=5;CALL SCRN.EDIT
+      END
+   END
+   SOR.CASH.REC<LN>=VALUE
+* IF INV.FLG THEN CASH.FLG=1
+   GOSUB 800
+   IF SOR.INV.AMT<LN> > 0 AND SOR.OPEN.AMT<LN> < 0 THEN
+      ERRMSG="Invoice Balance must be => zero or <= invoice amount";GOSUB 91000
+      SOR.CASH.REC<LN>=0;SOR.OPEN.AMT<LN>=0;GOSUB 800;GOTO 720
+   END
+   IF SOR.INV.AMT<LN> < 0 AND SOR.OPEN.AMT<LN> > 0 THEN
+      ERRMSG="Invoice Balance must be <= zero or => invoice amount";GOSUB 91000
+      SOR.CASH.REC<LN>=0;SOR.OPEN.AMT<LN>=0;GOSUB 800;GOTO 720
+   END
+   IF SOR.OPEN.AMT<LN>=0 THEN
+      P_X  = 39 ; P_Y = SLN+1 ; P_VALUE = OCONV(SOR.MISC.AMT<LN>,"MD2") "R#12" ; P_OPT = ""
+      P_X  := AM:52 ; P_Y := AM:SLN ; P_VALUE := AM:SOR.GL.ACCT<LN> CO.ACCT.MASK;GOTO 777
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   END
+*
+*---- ENTER MISC
+725*
+   X=39;Y=SLN+1;MAXL=12;TYP=4;SCALER=2;O.R='O'
+   SOR.OPEN.AMT<LN>=SOR.OPEN.AMT<LN> + (SOR.MISC.AMT<LN> + SOR.CASH.REC<LN>)
+   IF SOR.OPEN.AMT<LN>="0" THEN
+      SOR.MISC.AMT<LN>="";SOR.GL.ACCT<LN>="";SOR.PAY.FLG<LN>=""
+      P_X  = 39 ; P_Y = SLN+1 ; P_VALUE = OCONV(SOR.MISC.AMT<LN>,"MD2") "R#12" ; P_OPT = ""
+      P_X  := AM:52 ; P_Y := AM:SLN ; P_VALUE := AM:SOR.GL.ACCT<LN> CO.ACCT.MASK;GOTO 777
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   END
+   IF SOR.INV.AMT<LN> < 0 THEN MAXV=0;MINV=(SOR.OPEN.AMT<LN> - SOR.CASH.REC<LN>)
+   IF SOR.INV.AMT<LN> > 0 THEN MAXV=(SOR.OPEN.AMT<LN> - SOR.CASH.REC<LN>);MINV=0
+   IF SOR.MISC.AMT<LN> # "" THEN DEFAULT=OCONV(SOR.MISC.AMT<LN>,"MD2")
+   CALL EDIT.SUB
+   IF VALUE="END" THEN
+      IF SOR.GL.ACCT<LN>="" THEN SOR.MISC.AMT<LN>=""
+      P_X  = 39 ; P_Y = SLN+1 ; P_VALUE = OCONV(SOR.MISC.AMT<LN>,"MD2") "R#12" ; P_OPT = ""
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   END ELSE
+      SOR.MISC.AMT<LN>=VALUE
+   END
+   GOSUB 800
+*
+*---- ENTER GL ACCOUNT
+730*
+*T25994 v
+*  IF SOR.MISC.AMT<LN> + 0=0 THEN SOR.GL.ACCT<LN>="";GOTO 760
+   IF SOR.MISC.AMT<LN> + 0=0 THEN
+      SOR.GL.ACCT<LN> = ""
+      SOR.SHORT.PAY<LN> = ""
+      SOR.S.P.DESC<LN> = ""
+      GOTO 760
+   END
+*T25994 ^
+   P_X  = 52 ; P_Y = SLN ; P_VALUE = SP15 ; P_OPT = ""
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   X=52;Y=SLN;MINL=ACCT.LEN;MAXL=ACCT.LEN;TYP=3
+   IF SOR.GL.ACCT<LN>='' THEN
+      DEFAULT=GLTB.TRADE.DISC
+   END ELSE
+      DEFAULT=SOR.GL.ACCT<LN>
+   END
+   IF DEFAULT="" THEN O.R="R" ELSE O.R="O"
+   CALL EDIT.SUB
+   IF VALUE="END" AND SOR.GL.ACCT<LN>="" THEN GOTO 725
+   IF VALUE="END" THEN GOTO 760
+   IF VALUE="" THEN GOTO 730
+   IF VALUE # "" AND CO.GLS="Y" THEN
+      READ GL.REC FROM COA,CONO:VALUE ELSE
+         ERRMSG='G/L account not on file';GOSUB 91000;GOTO 730
+      END
+   END
+   SOR.GL.ACCT<LN>=VALUE
+760*
+   P_X  = 52 ; P_Y = SLN ; P_VALUE = SOR.GL.ACCT<LN> CO.ACCT.MASK ; P_OPT = ""
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+*
+*T25994v
+*---- ENTER SHORT PAY CODE
+765*
+   IF SOR.MISC.AMT<LN> + 0=0 THEN SOR.SHORT.PAY<LN>="";GOTO 766
+   ECD.NUM=27; ECD.SUB.NUM=(SLN-BEGIN.PAGE)/LINE.SPACE+1
+   ECD.ACTION=4; CALL SCRN.EDIT
+   IF ECD.RET.VALUE = "END" THEN
+      BEGIN CASE
+         CASE SOR.SHORT.PAY<LN>= ""
+            SOR.GL.ACCT<LN> = ""
+            P_X  = 52 ; P_Y = SLN+1 ; P_VALUE = SPACE(6) ; P_OPT = ""
+            P_X := AM:59 ; P_Y := AM:SLN+1 ; P_VALUE := AM:SPACE(17)
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            GOTO 730
+         CASE 1
+            GOTO 766
+      END CASE
+   END
+   IF ECD.RET.VALUE = "???" THEN
+      GXR.NAME = "GEN.CODE"
+      GXR.SORT.FILE = "SHORT.PAY.CODE"
+      GXR.FILE = SHORT.PAY.CODE
+      CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+      ECD.ACTION = 2;CALL SCRN.EDIT
+      ECD.ACTION = 3;CALL SCRN.EDIT
+      OLD.START.LINE = 0
+      GOSUB 10000
+      SLN=BEGIN.PAGE + LINE.SPACE * MOD(LN-1,PAGE.SIZE)
+      ECD.RET.VALUE = GXR.ID
+   END
+   MATREAD SHORT.PAY.REC FROM SHORT.PAY.CODE,CONO:ECD.RET.VALUE ELSE
+      ERRMSG="Invalid short pay code";GOSUB 91000
+      ECD.NUM=28; ECD.SUB.NUM=(SLN-BEGIN.PAGE)/LINE.SPACE+1
+      SCV.REC(ECD.NUM)<1,ECD.SUB.NUM>=''
+      ECD.ACTION=5;CALL SCRN.EDIT
+      GOTO 765
+   END
+   SOR.SHORT.PAY<LN>=ECD.RET.VALUE
+   SOR.S.P.DESC<LN>=SHORT.PAY.DESC
+766 *
+   ECD.NUM=27; ECD.SUB.NUM=(SLN-BEGIN.PAGE)/LINE.SPACE+1
+   SCV.REC(ECD.NUM)<1,ECD.SUB.NUM>=SOR.SHORT.PAY<LN>
+   ECD.ACTION=5;CALL SCRN.EDIT
+   ECD.NUM=28; ECD.SUB.NUM=(SLN-BEGIN.PAGE)/LINE.SPACE+1
+   SCV.REC(ECD.NUM)<1,ECD.SUB.NUM>=SOR.S.P.DESC<LN>
+   ECD.ACTION=5;CALL SCRN.EDIT
+*T25994^
+*
+777*
+   RETURN
+*
+*---- PRINT OPEN BAL
+800*
+   SOR.OPEN.AMT<LN>=SOR.OPEN.AMT<LN> - (SOR.CASH.REC<LN> + SOR.MISC.AMT<LN>)
+   P_X  = 68 ; P_Y = SLN ; P_VALUE = OCONV(SOR.OPEN.AMT<LN>,"MD2") "R#12" ; P_OPT = ""
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+*
+*---- PRINT OPEN BALANCE FOR CUSTOMER
+801*
+   SA.CH.AMT=CH.AMT
+   BEGIN CASE
+      CASE INV.FLG
+         TOT.BAL = CUST.AR.BAL
+      CASE 1
+         TOT.BAL=0
+   END CASE
+   FOR SS=1 TO LINES
+      IF SOR.PAY.FLG<SS> # "" THEN
+         SUM.CASH=SUM(SOR.CASH.REC<SS>)
+         SUM.MISC=SUM(SOR.MISC.AMT<SS>)
+         BEGIN CASE
+*              CASE SOR.PAY.FLG<SS>="REV" AND SUM.CASH < "0" ;* T24432
+*                  SA.CH.AMT=SA.CH.AMT + SUM.CASH ;* T24432
+            CASE SOR.PAY.FLG<SS>="REV"
+               SA.CH.AMT=SA.CH.AMT - SUM.CASH
+            CASE SOR.PAY.FLG<SS> # "PA" AND SOR.OPEN.AMT<SS> < "0"
+               SA.CH.AMT=SA.CH.AMT + SOR.INV.AMT<SS>
+            CASE SOR.PAY.FLG<SS>="PA"
+               SA.CH.AMT=SA.CH.AMT - SUM.CASH
+         END CASE
+         IF INV.FLG THEN
+            BEGIN CASE
+               CASE SOR.PAY.FLG<SS>="REV" AND SUM.CASH < "0"
+                  TOT.BAL=TOT.BAL + SUM.CASH
+               CASE SOR.PAY.FLG<SS>="REV"
+                  TOT.BAL=TOT.BAL - SUM.CASH
+               CASE SOR.PAY.FLG<SS> # "PA" AND SOR.OPEN.AMT<SS> < "0"
+                  TOT.BAL=TOT.BAL + SOR.INV.AMT<SS>
+               CASE SOR.PAY.FLG<SS>="PA"
+                  TOT.BAL=TOT.BAL - (SUM.CASH + SUM.MISC)
+            END CASE
+         END
+      END
+      IF NOT(INV.FLG) THEN
+         TOT.BAL=TOT.BAL + SOR.OPEN.AMT<SS>
+      END
+   NEXT SS
+   APPLY.AMT=SA.CH.AMT
+   ECD.NUM=10;SCV.REC(ECD.NUM)<1>=APPLY.AMT;ECD.ACTION=5;CALL SCRN.EDIT
+   IF REVERSE.FLAG # "Y" THEN
+      ECD.NUM=7;SCV.REC(ECD.NUM)<1>=TOT.BAL;ECD.ACTION=5;CALL SCRN.EDIT
+   END
+   RETURN
+*
+*---- PROCESS CASH BATCH
+900*
+   FOR SS=START.LINE TO END.LINE UNTIL BAPPLY.AMT=0
+*T23278 v
+      DIV.CODE = SOR.DIV<SS>; USER.ID = UPCASE(LOGNAME); ERRMSG = ''; *T27646
+      CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+      IF ERRMSG = '' THEN 
+*T23278 ^
+         IF SOR.OPEN.AMT<SS> # 0 THEN
+            IF SOR.INV.AMT<SS> < 0 THEN
+               IF SOR.CASH.REC<SS>=0 THEN
+                  SOR.CASH.REC<SS>=SOR.OPEN.AMT<SS>
+               END ELSE
+                  SOR.CASH.REC<SS>=SOR.CASH.REC<SS> - SOR.OPEN.AMT<SS>
+               END
+               BAPPLY.AMT=BAPPLY.AMT - SOR.OPEN.AMT<SS>
+               IF SOR.INV.NO<SS>[7,2]="AC" OR SOR.INV.NO<SS>[7,2]="PP" THEN
+                  ON.ACCT.BAL=ON.ACCT.BAL - SOR.OPEN.AMT<SS>
+               END
+               SOR.OPEN.AMT<SS>=0;SOR.PAY.FLG<SS>="PA"
+            END ELSE
+               IF SOR.OPEN.AMT<SS> > BAPPLY.AMT THEN
+                  SOR.CASH.REC<SS>=SOR.CASH.REC<SS> + BAPPLY.AMT
+                  SOR.OPEN.AMT<SS>=SOR.OPEN.AMT<SS> - BAPPLY.AMT
+                  BAPPLY.AMT=0
+               END ELSE
+                  SOR.CASH.REC<SS>=SOR.CASH.REC<SS> + SOR.OPEN.AMT<SS>
+                  BAPPLY.AMT=BAPPLY.AMT - SOR.OPEN.AMT<SS>
+                  SOR.OPEN.AMT<SS>=0
+               END
+               SOR.PAY.FLG<SS>="PA"
+            END
+         END
+      END;* T23278
+   NEXT SS
+   GOSUB 801;OLD.START.LINE=0;GOSUB 10000;ECD.NUM=9;SCV.REC(ECD.NUM)<1>=ON.ACCT.BAL * (-1);ECD.ACTION=5;CALL SCRN.EDIT
+   RETURN
+*
+*---- ENTER OPTION
+9000*
+   MORE=1
+   LOOP
+      GOSUB 10000
+      LINES=COUNT(SOR.INV.NO,AM) + (SOR.INV.NO # "")   ;* T25978
+      IF REVERSE.FLAG="N" THEN
+         ECD.NUM=14;ECD.ACTION=4;SCV.REC(ECD.NUM)<1>='';CALL SCRN.EDIT
+      END ELSE
+            **** TASK 15010
+         IF CH.NUM="000000" AND REV.ALL # 0 THEN
+            ECD.NUM=15;ECD.ACTION=4;SCV.REC(ECD.NUM)<1>='';CALL SCRN.EDIT
+         END ELSE
+            ECD.NUM=13;ECD.ACTION=4;SCV.REC(ECD.NUM)<1>='';CALL SCRN.EDIT
+         END
+      END
+      OPTION=ECD.RET.VALUE
+      BEGIN CASE
+         CASE OPTION='E' OR OPTION='END'
+            MORE=0
+            RELEASE
+         CASE NUM(OPTION) AND LEN(OPTION) < 5 AND REVERSE.FLAG="Y" AND OPTION >= OLD.START.LINE AND OPTION <= LAST.LINE
+            *** TASK 15010
+            IF CH.NUM="000000" AND REV.ALL # 0 THEN
+               ERRMSG="You must reverse all entries when reversing on-account entry";GOSUB 91000
+            END ELSE
+               LN=OPTION
+*T23278 v
+               DIV.CODE = SOR.DIV<LN>; USER.ID = UPCASE(LOGNAME); ERRMSG = ''; *T27646
+               CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+               IF ERRMSG # '' THEN
+                  GOSUB 91000; GOTO 9050
+               END
+*T23278 ^
+               SUM.CASH=SUM(SOR.CASH.REC<LN>)
+               SUM.MISC=SUM(SOR.MISC.AMT<LN>)
+               SLN=BEGIN.PAGE + LINE.SPACE * MOD(LN-1,PAGE.SIZE)
+               IF SOR.PAY.FLG<OPTION>="" THEN
+                  SOR.PAY.FLG<OPTION>="REV"
+                  P_X  = 4 ; P_Y = SLN ; P_VALUE = "*" ; P_OPT = ""
+                  CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+* T24432 v
+*                      IF SOR.INV.AMT<OPTION> < 0 THEN
+*                          SOR.OPEN.AMT<OPTION>=SOR.OPEN.AMT<OPTION> - (SUM.CASH + SUM.MISC)
+*                      END ELSE
+*                          SOR.OPEN.AMT<OPTION>=SOR.OPEN.AMT<OPTION> + (SUM.CASH + SUM.MISC)
+*                      END
+                  SOR.OPEN.AMT<OPTION>=SOR.OPEN.AMT<OPTION> + (SUM.CASH + SUM.MISC)
+* T24432 ^
+               END ELSE
+                  SOR.PAY.FLG<OPTION>=""
+                  P_X  = 4 ; P_Y = SLN ; P_VALUE = " " ; P_OPT = ""
+                  CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+* T24432 v
+*                      IF SOR.INV.AMT<OPTION> < 0 THEN
+*                          SOR.OPEN.AMT<OPTION>=SOR.OPEN.AMT<OPTION> + (SUM.CASH + SUM.MISC)
+*                      END ELSE
+*                          SOR.OPEN.AMT<OPTION>=SOR.OPEN.AMT<OPTION> - (SUM.CASH + SUM.MISC)
+*                      END
+                  SOR.OPEN.AMT<OPTION>=SOR.OPEN.AMT<OPTION> - (SUM.CASH + SUM.MISC)
+* T24432 ^
+               END
+               P_X  = 68 ; P_Y = SLN ; P_VALUE = OCONV(SOR.OPEN.AMT<OPTION>,"MD2") "R#12" ; P_OPT = ""
+               CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+               GOSUB 801
+            END
+         CASE OPTION="F" AND REVERSE.FLAG="Y"
+            CH.AMT=CH.AMT - APPLY.AMT
+            CALL CASH.REC.REVERSE(MAT SAVE.OR.REC,GLTB.CASH,HOLD.CASH,HOLD.MISC,HOLD.ACCT,HOLD.INV)
+            MORE=0
+            RELEASE
+         CASE NUM(OPTION) AND REVERSE.FLAG="N" AND LEN(OPTION) < 5 AND OPTION >= OLD.START.LINE AND OPTION <= LAST.LINE
+            LN=OPTION
+*T23278 v
+            DIV.CODE = SOR.DIV<LN>; USER.ID = UPCASE(LOGNAME); ERRMSG = ''; *T27646
+            CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+            IF ERRMSG # '' THEN
+               GOSUB 91000; GOTO 9050
+            END
+*T23278 ^
+            GOSUB 9100
+         CASE OPTION='CC' AND REVERSE.FLAG="N"
+            IF CH.NUM # "" THEN
+               GOSUB 500
+            END ELSE
+               ERRMSG="Can't mix cash and on-account entries";GOSUB 91000
+            END
+         CASE OPTION='BP' AND REVERSE.FLAG="N"
+            IF APPLY.AMT > 0 THEN
+               X=3;Y=21;TYP=4;SCALER=2;O.R='O';DEFAULT=OCONV(APPLY.AMT,"MD2");MAXL=10;MAXV=APPLY.AMT;MINV=0
+               PMSG="Enter amount to be applied :"
+               CALL EDIT.SUB
+               IF VALUE # "END" AND VALUE > 0 THEN
+                  BAPPLY.AMT=VALUE
+9010*
+                  X=3;Y=21;O.R='O';MINV=1;MAXV=LINES;MAXL=4;DEFAULT=1
+                  PMSG="Enter starting line number :"
+                  CALL EDIT.SUB
+                  IF VALUE # "END" THEN
+*T23278 v
+                     DIV.CODE = SOR.DIV<VALUE>; USER.ID = UPCASE(LOGNAME); ERRMSG = ''; *T27646
+                     CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+                     IF ERRMSG # '' THEN
+                        GOSUB 91000; GOTO 9010
+                     END
+*T23278 ^
+                     START.LINE=VALUE
+9020*
+                     X=3;Y=21;O.R='O';MINV=START.LINE;MAXV=LINES;MAXL=4;DEFAULT=LINES
+                     PMSG="Enter ending line number :"
+                     CALL EDIT.SUB
+                     IF VALUE # "END" THEN
+*T23278 v
+                        DIV.CODE = SOR.DIV<VALUE>; USER.ID = UPCASE(LOGNAME); ERRMSG = ''; *T27646
+                        CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+                        IF ERRMSG # '' THEN
+                           GOSUB 91000; GOTO 9020
+                        END
+*T23278 ^
+                        END.LINE=VALUE
+                        GOSUB 900
+                     END
+                  END
+               END
+            END ELSE
+               ERRMSG="Can't apply cash when cash to apply is zero";GOSUB 91000
+            END
+         CASE OPTION='PP' AND REVERSE.FLAG="N"
+            LINES=LINES + 1;LN=LINES;SOR.PAY.FLG<LN>="PP"
+            READU ONACCT FROM CONTROL,CONO:"PPINV#" ELSE ONACCT=1
+            WRITE ONACCT+1 ON CONTROL,CONO:"PPINV#"
+            OR.ORDER.FLG= '' ;*T25685
+            SOR.INV.NO<LN>=STR("0",6-LEN(ONACCT)):ONACCT:"PP";GOSUB 700
+         CASE OPTION='BC' AND REVERSE.FLAG="N"
+            LINES=LINES + 1;LN=LINES;SOR.PAY.FLG<LN>="BC"
+            READU ONACCT FROM CONTROL,CONO:"BCINV#" ELSE ONACCT=1
+            WRITE ONACCT+1 ON CONTROL,CONO:"BCINV#"
+            SOR.INV.NO<LN>=STR("0",6-LEN(ONACCT)):ONACCT:"BC";GOSUB 700
+*            SOR.DIV<LN>=GEN.DIV
+            SOR.DEPT<LN>=GEN.DEPT
+            SOR.CCTR<LN>=GEN.CCTR
+         CASE OPTION='ON' AND REVERSE.FLAG="N"
+            LINES=LINES + 1;LN=LINES;SOR.PAY.FLG<LN>="ON"
+            READU ONACCT FROM CONTROL,CONO:"ACINV#" ELSE ONACCT=1
+            WRITE ONACCT+1 ON CONTROL,CONO:"ACINV#"
+            SOR.INV.NO<LN>=STR("0",6-LEN(ONACCT)):ONACCT:"AC";GOSUB 700
+*            SOR.DIV<LN>=GEN.DIV
+            SOR.DEPT<LN>=GEN.DEPT
+            SOR.CCTR<LN>=GEN.CCTR
+         CASE LEN(OPTION) > 4 AND REVERSE.FLAG="N"
+            LOCATE OPTION IN SOR.INV.NO SETTING FND.LN ELSE FND.LN=0
+            IF FND.LN=0 THEN
+               ERRMSG="INVALID INVOICE NUMBER";GOSUB 91000
+            END ELSE
+               LN=FND.LN
+*T23278 v
+               DIV.CODE = SOR.DIV<LN>; USER.ID = UPCASE(LOGNAME); ERRMSG = ''; *T27646
+               CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+               IF ERRMSG # '' THEN
+                  GOSUB 91000; GOTO 9050
+               END
+*T23278 ^
+               OLD.START.LINE=0;GOSUB 10000
+               GOSUB 9100
+            END
+         CASE OPTION='S'
+            LN=1 + INT((LN-1)/PAGE.SIZE) * PAGE.SIZE + PAGE.SIZE
+            IF LN > LINES THEN LN=1
+            GOSUB 10000
+      * T25978 v
+         CASE OPTION = 'SR'
+            LN=1 + INT((LN-1)/PAGE.SIZE) * PAGE.SIZE - PAGE.SIZE
+            IF LN < 1 THEN LN = 1
+            GOSUB 10000
+         CASE OPTION = 'ST'
+            LN = 1
+            GOSUB 10000
+         CASE OPTION = 'SB'
+            LN = LINES
+            GOSUB 10000
+      * T25978 ^
+         CASE OPTION='F' AND REVERSE.FLAG="N"
+            IF APPLY.AMT=0 THEN
+               IF CH.NUM="CASH" THEN CH.NUM=""
+               CALL CASH.REC.UPDATE(MAT SAVE.OR.REC,GLTB.CASH)
+               MORE=0
+            END ELSE
+               ERRMSG="Applied amount must be zero to file";GOSUB 91000
+            END
+         CASE 1
+            ERRMSG="INVALID OPTION";GOSUB 91000
+      END CASE
+9050*
+   WHILE MORE=1 DO
+   REPEAT
+   RETURN
+9100*
+   SLN=BEGIN.PAGE + LINE.SPACE * MOD(LN-1,PAGE.SIZE)
+   IF SOR.CASH.REC<LN> * 1 # '0' THEN
+      APPLY.AMT=APPLY.AMT + SOR.CASH.REC<LN>
+   END
+   IF APPLY.AMT * 1=0 AND SOR.INV.AMT<LN> > 0 AND SOR.PAY.FLG<LN> # "BC" THEN
+      SOR.PAY.FLG<LN>="PA";GOSUB 725
+      IF SOR.CASH.REC<LN> + SOR.MISC.AMT<LN>=0 THEN SOR.PAY.FLG<LN>=''
+   END ELSE
+      BEGIN CASE
+         CASE SOR.PAY.FLG<LN> # "PA" AND SOR.PAY.FLG<LN> # ""
+            OPTION=SOR.PAY.FLG<LN>;GOSUB 710
+         CASE 1
+            SOR.PAY.FLG<LN>="PA";GOSUB 720
+            IF SOR.CASH.REC<LN> + SOR.MISC.AMT<LN>=0 THEN SOR.PAY.FLG<LN>=''
+      END CASE
+   END
+   LINES=COUNT(SOR.INV.NO,AM) + (SOR.INV.NO # "")
+   RETURN
+10000*
+   START.LINE=1 + INT((LN-1)/PAGE.SIZE) * PAGE.SIZE
+   LAST.LINE=START.LINE + PAGE.SIZE - 1
+   IF LAST.LINE > LINES THEN LAST.LINE=LINES
+   IF START.LINE=OLD.START.LINE THEN GOTO 10001
+   OLD.START.LINE=START.LINE
+   CNT=1
+   FOR N=START.LINE TO LAST.LINE
+      SLN=BEGIN.PAGE + LINE.SPACE * MOD(N-1,PAGE.SIZE)
+      P_X  = 0 ; P_Y = SLN ; P_VALUE = "" ; P_OPT = "CL"
+      P_X  := AM:0 ; P_Y := AM:SLN ; P_VALUE := AM:N "R#4"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+*  IF SOR.PAY.FLG<N>="REV" THEN PRINT @(3,SLN):"*" "L#1"
+      IF SOR.PAY.FLG<N>="REV" THEN
+         P_X  = 4 ; P_Y = SLN ; P_VALUE = "*" "L#1" ; P_OPT = ""
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      END
+      P_X  = 5 ; P_Y = SLN ; P_VALUE = SOR.INV.NO<N> "L#8" ; P_OPT = ""
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      IF SOR.JOB.NO<N> # "" THEN
+         P_X  = 14 ; P_Y = SLN ; P_VALUE = SOR.JOB.NO<N> "L#8" ; P_OPT = ""
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      END ELSE
+         P_X  = 14 ; P_Y = SLN ; P_VALUE = SOR.PO.NO<N> "L#8" ; P_OPT = ""
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      END
+      P_X  = 23 ; P_Y = SLN ; P_VALUE = OCONV(SOR.INV.AMT<N>,"MD2") "R#12" ; P_OPT = ""
+      P_X  := AM:36 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(SOR.CASH.REC<N>,"MD2") "R#12"
+      P_X  := AM:39 ; P_Y := AM:SLN+1 ; P_VALUE := AM:OCONV(SOR.MISC.AMT<N>,"MD2") "R#12"
+*T25994 v
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      P_X = 52 ; P_Y = SLN+1 ; P_VALUE = SOR.SHORT.PAY<N>; P_OPT="CL"
+      P_X := AM:59 ; P_Y := AM:SLN+1 ; P_VALUE := AM:SOR.S.P.DESC<N>
+*T25994 ^
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      GL.ACCT=SOR.GL.ACCT<N> CO.ACCT.MASK
+      P_X  = 52 ; P_Y = SLN ; P_VALUE = GL.ACCT ; P_OPT = ""
+      P_X  := AM:68 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(SOR.OPEN.AMT<N>,"MD2") "R#12"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      CNT=CNT + 1
+   NEXT N
+   FOR M=CNT TO PAGE.SIZE
+      SLN=BEGIN.PAGE + LINE.SPACE * MOD(M-1,PAGE.SIZE)
+      P_X  = 0 ; P_Y = SLN ; P_VALUE = "" ; P_OPT = "CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+*T22756 v
+      P_X  = 0 ; P_Y = SLN+1 ; P_VALUE = "" ; P_OPT = "CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+*T22756 ^
+   NEXT M
+10001*
+   RETURN
+*
+*---- CALLS FOR SYSCOM
+91000*
+   ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+92000*
+   ERR.TYPE=2;CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+93000*
+   ERR.TYPE=3;CALL SYSCOM(MAT SYSCOM.REC)
+99999*
+END

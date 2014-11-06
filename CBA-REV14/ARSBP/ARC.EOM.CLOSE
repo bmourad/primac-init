@@ -1,0 +1,482 @@
+*COPY>CPYLIB>COM1
+*********************************************************************
+* REVISION    - [08.1]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - ARSBP
+* PROGRAM     - ARC.EOM.CLOSE
+* BY          - ZIAD YAMOUT, C.B.A
+* DATE        - 02/28/87
+* DESCRIPTION -
+*T21177 diane 02/11/1997 * REV11 UPG ADD CLOSE
+*T23278 markt 01/06/1999 * Make fiscal data multi-value by division.
+*T25975 cmykleb 01/30/2002 * Save EOM transaction data so history
+*                            reports can be run.
+*T26685 lhelms 07/03/2002 * REV12 DIVISION SECURITY
+*ENDDOC
+*********************************************************************
+*
+***** INSERT FILE EQUATE
+*
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>SALESDATES
+*COPY>PMC.CPYLIB>FISCAL
+*COPY>PMC.CPYLIB>EOM.TRANS
+*COPY>PMC.CPYLIB>EOM.TRANS.HIST              ; * T25975
+*COPY>GLS.CPYLIB>GLA
+*COPY>PMC.CPYLIB>COA
+*COPY>GLS.CPYLIB>COA.SYS
+*COPY>ARS.CPYLIB>DAILY.CASH
+*COPY>PMC.CPYLIB>POST.REJECTS
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*
+***** SETUP ERRMSG ROUTINE
+*
+   SYS.TYPE = 1
+   CALL SYSCOM(MAT SYSCOM.REC)
+*
+*--- PROCREAD
+*
+   PROCREAD INBUFF ELSE
+      ERRMSG = "MUST RUN FROM PROC"
+      GOSUB 91000; GOTO 99999
+   END
+   CONO = INBUFF<1>
+   D.M.FLG = INBUFF<6>
+   IF D.M.FLG = "PERIOD" THEN
+      RPT.PER = "PERIOD"
+   END ELSE
+      RPT.PER = "DAY"
+   END
+   DIV.CODE = INBUFF<8>;* T23278
+*
+**** INTITIALIZATION
+*
+   MAT FILE.VARS = ""
+   MAT EDIT.COM.DRIVER = ""
+   TODAY = DATE()
+   UNKNOWN = "NOT ON FILE"
+   SYS.FISCAL = "ARCFISCAL"
+* PROG.ID = FIELD(OCONV(0,"U50BB")," ",1):"!":CONO:"!ARC.EOM"
+* PROG.ID = SYSTEM(18):"!":CONO:"!ARC.EOM"
+   PROG.ID = @TTY:"!":CONO:"!ARC.EOM"
+*
+***** OPEN FILES
+*
+   OPEN "","CONTROL" TO CONTROL ELSE
+      ERRMSG = "CONTROL FILE MISSING"
+      GOSUB 91000; GOTO 99000
+   END
+   OPEN "",INBUFF<3> TO EOM.TRANS ELSE
+      ERRMSG = "YOU NEED TO RUN END OF ":RPT.PER:" PROCESSING BEFORE YOU CLOSE THE ":RPT.PER
+      GOSUB 91000; GOTO 99000
+   END
+   OPEN "",INBUFF<4> TO POST.REJECTS ELSE
+      ERRMSG = "YOU NEED TO RUN END OF ":RPT.PER:" REPORTS BEFORE YOU CLOSE THE ":RPT.PER
+      GOSUB 91000; GOTO 99000
+   END
+   OPEN "","COMPANY" TO COMPANY ELSE ERRMSG="COMPANY FILE MISSING";GOTO 93000
+   OPEN "","PMC.SCREENS" TO M.SCREENS ELSE ERRMSG="PMC.SCREENS FILE IS MISSING";GOTO 93000
+   OPEN "","DAILY.CASH" TO DAILY.CASH ELSE ERRMSG="DAILY.CASH FILE MISSING";GOTO 93000
+   OPEN "","DAILY.CASH.TAG" TO DAILY.CASH.TAG ELSE ERRMSG="DAILY.CASH.TAG FILE MISSING";GOTO 93000
+   OPEN "","CHECK.XREF" TO CHECK.XREF ELSE ERRMSG="CHECK.XREF FILE MISSING";GOTO 93000
+   OPEN "","EOD.HIST" TO EOD.HIST ELSE ERRMSG="EOD.HIST FILE IS MISSING";GOTO 93000
+*T25975 v
+   OPEN "","ARC.EOM.TRANS.HIST" TO ARC.EOM.TRANS.HIST ELSE ERRMSG="ARC.EOM.TRANS.HIST FILE IS MISSING";GOTO 93000
+*T25975 ^
+   MATREAD COMP.REC FROM COMPANY,CONO ELSE
+      ERRMSG = "CANNOT LOCATE COMPANY # ":CONO; GOTO 93000
+   END
+   EQV.FLG = ""   ; * ADDED TO AVOID UNIT VAR IF CO.GLS = 'N'
+   IF CO.GLS # "N" THEN
+      IF CO.GL.LINK<1,1> = "Y" THEN
+         OPEN "","GLA" TO GLA ELSE ERRMSG="GLA FILE IS MISSING";GOTO 93000
+      END
+      OPEN "","COA" TO COA ELSE ERRMSG="COA FILE IS MISSING";GOTO 93000
+      EQV.FLG = 1
+      OPEN "","COA.EQUIV" TO COA.EQUIV ELSE EQV.FLG = 0
+   END
+   STMT.HEAD = "CASH RECEIPTS"
+*COPY>PMCBP>EOD.CLOSE  
+   IF ECD.RET.VALUE = "END" THEN
+      ECD.ACTION = 99 ; CALL SCRN.EDIT
+      GOTO 99000
+   END
+   CLEARFILE POST.REJECTS
+   PRR.SEQ = 10000
+*
+***** MAIN PROCESSING
+*
+   IF CO.GLS = "N" THEN GOTO 8000
+   IF CO.GL.LINK<1,1> # "Y" THEN GOTO 8000
+**** EOM.TRANS (1) ****
+7000 ECD.NUM = 14; SCV.REC(ECD.NUM)<1> = "NOW PROCESSING EOM.TRANS (1) FILE"
+   ECD.ACTION = 5; CALL SCRN.EDIT
+   ACCOUNTS = ""; AMOUNTS = ""
+   SELECT EOM.TRANS
+   WRITE "EOM.TRANS (1)" ON CONTROL , PROG.ID
+   MATREAD CSY.REC FROM CONTROL, CONO : "COA.SYS" ELSE MAT CSY.REC = ""
+   LOCATE "CR" IN CSY.SOURCE<1>,1 SETTING FND ELSE NULL
+   L.GLA = CSY.LEVEL<1,FND>
+   MAT GLA.REC = ""
+   GLA.DATE = TODAY
+   GLA.SRC = "CR"
+***** T23278 v
+*      GLA.MON = FR.CURR.PER
+*      ODATE = " " : OCONV(FR.CURR.DATE,"D2/")
+   GLA.MON = FR.CURR.PER<1,POS>
+   ODATE = " " : OCONV(FR.CURR.DATE<1,POS>,"D2/")
+***** T23278 ^
+   READU COUNTER FROM CONTROL, CONO : "GLACOUNTER" ELSE COUNTER = 1
+   WRITE "GLA ":COUNTER ON CONTROL, PROG.ID
+   DATA = 1
+   BEGIN CASE
+      CASE L.GLA = "R"
+         LOOP
+            READNEXT ETR.ID ELSE DATA = 0
+         WHILE DATA DO
+            IF ETR.ID[1,3] # CONO THEN GOTO 7200
+            MATREADU ETR.REC FROM EOM.TRANS, ETR.ID ELSE GOTO 7100
+            TYPE = FIELD(FIELD(ETR.ID,"!",2),"*",1)
+            ACCT = ETR.ID[1,ACCT.LEN]
+            CUST.NO = FIELD(ETR.ID,"!",1)[ACCT.LEN+1,99]
+            IF EQV.FLG = 1 THEN
+               READ N.ACCT FROM COA.EQUIV, ACCT ELSE N.ACCT = ACCT
+               ACCT = N.ACCT
+            END
+            COA.ID = ACCT[11,IN.ACCT.LEN]
+            MATREAD COA.REC FROM COA, CONO : COA.ID ELSE
+               MAT COA.REC = ""
+               COA.DESC = UNKNOWN
+            END
+            BEGIN CASE
+               CASE COA.DETAIL = "R" OR COA.DETAIL = "D"
+                  LOOP
+                     COUNTER = COUNTER + 1
+                     IF COUNTER > 999998 THEN COUNTER = 1
+                     GLA.ID = ACCT : STR("0",6-LEN(COUNTER)) : COUNTER
+                     READ DUMMY FROM GLA, GLA.ID ELSE DUMMY = ""
+                  WHILE DUMMY # "" DO REPEAT
+                  GLA.DESC = COA.DESC "L#25" : ODATE
+                  GLA.AMT = ETR.AMT
+                  GLA.REF = CUST.NO
+                  MATWRITE GLA.REC ON GLA, GLA.ID
+               CASE 1
+                  LOCATE ACCT IN ACCOUNTS,1 SETTING AFND ELSE
+                     ACCOUNTS<AFND> = ACCT
+                     AMOUNTS<AFND> = ""
+                  END
+                  IF TYPE = "D" THEN
+                     AMOUNTS<AFND,1> = AMOUNTS<AFND,1> + ETR.AMT
+                  END ELSE
+                     AMOUNTS<AFND,2> = AMOUNTS<AFND,2> + ETR.AMT
+                  END
+            END CASE
+7100        RELEASE EOM.TRANS, ETR.ID
+7200     REPEAT
+      CASE L.GLA = "D"
+         LOOP
+            READNEXT ETR.ID ELSE DATA = 0
+         WHILE DATA DO
+            IF ETR.ID[1,3] # CONO THEN GOTO 7400
+            MATREADU ETR.REC FROM EOM.TRANS, ETR.ID ELSE GOTO 7300
+            ACCT = ETR.ID[1,ACCT.LEN]
+            TYPE = FIELD(FIELD(ETR.ID,"!",2),"*",1)
+            CUST.NO = FIELD(ETR.ID,"!",1)[ACCT.LEN+1,99]
+            IF EQV.FLG = 1 THEN
+               READ N.ACCT FROM COA.EQUIV, ACCT ELSE N.ACCT = ACCT
+               ACCT = N.ACCT
+            END
+            COA.ID = ACCT[11,IN.ACCT.LEN]
+            MATREAD COA.REC FROM COA, CONO : COA.ID ELSE
+               MAT COA.REC = ""
+               COA.DESC = UNKNOWN
+            END
+            BEGIN CASE
+               CASE COA.DETAIL = "D"
+                  TCNT = COUNT(ETR.TRAN,VM) + (ETR.TRAN # "")
+                  FOR I = 1 TO TCNT
+                     LOOP
+                        COUNTER = COUNTER + 1
+                        IF COUNTER > 999998 THEN COUNTER = 1
+                        GLA.ID = ACCT : STR("0",6-LEN(COUNTER)) : COUNTER
+                        READ DUMMY FROM GLA, GLA.ID ELSE DUMMY = ""
+                     WHILE DUMMY # "" DO REPEAT
+                     GLA.DESC = ETR.RDATE<1,I> "L#8" : ETR.TRAN<1,I> : "-" : ETR.REF<1,I>
+                     GLA.DESC = GLA.DESC "L#25" : " " : OCONV(ETR.DATE<1,I>,"D2/")
+                     GLA.AMT = ETR.TAMT<1,I>
+                     GLA.REF = CUST.NO
+                     MATWRITE GLA.REC ON GLA, GLA.ID
+                  NEXT I
+               CASE COA.DETAIL = "R"
+                  LOOP
+                     COUNTER = COUNTER + 1
+                     IF COUNTER > 999998 THEN COUNTER = 1
+                     GLA.ID = ACCT : STR("0",6-LEN(COUNTER)) : COUNTER
+                     READ DUMMY FROM GLA, GLA.ID ELSE DUMMY = ""
+                  WHILE DUMMY # "" DO REPEAT
+                  GLA.DESC = COA.DESC "L#25" : ODATE
+                  GLA.AMT = ETR.AMT
+                  GLA.REF = CUST.NO
+                  MATWRITE GLA.REC ON GLA, GLA.ID
+               CASE 1
+                  LOCATE ACCT IN ACCOUNTS,1 SETTING AFND ELSE
+                     ACCOUNTS<AFND> = ACCT
+                     AMOUNTS<AFND> = ""
+                  END
+                  IF TYPE = "D" THEN
+                     AMOUNTS<AFND,1> = AMOUNTS<AFND,1> + ETR.AMT
+                  END ELSE
+                     AMOUNTS<AFND,2> = AMOUNTS<AFND,2> + ETR.AMT
+                  END
+            END CASE
+7300        RELEASE EOM.TRANS, ETR.ID
+7400     REPEAT
+      CASE 1
+         LOOP
+            READNEXT ETR.ID ELSE DATA = 0
+         WHILE DATA DO
+            IF ETR.ID[1,3] # CONO THEN GOTO 7600
+            MATREADU ETR.REC FROM EOM.TRANS, ETR.ID ELSE GOTO 7500
+            ACCT = ETR.ID[1,ACCT.LEN]
+            TYPE = FIELD(FIELD(ETR.ID,"!",2),"*",1)
+            IF EQV.FLG = 1 THEN
+               READ N.ACCT FROM COA.EQUIV, ACCT ELSE N.ACCT = ACCT
+               ACCT = N.ACCT
+            END
+            LOCATE ACCT IN ACCOUNTS,1 SETTING FND ELSE
+               ACCOUNTS<FND> = ACCT
+               AMOUNTS<FND> = ""
+            END
+            IF TYPE = "D" THEN
+               AMOUNTS<FND,1> = AMOUNTS<FND,1> + ETR.AMT
+            END ELSE
+               AMOUNTS<FND,2> = AMOUNTS<FND,2> + ETR.AMT
+            END
+7500        RELEASE EOM.TRANS, ETR.ID
+7600     REPEAT
+   END CASE
+   GLA.REF = ""
+   ACNT = COUNT(ACCOUNTS,AM)+(ACCOUNTS # "")
+   FOR I = 1 TO ACNT
+      ACCT = ACCOUNTS<I>
+      COA.ID = CONO : ACCT[11,IN.ACCT.LEN]
+      MATREAD COA.REC FROM COA, COA.ID ELSE COA.DESC = UNKNOWN
+      GLA.DESC = COA.DESC "L#25" : ODATE
+      FOR J = 1 TO 2
+         IF AMOUNTS<I,J> = "" THEN GOTO 7900
+         LOOP
+            COUNTER = COUNTER + 1
+            IF COUNTER > 999998 THEN COUNTER = 1
+            GLA.ID = ACCT : STR("0",6-LEN(COUNTER)) : COUNTER
+            READ DUMMY FROM GLA, GLA.ID ELSE DUMMY = ""
+         WHILE DUMMY # "" DO REPEAT
+         GLA.AMT = AMOUNTS<I,J>
+         MATWRITE GLA.REC ON GLA, GLA.ID
+7900  NEXT J
+   NEXT I
+   WRITE COUNTER ON CONTROL, CONO : "GLACOUNTER"
+   ACCOUNTS = ""
+   AMOUNTS = ""
+**** EOM.TRANS (2) ****
+8000 ECD.NUM = 14; SCV.REC(ECD.NUM)<1> = "NOW PROCESSING EOM.TRANS (2) FILE"
+   ECD.ACTION = 5; CALL SCRN.EDIT
+   SELECT EOM.TRANS
+   WRITE "EOM.TRANS (2)" ON CONTROL , PROG.ID
+   DATA = 1
+   LOOP
+      READNEXT ETR.ID ELSE DATA = 0
+   WHILE DATA DO
+      IF CONO # ETR.ID[1,3] THEN GOTO 8599
+      MATREADU ETR.REC FROM EOM.TRANS, ETR.ID ELSE
+         RELEASE EOM.TRANS, ETR.ID
+         GOTO 8599
+      END
+*T25975 v
+      CURR.PER = FR.CURR.PER<1,POS>
+      MAT ETH.REC = MAT ETR.REC
+      DONE = 0
+      SEQ = 0
+      ETH.ID = FIELD(ETR.ID,"*",1):"*":CURR.PER
+      LOOP UNTIL DONE = 1 DO
+         SEQ = SEQ + 1
+         ETH.KEY = ETH.ID:"*":SEQ
+         READ CHECKIT FROM ARC.EOM.TRANS.HIST, ETH.KEY ELSE DONE = 1
+      REPEAT
+      MATWRITE ETH.REC ON ARC.EOM.TRANS.HIST, ETH.KEY
+*T25975 ^
+      DELETE EOM.TRANS, ETR.ID
+8599 REPEAT
+   WRITE "EOM.TRANS (3)" ON CONTROL, PROG.ID
+   EOD.HIST.REC = INSERT(EOD.HIST.REC,-1,0,0,TODAY)
+***** T23278 v
+*      WRITE EOD.HIST.REC ON EOD.HIST,CONO:SYS.FISCAL:FR.CURR.PER
+* T26685
+*  WRITE EOD.HIST.REC ON EOD.HIST,CONO:SYS.FISCAL:FR.CURR.PER<1,POS>
+   WRITE EOD.HIST.REC ON EOD.HIST,CONO:SYS.FISCAL:FR.CURR.PER<1,POS>:EOD.HID
+* T26685
+***** T23278 ^
+   SELECT EOM.TRANS
+   READNEXT ETR.ID ELSE
+**** DAILY.CASH ****
+      ECD.NUM = 14; SCV.REC(ECD.NUM)<1> = "NOW PROCESSING DAILY.CASH FILE"
+      ECD.ACTION = 5; CALL SCRN.EDIT
+      WRITE "DAILY.CASH" ON CONTROL, PROG.ID
+      IF D.M.FLG = "PERIOD" THEN GOTO 8700
+      SELECT DAILY.CASH.TAG
+      DATA = 1
+      LOOP
+         READNEXT DC.ID ELSE DATA = 0
+      WHILE DATA DO
+         IF DC.ID[1,3] # CONO THEN GOTO 8600
+         MATREADU DC.REC FROM DAILY.CASH, DC.ID ELSE
+            RELEASE DAILY.CASH, DC.ID
+            GOTO 8600
+         END
+***** T23278 v
+*            IF DC.GLA.DATE = '' THEN
+*               RELEASE DAILY.CASH, DC.ID
+*               GOTO 8600
+*            END
+*            DC.GLA.DATE = TODAY
+         ICNT = DCOUNT(DC.CASH.APPL,VM)
+         MCNT = DCOUNT(DC.AMT,VM)
+         IF MCNT > ICNT THEN ICNT = MCNT
+         FOR I = 1 TO ICNT 
+            IF DC.CASH.APPL<1,I> # '' THEN
+               JCNT = DCOUNT(DC.CASH.APPL<1,I>,SM)
+            END ELSE
+               JCNT = DCOUNT(DC.AMT<1,I>,SM)
+            END
+            FOR J = 1 TO JCNT 
+               IF DC.DIV<1,I,J> = DIV.CODE OR DIV.CODE = 'ALL' THEN
+*                     IF DC.GLA.DATE<1,I,J> # "" THEN
+                  IF DC.GLA.DATE<1,I,J> = 'P' THEN
+                     DC.GLA.DATE<1,I,J> = TODAY
+                  END
+               END
+            NEXT J
+         NEXT I
+***** T23278 ^
+         MATWRITE DC.REC ON DAILY.CASH, DC.ID
+***** T23278 v
+         DELETE.OK = 1
+         FOR I = 1 TO ICNT UNTIL NOT(DELETE.OK)
+            IF DC.CASH.APPL<1,I> # '' THEN
+               JCNT = DCOUNT(DC.CASH.APPL<1,I>,SM)
+            END ELSE
+               JCNT = DCOUNT(DC.AMT<1,I>,SM)
+            END
+            FOR J = 1 TO JCNT UNTIL NOT(DELETE.OK)
+               IF DC.GLA.DATE<1,I,J> = "" OR DC.GLA.DATE<1,I,J> = 'P' THEN DELETE.OK = 0
+            NEXT J
+         NEXT I
+         IF DELETE.OK THEN
+***** T23278 ^
+            DELETE DAILY.CASH.TAG, DC.ID
+         END ;* T23278
+8600  REPEAT
+      GOTO 8999
+8700  SELECT DAILY.CASH
+      DATA = 1
+      LOOP
+         READNEXT DC.ID ELSE DATA = 0
+      WHILE DATA DO
+         IF DC.ID[1,3] # CONO THEN GOTO 8800
+         MATREADU DC.REC FROM DAILY.CASH, DC.ID ELSE
+            RELEASE DAILY.CASH, DC.ID
+            GOTO 8800
+         END
+***** T23278 v
+*          IF DC.GLA.DATE = '' THEN
+*              RELEASE DAILY.CASH, DC.ID
+*              GOTO 8800
+*          END
+         DELETE.OK = 1
+         ICNT = DCOUNT(DC.CASH.APPL,VM)
+         MCNT = DCOUNT(DC.AMT,VM)
+         IF MCNT > ICNT THEN ICNT = MCNT
+         FOR I = 1 TO ICNT
+            IF DC.CASH.APPL<1,I> # '' THEN
+               JCNT = DCOUNT(DC.CASH.APPL<1,I>,SM)
+            END ELSE
+               JCNT = DCOUNT(DC.AMT<1,I>,SM)
+            END
+            FOR J = 1 TO JCNT
+               IF DC.DIV<1,I,J> = DIV.CODE OR DIV.CODE = "ALL" THEN
+                  IF DC.GLA.DATE<1,I,J> # "" THEN
+                     DC.GLA.DATE<1,I,J> = TODAY
+                  END
+               END
+               IF DC.GLA.DATE<1,I,J> = "" OR DC.GLA.DATE<1,I,J> = 'P' THEN DELETE.OK = 0
+            NEXT J
+         NEXT I
+         IF DELETE.OK THEN
+***** T23278 ^
+            DELETE DAILY.CASH, DC.ID
+            DELETE DAILY.CASH.TAG, DC.ID
+***** T23278 v
+         END ELSE
+            MATWRITE DC.REC ON DAILY.CASH, DC.ID
+         END
+***** T23278 ^
+8800  REPEAT
+**** CHECK.XREF ****
+      ECD.NUM = 14; SCV.REC(ECD.NUM)<1> = "NOW PROCESSING CHECK.XREF FILE"
+      ECD.ACTION = 5; CALL SCRN.EDIT
+      SELECT CHECK.XREF
+      WRITE "CHECK.XREF" ON CONTROL, PROG.ID
+      DATA = 1
+      LOOP
+         READNEXT CHK.ID ELSE DATA = 0
+      WHILE DATA DO
+         IF CHK.ID[1,3] # CONO THEN GOTO 8900
+         READU DUMMY FROM CHECK.XREF, CHK.ID ELSE
+            RELEASE CHECK.XREF, CHK.ID
+            GOTO 8900
+         END
+         DELETE CHECK.XREF, CHK.ID
+8900  REPEAT
+8999  IF D.M.FLG = "PERIOD" THEN
+***** T23278 v
+*            FR.CURR.PER = FR.NEXT.PER
+*            FR.CURR.DATE = FR.NEXT.DATE
+*            FR.CLOSE.DATE = TODAY
+         FR.CURR.PER<1,POS> = FR.NEXT.PER<1,POS>
+         FR.CURR.DATE<1,POS> = FR.NEXT.DATE<1,POS>
+         FR.CLOSE.DATE<1,POS> = TODAY
+***** T23278 ^
+      END
+***** T23278 v
+*         FR.NEXT.PER = ""; FR.NEXT.DATE = ""
+*         FR.PRINT = "";FR.D.M.FLG = ""
+      FR.NEXT.PER<1,POS> = ""; FR.NEXT.DATE<1,POS> = ""
+      FR.PRINT<1,POS> = "";FR.D.M.FLG<1,POS> = ""
+***** T23278 ^
+      MATWRITE FISCAL.REC ON CONTROL, CONO:SYS.FISCAL
+      DELETE CONTROL, PROG.ID
+      ECD.ACTION = 99 ; CALL SCRN.EDIT
+      GOTO 99999
+   END
+***** T23278 v
+*      FR.PRINT = "X"
+   FR.PRINT<1,POS> = "X"
+***** T23278 ^
+   MATWRITE FISCAL.REC ON CONTROL, CONO:SYS.FISCAL
+   ERRMSG = "E R R O R !!! CANNOT LOCATE ALL TRANSACTIONS"
+   ECD.ACTION = 99 ; CALL SCRN.EDIT
+   GOTO 93000
+91000 ERR.TYPE = 1
+   CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+93000 WRITEV ERRMSG ON CONTROL, PROG.ID,2
+   ERR.TYPE = 3
+   CALL SYSCOM(MAT SYSCOM.REC)
+99000 INBUFF<5> = "END"
+   PROCWRITE INBUFF
+*** END OF JOB ***
+99999 END

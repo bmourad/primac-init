@@ -1,0 +1,283 @@
+SUBROUTINE FNGDMRES_POSTREAD
+********************************************************************************
+*   Program name :- FNGDMRES_POSTREAD
+*   Created:- 11/13/2002
+*   Author:- MOHAMMED ABDUL MALIK & Edvard Pitka
+*------------------------------------------------------------------------------*
+*
+*  
+*
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+
+$INCLUDE JES.CPYLIB ESTIMATE
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB INV.FNGD
+$INCLUDE ICS.CPYLIB CATEGORY
+$INCLUDE CPYLIB CHAR
+$INCLUDE ICS.CPYLIB INV.WHSE
+$INCLUDE ICS.CPYLIB INV.STATS
+$INCLUDE PMC.CPYLIB COMPANY
+;* open files
+ERRMSG=''
+ROH = ''
+IF FILEINFO(INVENTORY,0)=0 THEN
+  OPEN '','INVENTORY' TO INVENTORY ELSE
+    ERRMSG<1,-1>='INVENTORY FILE IS MISSING'
+   END
+END
+IF FILEINFO(INV.FNGD,0)=0 THEN
+  OPEN '','INV.FNGD' TO INV.FNGD ELSE
+    ERRMSG<1,-1>='INV.FNGD FILE IS MISSING'
+   END
+END
+IF FILEINFO(ESTIMATE,0)=0 THEN
+  OPEN '','ESTIMATE' TO ESTIMATE ELSE
+    ERRMSG<1,-1>='ESTIMATE FILE IS MISSING'
+  END
+END
+IF FILEINFO(INV.WHSE,0)=0 THEN
+  OPEN '','INV.WHSE' TO INV.WHSE ELSE
+    ERRMSG<1,-1>='INV.WHSE FILE IS MISSING'
+  END
+END
+IF FILEINFO(INV.STATS,0)=0 THEN
+  OPEN '','INV.STATS' TO INV.STATS ELSE
+    ERRMSG<1,-1>='INV.STATS FILE IS MISSING'
+  END
+END
+IF FILEINFO(COMPANY,0)=0 THEN
+  OPEN '','COMPANY' TO COMPANY ELSE
+    ERRMSG<1,-1>='COMPANY FILE IS MISSING'
+  END
+END
+IF FILEINFO(CATEGORY,0)=0 THEN
+  OPEN '','CATEGORY' TO CATEGORY ELSE
+    ERRMSG<1,-1>='CATEGORY FILE IS MISSING'
+  END
+END
+
+IF ERRMSG#'' THEN GOTO 93000
+
+
+;* initialize
+LOCKMSG='Inventory record is locked by user - '
+DIM HOLD.INV.REC(INV.REC.SIZE); MAT HOLD.INV.REC=''
+ROF='' ;*read only fields
+;* get ID
+STATUS=RBO.getProperty('','ID',INV.ID)
+CONO=INV.ID[1,3]
+MATREAD COMP.REC FROM COMPANY,CONO ELSE
+  ERRMSG<1,-1>='Cannot read COMPANY record'
+  GOTO 93000
+END
+PDNO=INV.ID[4,99]
+NEW.ITEM=1
+QTY.OH=0
+MATREADU INV.REC FROM INVENTORY,INV.ID LOCKED
+  ERRMSG<1,-1>=LOCKMSG:GETUSERNAME(STATUS())
+  GOTO 93000
+END THEN
+  NEW.ITEM=0
+  MATREADU IOF.REC FROM INV.FNGD,INV.ID LOCKED
+    ERRMSG<1,-1>=LOCKMSG:GETUSERNAME(STATUS())
+    GOTO 93000
+  END ELSE
+    MAT IOF.REC=''
+  END
+END
+CALL FNGDMRES_PopSpecification
+CALL FNGDMRES_PopDie
+CALL FNGDMRES_PopBOM
+FLAG = "0000000"
+IF (NEW.ITEM) THEN 
+  MAT INV.REC=''
+  MAT IOF.REC=''
+END ELSE
+
+  IF INV.M.LINE#'FNGD' THEN 
+    ERRMSG<1,-1>='This is not a Finished Goods Product. Try again !'
+    GOTO 93000
+  END
+  GOSUB GetQtyOnhand
+  IF (QTY.OH) AND INV.SUBS#'' THEN
+    MAT HOLD.INV.REC=MAT INV.REC
+    HOLD.PDNO=PDNO ; HOLD.INV.SUBS=INV.SUBS
+    PCNT=DCOUNT(HOLD.INV.SUBS,VM)
+    FOR P = 1 TO PCNT                                  
+      PDNO = HOLD.INV.SUBS<1,P>                          
+      MATREAD INV.REC FROM INVENTORY, CONO:PDNO THEN  
+        GOSUB GetQtyOnhand                                  
+        IF QTY.OH THEN                               
+          QTY.OH = 2
+          EXIT                      
+        END                                          
+      END                                             
+    NEXT P                                             
+    MAT INV.REC = MAT HOLD.INV.REC                  
+    PDNO=HOLD.PDNO ; HOLD.INV.SUBS=""  
+  END
+  STATUS=RBO.setProperty('','QTY_OH',QTY.OH)
+  IF CO.JES='Y' THEN
+    GOSUB GetEstDivArray
+    STATUS=RBO.setProperty('','IOF_ESTIMATE',IOF.ESTIMATE)
+  END
+  STATUS=RBO.setProperty('','IOF_BOM',IOF.BOM)
+END
+*STATUS=RBO.getProperty('','INV_BASE_SKU',HoldBaseSku)
+*STATUS=RBO.setProperty('','HoldBaseSku',HoldBaseSku)
+
+GOSUB CheckCustomerQtys
+GOSUB SetReadOnlyFields
+GOSUB SetValidOptions
+IF QTY.OH THEN
+  STATUS=RBO.setProperty('','QtyOh',QTY.OH)
+END
+STATUS=RBO.setProperty('','INV_BAS_WT',OCONV(INV.BAS.WT,"MD2"))
+GOTO 99999
+
+*******************************************************************************
+*
+**************
+GetQtyOnhand:
+**************
+*
+
+WCNT = DCOUNT(INV.WHSE.CODE,VM)                            
+FOR W = 1 TO WCNT                                          
+  IWH.ID = CONO:PDNO:"!":INV.WHSE.CODE<1,W>               
+  MATREAD IWH.REC FROM INV.WHSE, IWH.ID THEN              
+    IF IWH.ON.HAND > 0 THEN                              
+      QTY.OH = 1
+      EXIT                  
+    END ELSE                                             
+      MATREAD INV.STAT.REC FROM INV.STATS, IWH.ID THEN  
+        IF SUM(ISTAT.PO.QTY) > 0 OR ISTAT.JOB # "" THEN
+          QTY.OH = 1
+          EXIT                         
+        END                                            
+      END                                               
+    END                                                  
+  END                                                     
+NEXT W    
+                                                 
+RETURN
+*
+****************
+GetEstDivArray:
+****************
+*
+LINES = DCOUNT(IOF.ESTIMATE,@VM)                             
+EST.DIV.ARRAY=''                                             
+FOR II = 1 TO LINES
+  EST.ID= CONO:IOF.ESTIMATE<1,II>                                          
+  MATREAD EST.REC FROM ESTIMATE,EST.ID THEN
+    EST.DIV.ARRAY<1,II> = EST.DIV[1,2]                     
+  END ELSE                                                  
+    EST.DIV.ARRAY<1,II> = ""                               
+  END                       
+NEXT II
+STATUS=RBO.setProperty('','EST_DIV_ARRAY',EST.DIV.ARRAY)
+RETURN
+*
+*******************
+CheckCustomerQtys:
+*******************
+*
+CUST.QTY.FLAG = ''                                                     
+IF INV.CUST # '' THEN                                                  
+  WHSE.CNT = DCOUNT(INV.WHSE.CODE,VM)           
+  IF WHSE.CNT = 0 THEN RETURN                                         
+  FOR A = WHSE.CNT TO 1 STEP -1 
+    IWH.ID= CONO:PDNO:"!":INV.WHSE.CODE<1,A>             
+    MATREAD IWH.REC FROM INV.WHSE,IWH.ID ELSE MAT IWH.REC=''                 
+    MATREAD INV.STAT.REC FROM INV.STATS, IWH.ID ELSE MAT INV.STAT.REC=''                                             
+    PO.QTY = SUM(ISTAT.PO.QTY)                                       
+    IF PO.QTY # 0 AND PO.QTY # '' THEN
+      CUST.QTY.FLAG=1
+      EXIT
+    END             
+    PJQ = 0                                                          
+    PJQ.CNT = DCOUNT(ISTAT.PO,VM)                                    
+    FOR PJQ.POS = 1 TO PJQ.CNT                                       
+      PJQ += SUM(ISTAT.PO.JOB.QTY<1,PJQ.POS>)                       
+    NEXT PJQ.POS                                                     
+    IF PJQ # 0 AND PJQ # '' THEN
+      CUST.QTY.FLAG = 1                   
+      EXIT
+    END
+    IF IWH.RESV # 0 AND IWH.RESV # '' THEN
+      CUST.QTY.FLAG = 1          
+      EXIT
+    END
+    IF IWH.INPRCS # 0 AND IWH.INPRCS # '' THEN
+      CUST.QTY.FLAG = 1                                                            
+      EXIT
+    END
+  NEXT A                                                              
+END                                                               
+RETURN
+*
+******************
+SetReadOnlyFields:
+******************
+*
+IF (QTY.OH) THEN
+  ROH<1,-1>="INV_LINE"
+  ROH<1,-1>="INV_BAS_WT"
+  ROH<1,-1>="INV_COST_WT"
+  ROH<1,-1>="INV_M_WT"
+  ROH<1,-1>="INV_M_LINE"
+END
+IF CUST.QTY.FLAG=1 THEN
+   ROF<1,-1>='INV_CUST'  
+END
+IF INV.BASE.SKU#'' THEN
+  ROF<1,-1>='INV_SBR'
+  ROF<1,-1>="INV_BAS_WT"
+  ROF<1,-1>='INV_COST_WT'
+  ROF<1,-1>='INV_M_WT'
+END
+IF INV.PAP.TYPE='REGULAR' THEN
+ ROF<1,-1>='INV_BRIGHT'
+ ROF<1,-1>='INV_SHADE'
+ ROF<1,-1>='INV_FINISH'
+ ROF<1,-1>='INV_PPI'
+ ROF<1,-1>='INV_GRAIN'
+END
+IF CO.JES#'Y' THEN
+ ROF<1,-1>='IOF_ESTIMATE'
+END
+IF INV.SUBS # '' THEN
+ ROF<1,-1>='INV_BASE_SKU'
+END
+STATUS=RBO.setProperty('','ReadOnlyFields',ROF)
+RETURN
+*
+*******************
+SetValidOptions:
+*******************
+*
+CATG.ID=CONO:INV.LINE
+MATREAD CATG.REC FROM CATEGORY,CATG.ID ELSE MAT CATG.REC=''
+ValidOptions=CATG.ADDL.SCRNS
+CONVERT ',' TO VM IN ValidOptions
+ValidOptions<1,-1>="W"
+ValidOptions<1,-1>="V"
+STATUS=RBO.setProperty('','ValidOptions',ValidOptions)
+RETURN
+
+93000* 
+STATUS = RBO.setProperty('','ServerStatus',1)        
+STATUS = RBO.setProperty('','ServerMessage'," " : ERRMSG)
+RETURN
+99999
+RETURN
+

@@ -1,0 +1,223 @@
+SUBROUTINE UPDATE_GEN_STK_REC
+********************************************************************************
+*   Program name :- 
+*   Created:- 1/12/2004
+*------------------------------------------------------------------------------*
+*
+*  Server event triggered after the database has been updated. Note that the - *
+*  API function RBO.getDBVals() should be used to retrieve values from the da- *
+*  tabase image, as values from the uObject data aware properties may have be- *
+*  en amended via the {m:WW:uObject=PreWrite} server event.
+*  
+*                                                        - *
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE ICS.CPYLIB INV.WHSE
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB INV.CNV
+$INCLUDE CPYLIB CHAR
+
+* Insert method code here
+DEFFUN CALC_STK_QTY(COST.QTY,MAT INV.CNV.REC,ROND,LN) ; * FOR READING 
+DEFFUN CALC_COST_QTY(STK.QTY,MAT INV.CNV.REC,ROND,LN) ; * FOR WRITING
+
+*CALC_STK_QTY(PHS.CUR.WGHT<1,I,S>,MAT INV.CNV.REC,ROND,'')
+*CALC_COST_QTY(PHS.NEW.WGHT<1,I,S>,MAT INV.CNV.REC,ROND,'')
+
+OPEN '', 'INV.WHSE' TO INV.WHSE ELSE 
+	ERRMSG = 'INV.WHSE FILE IS MISSING'
+	GOTO 99999
+END
+OPEN '','INVENTORY' TO INVENTORY ELSE
+	ERRMSG = 'INVENTORY FILE IS MISSING'
+	GOTO 99999
+END
+OPEN '','CONTROL' TO CONTROL ELSE STOP
+PRODUCT_ID = ''
+Whse = ''
+QtyOnHand = ''
+*MAT INV.CNV.REC = ''
+
+DEFFUN UOM.CONVERSION.CALC(QTY,FROM.UOM,TO.UOM,WGT,WIDTH,ROND,LN)
+
+STATUS = RBO.getProperty('','PMCProperty',PMCPROPERTY)
+CONO = PMCPROPERTY<1,4>
+STATUS = RBO.getProperty('','PDT_ID',PRODUCT_ID)
+STATUS = RBO.getProperty('','PDT_Whse',Whse)
+STATUS = RBO.getProperty('','PDT_QtyOnHand',QtyOnHand)
+STATUS= RBO.getProperty('','TEMP',QtyOnHandVal)
+STATUS = RBO.getProperty('','UnitFlg',PO_UNIT_FLG)
+*STATUS = RBO.setProperty('','ServerMessage','PRODUCT ID -' : PRODUCT_ID : '--WHSE - ' : Whse : 'QTY ON HAND-' : QtyOnHand)
+*RETURN
+**** v added by suhail
+GOSUB PRE_PROCESS
+GOTO PROCESS_DATA
+
+PRE_PROCESS:
+   FOR PLN = 1 TO DCOUNT(PRODUCT_ID,@VM)
+      MAT INV.CNV.REC = ""
+      MATREAD INV.REC FROM INVENTORY,CONO:PRODUCT_ID<1,PLN> THEN	
+         VALUE = ''
+         $INCLUDE ICSBP INV.UM.CNV
+         GOSUB DETERMINE.QTY.TYPE
+         ERRMSG='';RQ.VALUE='';WT.VALUE=''
+	 VALUE = QtyOnHand<1,PLN> / 1000
+            GOSUB CALC_VAL
+	    QtyOnHand<1,PLN>= VALUE
+	 CNT=DCOUNT(QtyOnHandVal<1,PLN>,SVM)
+	 FOR L=1 TO CNT 
+            VALUE = QtyOnHandVal<1,PLN,L> / 1000
+            GOSUB CALC_VAL
+         *BEGIN CASE
+         *   CASE OQX AND ICR.DV1<2>=''
+         *      VALUE=VALUE * INV.SBR
+         *      VALUE=VALUE * 10
+         *      RQ.VALUE=INT(((VALUE/ICR.DV1<1>)*ICR.MT1<1>)/ICR.DV2<1>+.5)
+         *      WT.VALUE=INT(((RQ.VALUE/ICR.MT1<1>)*ICR.DV1<1>)*ICR.DV2<1>+.5)
+         *   CASE OQX
+         *      WT.VALUE=INT(((VALUE/ICR.MT1<2>)*ICR.DV1<2>)*ICR.DV2<2>+.5)
+         *      RQ.VALUE=INT(((WT.VALUE/ICR.DV1<1>)*ICR.MT1<1>)/ICR.DV2<1>+.5)
+         *      WT.VALUE=INT(((RQ.VALUE/ICR.MT1<1>)*ICR.DV1<1>)*ICR.DV2<1>+.5)
+         *   CASE RQX
+         *      WT.VALUE=INT(((VALUE/ICR.MT1<1>)*ICR.DV1<1>)*ICR.DV2<1>+.5)
+         *END CASE
+         *QtyOnHand<1,PLN>= WT.VALUE
+           QtyOnHandVal<1,PLN,L>= VALUE
+         NEXT L
+      END
+   NEXT
+STATUS = RBO.setProperty('','PO',RQX)
+**** ^
+RETURN
+
+CALC_VAL:
+   IF ICR.CNV = "MD0" THEN
+      VALUE = ICONV(VALUE,"MD0")
+   END ELSE
+      VALUE = ICONV(VALUE,"MD2")
+   END
+   IF PO_UNIT_FLG<1,PLN> # INV.UNIT THEN 
+      FROM.UOM = PO_UNIT_FLG<1,X>
+      TO.UOM = INV.UNIT   
+      STK.QTY = UOM.CONVERSION.CALC(VALUE,FROM.UOM,TO.UOM,INV.M.WT,INV.PAP.WIDTH,'','')
+      VALUE = UOM.CONVERSION.CALC(STK.QTY,TO.UOM,FROM.UOM,INV.M.WT,INV.PAP.WIDTH,'','')
+      IF ICR.CNV = "MD0" THEN
+         VALUE = ICONV(((VALUE/ICR.MT1)*ICR.DV1)*ICR.DV2,'MD0')
+      END
+      IF ICR.CNV = "MD0" THEN
+         IF ICR.CNV # "MD0" THEN
+            VALUE = VALUE * 10
+         END
+      END ELSE
+         VALUE = VALUE * ICR.MT1 * 10
+      END
+   END ELSE
+      IF ICR.CNV<1,1> = "MD0" THEN
+         VALUE = ICONV(((VALUE/ICR.MT1)*ICR.DV1)*ICR.DV2,'MD0')
+      END ELSE
+         VALUE = VALUE * 10
+      END
+   END
+RETURN
+
+
+
+PROCESS_DATA:
+   VALUE = ""
+   FLAG = ""
+TEST = ''
+   FOR X = 1 TO DCOUNT(PRODUCT_ID,@VM)
+      MATREAD INV.REC FROM INVENTORY,CONO:PRODUCT_ID<1,X> THEN	
+         $INCLUDE ICSBP INV.UM.CNV
+         IWH.ID = CONO:PRODUCT_ID<1,X>:"!":Whse<1,X>
+         IWH.ON.HAND = ''
+         PREV_QTY = ''
+         TOTAL_QTY = ''
+         MATREADU IWH.REC FROM INV.WHSE,IWH.ID THEN
+            FLAG<1,-1> = "T"
+            *PREV_QTY = CALC_STK_QTY(IWH.ON.HAND,MAT INV.CNV.REC,ROND,'')
+            *PREV_QTY = OCONV(PREV_QTY,ICR.CNV)
+            TOTAL_QTY = PREV_QTY + QtyOnHand<1,X>
+            IWH.ON.HAND = TOTAL_QTY
+            *IWH.ON.HAND = CALC_COST_QTY(TOTAL_QTY,MAT INV.CNV.REC,ROND,'')
+            *IWH.ON.HAND = ICONV(IWH.ON.HAND,ICR.CNV)
+*           IWH.LOC=LOCS
+*           MATREADU IWH.REC FROM INV.WHSE,IWH.ID THEN
+*            MATWRITE IWH.REC ON INV.WHSE,IWH.ID;* COMMENTD /SUHAIL
+*           END ELSE
+*              RELEASE INV.WHSE
+*           END                                       
+         END ELSE
+            IWH.ON.HAND = ''
+         END		
+      END ELSE
+         PRODUCT_ID<1,X> = ""
+      END
+   NEXT
+   STATUS = RBO.setProperty('','PDT_QtyOnHand',QtyOnHand) ;* ADDED BY SUHAIL
+   STATUS=RBO.setProperty('','TEMP',QtyOnHandVal); * ADDED BY LAKSHMI
+RETURN	
+
+*** v
+DETERMINE.QTY.TYPE: 
+   RSX=0; DQX=0; OQX=0; RQX=0
+   BEGIN CASE
+      CASE INV.UNIT<1,2>='SHT' AND INV.UNIT<1,3>='LBS'
+         ICR.DV1=INV.M.WT; ICR.MT1=1; ICR.DV2=1; ICR.CNV="MD0"
+         RSX=36
+         BEGIN CASE
+            CASE PO_UNIT_FLG<1,PLN>=INV.UNIT<1,2>
+               RQX=48
+            CASE PO_UNIT_FLG<1,PLN>='LBS'
+               OQX=48; RQX=60
+         END CASE
+      CASE INV.UNIT<1,2>='PC' AND INV.UNIT<1,3>='MSI'
+         ICR.DV1=INV.PAP.WIDTH/100; ICR.MT1=10; ICR.DV2=1; ICR.CNV="MD0"
+         RSX=36
+         BEGIN CASE
+            CASE PO_UNIT_FLG<1,PLN>='PC'
+               RQX=48
+            CASE PO_UNIT_FLG<1,PLN>='MSI'
+               OQX=48; RQX=60
+            CASE PO_UNIT_FLG<1,PLN>='FT'
+               ICR.DV1<2>=INV.PAP.WIDTH/100; ICR.MT1<2>=100; ICR.DV2<2>=12
+               OQX=48; RQX=60
+         END CASE
+      CASE INV.UNIT<1,2>='FT' AND INV.UNIT<1,3>='MSI'
+         ICR.DV1=INV.PAP.WIDTH/100; ICR.MT1=100; ICR.DV2=12; ICR.CNV="MD0"
+         RSX=36
+         BEGIN CASE
+            CASE PO_UNIT_FLG<1,PLN>='FT'
+               RQX=48
+            CASE PO_UNIT_FLG<1,PLN>='MSI'
+               OQX=48; RQX=60
+            CASE PO_UNIT_FLG<1,PLN>='PC'
+               ICR.DV1<2>=INV.PAP.WIDTH/100; ICR.MT1<2>=10; ICR.DV2<2>=1
+               OQX=48; RQX=60
+         END CASE
+      CASE 1
+         ICR.DV1=10; ICR.MT1=1; ICR.DV2=1; ICR.CNV="MD2"
+         BEGIN CASE
+            CASE INV.PAP.TYPE="ROLL" OR INV.PAP.TYPE="LROLL" OR INV.PAP.TYPE="PCOAT"
+               RSX=36; RQX=48; DQX=60
+            CASE PO_UNIT_FLG<1,PLN> # INV.UNIT<1,2>
+               OQX=36; RQX=48
+            CASE 1
+               RQX=36
+         END CASE
+   END CASE
+RETURN
+*** ^
+99999*
+   STATUS = RBO.setProperty('','ServerStatus',1)
+   STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+RETURN
+

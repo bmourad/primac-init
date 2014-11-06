@@ -1,0 +1,1982 @@
+   SUBROUTINE MISC.PO.MAINT
+*24955 ^
+*COPY>CPYLIB>COM1
+*COPY>POS.CPYLIB>COM.MPO
+*COPY>POS.CPYLIB>COM.PO.INTRF
+**************************************************************
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - POSBP
+* PROGRAM     - MISC.PO.MAINT
+* BY          - JIHAD YAMOUT , C.B.A
+* DATE        - 09/17/84
+* DESCRIPTION - THIS PROGRAM INPUT MISC P/O IN THEN SYSTEM
+* MOD         - 2.23.90 GG  ENLARGE UNIT COST FIELD.
+* MOD 09/24/94 CLW Task 17919 - add division, department and cost center,
+*                               plus miscellaneous category.
+*
+* TASK 18746 RKB 1/25/95 import from DEV where accrue field was added
+* TASK 19404 10/22/95 by Bob Sherer - POS DIVISIONALIZATION
+* CLS 5/96 - ADD VEND PHONE AND FAX
+*
+*T23082 gat 07/20/1998 * FIX PO GUI PROBLEM
+*T23278 markt 10/21/1998 * Add check for divisional security
+*T24231 edvard 08/26/1999 * Added logic for requisitions
+*T25260 edvard 09/27/2000 * CHAGE THE FUNCITIONALITY OF DOLLAR LIMITS SO
+*                           THAT LIMIT CONTROLS ROUTING OF THE REQ.     
+*T25463 lanny 10/16/2000 * Misc Po Maint & Receipts both call
+*                          MISC.VEND.STAT.UPDATE where the on-order &
+*                          Receipt data is updated. This causes an
+*                          overwrite to receipt data if price changes
+*                          from one receipt to another.
+*T25861 bilal 05/30/2001 * Check flag to allow user to enter a misc
+*                          requesition.
+*T25854 cm 06/13/2001 * Add duplicate function to program.
+*T25858 edwin 06/14/01 * Add requestor field.
+*T25942 ajibaly 07/10/2001 * Change options to:
+*                         F- release for approval, H- put it on hold
+*T26081 lanny 08/10/2001 * When coming from REQ INQ detail line screen
+*                          is retaining values from previous PO for
+*                          qty/due date, etc.
+*T26152 alex 10/29/2001 * Set validation rule for the Accrue field to be
+*                         based on the company POS setup.
+*T25938 cmykleb 02/20/2002 * Add a duplicate function to PO's.
+*T26126 adelgado 02/26/2002 * Implement the LOCKED clause for READU.
+*T26471 lross 03/11/2002 * Default new Vendor terms if Vend No. chg'd for
+*                          REQS.
+*T25941 ajibaly 06/28/2002 * Add ability to email POs
+*C40479 ajibaly 08/02/2002 * Make sure REQ -> PO process gets an accrue
+*                            flag.
+*T26685 cmykleb 08/15/2002 * Check for divisional security for divison
+*                            number in MISC.PO.IN.MAINT
+*T27417 thompson 05/07/2003 * Not allow "F" OR "C" on inquiry. 
+*T27552 cmykleb 07/11/2003 * Correct error message problem.
+*T27701 lross 09/11/2003 * Add SHIP.VIA XREF.
+*T27701 wyamout 10/01/2003 * REMOVE SHIP.VIA XREF FROM THE PROGRAM IT IS
+*                            HANDLED BY THE SCREEN SEE TASK 27685
+*                            DEFAULT SHIP.VIA TO VEND SHIP.VIA
+*                            SEE CCP REV12 PROBLEM 15
+*T27798 cmykleb 11/25/2003 * If a purchase requisition is on hold and
+*                            the approver is a level 1 then allow
+*                            access to the requusution.
+*T28244 lross 09/09/2004 * Delete requisition after Filing PO record.
+*T28687 lross 10/11/2005 * Error in cost extension where per "M" costs involved.
+*T29000 lross 10/20/2006 * Limit ID on new PO to 8 digits.
+*ENDDOC
+**************************************************************
+**** INSERT FILES EQUATES
+*COPY>POS.CPYLIB>MISC.PO
+*COPY>PMC.CPYLIB>TERMS
+*COPY>PMC.CPYLIB>SHIP.VIA
+*COPY>PMC.CPYLIB>VEND
+*COPY>APS.CPYLIB>VEND.STATS
+*COPY>APS.CPYLIB>VEND.PO.STATS
+*COPY>ICS.CPYLIB>WAREHOUSE
+*COPY>PMC.CPYLIB>DIVISION
+*COPY>APS.CPYLIB>VEND.PROD.STATS
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>FILE.VARS
+*COPY>APS.CPYLIB>APS.FILE.VARS
+*COPY>CPYLIB>GEN.XREF.SUB
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>CHAR
+*24231 v
+*COPY>PMC.CPYLIB>SECURITY 
+*COPY>POS.CPYLIB>APP.REQ
+   DIM HOLD.APP.REQ.REC(20)
+   MAT APP.REQ.REC = ""
+   MAT HOLD.APP.REQ.REC = ""
+*24231 ^
+**** SETUP FOR SYSTEM ERRMSGS
+   SYS.TYPE = 1
+   CALL SYSCOM(MAT SYSCOM.REC)
+   PROCREAD BUFFER ELSE
+      ERRMSG = "MUST BE RUN FROM PROC"
+      GOSUB 93000
+   END
+* 25855 v
+   IF BUFFER<1> = "PI" THEN
+      BUFFER<1> = "P"
+      BUFFER<5> = "I"
+      PROCWRITE BUFFER
+      POS.INQ = 1
+   END ELSE
+      POS.INQ = 0
+   END
+* 25855 ^
+**** OPEN FILES
+   OPEN '','COMPANY' TO COMPANY ELSE
+      ERRMSG = 'COMPANY FILE IS MISSING'
+      GOTO 93000
+   END
+   OPEN '','CONTROL' TO CONTROL ELSE
+      ERRMSG = 'CONTROL FILE IS MISSING'
+      GOTO 93000
+   END
+   MAT COMP.REC = ''
+   CONO = ''
+   CALL GET.CONO(CONO,MAT COMP.REC)
+   IF CONO = 'END' THEN GOTO 99999
+   IF BUFFER<1> = "R" AND CO.PO.REQ.FLAG # "Y" THEN    
+      ERRMSG = "Requisition system is not activated."
+      GOSUB 91000                                    
+      GOSUB 99999                                    
+   END                                              
+   OPEN '','MISC.PO' TO MISC.PO ELSE
+      ERRMSG = 'MISC.PO FILE IS MISSING'
+      GOSUB 93000
+   END
+   OPEN '','TERMS' TO TERMS ELSE
+      ERRMSG = 'TERMS FILE IS MISSING'
+      GOSUB 93000
+   END
+   OPEN '','WAREHOUSE' TO WAREHOUSE ELSE
+      ERRMSG = 'WAREHOUSE FILE IS MISSING'
+      GOTO 93000
+   END
+   OPEN '','SHIP.VIA' TO SHIP.VIA ELSE
+      ERRMSG = 'SHIP.VIA FILE IS MISSING'
+      GOTO 93000
+   END
+   OPEN '','VEND' TO VEND ELSE
+      ERRMSG = 'VENDOR FILE IS MISSING'
+      GOTO 93000
+   END
+   OPEN '','POS.SCREENS' TO M.SCREENS ELSE
+      ERRMSG = 'POS.SCREENS FILE IS MISSING'
+      GOTO 93000
+   END
+   OPEN '','VENDOR.XREF' TO VENDOR.XREF ELSE
+      ERRMSG = 'VENDOR.XREF FILE IS MISSING'
+      GOTO 93000
+   END
+   OPEN '','PREFIX' TO PREFIX ELSE
+      ERRMSG = 'PREFIX FILE IS MISSING'
+      GOTO 93000
+   END
+   OPEN '','XREF.DATA' TO XREF.DATA ELSE
+      ERRMSG = 'XREF.DATA FILE IS MISSING'
+      GOSUB 93000
+   END
+   OPEN '','CATEGORY.MISC' TO CATEGORY.MISC ELSE        ;* Task 17919
+      ERRMSG = 'CATEGORY.MISC FILE IS MISSING'
+      GOTO 93000
+   END
+   OPEN '','COA' TO COA ELSE        ;* Task 17919
+      ERRMSG = 'COA FILE IS MISSING'
+      GOTO 93000
+   END
+   OPEN '','DIVISION' TO DIVISION ELSE        ;* Task 17919
+      ERRMSG = 'DIVISION FILE IS MISSING'
+      GOTO 93000
+   END
+   OPEN '','DEPARTMENT' TO DEPARTMENT ELSE        ;* Task 17919
+      ERRMSG = 'DEPARTMENT FILE IS MISSING'
+      GOTO 93000
+   END
+   OPEN '','COST.CNTR' TO COST.CNTR ELSE        ;* Task 17919
+      ERRMSG = 'COST.CNTR FILE IS MISSING'
+      GOTO 93000
+   END
+* 25858 v
+   IF POS.INQ THEN OPEN '','MISC.REQ' TO MISC.REQ ELSE
+      ERRMSG = 'MISC.REQ FILE IS MISSING' ; GOTO 93000
+   END
+* 25858 ^
+***** GET COMPANY NAME
+*24231 v
+   IF CO.PO.REQ.FLAG = "Y" THEN  
+      OPEN '','MISC.REQ' TO MISC.REQ ELSE ERRMSG = 'MISC.REQ FILE IS MISSING'; GOTO 93000
+      OPEN '','APP.REQ' TO APP.REQ ELSE ERRMSG = 'APP.REQ FILE IS MISSING'; GOTO 93000
+      OPEN '','SECURITY' TO SECURITY ELSE ERRMSG = 'SECURITY FILE IS MISSING'; GOTO 93000
+      USER.ID = UPCASE(@LOGNAME)
+   END
+*24231 ^
+   IF CO.APS.M.INTRF > 1 THEN
+      OPEN '','VEND.STATS' TO VEND.STATS ELSE
+         ERRMSG = "VEND.STATS FILE IS MISSING" ; GOTO 93000
+      END
+      OPEN '','VEND.PO.STATS' TO VEND.PO.STATS ELSE
+         ERRMSG = "VEND.PO.STATS FILE IS MISSING" ; GOTO 93000
+      END
+      OPEN '','VEND.PROD.STATS' TO VEND.PROD.STATS ELSE
+         ERRMSG = "VEND.PROD.STATS FILE IS MISSING" ; GOTO 93000
+      END
+   END
+*24231 v
+   APPROVER.LIMIT = 99999999999
+   TOTAL.AMT = 0
+   PW = ''
+*24231 ^
+   DIV = "" ; *24953
+*T26685 v
+   READ SECURITY.REC FROM CONTROL, CONO:"DIV.SECURITY" ELSE
+      ERRMSG = "DIV.SECURITY RECORD NOT FOUND IN CONTROL FILE"
+      GOTO 93000
+   END
+*T26685 ^
+**** SET UP GEN.XREF.REC
+   MAT EDIT.COM = ''
+   MAT EDIT.COM.DRIVER = ''
+   MAT GEN.XREF.REC = ''
+   GXR.CO = CONO
+***** MAIN PROCESSING
+   MAT EDIT.COM.DRIVER = ''
+*24231 v
+   ECD.SCRN.CNT = 5
+*24231 ^
+   ECD.SCRN.NAME<1> = 'MISC.PO.MAINT'
+   ECD.SCRN.NAME<2> = 'MISC.PO.IN.MAINT'
+   ECD.SCRN.NAME<3> = 'MISC.REQ.MAINT'
+   ECD.SCRN.NAME<4> = 'PO.REQ.LOG.INQ'
+   ECD.SCRN.NAME<5> = 'MISC.PO.INQUIRY'
+*24231 ^
+* T23082
+*24231 v
+   IF BUFFER<1> = "R" THEN
+      SCRN.NO = 3
+      MENU.FLAG = "R"
+   END ELSE
+      IF POS.INQ THEN SCRN.NO = 5 ELSE SCRN.NO = 1
+      MENU.FLAG = "P"
+   END
+   ECD.SCRN.NO = SCRN.NO
+*24231 ^
+* T23082
+   IF BUFFER<3> # "INQ" THEN ; * 24955
+      ECD.ACTION=1;CALL SCRN.EDIT
+   END ; * 24955
+   GEN.DIV = '00'           ;* Task 17919
+   GEN.DEPT = '00'
+   GEN.CCTR = '000'
+   GENERAL = 'GENERAL'
+**** PRINT SCREEN
+1*
+*T26081  IF BUFFER<3> # "INQ" THEN    ; * 24955
+   MAT SCV.REC = ""
+*T26081  END                          ; * 24955
+   ECD.ACTION=6;CALL SCRN.EDIT
+***** ENTER PO NUMBER
+5*
+   DUPLICATED.PO = 0 ; * T25938
+   MAT MPO.REC = ''
+   MPO.TOT.LA.REC = ''
+   MPO.M.WHT = ''
+   MISC.DIV.DESC = ""
+   MISC.DEPT.DESC = ""
+   MISC.CCTR.DESC = ""
+   NEW = 0
+   FIRST.TIME = 0    ;* T26152
+*24231 v
+   PORDER= 0
+   REQ = 0
+*24231 ^
+   OPTION = ''
+*24955 v                   
+   IF BUFFER<4>  # "" THEN    
+      ECD.RET.VALUE = BUFFER<4>
+      BUFFER<4> = ""           
+   END ELSE                   
+*24955 ^                   
+      IF NOT(POS.INQ) THEN ECD.DEFAULT = 'N'   ; * 25855
+      ECD.NUM = 5
+      ECD.ACTION=4;CALL SCRN.EDIT
+   END ; *24955
+   MPO.CODE = ECD.RET.VALUE
+   BEGIN CASE
+      CASE ECD.RET.VALUE = 'END'
+         GOTO 99999
+      CASE ECD.RET.VALUE = "N" AND NOT(POS.INQ) ; * 25855
+         NEW = 1
+ *24231 v                                               
+         IF MENU.FLAG = "R" THEN
+            MPO.STATUS<1,-1> = "Entered"                            
+            MPO.ST.DATE<1,-1> = DATE()
+            MPO.PREV.APP<1,-1> = USER.ID
+*T24953      MPO.WRIT.BY = USER.ID
+            SCV.REC(48)<ECD.SCRN.NO,1> = MPO.STATUS
+            ECD.NUM = 48 ; ECD.ACTION = 5 ; CALL SCRN.EDIT   
+            SCV.REC(49)<ECD.SCRN.NO,1> = OCONV(MPO.ST.DATE,"D2/")
+            ECD.NUM = 49 ; ECD.SCRN = 5 ; CALL SCRN.EDIT  
+         END                                                
+ *24231 ^                                               
+*T25938 v
+      CASE MENU.FLAG = "P" AND ECD.RET.VALUE = "D" AND NOT(POS.INQ)
+         ECD.NUM=60;ECD.ACTION=4;CALL SCRN.EDIT
+         IF ECD.RET.VALUE = "END" OR ECD.RET.VALUE = "" THEN GOTO 5
+         DUP.PONO = ECD.RET.VALUE
+         MATREAD MPO.REC FROM MISC.PO, CONO:DUP.PONO ELSE
+            ERRMSG = "Miscellaneous PO # entered not on file"
+            GOSUB 91000
+            GOTO 5
+         END
+         ECD.NUM=1;ECD.ACTION=4;CALL SCRN.EDIT
+         MPO.CODE = ECD.RET.VALUE
+         BEGIN CASE
+            CASE MPO.CODE = "END" OR MPO.CODE = ""
+               GOTO 5
+            CASE MPO.CODE = "N"
+               SCV.REC(5)<1> = MPO.CODE; ECD.NUM = 5; ECD.ACTION = 5; CALL SCRN.EDIT
+            CASE MPO.CODE # ""
+               SCV.REC(5)<1> = MPO.CODE; ECD.NUM = 5; ECD.ACTION = 5; CALL SCRN.EDIT
+               READ REC FROM MISC.PO, CONO:MPO.CODE THEN
+                  ERRMSG = "Micellaneous PO # already exists on file"
+                  GOSUB 91000
+                  GOTO 5
+               END
+               MATBUILD SAV.REC FROM MPO.REC
+         END CASE
+         DUPLICATED.PO = 1
+         MPO.DATE = DATE()
+         MPO.ST.DATE = DATE()
+         MPO.TOT.RECEVED = ""
+         MPO.DATE.RECVD = ""
+         MPO.LAST.RECV = ""
+         MPO.PRT.FLG = "Y"
+         MPO.TOT.OPEN = MPO.TOT.ONORD
+         MPO.TOT.CANCEL = '' 
+         MPO.REC.QTY = ''
+         MPO.REC.DATE = '' 
+         MPO.REC.PER = ''
+         MPO.PREV.RECEVED = '' 
+         MPO.LAST.RECV = ''
+         GOSUB 15
+         DCNT = DCOUNT(MPO.DEL.DATE<1>,VM)
+         FOR D = 1 TO DCNT
+            MPO.DEL.DATE<1,D> = MPO.DUE.DATE
+         NEXT D
+*T25938 ^
+*T25854 v
+      CASE MENU.FLAG="R" AND ECD.RET.VALUE="D" AND NOT(POS.INQ) ;*25855
+         GOTO DUPE.SUB
+*T25854 ^
+      CASE ECD.RET.VALUE # "" AND NOT(POS.INQ)  ; * 25855
+*24231 v
+*C38358 Do not lock record at this point.
+      * T26126 v
+         MATREADU MPO.REC FROM MISC.PO, CONO:MPO.CODE LOCKED
+            ERRMSG = 'P/O record is locked by user - ':GETUSERNAME(STATUS())
+            GOSUB 91000;GOTO 5 
+         END THEN
+      * T26126 ^
+            IF MENU.FLAG = "R" THEN
+               ERRMSG = "PO with number ":MPO.CODE: " already exists"
+               GOSUB 91000; RELEASE MISC.PO,CONO:MPO.CODE
+               GOTO 5
+            END
+            PORDER = 1  ; * this is a purchase order since found in PO file
+         END ELSE
+            IF CO.PO.REQ.FLAG = "Y" THEN
+               MATREAD MPO.REC FROM MISC.REQ, CONO:MPO.CODE THEN
+                  IF MENU.FLAG = "P" THEN
+                     ERRMSG = "Requisition with number ":MPO.CODE:" already exists"
+                     GOSUB 91000 ; RELEASE MISC.REQ,CONO:MPO.CODE ; GOTO 5
+                  END
+                  REQ = 1 ; * this is still requisition 
+               END 
+            END
+         END
+*C38258 v
+         IF REQ THEN
+            IF BUFFER<3> = 'INQ' THEN
+               MATREAD MPO.REC FROM MISC.REQ, CONO:MPO.CODE ELSE MAT MPO.REC = ''
+            END ELSE
+          * T26126 v
+               MATREADU MPO.REC FROM MISC.REQ, CONO:MPO.CODE LOCKED
+                  ERRMSG = 'P/O record is locked by user - ':GETUSERNAME(STATUS())
+                  GOSUB 91000;GOTO 5 
+               END ELSE
+                  MAT MPO.REC = ''
+               END
+          * T26126 ^
+            END
+         END ELSE
+        * T26126 v
+            MATREADU MPO.REC FROM MISC.PO, CONO:MPO.CODE LOCKED
+               ERRMSG = 'P/O record is locked by user - ':GETUSERNAME(STATUS())
+               GOSUB 91000;GOTO 5 
+            END ELSE
+               MAT MPO.REC = ''
+            END
+        * T26126 ^
+         END
+*C38258 ^
+         IF MPO.APP.LEVEL = "C" THEN
+            IF (REQ) THEN
+               ERRMSG = "Requisition: ":MPO.CODE:" was cancelled. Cannot make any changes."
+               GOSUB 91000
+            END ELSE
+               ERRMSG = "PO ":MPO.CODE:" was cancelled. You cannot make any changes."
+               GOSUB 91000
+            END
+         END
+         IF NOT(PORDER) AND NOT(REQ) THEN 
+*24231 ^
+            X = 0; Y = 22; TYP = 8; MAXL = 1
+            PMSG = MPO.CODE:" IS NOT ON FILE. DO YOU WANT TO ADD (Y/N)"
+            CALL EDIT.SUB
+            P_X  = 0 ; P_Y = 22 ; P_VALUE = "" ; P_OPT = "CL"
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            IF VALUE = "Y" THEN
+               NEW = 1
+*24231 v
+               IF MENU.FLAG = "R" THEN
+                  REQ = 1
+               END ELSE
+                  PORDER = 1
+               END
+*24231 ^
+            END ELSE
+               RELEASE MISC.PO, CONO:MPO.CODE
+               IF CO.PO.REQ.FLAG = "Y" THEN  
+                  RELEASE MISC.REQ, CONO:MPO.CODE  ; *24231
+               END
+               GOTO 5
+            END
+         END
+*T23278 v
+         IF NOT(NEW) THEN
+            DIV.CODE = MPO.DIV.OWNER; USER.ID = UPCASE(@LOGNAME); ERRMSG = ''
+            CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+            IF ERRMSG # '' THEN
+               GOSUB 91000; SCV.REC(5)<1,1> = ''; GOTO 5
+            END
+*24231 v
+            IF MENU.FLAG = "R" THEN
+*25260 v
+               ;* moved the logic to subroutine so it can be reused
+               USER= USER.ID; DIV.OWNER = MPO.DIV.OWNER; APP.REQ.ID = ""
+               CALL CHECK.ACTIVE.STATUS (CONO,USER,DIV.OWNER,RET.FLAG,MAT APP.REQ.REC,APP.REQ.ID,YYY)
+               VALID = RET.FLAG
+*25260 ^
+               IF NOT(VALID) THEN                                           
+                  ERRMSG = "Profile for user ":USER.ID:" is either missing or is inactive" 
+                  GOSUB 91000
+                  GOTO 5
+               END
+            END
+         END
+*24231 ^
+*T23278 ^
+      CASE POS.INQ                ; * 25855
+         MPO.CODE = ECD.RET.VALUE
+         MATREAD MPO.REC FROM MISC.PO, CONO:MPO.CODE ELSE
+            MATREAD MPO.REC FROM MISC.REQ, CONO:MPO.CODE ELSE
+               ERRMSG = "PO with number ":MPO.CODE:" not found"
+               GOSUB 91000; GOTO 5
+            END
+         END
+         DIV.CODE=MPO.DIV.OWNER ; USER.ID=UPCASE(@LOGNAME) ; ERRMSG=""
+         CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+         IF ERRMSG # '' THEN GOSUB 91000 ; SCV.REC(5)<1,1> = '' ; GOTO 5
+   END CASE
+   IF NEW THEN
+      FIRST.TIME = 1    ;* T26152
+*24231 v
+      IF MENU.FLAG = "R" THEN
+         REQ  = 1
+         FOR S = 1 TO 14 UNTIL ECD.RET.VALUE = "END"
+            ON S GOSUB 80,9,10,12,15,20,27,30,35,40,45,50,60,70  ; *25858
+         NEXT S
+      END ELSE
+         PORDER = 1
+*24231 ^
+         FOR S = 1 TO 14 UNTIL ECD.RET.VALUE = "END"
+            ON S GOSUB 80,9,10,12,15,20,25,30,35,40,45,50,60,70
+         NEXT S
+      END  ; * 24231
+      FIRST.TIME = 0    ;* T26152
+      IF ECD.RET.VALUE = "END" THEN
+*24231 v
+*  IF MPO.CODE # "N" THEN RELEASE MISC.PO, CONO:MPO.CODE
+         IF MPO.CODE # "N" THEN 
+            RELEASE MISC.PO, CONO:MPO.CODE
+            IF CO.PO.REQ.FLAG = "Y" THEN  
+               RELEASE MISC.REQ, CONO:MPO.CODE
+            END
+         END
+*24231 ^
+*24955 v
+         IF BUFFER<3> = "INQ" THEN
+            ECD.ACTION = 99 ; CALL SCRN.EDIT
+            GOSUB 99999
+         END ELSE
+*24955 ^
+            GOTO 1
+         END ; * 24955
+      END
+   END ELSE
+      GOSUB 1020
+      GOSUB 1000
+      ECD.ACTION = 3; CALL SCRN.EDIT
+   END
+***** ENTER OPTIONS
+*
+95 * ; * T25854
+   IF NOT(NEW) AND MENU.FLAG = "R" THEN
+*25260 v
+      INQ.MODE = 0                                        
+      IF USER.ID # MPO.APPROVER THEN
+         BEGIN CASE
+            CASE APP.PO.LEVEL > 1   
+               LOCATE USER.ID IN MPO.PREV.APP<1> SETTING POS ELSE 
+                  INQ.MODE = 1                                    
+                  PROMPT.NBR =  54                                
+               END                                               
+*T27798     CASE APP.PO.LEVEL = 1           
+*T27798        IF MPO.LEVEL.STATUS='H' AND MPO.APP.LEVEL#1 THEN 
+*T27798           INQ.MODE=1                  
+*T27798           PROMPT.NBR = 54             
+*T27798        END                           
+         END CASE                          
+      END                                 
+      IF NOT(INQ.MODE) THEN                               
+         IF MPO.APP.LEVEL < APP.PO.LEVEL OR MPO.APP.LEVEL = "C" THEN
+            IF APP.PO.LEVEL = 1 AND MPO.APP.LEVEL # "C" THEN
+               PROMPT.NBR = 52
+            END ELSE
+               PROMPT.NBR = 54 ; * only inquiry
+            END
+         END ELSE
+            BEGIN CASE
+               CASE USER.ID=MPO.APPROVER OR APP.PO.LEVEL = 1 OR MPO.APPROVER=''
+                  PROMPT.NBR = 52
+               CASE 1
+                  PROMPT.NBR = 51
+            END CASE
+         END
+      END
+   END
+   ;*25260 ^
+   IF (NEW)  OR MENU.FLAG = "P" THEN 
+      IF CO.PO.REQ.FLAG = "Y" THEN
+         IF APP.PO.LEVEL = 1 THEN
+            PROMPT.NBR = 52
+         END ELSE
+            IF POS.INQ THEN PROMPT.NBR = 58 ELSE PROMPT.NBR = 31 ; *25855
+         END
+      END ELSE
+         PROMPT.NBR = 57
+      END
+   END
+*
+   MORE = 1
+   LOOP
+*  ECD.NUM = 31 ; 24231
+      ECD.NUM = PROMPT.NBR   ; *24231
+      ECD.ACTION=4;CALL SCRN.EDIT
+      OPTION = ECD.RET.VALUE
+      BEGIN CASE
+         CASE OPTION = 'END' OR OPTION = 'E'
+*24231 v
+*      IF MPO.CODE # "N" THEN RELEASE MISC.PO, CONO:MPO.CODE
+            IF MPO.CODE # "N" THEN
+               RELEASE MISC.PO, CONO:MPO.CODE 
+               IF CO.PO.REQ.FLAG = "Y" THEN  
+                  RELEASE MISC.REQ, CONO:MPO.CODE 
+               END
+            END
+*24231 ^
+            MORE = 0
+         CASE NUM(OPTION)
+            IF REQ THEN
+               ON OPTION GOSUB 9,10,12,15,20,27,25,30,35,40,45,50,60,70  ; *25858
+            END ELSE
+               ON OPTION GOSUB 9,10,12,15,20,25,30,35,40,45,50,60,70
+            END
+         CASE OPTION = 'N'
+*T26685 v
+*           CALL MISC.PO.IN.MAINT(CONO,MPO.CODE)
+            CALL MISC.PO.IN.MAINT(CONO,MPO.CODE,SECURITY.REC)
+*T26685 ^
+*      ECD.SCRN.NO = 1 ; * 24231
+            ECD.SCRN.NO = SCRN.NO  ; *24231
+            GOSUB 1020
+            PD.CNT = 0;LAST.DATE = ""                               
+            PD.CNT=DCOUNT(MPO.DEL.DATE,VM)
+            FOR PD = 1 TO PD.CNT                                    
+               IF MPO.DEL.DATE<1,PD> > LAST.DATE THEN LAST.DATE=MPO.DEL.DATE<1,PD>
+            NEXT PD                                                 
+            MPO.DUE.DATE = LAST.DATE                                 
+            SCV.REC(19)<ECD.SCRN.NO,1> = MPO.DUE.DATE                
+            ECD.ACTION=2;CALL SCRN.EDIT
+            ECD.ACTION=3;CALL SCRN.EDIT
+*      MORE = 0
+*24231 v
+         CASE OPTION = "A"
+            IF MPO.LEVEL.STATUS = "H" THEN
+               ERRMSG = "This requisition has not yet been released for approval"
+               GOSUB  91000
+            END ELSE
+ *T36138 v                                                               
+ * IF YOU ARE MAKING CHANGES TO THE FORM YOU HAVE TO MANUALY ADD PROPERTY
+ * passwordAND TURN IT OFF SETTING VALUE TO 0                            
+ * TO DO THIS EDIT PMCFORMS {record name} AND LOCATE THE FIELD pmc{#}    
+ * AND ADD IT TO THE END OF THE ATTRIBUTE. FOR PROMPT IT IS FIELD pmc70. 
+ *IF SHOULD LOOK SOMETHING LIKE THIS                                     
+ * 1ªª_pmc70                                                             
+ *x_lenªchar_colªchar_rowªchar_lengthªhelp_stringªcursorªuser_dataªpasswo
+
+ *riableª13n9n27n1551ªª8ª0ª21ª8ªª_IBEAM.CURªª0                           
+*                                                                        
+               P_FIELDS ="_pmc70"                                               
+               P_ATTRS = "password"                                             
+               P_VALUES = 1                                                     
+               ERROR = ""                                                       
+               CALL VSI_SETATTR(P_FIELDS,P_ATTRS,P_VALUES,ERROR)                
+               IF ERROR THEN                                                    
+                  ERRMSG = ERROR                                                 
+                  GOSUB 91000                                                    
+               END
+*36138 ^
+               ECD.NUM = 56 ; ECD.ACTION = 4 ; CALL SCRN.EDIT
+               IF ECD.RET.VALUE = APP.CODE THEN
+                  IF APP.PO.LEVEL = 1 THEN
+                     MPO.STATUS<1,-1> = "APPROVED"
+                     MPO.APP.LEVEL = APP.PO.LEVEL
+                     MPO.APPROVER = ""
+                     MPO.PREV.APP<1,-1> = USER.ID
+                     MPO.ST.DATE<1,-1> = DATE()
+*            REQ = 0 ; * this is not requisition any more
+                     GOSUB 1000
+                     ECD.ACTION = 6 ; CALL SCRN.EDIT
+                     ECD.ACTION = 3 ; CALL SCRN.EDIT
+*T36138 v                                                    
+                     P_FIELDS = "_pmc70"                              
+                     P_ATTRS = "password"                             
+                     P_VALUES = 0                                     
+                     CALL VSI_SETATTR(P_FIELDS,P_ATTRS,P_VALUES,ERROR)
+                     IF ERROR THEN                                    
+                        ERRMSG = ERROR                                 
+                        GOSUB 91000                                    
+                     END                                              
+                     GOSUB 60                                         
+*T36138 ^                                                    
+                     PROMPT.NBR = 52
+*****
+                  END ELSE
+                     MPO.STATUS<1,-1> = "Lvl ":APP.PO.LEVEL<1>:" Apr" 
+                     MPO.ST.DATE<1,-1> = DATE()
+                     MPO.PREV.APP<1,-1> = USER.ID
+                     MPO.APP.LEVEL = APP.PO.LEVEL
+*T36138 v                                                    
+                     GOSUB 1000                                       
+                     ECD.ACTION = 6 ; CALL SCRN.EDIT                  
+                     ECD.ACTION = 3 ; CALL SCRN.EDIT                  
+                     P_FIELDS = "_pmc70"                              
+                     P_ATTRS = "password"                             
+                     P_VALUES = 0                                     
+                     CALL VSI_SETATTR(P_FIELDS,P_ATTRS,P_VALUES,ERROR)
+                     IF ERROR THEN                                    
+                        ERRMSG = ERROR                                 
+                        GOSUB 91000                                    
+                     END                                              
+*T36138 ^                                                    
+                     LOOP
+                        ERRMSG = "You have to change Approver Id for the next level"
+                        GOSUB 91000
+*
+                        GOSUB 90 ; * enter approver id
+                     UNTIL ECD.RET.VALUE # "END" DO REPEAT 
+                     PROMPT.NBR = 51
+                  END
+               END ELSE
+                  ERRMSG = "Invalid Approval Code. " 
+                  GOSUB 91000
+*T36138 v                                                  
+                  P_FIELDS = "_pmc70"                              
+                  P_ATTRS = "password"                             
+                  P_VALUES = 0                                     
+                  CALL VSI_SETATTR(P_FIELDS,P_ATTRS,P_VALUES,ERROR)
+                  IF ERROR THEN                                    
+                     ERRMSG = ERROR                                 
+                     GOSUB 91000                                    
+                  END                                              
+*T36138 ^                                                  
+               END
+            END
+         CASE OPTION = "CA" 
+            GOSUB CHOOSE.APPROVER ; * 25260 
+         CASE OPTION = "L"
+            ECD.SCRN.NO = 4
+            STATUS = MPO.STATUS
+            ST.DATE = MPO.ST.DATE
+            USER = MPO.PREV.APP
+            CALL PO.REQ.LOG.INQ(STATUS, ST.DATE, USER)
+            ECD.SCRN.NO = SCRN.NO             
+            ECD.ACTION=2;CALL SCRN.EDIT 
+*      GOSUB 1000
+            ECD.ACTION=3;CALL SCRN.EDIT 
+         CASE OPTION = "C" AND POS.INQ = 0
+            X = 0; Y = 22; TYP = 18; MAXL = 1; O.R = "R"                  
+            PMSG = "Do you really want to cancel this requisition (Y/N) ?"
+            CALL EDIT.SUB                                                 
+            P_X  = 0 ; P_Y = 22 ; P_VALUE = "" ; P_OPT = "CL"             
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)                         
+            IF VALUE = "Y" THEN                                           
+               MPO.STATUS<1,-1> = "Cancelled"
+               MPO.ST.DATE<1,-1> = DATE()
+               MPO.PREV.APP<1,-1> = USER.ID
+               MPO.APPROVER = ""
+               MPO.APP.LEVEL = "C"
+               MATWRITE MPO.REC ON MISC.REQ,CONO:MPO.CODE  
+               MORE = 0                                    
+            END                                           
+*24231 ^
+*T25942         CASE OPTION = 'F' OR OPTION = "R"
+*T27417         CASE OPTION = "F" OR OPTION = "H"
+         CASE (OPTION = "F" OR OPTION = "H") AND POS.INQ = 0
+            ;* F- release for approval, H- put it on hold
+            GO.BACK = 0
+            IF (MENU.FLAG = "R") THEN
+*T25942               IF OPTION= "R" THEN
+               IF OPTION= "F" THEN
+                  IF DCOUNT(MPO.PROD.NUM,VM) > 0 THEN
+                     IF APP.PO.LEVEL # 1 THEN
+                        IF APP.PO.LEVEL # CO.PO.APP.LEVELS THEN
+                           GOSUB ENT.APP.CODE
+                           IF (CODE.OK) THEN 
+                              GOSUB CHOOSE.APPROVER
+                              IF (SKIP.RELEASE) THEN
+                                 GO.BACK = 1
+                              END ELSE
+                                 GOSUB SET.RELEASED ; * 25260 
+                              END
+                           END ELSE
+                              GO.BACK = 1
+                           END
+                        END ELSE
+                           GOSUB CHOOSE.APPROVER
+                           IF (SKIP.RELEASE) THEN
+                              GO.BACK = 1
+                           END ELSE
+                              GOSUB SET.RELEASED
+                           END
+                        END
+                     END ELSE
+                        GOSUB ENT.APP.CODE
+                        IF (CODE.OK) THEN
+                           REQ = 0; * this is not a requisition any more
+                           GOSUB SET.RELEASED ; * 25260 
+                        END ELSE
+                           GO.BACK = 1
+                        END
+                     END
+                  END ELSE
+                     ERRMSG = "Cannot release requisition that does not have any products"
+                     GOSUB 91000
+                     GO.BACK = 1
+                  END
+               END ELSE                       
+                  IF APP.PO.LEVEL#CO.PO.APP.LEVELS THEN
+                     GOSUB ENT.APP.CODE                  
+                     IF CODE.OK THEN                     
+                        GOSUB SET.ON.HOLD                 
+                     END ELSE                            
+                        GO.BACK =1                        
+                     END                                 
+                  END ELSE                              
+                     GOSUB SET.ON.HOLD                   
+                  END                                   
+               END                            
+            END
+            IF NOT(GO.BACK) THEN
+*24231 ^
+               IF MPO.CODE = "N" THEN
+                  READU MPO.NUMBER FROM CONTROL, CONO:"MPOCODE" ELSE MPO.NUMBER = 10000
+                  FND = 1
+                  LOOP
+                  WHILE FND DO
+                     MPO.CODE = MPO.NUMBER
+                     MPO.NUMBER = MPO.CODE + 1
+                     IF MPO.NUMBER > 99999999 THEN MPO.NUMBER = 10000 ;*T29000
+*24231 v
+                     IF CO.PO.REQ.FLAG = "Y" THEN
+                        READU REC FROM MISC.REQ, CONO:MPO.CODE  ELSE
+                           READU REC FROM MISC.PO, CONO:MPO.CODE ELSE
+                              FND = 0
+                           END
+                        END
+                     END ELSE
+*24231 ^
+                        READU REC FROM MISC.PO, CONO:MPO.CODE ELSE FND = 0
+                     END ; *24231 
+                     REC = ""
+*24231 v
+*            IF FND THEN RELEASE MISC.PO, CONO:MPO.CODE
+                     IF FND THEN 
+                        RELEASE MISC.PO, CONO:MPO.CODE
+                        IF CO.PO.REQ.FLAG = "Y" THEN
+                           RELEASE MISC.REQ, CONO:MPO.CODE
+                        END
+                     END
+*24231 ^
+                  REPEAT
+                  WRITE MPO.NUMBER ON CONTROL, CONO:"MPOCODE"
+                  ECD.NUM = 5; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = MPO.CODE
+                  ECD.ACTION = 5; CALL SCRN.EDIT
+                  IF MENU.FLAG = "R" THEN
+                     IF (REQ) THEN
+                        ERRMSG = "Note new requisition number"
+                        GOSUB 91000 ; * T27552
+                     END
+                  END ELSE
+                     ERRMSG = "Note new misc. PO number"
+                     GOSUB 91000 ; * T27552
+                  END
+*T27552           GOSUB 91000
+*T25260 v                                                      
+               END ELSE                                               
+*T25942           IF OPTION = "R" THEN                                 
+                  IF OPTION = "F" AND MENU.FLAG = "R" THEN                                 
+                     IF APP.PO.LEVEL # "1" THEN                         
+                        ERRMSG = "Requisition forwarded to ":MPO.APPROVER
+                        GOSUB 91000                                      
+                     END                                                
+                  END                                                  
+               END                                                    
+*T25260 ^                                                      
+*T24231 v                                                       
+*T24953 v
+               IF MENU.FLAG = "R" THEN                                      
+                  STATUS.CNT = DCOUNT(MPO.STATUS,VM)                          
+                  IF MPO.STATUS<1,STATUS.CNT> = "On-Hold" THEN                
+                     ERRMSG = "Requsition has been placed on On-Hold status." 
+                     GOSUB 91000                                              
+                  END                                                        
+               END                                                          
+*T24953 ^                                                             
+*T24231 v
+               IF (NEW) THEN 
+                  MPO.APP.LEVEL = APP.PO.LEVEL
+               END
+               IF MENU.FLAG = "R" THEN
+                  IF (REQ) THEN
+                     WORK.FILE = MISC.REQ
+                     UPDATE = "REQ"
+                  END ELSE
+                     IF APP.PO.LEVEL = 1 THEN
+*T28244 v
+*                       CMD = 'DELETE MISC.REQ ':'"':CONO:MPO.CODE:'"'
+*                       UDTEXECUTE CMD CAPTURING MSG
+                        WORK.FILE = MISC.PO
+*T25260 v                                                             
+*                       ERRMSG = "New PO number " :MPO.CODE:" has been created."
+*                       GOSUB 91000                                             
+*T25260 ^                                                             
+*T28244 ^
+                        UPDATE  = "PO"
+                     END
+                  END
+               END
+               ;* C40479 v
+               ;* Get accrue field if this PO doesnt have one
+               ;* As in the case of coming from POR
+               ;*
+               LOOP WHILE NOT(REQ) AND MPO.ACCRUE = '' DO
+                  GOSUB 60
+               REPEAT
+               ;* C40479 ^
+               IF MENU.FLAG = "P" THEN
+                  WORK.FILE = MISC.PO
+                  UPDATE = "PO"
+               END
+               IF UPDATE = "PO" THEN
+*24231 ^
+                  IF CO.APS.M.INTRF > 1 THEN
+*T25463 v     CALL MISC.VEND.STAT.UPDATE(CONO,MPO.CODE,"M")
+                     CALL MISC.VEND.STAT.UPDATE(CONO,MPO.CODE,"M","O","")
+                  END
+               END ; *24231
+               MPO.LAST.RECV = ""
+*24231 v
+*      MATWRITE MPO.REC ON MISC.PO , CONO:MPO.CODE
+               MATWRITE MPO.REC ON WORK.FILE , CONO:MPO.CODE
+*24231 ^
+*T28244 v
+               IF MENU.FLAG = "R" THEN
+                  IF NOT(REQ) THEN
+                     IF APP.PO.LEVEL = 1 THEN
+                        CMD = 'DELETE MISC.REQ ':'"':CONO:MPO.CODE:'"'
+                        UDTEXECUTE CMD CAPTURING MSG
+                        ERRMSG = "New PO number " :MPO.CODE:" has been created."
+                        GOSUB 91000                                             
+                     END
+                  END
+               END
+*T28244 ^
+               MORE = 0
+*24231 v
+*T25942               IF OPTION = "R" THEN
+               IF OPTION = "F" THEN
+                  GOSUB SEND.MAIL
+               END
+               RELEASE
+            END
+*24231 ^
+         CASE (OPTION = 'F' OR OPTION = 'C') AND POS.INQ = 1
+            ERRMSG = "** INVALID RESPONSE **"
+            GOSUB 91000
+      END CASE
+   WHILE MORE DO REPEAT
+*24955 v                   
+   IF BUFFER<3> = 'INQ' THEN  
+      ECD.ACTION = 99 ; CALL SCRN.EDIT
+      GOSUB 99999              
+   END ELSE                   
+*24955 ^                   
+      GOTO 1
+   END  ; * 24955 
+**** ENTER PO DATE
+9*
+   ECD.NUM = 43
+   ECD.ACTION = 4; CALL SCRN.EDIT
+   IF ECD.RET.VALUE # "END" THEN
+      MPO.DATE = ECD.RET.VALUE
+   END
+   RETURN
+*** ENTER VEND CODE AND PRINT VEND INFORMATION
+10*
+*T25938 v
+* IF NOT(NEW) THEN
+   IF NOT(NEW) AND NOT(DUPLICATED.PO) THEN
+*T25938 ^
+*24953 v
+      IF MENU.FLAG # "R" THEN
+         ERRMSG = "CANNOT MODIFY VENDOR INFORMATION ON EXISTING PURCHASE ORDER"
+         GOSUB 91000
+         GOTO 11
+      END ; *24953
+   END
+   ECD.NUM = 9
+   ECD.VALDAT.CODE = 2
+   ECD.VALDAT.FILE = VEND
+   ECD.PREFIX.ID = CONO
+   ECD.ACTION=4;CALL SCRN.EDIT
+   MPO.VEND.NO = ECD.RET.VALUE
+   BEGIN CASE
+      CASE ECD.RET.VALUE = 'END'
+         GOTO 11
+      CASE ECD.RET.VALUE # '' AND ECD.VALDAT.ITEM # ''
+         FOR V = 1 TO VEND.REC.SIZE
+            VEND.REC(V) = ECD.VALDAT.ITEM<V>
+         NEXT V
+         SCV.REC(10)<ECD.SCRN.NO,1> = VEND.PO.DESC
+         SCV.REC(11)<ECD.SCRN.NO,1> = VEND.PO.ADDR1
+         SCV.REC(12)<ECD.SCRN.NO,1> = VEND.PO.ADDR2
+         SCV.REC(13)<ECD.SCRN.NO,1> = FIELD(VEND.PO.CT.ST, ",",1)
+         SCV.REC(14)<ECD.SCRN.NO,1> = FIELD(VEND.PO.CT.ST, ",",2)
+         SCV.REC(45)<ECD.SCRN.NO,1> = VEND.PHONE
+         SCV.REC(46)<ECD.SCRN.NO,1> = VEND.FAX
+         SCV.REC(15)<ECD.SCRN.NO,1> = VEND.PO.ZIP
+*26471 v
+         SCV.REC(27)<ECD.SCRN.NO,1> = VEND.TERMS<1,2>
+         MPO.TERMS.DESC = VEND.TERMS<1,2>
+         SCV.REC(28)<ECD.SCRN.NO,1> = VEND.TERMS<1,1>[1,4]
+         MPO.TERMS.DIS = VEND.TERMS<1,1>[1,4]
+         IF MPO.TERMS.DESC[1,1] = 'P' THEN
+            SCV.REC(29)<ECD.SCRN.NO,1> = ''
+         END ELSE
+            SCV.REC(29)<ECD.SCRN.NO,1> = VEND.TERMS<1,1>[5,2]
+         END
+         MPO.TERMS.DATE = SCV.REC(29)<ECD.SCRN.NO,1>
+*26471 ^
+         ECD.ACTION=3;CALL SCRN.EDIT
+      CASE ECD.RET.VALUE = ''
+         ECD.NUM = 10
+         ECD.ACTION=4;CALL SCRN.EDIT
+         IF ECD.RET.VALUE = '' OR ECD.RET.VALUE = 'END' THEN GOTO 10
+         GXR.XREF = VENDOR.XREF
+         GXR.FILE = VEND
+         GXR.NAME = 'VEND'
+         GXR.ID = ''
+         GXR.SRCH.ID = ECD.RET.VALUE
+         CALL GEN.XREF.SUB(MAT GEN.XREF.REC,PREFIX,XREF.DATA)
+         ECD.ACTION=2;CALL SCRN.EDIT
+         IF GXR.ID = '' THEN
+            SCV.REC(10)<1> = ''
+            ECD.ACTION=3;CALL SCRN.EDIT
+            GOTO 10
+         END ELSE
+            MATREAD VEND.REC FROM VEND , CONO:GXR.ID ELSE
+               ERRMSG = 'VENDOR NOT ON FILE'
+               GOSUB 91000
+               SCV.REC(10)<1> = ''
+               GOTO 10
+            END
+            MPO.VEND.NO = GXR.ID
+            SCV.REC(9)<ECD.SCRN.NO,1> = MPO.VEND.NO
+            SCV.REC(10)<ECD.SCRN.NO,1> = VEND.PO.DESC
+            SCV.REC(11)<ECD.SCRN.NO,1> = VEND.PO.ADDR1
+            SCV.REC(12)<ECD.SCRN.NO,1> = VEND.PO.ADDR2
+            SCV.REC(13)<ECD.SCRN.NO,1> = FIELD(VEND.PO.CT.ST, ",",1)
+            SCV.REC(14)<ECD.SCRN.NO,1> = FIELD(VEND.PO.CT.ST, ",",2)
+            SCV.REC(45)<ECD.SCRN.NO,1> = VEND.PHONE
+            SCV.REC(46)<ECD.SCRN.NO,1> = VEND.FAX
+            SCV.REC(15)<ECD.SCRN.NO,1> = VEND.PO.ZIP
+*26471 v
+            SCV.REC(27)<ECD.SCRN.NO,1> = VEND.TERMS<1,2>
+            MPO.TERMS.DESC = VEND.TERMS<1,2>
+            SCV.REC(28)<ECD.SCRN.NO,1> = VEND.TERMS<1,1>[1,4]
+            MPO.TERMS.DIS = VEND.TERMS<1,1>[1,4]
+            IF MPO.TERMS.DESC[1,1] = 'P' THEN
+               SCV.REC(29)<ECD.SCRN.NO,1> = ''
+            END ELSE
+               SCV.REC(29)<ECD.SCRN.NO,1> = VEND.TERMS<1,1>[5,2]
+            END
+            MPO.TERMS.DATE = SCV.REC(29)<ECD.SCRN.NO,1>
+*26471 ^
+            ECD.ACTION=3;CALL SCRN.EDIT
+         END
+   END CASE
+11*
+   RETURN
+**** ENTER SHIP TO INFORMATION
+12*
+* 25855 v
+   ECD.NUM = 32
+   ECD.ACTION = 4 ; CALL SCRN.EDIT
+* 25855 ^
+   IF ECD.RET.VALUE='END' THEN GOTO 13
+   BEGIN CASE
+      CASE ECD.RET.VALUE = 'END'
+         GOTO 13
+      CASE ECD.RET.VALUE # '' AND ECD.RET.VALUE # "@@@@"
+         MATREAD WHSE.REC FROM WAREHOUSE,CONO:ECD.RET.VALUE ELSE
+            ERRMSG = "Can't locate Warehouse"
+            GOSUB 91000 ; GOTO 12
+         END
+* TASK 19404 vvv
+         IF WHS.DIV # MPO.DIV.OWNER AND MPO.DIV.OWNER # "00" THEN
+            ERRMSG = "Warehouse Division does not match the Owning Division"
+            GOSUB 91000; GOTO 12
+         END
+* TASK 19404 ^^
+         MPO.SHIP.WHSE=ECD.RET.VALUE
+         ECD.NUM=33;ECD.ACTION=5
+         SCV.REC(33)<ECD.SCRN.NO,1> = WHS.DESC; CALL SCRN.EDIT
+         MPO.SHIP.NAME= WHS.DESC
+         ECD.NUM=34;ECD.ACTION=5
+         SCV.REC(34)<ECD.SCRN.NO,1> = WHS.ADDR1; CALL SCRN.EDIT
+         MPO.SHIP.ADD1=WHS.ADDR1
+         ECD.NUM=35;ECD.ACTION=5
+         SCV.REC(35)<ECD.SCRN.NO,1> = WHS.ADDR2; CALL SCRN.EDIT
+         MPO.SHIP.ADD2=WHS.ADDR2
+         ECD.NUM=36;ECD.ACTION=5
+         SCV.REC(36)<ECD.SCRN.NO,1> = WHS.CITY; CALL SCRN.EDIT
+         ECD.NUM=37;ECD.ACTION=5
+         SCV.REC(37)<ECD.SCRN.NO,1> = WHS.STATE; CALL SCRN.EDIT
+         MPO.SHIP.ADD3=WHS.CITY:',':WHS.STATE
+         ECD.NUM=38;ECD.ACTION=5
+         SCV.REC(38)<ECD.SCRN.NO,1> = WHS.ZIP;CALL SCRN.EDIT
+         MPO.SHIP.ADD4=WHS.ZIP
+      CASE 1
+         IF ECD.RET.VALUE = "" THEN
+            MPO.SHIP.WHSE= "@@@@"
+         END ELSE
+            MPO.SHIP.WHSE=ECD.RET.VALUE
+         END
+         ECD.DEFAULT=CO.NAME;ECD.NUM=33;ECD.ACTION=4;CALL SCRN.EDIT
+         IF ECD.RET.VALUE='END' THEN GOTO 13
+         MPO.SHIP.NAME=ECD.RET.VALUE
+         ECD.DEFAULT=CO.ADDRESS;ECD.NUM=34;ECD.ACTION=4;CALL SCRN.EDIT
+         IF ECD.RET.VALUE='END' THEN GOTO 13
+         MPO.SHIP.ADD1=ECD.RET.VALUE
+         ECD.DEFAULT='';ECD.NUM=35;ECD.ACTION=4;CALL SCRN.EDIT
+         IF ECD.RET.VALUE='END' THEN GOTO 13
+         MPO.SHIP.ADD2=ECD.RET.VALUE
+         ECD.DEFAULT=CO.CITY;ECD.NUM=36;ECD.ACTION=4;CALL SCRN.EDIT
+         IF ECD.RET.VALUE='END' THEN GOTO 13
+         SAVE.CITY=ECD.RET.VALUE
+         ECD.DEFAULT=CO.STATE;ECD.NUM=37;ECD.ACTION=4;CALL SCRN.EDIT
+         IF ECD.RET.VALUE='END' THEN GOTO 13
+         MPO.SHIP.ADD3=SAVE.CITY:',':ECD.RET.VALUE
+         ECD.DEFAULT=CO.ZIP;ECD.NUM=38;ECD.ACTION=4;CALL SCRN.EDIT
+         IF ECD.RET.VALUE='END' THEN GOTO 13
+         MPO.SHIP.ADD4=ECD.RET.VALUE
+   END CASE
+13*
+   RETURN
+**** ENTER PO DUE DATE
+15*
+   ECD.NUM = 19
+   ECD.DEFAULT = OCONV(DATE() , "D2/")
+   ECD.ACTION=4;CALL SCRN.EDIT
+   IF ECD.RET.VALUE # 'END' THEN
+      MPO.DUE.DATE = ECD.RET.VALUE
+   END
+   RETURN
+**** ENTER VEND ORDER NO
+20*
+   ECD.NUM = 20
+   ECD.ACTION=4;CALL SCRN.EDIT
+   IF ECD.RET.VALUE # 'END' THEN
+      MPO.VDR.ORD = ECD.RET.VALUE
+   END
+   RETURN
+**** ENTER WRITTEN BY
+25*
+*
+*24231 v
+   IF (REQ) THEN 
+      ERRMSG = "You cannot change Written By while using requsition system."
+      GOSUB 91000
+   END ELSE
+      ECD.NUM = 21
+      ECD.ACTION=4;CALL SCRN.EDIT
+      IF ECD.RET.VALUE # 'END' THEN
+         MPO.WRIT.BY = ECD.RET.VALUE
+      END
+   END
+*24231 ^
+   RETURN
+**** ENTER REQUESTOR       ; *25858
+27*
+*
+   ECD.NUM = 58
+   ECD.ACTION=4;CALL SCRN.EDIT
+   IF ECD.RET.VALUE # 'END' THEN
+      MPO.REQUESTOR = ECD.RET.VALUE
+   END
+   RETURN
+**** ENTER CONTRACT
+30*
+   ECD.NUM = 22
+   ECD.ACTION=4;CALL SCRN.EDIT
+   IF ECD.RET.VALUE # 'END' THEN
+      MPO.CONTACT = ECD.RET.VALUE
+   END
+   RETURN
+**** ENTER SHIP VIA
+35*
+   ECD.NUM = 23
+*T27701 v
+   IF MPO.SHIP.VIA = "" THEN
+      SCV.REC(ECD.NUM)<ECD.SCRN.NO> = VEND.SHIP.VIA
+   END
+*T27701 ^
+   ECD.VALDAT.CODE = '2'
+   ECD.VALDAT.FILE = SHIP.VIA
+   ECD.PREFIX.ID = CONO
+   ECD.ACTION=4;CALL SCRN.EDIT
+*T27701 v
+*  IF ECD.RET.VALUE # 'END' THEN
+*    BEGIN CASE
+*    CASE ECD.RET.VALUE # '' AND ECD.VALDAT.ITEM # ''
+*     FOR SV = 1 TO SHIP.VIA.REC.SIZE
+*        SHIP.VIA.REC(SV) = ECD.VALDAT.ITEM<SV>
+*     NEXT SV
+*    CASE ECD.RET.VALUE = ''
+*     GXR.NAME = 'SHIP.VIA'
+*     GXR.FILE = SHIP.VIA
+*     ECD.SRCH.ID = ECD.RET.VALUE
+*     GXR.ID = ''
+*     CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+*     ECD.ACTION=2; CALL SCRN.EDIT
+*     IF GXR.ID # '' THEN
+*       MATREAD SHIP.VIA.REC FROM SHIP.VIA,CONO:GXR.ID THEN
+*         ECD.RET.VALUE = GXR.ID
+*       END
+*       SCV.REC(23)<ECD.SCRN.NO,1>=ECD.RET.VALUE; ECD.ACTION=3; CALL SCRN.EDIT
+*     END
+*    END CASE
+   IF ECD.RET.VALUE # 'END' THEN
+      FOR SV = 1 TO SHIP.VIA.REC.SIZE
+         SHIP.VIA.REC(SV) = ECD.VALDAT.ITEM<SV>
+      NEXT SV
+      MPO.SHIP.VIA = ECD.RET.VALUE
+      MPO.VIA.DESC = SHPV.DESC
+      SCV.REC(24)<ECD.SCRN.NO,1> = MPO.VIA.DESC
+      ECD.NUM = 24
+      ECD.ACTION=5;CALL SCRN.EDIT
+   END
+*T27701 ^
+   RETURN
+**** ENTER FOB
+40*
+   ECD.NUM = 25
+   ECD.ACTION=4;CALL SCRN.EDIT
+   IF ECD.RET.VALUE # 'END' THEN
+      MPO.FOB = ECD.RET.VALUE
+   END
+   RETURN
+**** ENTER INTRNL INST
+45*
+   ECD.NUM = 26
+   ECD.ACTION=4;CALL SCRN.EDIT
+   IF ECD.RET.VALUE # 'END' THEN
+      MPO.INTRAL.INT = ECD.RET.VALUE
+   END
+   RETURN
+**** ENTER TERMS CODE AND PRINT DESC AND DISC %
+50*
+   ECD.NUM = 27
+   ECD.DEFAULT = VEND.TERMS<1,2>
+   ECD.ACTION=4;CALL SCRN.EDIT
+   IF ECD.RET.VALUE = 'END' THEN GOTO 51
+   IF NOT(ECD.RET.VALUE MATCH "3N") AND NOT(ECD.RET.VALUE MATCH "1X2N") THEN GOTO 50
+   MPO.TERMS.DESC = ECD.RET.VALUE
+*
+   ECD.NUM = 28
+   ECD.DEFAULT = VEND.TERMS<1,1>[1,4]
+   ECD.ACTION=4;CALL SCRN.EDIT
+   IF ECD.RET.VALUE = "END" THEN GOTO 51
+   ECD.RET.VALUE = STR("0",4-LEN(ECD.RET.VALUE)):ECD.RET.VALUE
+   MPO.TERMS.DIS = ECD.RET.VALUE
+   IF MPO.TERMS.DESC[1,1] = "P" THEN
+      ECD.NUM = 29;SCV.REC(29)<1> = "";ECD.ACTION=5;CALL SCRN.EDIT
+      GOTO 51
+   END
+*
+   ECD.NUM = 29
+   ECD.DEFAULT = VEND.TERMS<1,1>[5,2]
+   ECD.ACTION=4;CALL SCRN.EDIT
+   IF ECD.RET.VALUE = "END" THEN GOTO 50
+   MPO.TERMS.DATE = ECD.RET.VALUE
+*
+51*
+   RETURN
+*** ENTER ACCRUE FLAG
+60*
+IF @LOGNAME = 'thompson' THEN DEBUG
+   IF APP.PO.LEVEL = 1 OR MENU.FLAG = "P" THEN ; * 24953 
+      IF SUM(MPO.TOT.RECEVED) = 0 THEN
+      * T26152 v
+         IF CO.PO.ACCRUE.FLAG<1,3> = '' OR CO.PO.ACCRUE.MAINT<1,3> = 'Y' THEN
+            IF CO.PO.ACCRUE.FLAG<1,3> # '' AND FIRST.TIME = 1 THEN
+               MPO.ACCRUE = CO.PO.ACCRUE.FLAG<1,3> 
+               ECD.NUM = 16
+               SCV.REC(ECD.NUM)<ECD.SCRN.NO> = MPO.ACCRUE
+               ECD.ACTION = 5 ; CALL SCRN.EDIT 
+            END ELSE
+      * T26152 ^
+               ECD.NUM=16
+               ECD.DEFAULT = CO.PO.ACCRUE.FLAG<1,3> ;* C40479
+               ECD.ACTION=4; CALL SCRN.EDIT
+               IF ECD.RET.VALUE # "END" THEN
+                  MPO.ACCRUE = ECD.RET.VALUE
+               END
+      * T26152 v
+            END 
+         END ELSE
+            IF MPO.ACCRUE = '' THEN 
+               MPO.ACCRUE = CO.PO.ACCRUE.FLAG<1,3> 
+               ECD.NUM = 16
+               SCV.REC(ECD.NUM)<ECD.SCRN.NO> = MPO.ACCRUE
+               ECD.ACTION = 5 ; CALL SCRN.EDIT 
+            END 
+         END 
+      * T26152 ^
+      END
+   END ; * 24953
+   RETURN
+*
+*** ENTER PRINT FLG (REWRITE: TASK 25941)
+*
+70*
+*
+   ECD.NUM = 39
+   ECD.DEFAULT = MPO.PRT.FLG<1,1>
+   IF SCV.REC(ECD.NUM)<ECD.SCRN.NO> = '' AND VEND.EMAIL.ADDR # '' THEN
+      ECD.DEFAULT = 'N'
+   END
+   IF MPO.PRT.FLG<1,1> = 'P' THEN ECD.VALDAT = 'Y,N,P,C'
+   IF MPO.PRT.FLG<1,1> = 'C' THEN ECD.VALDAT = 'Y,N,C'
+   SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ''
+   ECD.ACTION=4;CALL SCRN.EDIT
+   IF ECD.RET.VALUE = 'END' THEN
+      GOSUB SHOW.PRINT.MAIL.FLAGS
+      RETURN
+   END
+   MPO.PRT.FLG<1,1> = ECD.RET.VALUE
+   GOSUB SHOW.PRINT.MAIL.FLAGS
+   ;*
+   ;* Input Mail flag if Vendor has an email address
+   ;*
+   IF VEND.EMAIL.ADDR = '' THEN RETURN
+   ECD.NUM = 3
+   ECD.DEFAULT = MPO.PRT.FLG<1,2>
+   IF MPO.PRT.FLG<1,2> = 'M' THEN ECD.VALDAT = 'Y,N,M,C'
+   IF MPO.PRT.FLG<1,2> = 'C' THEN ECD.VALDAT = 'Y,N,C'
+   SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ''
+   ECD.ACTION=4; CALL SCRN.EDIT
+   IF ECD.RET.VALUE = 'END' THEN
+      GOSUB SHOW.PRINT.MAIL.FLAGS
+      RETURN
+   END
+   MPO.PRT.FLG<1,2> = ECD.RET.VALUE
+   GOSUB SHOW.PRINT.MAIL.FLAGS
+   RETURN
+*
+SHOW.PRINT.MAIL.FLAGS: 
+   ;* Show print flag
+   ECD.NUM = 39
+   BEGIN CASE
+      CASE MPO.PRT.FLG<1,1> = 'Y'
+         SCV.REC(ECD.NUM)<ECD.SCRN.NO> = "Yes"
+      CASE MPO.PRT.FLG<1,1> = 'P'
+         SCV.REC(ECD.NUM)<ECD.SCRN.NO> = "Print"
+      CASE MPO.PRT.FLG<1,1> = 'C'
+         SCV.REC(ECD.NUM)<ECD.SCRN.NO> = "Copy"
+      CASE 1
+         SCV.REC(ECD.NUM)<ECD.SCRN.NO> = "No"
+   END CASE
+   ECD.ACTION = 5; CALL SCRN.EDIT
+   ;* Show mail flag
+   ECD.NUM = 3
+   BEGIN CASE
+      CASE MPO.PRT.FLG<1,2> = 'Y'
+         SCV.REC(ECD.NUM)<ECD.SCRN.NO> = "Yes"
+      CASE MPO.PRT.FLG<1,2> = 'M'
+         SCV.REC(ECD.NUM)<ECD.SCRN.NO> = "Sent"
+      CASE MPO.PRT.FLG<1,2> = 'C'
+         SCV.REC(ECD.NUM)<ECD.SCRN.NO> = "Copy"
+      CASE 1
+         SCV.REC(ECD.NUM)<ECD.SCRN.NO> = "No"
+   END CASE
+   ECD.ACTION = 5; CALL SCRN.EDIT
+   RETURN
+*
+*** ENTER OWNING DIVISION NUMBER; * TASK 19404
+*
+80*
+   ECD.NUM=44; ECD.ACTION=4
+   CALL SCRN.EDIT
+   IF ECD.RET.VALUE # "END" THEN
+      MPO.DIV.OWNER = ECD.RET.VALUE
+*24231 v
+      DIV = ECD.RET.VALUE
+      INVALID = 0
+      IF MPO.DIV.OWNER # "00" THEN
+         MATREAD DIV.REC FROM DIVISION,CONO:MPO.DIV.OWNER ELSE
+            INVALID = 1
+         END
+      END ELSE
+         DIV = "ALL"
+      END
+      IF NOT(INVALID) THEN 
+         IF MENU.FLAG = "R" THEN
+            VALID = 1
+            MATREAD APP.REQ.REC FROM APP.REQ,CONO:USER.ID:"!ALL" THEN
+*T25861 v
+               IF APP.PO.FLAG<1,3> = "Y" THEN
+*T25861 ^
+                  IF APP.STATUS = "Y" THEN
+                     SCV.REC(21)<ECD.SCRN.NO,1> = APP.NAME<1>
+                     ECD.NUM = 21
+                     ECD.ACTION  = 5 ; CALL SCRN.EDIT
+                  END ELSE
+                     IF DIV # "ALL" THEN
+                        MATREAD APP.REQ.REC FROM APP.REQ,CONO:USER.ID:"!":DIV THEN
+                           IF APP.STATUS = "Y" THEN
+                              SCV.REC(21)<ECD.SCRN.NO,1> = APP.NAME<1>
+                              ECD.NUM = 21
+                              ECD.ACTION  = 5 ; CALL SCRN.EDIT
+                           END ELSE
+                              ERRMSG = "User profile is inactive for division ":DIV
+                              GOSUB 91000
+                              GOTO 80
+                           END
+                        END ELSE
+                           ERRMSG = "You are not allowed to enter requisitions for division ":MPO.DIV.OWNER
+                           GOSUB 91000
+                           GOTO 80
+                        END
+                     END ELSE
+                        ERRMSG = "User profile is inactive for division ":DIV
+                        GOSUB 91000
+                        GOTO 80
+                     END
+                  END
+*T25861 v
+               END ELSE
+                  ERRMSG = "You are not allowed to enter a Misc Requisition."
+                  GOSUB 91000
+                  GOTO 5
+               END
+*T25861 ^
+            END ELSE
+               IF DIV # "ALL" THEN
+                  MATREAD APP.REQ.REC FROM APP.REQ,CONO:USER.ID:"!":DIV THEN
+*T25861 v
+                     IF APP.PO.FLAG<1,3> = "Y" THEN
+*T25861 ^
+                        IF APP.STATUS = "Y" THEN
+                           SCV.REC(21)<ECD.SCRN.NO,1> = APP.NAME<1>
+                           ECD.NUM = 21
+                           ECD.ACTION  = 5 ; CALL SCRN.EDIT
+                        END ELSE
+                           ERRMSG = "User profile is inactive for division ":DIV
+                           GOSUB 91000
+                           GOTO 80
+                        END
+*T25861 v
+                     END ELSE
+                        ERRMSG = "You are not allowed to enter a Misc Requisition."
+                        GOSUB 91000
+                        GOTO 5
+                     END
+*T25861 ^
+                  END ELSE
+                     ERRMSG = "You are not allowed to enter requisitions for division ":MPO.DIV.OWNER
+                     GOSUB 91000
+                     GOTO 80
+                  END
+               END ELSE
+                  ERRMSG = "You are not allowed to enter requisitions for division ":MPO.DIV.OWNER
+                  GOSUB 91000
+                  GOTO 80
+               END
+            END
+*T24953 v
+            IF (NEW) THEN
+               MPO.WRIT.BY = APP.NAME<1>
+            END
+*T24953 ^
+         END
+      END ELSE
+         ERRMSG = "Invalid division number used as PO owning division"
+         GOSUB 91000; MPO.DIV.OWNER = ""; GOTO 80
+      END
+*24231 ^
+*T23278 v
+      DIV.CODE = MPO.DIV.OWNER; USER.ID = UPCASE(@LOGNAME); ERRMSG = ''
+      CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+      IF ERRMSG # '' THEN
+         GOSUB 91000; SCV.REC(44)<1,1> = ''; GOTO 80
+      END
+*T23278 ^
+   END
+   RETURN
+*
+* ENTER APPROVER ID
+*
+90*
+*
+   IF DIV = "" THEN DIV = MPO.DIV.OWNER ; * 24593  
+   IF APP.PO.LEVEL # 1 THEN
+      EOI = 0
+      LOOP
+         ECD.NUM = 47 
+*find default approver
+         NBR.IDS = DCOUNT(APP.PO.ID<1,3>,SVM)
+         FOUND = 0
+         MAT HOLD.APP.REQ.REC = MAT APP.REQ.REC
+         FOR XX =1 TO NBR.IDS UNTIL FOUND
+            READV STATUS FROM APP.REQ,CONO:APP.PO.ID<1,3,XX>:"!ALL",2 THEN
+               IF STATUS = "Y" THEN
+                  ECD.DEFAULT = APP.PO.ID<1,3,XX>
+                  FOUND = 1
+                  SCV.REC(47)<ECD.SCRN.NO,1> = APP.PO.ID<1,3,XX>
+               END ELSE
+                  READV STATUS FROM APP.REQ,CONO:APP.PO.ID<1,3,XX>:"!":DIV,2 THEN
+                     IF STATUS = "Y" THEN
+                        ECD.DEFAULT = APP.PO.ID<1,3,XX>
+                        FOUND = 1
+                        SCV.REC(47)<ECD.SCRN.NO,1> = APP.PO.ID<1,3,XX>
+                     END
+                  END
+               END
+            END ELSE
+               READV STATUS FROM APP.REQ,CONO:APP.PO.ID<1,3,XX>:"!":DIV,2 THEN
+                  IF STATUS = "Y" THEN                                         
+                     ECD.DEFAULT = APP.PO.ID<1,3,XX>                            
+                     FOUND = 1                                                  
+                     SCV.REC(47)<ECD.SCRN.NO,1> = APP.PO.ID<1,3,XX>             
+                  END                                                          
+               END                                                            
+            END
+            IF FOUND THEN FOUND.POS = XX  ; *24953
+         NEXT XX
+*
+*    24953 v                                                 
+         BEGIN CASE                                               
+            CASE NBR.IDS = 1 AND FOUND = 1                         
+               MPO.APPROVER = APP.PO.ID<1,3,FOUND.POS>              
+               SCV.REC(47)<ECD.SCRN.NO,1> = APP.PO.ID<1,3,FOUND.POS>
+               ECD.ACTION = 5 ; CALL SCRN.EDIT                      
+               EOI = 1                                              
+            CASE NBR.IDS = 1 AND FOUND = 0                         
+               ERRMSG = "No valid approvers setup"                  
+               GOSUB 91000                                          
+               GOSUB 99999                                          
+            CASE 1                                                 
+               ECD.ACTION = 4 ; CALL SCRN.EDIT
+               BEGIN CASE 
+                  CASE ECD.RET.VALUE = "END"
+                     EOI = 1
+                  CASE ECD.RET.VALUE # ""
+                     LOCATE ECD.RET.VALUE IN APP.PO.ID<1,3> SETTING POS THEN 
+*          MAT HOLD.APP.REQ.REC = MAT APP.REQ.REC
+                        VALID = 1
+                        MATREAD APP.REQ.REC FROM APP.REQ,CONO:APP.PO.ID<1,3,POS>:"!ALL" ELSE
+                           IF DIV # "ALL" THEN
+                              MATREAD APP.REQ.REC FROM APP.REQ,CONO:APP.PO.ID<1,3,POS>:"!":DIV ELSE
+                                 VALID = 0
+                              END
+                           END ELSE
+                              VALID = 0
+                           END
+                        END
+                        IF (VALID) THEN
+                           IF APP.STATUS = "N" THEN
+                              IF DIV # "ALL" THEN
+                                 MAT APP.REQ.REC = MAT HOLD.APP.REQ.REC
+                                 MATREAD APP.REQ.REC FROM APP.REQ,CONO:APP.PO.ID<1,3,POS>:"!":DIV THEN
+                                    IF APP.STATUS = "N" THEN
+                                       ERRMSG = "Approver ":ECD.RET.VALUE:" is inactive."
+                                       GOSUB 91000
+                                    END ELSE
+                                       EOI = 1                            
+                                       MPO.APPROVER = ECD.RET.VALUE        
+                                       APPROVER.LIMIT = APP.PO.LIMIT<1,3> 
+                                    END
+                                 END ELSE
+                                    ERRMSG = "Approver ":ECD.RET.VALUE:" cannot approve your requisitions"
+                                    GOSUB 91000
+                                 END
+                              END ELSE
+                                 ERRMSG = "Approver ":ECD.RET.VALUE:" is inactive." 
+                                 GOSUB 91000                                        
+                              END
+                           END ELSE
+                              EOI = 1                           
+                              MPO.APPROVER = ECD.RET.VALUE      
+                              APPROVER.LIMIT = APP.PO.LIMIT<1,3>
+                           END
+                        END ELSE
+                           ERRMSG = "Approver ":ECD.RET.VALUE:" cannot approve your requisitions"
+                           GOSUB 91000 
+                        END
+*          MAT APP.REQ.REC = MAT HOLD.APP.REQ.REC
+                     END ELSE
+                        ERRMSG = "Approver ":ECD.RET.VALUE:" cannot approve your requisitions"
+                        GOSUB 91000
+                     END
+               END CASE
+         END CASE ; *24953
+         MAT APP.REQ.REC = MAT HOLD.APP.REQ.REC
+      UNTIL (EOI) DO REPEAT
+   END
+   RETURN
+*
+***** GET ALL VALUES FROM FILE
+1000*
+   VEND.KEY = CONO:MPO.VEND.NO
+   MATREAD VEND.REC FROM VEND , VEND.KEY ELSE
+      MAT VEND.REC = "????????????????"
+   END
+   SCV.REC(43)<ECD.SCRN.NO,1> = MPO.DATE
+   SCV.REC(9)<ECD.SCRN.NO,1> = MPO.VEND.NO
+   SCV.REC(10)<ECD.SCRN.NO,1> = VEND.PO.DESC
+   SCV.REC(11)<ECD.SCRN.NO,1> = VEND.PO.ADDR1
+   SCV.REC(12)<ECD.SCRN.NO,1> = VEND.PO.ADDR2
+   SCV.REC(13)<ECD.SCRN.NO,1> = FIELD(VEND.PO.CT.ST, ",",1)
+   SCV.REC(14)<ECD.SCRN.NO,1> = FIELD(VEND.PO.CT.ST, ",",2)
+   SCV.REC(45)<ECD.SCRN.NO,1> = VEND.PHONE
+   SCV.REC(46)<ECD.SCRN.NO,1> = VEND.FAX
+   SCV.REC(15)<ECD.SCRN.NO,1> = VEND.PO.ZIP
+   SCV.REC(16)<ECD.SCRN.NO,1> = MPO.ACCRUE
+   SCV.REC(19)<ECD.SCRN.NO,1> = MPO.DUE.DATE
+   SCV.REC(20)<ECD.SCRN.NO,1> = MPO.VDR.ORD
+   SCV.REC(21)<ECD.SCRN.NO,1> = MPO.WRIT.BY
+   SCV.REC(22)<ECD.SCRN.NO,1> = MPO.CONTACT
+   SCV.REC(23)<ECD.SCRN.NO,1> = MPO.SHIP.VIA
+   SCV.REC(24)<ECD.SCRN.NO,1> = MPO.VIA.DESC
+   SCV.REC(25)<ECD.SCRN.NO,1> = MPO.FOB
+   SCV.REC(26)<ECD.SCRN.NO,1> = MPO.INTRAL.INT
+   SCV.REC(29)<ECD.SCRN.NO,1> = MPO.TERMS.DATE
+   SCV.REC(27)<ECD.SCRN.NO,1> = MPO.TERMS.DESC
+   SCV.REC(28)<ECD.SCRN.NO,1> = MPO.TERMS.DIS
+   SCV.REC(32)<ECD.SCRN.NO,1> = MPO.SHIP.WHSE
+   SCV.REC(33)<ECD.SCRN.NO,1> = MPO.SHIP.NAME
+   SCV.REC(34)<ECD.SCRN.NO,1> = MPO.SHIP.ADD1
+   SCV.REC(35)<ECD.SCRN.NO,1> = MPO.SHIP.ADD2
+   SCV.REC(36)<ECD.SCRN.NO,1> = FIELD(MPO.SHIP.ADD3, ",",1)
+   SCV.REC(37)<ECD.SCRN.NO,1> = FIELD(MPO.SHIP.ADD3, ",",2)
+   SCV.REC(38)<ECD.SCRN.NO,1> = MPO.SHIP.ADD4
+   ;* T25941 v
+   ;* SCV.REC(39)<ECD.SCRN.NO,1> = MPO.PRT.FLG
+   GOSUB SHOW.PRINT.MAIL.FLAGS
+   ;* T25941 ^
+*TASK 19404*
+   SCV.REC(44)<ECD.SCRN.NO,1> = MPO.DIV.OWNER
+*TASK 19404*
+*24231 v
+   SCV.REC(5)<ECD.SCRN.NO,1> = MPO.CODE
+*24231 v
+   IF MENU.FLAG = "R" THEN
+*T24953  SCV.REC(21)<ECD.SCRN.NO,1> = APP.NAME
+      LAST.POS = DCOUNT(MPO.STATUS<1>,VM)
+      SCV.REC(48)<ECD.SCRN.NO,1> = MPO.STATUS<1,LAST.POS>  ; *24231
+      SCV.REC(47)<ECD.SCRN.NO,1> = MPO.APPROVER
+      SCV.REC(49)<ECD.SCRN.NO,1> = MPO.ST.DATE<1,LAST.POS>
+      SCV.REC(58)<ECD.SCRN.NO,1> = MPO.REQUESTOR   ; *25858
+   END
+*24231 ^                              
+* 25858 v
+   IF MENU.FLAG # "R" THEN
+      IF POS.INQ THEN
+         SCV.REC(60)<ECD.SCRN.NO,1> = MPO.REQUESTOR
+      END ELSE
+         SCV.REC(59)<ECD.SCRN.NO,1> = MPO.REQUESTOR
+      END
+   END
+* 25858 ^
+   RETURN
+*** GET TOTALS
+1020*
+   P.CNT = COUNT(MPO.PROD.DESC,VM) + (MPO.PROD.DESC # "")
+   TOTAL.QTY = 0 ; TOTAL.AMT = 0
+   FOR A = 1 TO P.CNT
+*T28687 v
+      IF MPO.UNIT.MAG<1,A> = 'M' THEN
+         MFACTOR = 1000
+      END ELSE
+         MFACTOR = 1
+      END
+*T28687 ^
+      TOTAL.QTY = TOTAL.QTY + MPO.TOT.ONORD<1,A>
+*** TASK 14925 ***
+*        IF MPO.DISCOUNT<1,A> * 1  = 0 THEN
+*           ONORD.AMT.TOT = INT((MPO.GROS.PRICE<1,A>/100) * (MPO.TOT.ONORD<1,A>/100)+.5)
+*        END ELSE
+*           DESC.PRICE = MPO.GROS.PRICE<1,A> - INT((((MPO.GROS.PRICE<1,A>/100) * MPO.DISCOUNT<1,A>/100)+.5))
+      DESC.PRICE = INT(MPO.GROS.PRICE<1,A>*(1-(MPO.DISCOUNT<1,A>/10000)))
+*T28687 ONORD.AMT.TOT = INT((DESC.PRICE) * (MPO.TOT.ONORD<1,A>/100)+.5)
+      ONORD.AMT.TOT = INT((DESC.PRICE) * (MPO.TOT.ONORD<1,A>/100/MFACTOR)+.5)
+*        END
+      TOTAL.AMT = TOTAL.AMT + ONORD.AMT.TOT
+   NEXT A
+   SCV.REC(41)<ECD.SCRN.NO,1> = TOTAL.QTY
+   SCV.REC(42)<ECD.SCRN.NO,1> = ICONV(OCONV(TOTAL.AMT,"MD4"),"MD2")
+   RETURN
+*
+*---- DISPLAY MISC LEVEL DESC
+*
+*    Task 17919
+2000*
+   ECD.NUM = 46
+   SCV.REC(46)<ECD.SCRN.NO,1> = MPO.MISC.DIV
+   ECD.ACTION = 5 ; CALL SCRN.EDIT
+2100*
+   ECD.NUM = 47
+   SCV.REC(47)<ECD.SCRN.NO,1> = MISC.DIV.DESC
+   ECD.ACTION = 5 ; CALL SCRN.EDIT
+2200*
+   ECD.NUM = 48
+   SCV.REC(48)<ECD.SCRN.NO,1> = MPO.MISC.DEPT
+   ECD.ACTION = 5 ; CALL SCRN.EDIT
+2300*
+   ECD.NUM = 49
+   SCV.REC(49)<ECD.SCRN.NO,1> = MISC.DEPT.DESC
+   ECD.ACTION = 5 ; CALL SCRN.EDIT
+2400*
+   ECD.NUM = 50
+   SCV.REC(50)<ECD.SCRN.NO,1> = MPO.MISC.CCTR
+   ECD.ACTION = 5 ; CALL SCRN.EDIT
+2500*
+   ECD.NUM = 51
+   SCV.REC(51)<ECD.SCRN.NO,1> = MISC.CCTR.DESC
+   ECD.ACTION = 5 ; CALL SCRN.EDIT
+   RETURN
+*
+**********
+SEND.MAIL: 
+**********
+*
+   IF MPO.APP.LEVEL # "C" THEN
+      SUBJECT = "Miscellaneous PO requisition ":MPO.CODE :" is ready for approval."
+   END ELSE
+      SUBJECT = "Miscellaneous PO requisition " :MPO.CODE:" has been canceled"
+   END
+   MATREAD SEC.REC FROM SECURITY,CONO:MPO.APPROVER THEN 
+      IF SEC.EMAIL # "" THEN                                      
+         CMD = "!touch ":USER.ID                                   
+         UDTEXECUTE CMD CAPTURING MSG                              
+         CMD = '!mail -s ':'"':SUBJECT:'" ':SEC.EMAIL:' < ':USER.ID
+         IF APP.PO.LEVEL # 1 THEN                                  
+            UDTEXECUTE CMD CAPTURING MSG                            
+         END                                                       
+      END                                                         
+   END                                                           
+   CMD ="!rm ":USER.ID                                           
+   UDTEXECUTE CMD CAPTURING MSG                                  
+   RETURN                                                        
+*
+*
+*25260 v
+*
+*************
+SET.RELEASED: 
+*************
+*
+   MPO.LEVEL.STATUS = "R"       
+   MPO.STATUS<1,-1> = "Released"
+   MPO.ST.DATE<1,-1> = DATE()   
+   MPO.PREV.APP<1,-1> = USER.ID 
+   RETURN
+*
+*************
+SET.ON.HOLD: 
+*************
+*
+   MPO.LEVEL.STATUS = "H"      
+   MPO.STATUS<1,-1> ="On-Hold" 
+   MPO.ST.DATE<1,-1> = DATE()  
+   MPO.PREV.APP<1,-1> = USER.ID
+   RETURN
+*
+****************
+CHOOSE.APPROVER: 
+****************
+*
+   IF APP.PO.LEVEL # 1 THEN
+      APP.ARR= '' ;*array of valid approvers  
+      SKIP.RELEASE = 0
+      IF OCONV(TOTAL.AMT,"MD4") <= APP.PO.LIMIT<1,3> OR APP.PO.LIMIT<1,3>="UNLIMITED" THEN
+         ;* since order amt. is <= then requestor limit
+         ;* it can be released to level 1 approver.
+         LEVEL =1 ; ORD.TOT = OCONV(TOTAL.AMT,"MD4") ; APP.ARR = ""
+         USER= USER.ID ; DIV.OWNER = MPO.DIV.OWNER;TYPE = 3
+         CALL  FIND.APPROVERS (CONO,USER,DIV.OWNER,TYPE,LEVEL,ORD.TOT,APP.ARR,XXX,ZZZ,YYY)
+      END ELSE
+         ;*check to see if default approver is active
+         ;*if not then look for the approver that can send req.
+         ;*directly to level 1 and make it first in the list.
+         MAT HOLD.APP.REQ.REC = MAT APP.REQ.REC
+         USER = APP.PO.ID<1,3,1>;DIV.OWNER=MPO.DIV.OWNER
+         APP.REQ.ID = ""
+         CALL CHECK.ACTIVE.STATUS (CONO,USER,DIV.OWNER,RET.FLAG,MAT APP.REQ.REC,APP.REQ.ID,YYY)
+         MAT APP.REQ.REC = MAT HOLD.APP.REQ.REC
+         ACTIVE = RET.FLAG
+         IF NOT(ACTIVE) THEN
+            LEVEL= APP.PO.LEVEL-1;ORD.TOT=OCONV(TOTAL.AMT,"MD4");APP.ARR=""
+            USER = USER.ID ; DIV.OWNER = MPO.DIV.OWNER;TYPE = 3
+            CALL  FIND.APPROVERS (CONO,USER,DIV.OWNER,TYPE,LEVEL,ORD.TOT,APP.ARR,XXX,ZZZ,YYY)
+         END
+      END
+      ;*now that we have a default approver get all
+      ;*active approvers for the user and add them to the list.
+      NBR.IDS = DCOUNT(APP.PO.ID<1,3>,SVM)
+      FOR LL =1 TO NBR.IDS
+         MAT HOLD.APP.REQ.REC = MAT APP.REQ.REC
+         USER = APP.PO.ID<1,3,LL>
+         CALL CHECK.ACTIVE.STATUS (CONO,USER,DIV.OWNER,RET.FLAG,MAT APP.REQ.REC,APP.REQ.ID,YYY)
+         MAT APP.REQ.REC = MAT HOLD.APP.REQ.REC
+         IF RET.FLAG = 1 THEN
+            LOCATE APP.REQ.ID IN APP.ARR<1>,1 SETTING JUNK ELSE
+               APP.ARR<1,-1> = APP.REQ.ID
+            END
+         END
+      NEXT LL
+      ;*set default and valid approvers values
+      ECD.DEFAULT = OCONV(APP.ARR<1,1>[4,99],"G!1")
+      NBR.IDS = DCOUNT(APP.ARR,VM)
+      VALID.INPUT = ""
+      FOR LL = 1 TO NBR.IDS
+         VALID.INPUT<1,-1>=OCONV(APP.ARR<1,LL>[4,99],"G!1")
+      NEXT LL
+      ;*check to see if there are any approvers active
+      IF VALID.INPUT # "" THEN
+         ;*locate current approver to see if change is needed
+         CHANGE.NEEDED = 0
+*    LOCATE MPO.APPROVER IN VALID.INPUT<1>,1 SETTING JUNK ELSE
+*      CHANGE.NEEDED=1
+*    END
+         IF MPO.APPROVER # VALID.INPUT<1,1> THEN
+            CHANGE.NEEDED = 1
+         END
+         IF (CHANGE.NEEDED) OR OPTION = "CA" THEN
+            VALID.INPUT = CONVERT(@VM,",",VALID.INPUT<1>)
+            VALID.INPUT :=",???,END" 
+*
+            EOI = 0
+            LOOP
+               ECD.NUM = 47 
+               ECD.VALDAT = VALID.INPUT
+               SCV.REC(47)<ECD.SCRN.NO,1> = ""
+               ECD.DEFAULT = OCONV(APP.ARR<1,1>[4,99],"G!1")
+               ECD.ACTION = 4 ; CALL SCRN.EDIT
+               BEGIN CASE 
+                  CASE ECD.RET.VALUE = "END" 
+                     SKIP.RELEASE = 1
+                     EOI = 1
+                  CASE ECD.RET.VALUE = "???"
+                     MAT GEN.XREF.REC = ""
+                     GXR.NAME = "APPROVER"
+                     GXR.FILE = APP.REQ   
+                     GXR.IDLIST = APP.ARR
+                     CALL GEN.XREF.SUB(MAT GEN.XREF.REC,PREFIX,XREF.DATA)
+                     ECD.ACTION = 2 ; CALL SCRN.EDIT
+                     ECD.ACTION = 3 ; CALL SCRN.EDIT
+                     IF GXR.ID # "" THEN
+                        GXR.ID = GXR.ID[4,99]
+                        MPO.APPROVER = OCONV(GXR.ID,"G!1")
+                        SCV.REC(47)<ECD.SCRN.NO,1>= MPO.APPROVER
+                        ECD.ACTION = 3 ; CALL SCRN.EDIT
+                        EOI = 1
+                     END
+                  CASE ECD.RET.VALUE # ""
+                     EOI = 1                            
+                     MPO.APPROVER = ECD.RET.VALUE        
+                     APPROVER.LIMIT = APP.PO.LIMIT<1,3> 
+               END CASE
+            UNTIL (EOI) DO REPEAT
+         END
+      END ELSE
+         SKIP.RELEASE = 1
+         ERRMSG="No approvers available at this time. You can only file the requisition."
+         GOSUB 91000
+      END
+   END
+   RETURN
+*
+*
+***************
+ENT.APP.CODE: 
+***************
+*
+*T36138 v 
+* IF YOU ARE MAKING CHANGES TO THE FORM YOU HAVE TO MANUALY ADD PROPERTY
+* passwordAND TURN IT OFF SETTING VALUE TO 0
+* TO DO THIS EDIT PMCFORMS {record name} AND LOCATE THE FIELD pmc{#}
+* AND ADD IT TO THE END OF THE ATTRIBUTE. FOR PROMPT IT IS FIELD pmc70. 
+*IF SHOULD LOOK SOMETHING LIKE THIS 
+* 1¦¦_pmc70 
+*x_len¦char_col¦char_row¦char_length¦help_string¦cursor¦user_data¦password
+*riable¦13n9n27n1551¦¦8¦0¦21¦8¦¦_IBEAM.CUR¦¦0 
+*
+*
+   P_FIELDS ="_pmc70"
+   P_ATTRS = "password"
+   P_VALUES = 1
+   ERROR = ""
+   CALL VSI_SETATTR(P_FIELDS,P_ATTRS,P_VALUES,ERROR) 
+   IF ERROR THEN 
+      ERRMSG = ERROR
+      GOSUB 91000 
+   END
+*36138 ^
+   ECD.NUM = 56 ; ECD.ACTION = 4 ; CALL SCRN.EDIT
+   CODE.OK = 1
+   IF ECD.RET.VALUE = APP.CODE THEN
+      IF APP.PO.LEVEL = 1 AND OPTION='R' THEN
+         MPO.STATUS<1,-1> = "Approved"
+         MPO.APP.LEVEL = APP.PO.LEVEL
+         MPO.APPROVER = ""
+         MPO.PREV.APP<1,-1> = USER.ID
+         MPO.ST.DATE<1,-1> = DATE()
+         GOSUB 1000
+         ECD.ACTION = 6 ; CALL SCRN.EDIT
+         ECD.ACTION = 3 ; CALL SCRN.EDIT
+ *T36138 v 
+         P_FIELDS = "_pmc70" 
+         P_ATTRS = "password"                              
+         P_VALUES = 0                                      
+         CALL VSI_SETATTR(P_FIELDS,P_ATTRS,P_VALUES,ERROR) 
+         IF ERROR THEN                                     
+            ERRMSG = ERROR                                  
+            GOSUB 91000                                     
+         END                                               
+         GOSUB 60                                         
+ *T36138 ^                                                     
+         PROMPT.NBR = 50
+      END ELSE
+*    MPO.STATUS<1,-1> = "Lvl ":APP.PO.LEVEL<1>:" Apr"
+*    MPO.ST.DATE<1,-1> = DATE()
+*    MPO.PREV.APP<1,-1> = USER.ID
+         MPO.APP.LEVEL = APP.PO.LEVEL
+*T36138 v                                                    
+         GOSUB 1000                                       
+         ECD.ACTION = 6 ; CALL SCRN.EDIT                  
+         ECD.ACTION = 3 ; CALL SCRN.EDIT                  
+         P_FIELDS = "_pmc70"                              
+         P_ATTRS = "password"                             
+         P_VALUES = 0                                     
+         CALL VSI_SETATTR(P_FIELDS,P_ATTRS,P_VALUES,ERROR)
+         IF ERROR THEN                                    
+            ERRMSG = ERROR                                 
+            GOSUB 91000                                    
+         END                                              
+*T36138 ^                                                    
+         PROMPT.NBR = 51
+      END
+   END ELSE
+      CODE.OK = 0
+      ERRMSG = "Invalid Approval Code. " 
+      GOSUB 91000
+*T36138 v                                                  
+      P_FIELDS = "_pmc70"                              
+      P_ATTRS = "password"                             
+      P_VALUES = 0                                     
+      CALL VSI_SETATTR(P_FIELDS,P_ATTRS,P_VALUES,ERROR)
+      IF ERROR THEN                                    
+         ERRMSG = ERROR                                 
+         GOSUB 91000                                    
+      END                                              
+*T36138 ^                                                  
+   END
+   RETURN
+*
+*25260 ^
+*T25854 v
+*
+DUPE.SUB: 
+*
+   ECD.NUM = 59
+   ECD.ACTION = 4 ; CALL SCRN.EDIT
+   IF ECD.RET.VALUE = "" OR ECD.RET.VALUE = "END" THEN GOTO 1
+   MATREAD MPO.REC FROM MISC.REQ, CONO:ECD.RET.VALUE ELSE
+      ERRMSG = "Requisition # entered not on file"
+      GOSUB 91000
+      GOTO DUPE.SUB
+   END
+   USER= USER.ID; DIV.OWNER = MPO.DIV.OWNER; APP.REQ.ID = ""
+   CALL CHECK.ACTIVE.STATUS (CONO,USER,DIV.OWNER,RET.FLAG,MAT APP.REQ.REC,APP.REQ.ID,YYY)
+*T25854.2 v
+   ECD.NUM = 60
+   ECD.ACTION = 4 ; CALL SCRN.EDIT
+   MPO.CODE = ECD.RET.VALUE
+   MATREAD MPO.REC FROM MISC.PO, CONO:MPO.CODE THEN
+      ERRMSG = "PO with number ":MPO.CODE: " already exists"
+      GOSUB 91000; RELEASE MISC.PO,CONO:MPO.CODE
+      GOTO DUPE.SUB
+   END
+   MATREAD MPO.REC FROM MISC.REQ, CONO:MPO.CODE THEN
+      ERRMSG = "Requisition with number ":MPO.CODE:" already exists"
+      GOSUB 91000 ; RELEASE MISC.REQ,CONO:MPO.CODE ; GOTO DUPE.SUB
+   END 
+*T25854.2 ^
+   IF MPO.CODE = 'N' THEN
+      MPO.STATUS = 'Entered'
+   END ELSE
+      MPO.STATUS = ''
+   END
+   MPO.ST.DATE = DATE()
+   MPO.PREV.APP = USER.ID
+   MPO.WRIT.BY = APP.NAME<1>
+   MPO.DATE = DATE()
+   MPO.APPROVER = ''
+   MPO.APP.LEVEL = ''
+   MPO.PREV.APP = ''
+   MPO.LEVEL.STATUS = ''
+   NEW = 1
+   REQ = 1
+   GOSUB 1000
+   ECD.ACTION = 3 ; CALL SCRN.EDIT
+   GOTO 95
+*T25854 ^
+*
+**** CALLS FOR SYSCOM
+91000 ERR.TYPE = 1; CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+92000 ERR.TYPE = 2; CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+93000 ERR.TYPE = 3; CALL SYSCOM(MAT SYSCOM.REC)
+99999 * PRINT * @(-1) * :
+   RELEASE
+END

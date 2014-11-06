@@ -1,0 +1,171 @@
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>ICS.CPYLIB>INV.WHSE.REV11
+*COPY>OPS.CPYLIB>PALLET
+*COPY>ICS.CPYLIB>INV_RECEIPTS
+*COPY>ICS.CPYLIB>INV_RECP_WHSE
+*COPY>ICS.CPYLIB>WAREHOUSE
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>CATEGORY.REV11
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>CPYLIB>CHAR
+*
+OPEN '','WAREHOUSE' TO WAREHOUSE ELSE STOP 201
+OPEN '','INV.WHSE' TO INV.WHSE ELSE STOP 201
+OPEN '','FNGD.RECEIPT.HIST' TO FNGD.RECEIPT.HIST ELSE STOP 201
+OPEN '','INV.WHSE.OLD' TO INV.WHSE.OLD ELSE STOP 201
+OPEN '','INV_RECEIPTS' TO INV_RECEIPTS ELSE STOP 201
+OPEN '','CONTROL' TO CONTROL ELSE STOP 201
+OPEN '','INV_RECP_WHSE'TO INV_RECP_WHSE ELSE STOP 201
+OPEN '','INVENTORY' TO INVENTORY ELSE STOP 201
+OPEN '','CATEGORY.OLD' TO CATEGORY.OLD ELSE STOP 201
+OPEN '','COMPANY' TO COMPANY ELSE STOP 201
+OPEN '','CONVERSION.ERRORS' TO CONVERSION.ERRORS ELSE STOP 201
+*
+PRINT @(-1)
+PRINT @(1,5):'SELECTING INV.WHSE.OLD':@(-4)
+*
+CMD="SELECT INV.WHSE.OLD WITH M.LINE='FNGD'"
+UDTEXECUTE CMD
+*
+PRINT @(1,5):'CONVERTING INV.WHSE RECORD':@(-4)
+*
+DONE = 0 ; ERR.CNT=0 ; ERR=''
+CNT=0
+LOOP
+  READNEXT IWH.ID ELSE DONE = 1
+UNTIL (DONE) DO 
+  IF REM(CNT,100)=0 THEN
+    PRINT @(45,5):CNT:@(-4)
+  END
+  ERRMSG=''
+  RECP.NO='' ; RECP.ENT.DATE='' ; RECP.PERIOD=''
+  READ CHECK.REC FROM INV.WHSE,IWH.ID ELSE
+    MATREAD R11.IWH.REC FROM INV.WHSE.OLD,IWH.ID THEN
+      CNT+=1
+      CONO = IWH.ID[1,3]
+      PROD = OCONV(IWH.ID,"G!1")[4,99]
+      WHSE=OCONV(IWH.ID,"G1!1")
+      MATREAD INV.REC FROM INVENTORY,CONO:PROD THEN
+        MATREAD R11.CATG.REC FROM CATEGORY.OLD,CONO:INV.LINE THEN
+          ;* do not convert pallet items
+          IF R11.CATG.R.S.ID='Y' THEN
+            RCNT = DCOUNT(R11.IWH.PO.LN.FI,VM)
+            FOR RR = 1 TO RCNT
+              RECP=R11.IWH.PO.LN.FI<1,RR>
+              INVR.ID=CONO:RECP
+              MATREAD PLRS.REC FROM FNGD.RECEIPT.HIST,INVR.ID THEN
+                IF PROD=PLRS.PROD THEN
+                  MATREAD INVR.REC FROM INV_RECEIPTS,INVR.ID THEN
+                    IF PROD=INVR.PROD THEN
+                      INVR.ORG.QTY+=R11.IWH.ORG.FI<1,RR>
+                      IRW.ID=CONO:RECP:"!":WHSE 
+                      MATREAD IRW.REC FROM INV_RECP_WHSE,IRW.ID THEN
+                        IRW.ORG.QTY+=R11.IWH.ORG.FI<1,RR>
+                        IRW.RSVB.QTY+=R11.IWH.RSV.FI<1,RR>
+                        IRW.CUR.QTY+=R11.IWH.QTY.FI<1,RR>
+                      END ELSE
+                        MAT IRW.REC=''
+                        IRW.ORG.QTY = R11.IWH.ORG.FI<1,RR>
+                        IRW.RSVB.QTY=R11.IWH.RSV.FI<1,RR> 
+                        IRW.CUR.QTY=R11.IWH.QTY.FI<1,RR>
+                        IRW.UNIT.COST=INVR.UNIT.COST
+                        IRW.ID=CONO:RECP:"!":WHSE 
+                        ;* build pointers to the INV_RECEIPT file in INV.WHSE 
+                        RECP.NO<1,RR>=RECP
+                        RECP.ENT.DATE<1,RR>=INVR.ENT.DATE 
+                        RECP.PERIOD<1,RR>=PLRS.PERIOD 
+                      END
+                      MATWRITE INVR.REC ON INV_RECEIPTS,INVR.ID
+                      MATWRITE IRW.REC ON INV_RECP_WHSE,IRW.ID
+                    END ELSE
+                      ERRMSG<1,-1>='CANNOT USE THIS RECEIPT NUMBER. ALREADY USED'
+                    END
+                  END ELSE
+                    MAT INVR.REC = ""
+                    INVR.PROD=PLRS.PROD
+                    INVR.CUST=PLRS.CUST
+                    INVR.JOB=PLRS.JOB
+                    INVR.ENT.DATE=R11.IWH.RECV.FI<1,RR>
+                    INVR.POST.DATE=R11.IWH.RECV.FI<1,RR>
+                    INVR.PERIOD=PLRS.PERIOD
+                    INVR.UOM=INV.UNIT<1,3>
+                    INVR.ORG.QTY=R11.IWH.ORG.FI<1,RR>
+                    INVR.UNIT.COST=R11.IWH.COST.FI<1,RR>
+                    INVR.ORG.WHSE=PLRS.ORIG.WHSE
+                    INVR.ORDER=PLRS.ORDER
+                    INVR.SHIP.TO=PLRS.SHIP.TO
+                    INVR.ORD.QTY=PLRS.QTY
+                    INVR.ORD.SQTY=PLRS.SQTY
+                    INVR.PICK.FLG=PLRS.PICK.FLG
+                    INVR.UN.SALE=PLRS.UN.SALE
+                    INVR.TOT.COST=PLRS.TOT.COST
+                    INVR.TOT.AMT=PLRS.TOT.AMT
+                    INVR.STATUS=PLRS.STATUS
+                    INVR.STATUS.DATE=PLRS.STAT.DATE
+                    INVR.STATUS.PERIOD=PLRS.STAT.PER
+                    INVR.DEPL.QTY = R11.IWH.QTY.FI<1,RR>
+                    MATWRITE INVR.REC ON INV_RECEIPTS,INVR.ID
+                    ;* build INV_RECP_WHSE record
+                    MAT IRW.REC=''
+                    IRW.ORG.QTY = R11.IWH.ORG.FI<1,RR>
+                    IRW.RSVB.QTY=R11.IWH.RSV.FI<1,RR>
+                    IRW.CUR.QTY=R11.IWH.QTY.FI<1,RR>
+                    IRW.UNIT.COST=INVR.UNIT.COST
+                    IRW.ID=CONO:RECP:"!":WHSE
+                    MATWRITE IRW.REC ON INV_RECP_WHSE,IRW.ID
+                    ;* build pointers to the INV_RECEIPT file in INV.WHSE
+                    RECP.NO<1,RR>=RECP
+                    RECP.ENT.DATE<1,RR>=INVR.ENT.DATE
+                    RECP.PERIOD<1,RR>=PLRS.PERIOD
+                  END
+                END ELSE
+                  ERRMSG<1,-1>='MISMATCH BETWEEN IWH RECORD AND PLRS RECORD DETECTED.'
+                END
+              END ELSE
+                ERRMSG<1,-1>='CANNOT LOCATE FNGD.RECEIPT.HIST RECORD ':INVR.ID
+              END
+            NEXT RR
+          END
+          IF R11.CATG.R.S.ID='Y' THEN
+            GOSUB CLEAR.OLD.ATT
+            MATWRITE IWH.REC ON INV.WHSE,IWH.ID
+          END
+        END 
+      END
+    END
+  END
+  IF ERRMSG THEN                      
+    ERR.CNT+=1                        
+    ERR<ERR.CNT>=ERRMSG               
+    ERR=INSERT(ERR,ERR.CNT,1,0,IWH.ID)
+  END                                 
+REPEAT
+WRITE ERR ON CONVERSION.ERRORS,"FNGD.INV.WHSE.CNV"
+*
+GOTO 99999
+*
+***************
+CLEAR.OLD.ATT: 
+**************                                            *
+*                                                         
+;* clear attributes that are either not used in conversion
+;* or are not used in rev12                               
+*                                                         
+MAT IWH.REC=MAT R11.IWH.REC
+*
+IWH.RECP.NO=RECP.NO
+IWH.RECP.ENT.DATE=RECP.ENT.DATE
+IWH.RECP.PERIOD=RECP.PERIOD
+FOR II=15 TO 36                                           
+  IWH.REC(II)=''                                          
+NEXT II                                                   
+FOR II=44 TO 48                                           
+  IWH.REC(II)=''                                          
+NEXT II                                                   
+IWH.REC(56)=''                                            
+IWH.REC(65)=''                                            
+IWH.REC(64)=''
+RETURN                                                    
+*
+99999 
+END

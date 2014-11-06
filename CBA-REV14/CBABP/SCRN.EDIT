@@ -1,0 +1,2416 @@
+   SUBROUTINE SCRN.EDIT
+*
+*COPY>CPYLIB>COM1
+*
+********************************************************************
+*
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+*
+* PROGRAM - SCRN.EDIT
+*
+* BY      - NICK AMENDOLA, COMPUTER BUSINESS ASSOCIATES
+*
+* DATE    - 03/10/84
+*
+* DESCRIPTION
+*
+* This program provides the interface between an application program and
+* associated screens built and defined by the SCREEN.BUILD sub-system.
+* The screens are displayed upon request and all defined editing is
+* performed. Editing criteria defined at creation time may be modified
+* by the application program at run time.
+*
+*T21177 diane 11/06/1996 * REV11 UPG
+*T21177 diane 12/05/1996 * TEST FORM FILES
+*T21177 walid 04/10/1997 * PMCUTLCK
+*T24110 renee 07/16/1999 * If date is entered ad 07010199 instead of
+*                          070199, it was negative and system would allow
+*                          it. I added code to make it invalid if negative
+*T24570 edvard 11/16/1999 * Fix the display of scrolling area.
+*                           SIV_LST_LINE was not reset for ACTION 3
+*                           causing the diplay of the lines to begin
+*                           with a line number from previous record.
+*T26141 ajibaly 11/05/2001 * Check for 10 year +/- range on date input
+*T26126 adelgado 02/27/2002 * Implement the LOCKED clause for READU.
+*T26682 cmykleb 06/19/2002 * Add date+/date- code like SCREEN.INPUT
+*C40426 cmykleb 07/25/2002 * Change date check T26141 to not check if
+*                            there is minv/maxv fields are not blank.
+*C43383 cmykleb 05/13/2004 * Correct problem when user enters ? for
+*                            help and the screen bombs out.
+*********************************************************************
+*
+*---- DEFINE DIMENSIONED VARIABLES
+*
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>NEW.BUILD.SCREEN
+*COPY>CPYLIB>XREF_BUILD_SCREEN
+*COPY>CPYLIB>BAR_BUILD_SCREEN
+*COPY>JIS.CPYLIB>SYS_FILES
+*COPY>CPYLIB>TCC
+*COPY>CPYLIB>XREF.DATA
+*COPY>CPYLIB>GEN.XREF.SUB
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>ROC.H
+*COPY>CPYLIB>SPECIAL.H
+*
+   DIM EDIT.COM.SAVE(35)
+*
+*------------------------*
+*---- INITIALIZATION ----*
+*------------------------*
+   DISPLAY.ALL = 0
+   DASHES = STR("-",80)
+   ERRMSG = ""
+   ERRTYP = ""; BTN_HD = ""; BTN_VAL = ""
+   LINE.SPACE = 1
+   ESN = ECD.SCRN.NO
+   SP = " "
+   NEW_FLD = 0
+   IF ECD.SCRN.NAME # "SCREEN.BUILD.DATA":AM:"SCREEN.BUILD.DATA.SUB":AM:"TBAR_BLD" THEN NEW_FLD = 1
+   BITMAP_NAME = ""
+   DEFFUN PROMPT_YES_NO(PROMPT_MSG) ;* T26141 DEFINE PROMPT_YES_NO AS FUNC.
+*-------------------------*
+*---- MAIN PROCESSING ----*
+*-------------------------*
+100 PROMPT ""
+   BEGIN CASE
+      CASE ECD.ACTION = 1
+         PORT.NO = "TTY"; CALL SYSVARS.SUB(PORT.NO)
+         ACCT.NM = "ACCT"; CALL SYSVARS.SUB(ACCT.NM)
+         GOSUB 80000
+         GOSUB 1000                 ;* DEFINE SCREEN NAMES
+      CASE ECD.ACTION = 2
+         GOSUB 2000                 ;* DISPLAY SCREEN
+         GOSUB 8400
+      CASE ECD.ACTION = 3
+         SIV_LST_LINE<ESN> = "" ;*T24570, C34759 reset the line counter.
+         GOSUB 3000                 ;* DISPLAY ALL DATA
+      CASE ECD.ACTION = 4
+         GOSUB 4000                 ;* GET INPUT DATA
+      CASE ECD.ACTION = 5
+         GOSUB 5000                 ;* DISPLAY SPECIFIED FIELD
+      CASE ECD.ACTION = 6
+         GOSUB 6000                 ;* CLEAR ALL DATA FIELDS
+         GOSUB 8400
+      CASE ECD.ACTION = 7
+         GOSUB 7000                 ;* DISPLAY MULTI-LINE FIELD
+      CASE ECD.ACTION = 99          ;* EXIT FORM
+         IF NEW_FLD THEN
+            TMODE = "FILE"
+            CALL SCRN_FLD_M (TMODE)
+         END
+         IF PC.PORT.TYPE = "termulator" AND ECD.SCRN.PC<ESN> THEN
+            FRMHNDL = ECD.SCRN.PC<ESN>
+            TU_FUNC = "TU.FORM.KILL":TU_VERNO
+            CALL @TU_FUNC(FRMHNDL,ERROR)
+            ECD.SCRN.PC<ESN> = ""
+            ECD.SCRN.SEQ = DELETE(ECD.SCRN.SEQ,1,0,0);* PMCUTLCK
+            SIV_BAR_ACTIVE<ESN> = "";* Toolbar
+            SIV_BAR_HNDL<ESN> = "";* Toolbar
+            SIV_MOUSE_ON<ESN> = ""
+            SIV_PSTACK<ESN> = ""
+            SIV_EVENTS<ESN> = ""
+            SIV_FLD_STK<ESN> = ""
+            SIV_FLD_VAL<ESN> = ""
+            SIV_BAR_FLD<ESN> = ""
+            SIV_BAR_FILE<ESN> = ""
+            SIV_BAR_NAME<ESN> = ""
+            SIV_LST_LINE<ESN> = ""
+            SIV_STACK = ""
+         END
+      CASE 1
+         ERRMSG = "INVALID ACTION CODE - ":ECD.ACTION
+         GOSUB 90000
+   END CASE
+   LOCATE ECD.ACTION IN SIV_EVENTS<ESN>,1 SETTING FLD_LOC ELSE
+      IF ESN = 1 AND ECD.ACTION = 4 THEN
+         IF FLDTYPE # "M" AND FLDTYPE # "MP" AND FLDTYPE # "MO" AND FLDTYPE # "P" THEN
+            ERRMSG = 'First field (':ECD.NUM:') is not type "M" or "MP"'
+            ERRTYP = "WARNING"; GOSUB 90000
+         END
+      END
+      SIV_EVENTS<ESN,FLD_LOC> = ECD.ACTION
+   END
+*
+*---- END OF SUBROUTINE
+*
+   ECD.DEFAULT = ""
+   ECD.VALDATION = ""
+   ECD.PREFIX.ID = ""
+   ECD.VALDAT.CODE = ""
+   ECD.VALDAT.FILE = ""
+   ECD.VALDAT = ""
+   ECD.HMSG = ""
+   ECD.Y = ""
+   ECD.PMSG = ""
+   ECD.MAXL = ""
+   ECD.MINV = ""
+   ECD.MAXV = ""
+   ECD.PATRN = ""
+   ECD.O.R = ""
+   ECD.SCALER = ""
+   ECD.SUB.NUM = ""
+   ECD.TOOLBAR.EFF = ""
+   RETURN
+*
+*------------------------*
+*---- DEFINE SCREENS ----*
+*------------------------*
+1000 MAT BLD.SCRN = ""
+   CALL TCC.SUB(PORT.NO)
+   SIV_BAR_ACTIVE = ""
+   SIV_BAR_HNDL = ""
+   SIV_STACK = ""
+   SIV_MOUSE_ON = ""
+   SIV_PSTACK = ""
+   SIV_EVENTS = ""
+   SIV_FLD_STK = ""
+   SIV_FLD_VAL = ""
+   SIV_BAR_FLD = ""
+   SIV_BAR_FILE = ""
+   SIV_BAR_NAME = ""
+   SIV_LST_LINE = ""
+   MAT EDIT.COM = ""; TYP = "I"
+   CALL EDIT.SUB
+   EDITLEN = ECD.EDITLEN
+*--- TU_VERNO already set
+   RETURN
+*----------------------------------*
+*---- DISPLAY SPECIFIED SCREEN ----*
+*----------------------------------*
+2000* IF BLD.SCRN.NO = ESN THEN GOTO 2050
+   SCREEN.NAME = ECD.SCRN.NAME<ESN>
+   BEGIN CASE
+      CASE ECD.SCRN.FLAG<ESN> = 5
+         CURR.SCREENS.FILE = FIFTH.SCREENS
+      CASE ECD.SCRN.FLAG<ESN> = 4
+         CURR.SCREENS.FILE = FOURTH.SCREENS
+      CASE ECD.SCRN.FLAG<ESN> = 3
+         CURR.SCREENS.FILE = THIRD.SCREENS
+      CASE ECD.SCRN.FLAG<ESN> = 2
+         CURR.SCREENS.FILE = SECOND.SCREENS
+      CASE 1
+         CURR.SCREENS.FILE = M.SCREENS
+   END CASE
+   MATREAD BLD.SCRN FROM CURR.SCREENS.FILE, SCREEN.NAME:"*FLD" ELSE
+      ECD.ACTION = 0
+      ERRMSG = "CANNOT LOCATE SCREEN - ":SCREEN.NAME
+      GOSUB 90000; GOTO 2099
+   END
+*TOOLBAR ^
+   MATREAD SBAR_REC FROM CURR.SCREENS.FILE, SCREEN.NAME:"*BAR" ELSE
+      MAT SBAR_REC = ""
+   END
+   SIV_BAR_FLD<ESN> = SBAR_FLD
+   SIV_BAR_FILE<ESN> = SBAR_FILE
+   SIV_BAR_NAME<ESN> = SBAR_NAME
+   SIV_STACK = ""
+*TOOLBAR v
+   BEGIN CASE
+      CASE PC.PORT.TYPE = "wIntegrate"
+         FRMHNDL = ECD.SCRN.PC<ESN>
+         BEGIN CASE
+            CASE FRMHNDL
+               CALL WIN.SLOAD(FRMHNDL)
+               BLD.SCRN.NO = ESN
+            CASE BLD.PCNAME # ""
+               PCNAME = PMC.PCDIR:BLD.PCNAME
+               ECD.SCRN.PC<ESN> = PCNAME
+               CALL WIN.PCINFO(PCNAME,ONFILE)
+               BEGIN CASE
+                  CASE ONFILE # ""
+                     PCDATE = ICONV(FIELD(ONFILE,SP,2),"DE")
+                     BEGIN CASE
+                        CASE BLD.UPD.DT<1,1> < PCDATE
+                           CALL WIN.SLOAD(PCNAME)
+                           BLD.SCRN.NO = ESN
+                        CASE BLD.UPD.DT<1,1> = PCDATE AND BLD.UPD.DT<1,2> < ICONV(FIELD(ONFILE,SP,3),"MTS")
+                           CALL WIN.SLOAD(PCNAME)
+                           BLD.SCRN.NO = ESN
+                        CASE CRT.DSPLY.MODE = "STD"
+                           GOSUB 2100
+                           GOSUB 2300
+                           CALL WIN.SSAVE(PCNAME)
+                        CASE 1
+                           GOSUB 2200
+                           GOSUB 2300
+                           CALL WIN.SSAVE(PCNAME)
+                     END CASE
+                  CASE CRT.DSPLY.MODE = "STD"
+                     GOSUB 2100
+                     GOSUB 2300
+                     CALL WIN.SSAVE(PCNAME)
+                  CASE 1
+                     GOSUB 2200
+                     GOSUB 2300
+                     CALL WIN.SSAVE(PCNAME)
+               END CASE
+            CASE CRT.DSPLY.MODE = "STD"
+               GOSUB 2100
+               GOSUB 2300
+            CASE 1
+               GOSUB 2200
+               GOSUB 2300
+         END CASE
+      CASE PC.PORT.TYPE = "termulator"
+         FRMHNDL = ECD.SCRN.PC<ESN>
+*PMCUTLCK ^
+         BEGIN CASE
+            CASE FRMHNDL = ""
+            CASE FRMHNDL # ECD.SCRN.SEQ<1>
+               CALL PMCUTLCK("?")
+               FRMHNDL = ECD.SCRN.PC<ESN>
+         END CASE
+*PMCUTLCK v
+         BEGIN CASE
+            CASE FRMHNDL
+               BLD.SCRN.NO = ESN
+               GUIFORM = FRMHNDL
+*PMCUTLCK ^
+*           CALL TU.FORM.CLEAR(FRMHNDL,ERROR)
+               IF FRMHNDL = ECD.SCRN.SEQ<1> THEN
+                  TU_FUNC = "TU.FORM.CLEAR":TU_VERNO
+                  CALL @TU_FUNC(FRMHNDL,ERROR)
+               END ELSE
+                  LOCATE FRMHNDL IN ECD.SCRN.SEQ,1 SETTING WFND THEN
+                     WCNT = WFND - 1
+                     FOR WXX = 1 TO WCNT
+                        LOCATE ECD.SCRN.SEQ<1> IN ECD.SCRN.PC,1 SETTING WFND THEN
+                           ECD.SCRN.PC<WFND> = ""
+                           ERRMSG = "PLEASE, CONTACT YOUR VENDOR IMMEDIATLEY!!!"
+                           GOSUB 90000
+                           ERRMSG = "Screen '":ECD.SCRN.NAME<WFND>:"' was not closed by the program"
+                           GOSUB 90000
+                        END
+                        TU_FUNC = "TU.FORM.KILL":TU_VERNO
+                        CALL @TU_FUNC(ECD.SCRN.SEQ<1>,ERROR)
+                        ECD.SCRN.SEQ = DELETE(ECD.SCRN.SEQ,1,0,0)
+                     NEXT WXX
+                  END ELSE
+                     INS FRMHNDL BEFORE ECD.SCRN.SEQ<1>
+                  END
+               END
+*PMCUTLCK v
+            CASE BLD.PCNAME # ""
+               TFILE = FIELD(BLD.PCNAME,".",2):'FORMS'
+               TNAME = FIELD(BLD.PCNAME,".",1)
+               M_FRMHNDL = ""
+               TU_FUNC = "TU.FORM.SMARTHOURGLASS":TU_VERNO
+               CALL @TU_FUNC("1",ERROR)
+               TU_FUNC = "TU.FORM.LOAD":TU_VERNO
+               CALL @TU_FUNC(TFILE,TNAME,M_FRMHNDL,"",FRMHNDL,ERROR)
+               BEGIN CASE
+                  CASE ERROR = 0
+                     BLD.SCRN.NO = ESN
+                     ECD.SCRN.PC<ESN> = FRMHNDL
+                     INS FRMHNDL BEFORE ECD.SCRN.SEQ<1>;* PMCUTLCK
+                     GUIFORM = FRMHNDL
+*CALL TU.SESSION('minimize',1,ERROR);* TEMP
+* MAIN TOOLBAR ^
+                     LOCATE "MAIN" IN SIV_BAR_FLD<ESN>,1 SETTING BLOC THEN
+                        BARNAME = SIV_BAR_NAME<ESN,BLOC>
+                        BARFILE = SIV_BAR_FILE<ESN,BLOC>
+                     END ELSE
+                        BARNAME = ""
+                        BARFILE = ""
+                     END
+                     GOSUB 8350
+* MAIN TOOLBAR v
+                  CASE CRT.DSPLY.MODE = "STD"
+                     ECD.SCRN.PC<ESN> = ""
+                     PC.PORT.TYPE = "STD"
+                     GOSUB 2100
+                     GOSUB 2300
+                  CASE 1
+                     ECD.SCRN.PC<ESN> = ""
+                     PC.PORT.TYPE = "STD"
+                     GOSUB 2200
+                     GOSUB 2300
+               END CASE
+            CASE CRT.DSPLY.MODE = "STD"
+               PC.PORT.TYPE = "STD"
+               GOSUB 2100
+               GOSUB 2300
+            CASE 1
+               PC.PORT.TYPE = "STD"
+               GOSUB 2200
+               GOSUB 2300
+         END CASE
+      CASE CRT.DSPLY.MODE = "STD"
+         GOSUB 2100
+      CASE 1
+         GOSUB 2200
+   END CASE
+2099 RETURN
+2100*
+   READ BLD.COMP.SCRN FROM CURR.SCREENS.FILE, SCREEN.NAME:"*FRM" THEN
+      BLD.SCRN.NO = ESN
+      CRT BLD.COMP.SCRN:
+   END ELSE
+      ECD.ACTION = 0
+      ERRMSG = "CANNOT LOCATE SCREEN - ":SCREEN.NAME:"*FRM"
+      GOSUB 90000
+   END
+   RETURN
+2200*
+   READ DEFREC FROM CURR.SCREENS.FILE, SCREEN.NAME:"*DEF" ELSE
+      GOSUB 2100; GOTO 2209
+   END
+   RCNT = DCOUNT(DEFREC,AM)
+   BLD.COMP.SCRN = CS
+   IF GRAPH.PORT.TYPE = "STD" OR HORZ.CHAR = "-" OR VERT.CHAR = "|" THEN
+      FOR R = 1 TO RCNT
+         Y = DEFREC<R,1>; X = DEFREC<R,2>; ML = DEFREC<R,3>
+         BLD.COMP.SCRN = BLD.COMP.SCRN:@(X,Y):ML
+      NEXT R
+      GOTO 2207
+   END
+   FOR R = 1 TO RCNT
+      Y = DEFREC<R,1>; X = DEFREC<R,2>; ML = DEFREC<R,3>
+      POS = INDEX(ML,"--",1)
+      IF POS THEN
+         ML.LEN = LEN(ML)
+         IF ML = STR("-",ML.LEN) THEN
+            ML = BOX.ON:STR(HORZ.CHAR,ML.LEN):BOX.OFF
+         END ELSE
+            OML = ML
+            IF POS > 1 THEN
+               ML = OML[1,POS-1]
+            END ELSE
+               ML = ""
+            END
+            BLEN = 2; POS = POS + 2
+            FOR I = POS TO ML.LEN
+               CHR = OML[I,1]
+               BEGIN CASE
+                  CASE CHR = "-"
+                     BLEN = BLEN + 1
+                  CASE BLEN
+                     ML = ML:BOX.ON:STR(HORZ.CHAR,BLEN):BOX.OFF:CHR
+                     BLEN = 0
+                  CASE 1
+                     ML = ML:CHR
+               END CASE
+            NEXT I
+            OML = ""
+            IF BLEN THEN
+               ML = ML:BOX.ON:STR(HORZ.CHAR,BLEN):BOX.OFF
+            END
+         END
+      END
+      POS = INDEX(ML,"|",1)
+      IF POS THEN
+         IF ML = "|" THEN
+            ML = BOX.ON:VERT.CHAR:BOX.OFF
+         END ELSE
+            LOOP
+               ML = ML[1,POS-1]:BOX.ON:VERT.CHAR:BOX.OFF:ML[POS+1,999]
+               POS = INDEX(ML,"|",1)
+            WHILE POS DO REPEAT
+         END
+      END
+      BLD.COMP.SCRN = BLD.COMP.SCRN:@(X,Y):ML
+   NEXT R
+2207*
+   DEFREC = ""
+   BLD.SCRN.NO = ESN
+   CRT BLD.COMP.SCRN:
+2209*
+   RETURN
+2300*
+   BEGIN CASE
+      CASE ETX.EMBED
+         FOR INT.REF = 1 TO BLD.FIELD.CNT
+            FDEF = BLD.SCRN(INT.REF)
+            IF FDEF<1,B.PMSG> = "" THEN
+               GOSUB 3015
+               FOR ECD.SUB.NUM = 1 TO MULTI.LN
+                  GOSUB 8100
+                  IF ECD.Y # "" THEN
+                     Y = ECD.Y
+                     ECD.Y = ""
+                  END
+                  CRT @(X-1,Y):ETX.DIN.OFF:SPACE(MAXL):ETX.DIN.OFF:
+                  CRT @(X-1,Y):ETX.DIN:
+               NEXT ECD.SUB.NUM
+            END
+         NEXT INT.REF
+      CASE 1
+         FOR INT.REF = 1 TO BLD.FIELD.CNT
+            FDEF = BLD.SCRN(INT.REF)
+            IF FDEF<1,B.PMSG> = "" THEN
+               GOSUB 3015
+               FOR ECD.SUB.NUM = 1 TO MULTI.LN
+                  GOSUB 8100
+                  IF ECD.Y # "" THEN
+                     Y = ECD.Y
+                     ECD.Y = ""
+                  END
+                  CRT @(X,Y):ETX.DIN:SPACE(MAXL):ETX.DIN.OFF:
+               NEXT ECD.SUB.NUM
+            END
+         NEXT INT.REF
+   END CASE
+   RETURN
+*--------------------------*
+*---- DISPLAY ALL DATA ----*
+*--------------------------*
+3000 IF ESN # BLD.SCRN.NO THEN GOSUB 2000
+   DISPLAY.ALL = 1
+   BEGIN CASE
+      CASE PC.PORT.TYPE = "termulator" AND ECD.SCRN.PC<ESN>
+         CRT GUI.LABEL:
+         FOR INT.REF = 1 TO BLD.FIELD.CNT
+            GOSUB 3010
+            IF FDEF<1,B.TYP> = 19 THEN
+               ECD.NUM = BLD.EXT.REF<1,INT.REF>
+               GOSUB 8500
+            END ELSE
+               FOR ECD.SUB.NUM = START.LINE TO LAST.LINE
+                  GOSUB 8000
+                  IF CRT_OK THEN
+                     SIV_LST_LINE<ESN,INT.REF> = ECD.SUB.NUM
+                     CRT @(X,Y):OUTPUT:
+                  END
+               NEXT ECD.SUB.NUM
+            END
+         NEXT INT.REF
+         CRT GUI.END:
+      CASE ETX.EMBED
+         FOR INT.REF = 1 TO BLD.FIELD.CNT
+            GOSUB 3010
+            FOR ECD.SUB.NUM = START.LINE TO LAST.LINE
+               GOSUB 8000
+               IF CRT_OK THEN
+                  SIV_LST_LINE<ESN,INT.REF> = ECD.SUB.NUM
+                  OUTPUT = OUTPUT FORM
+                  CRT @(X,Y):OUTPUT:
+               END
+            NEXT ECD.SUB.NUM
+         NEXT INT.REF
+      CASE 1
+         FOR INT.REF = 1 TO BLD.FIELD.CNT
+            GOSUB 3010
+            FOR ECD.SUB.NUM = START.LINE TO LAST.LINE
+               GOSUB 8000
+               IF CRT_OK THEN
+                  SIV_LST_LINE<ESN,INT.REF> = ECD.SUB.NUM
+                  OUTPUT = OUTPUT FORM
+                  CRT @(X,Y):ETX.DIN:OUTPUT:ETX.DIN.OFF:
+               END
+            NEXT ECD.SUB.NUM
+         NEXT INT.REF
+   END CASE
+   RETURN
+3010*
+   FDEF = BLD.SCRN(INT.REF)
+3015*
+   MULTI.LN = FDEF<1,B.MULTI.LN> + 0
+   IF MULTI.LN < 2 THEN
+      MULTI.LN = 1
+      START.LINE = 1
+      LAST.LINE = 1
+   END ELSE
+      IF SIV_LST_LINE<ESN,INT.REF> < 1 THEN SIV_LST_LINE<ESN,INT.REF> = 1
+      START.LINE = 1 + INT((SIV_LST_LINE<ESN,INT.REF>-1)/MULTI.LN)*MULTI.LN
+      LAST.LINE = START.LINE - 1 + MULTI.LN
+   END
+   LINE.SPACE = FDEF<1,B.MULTI.SP> + 0
+   IF LINE.SPACE < 2 THEN LINE.SPACE = 1
+   RETURN
+*----------------------------*
+*---- GET SPECIFIED DATA ----*
+*----------------------------*
+4000 IF ESN # BLD.SCRN.NO THEN GOSUB 2000
+   LOCATE ECD.NUM IN BLD.EXT.REF<1>,1 SETTING INT.REF ELSE
+      ERRMSG = "CANNOT LOCATE FIELD REFERENCED - ":ECD.NUM
+      GOSUB 90000; GOTO 4099
+   END
+   SCREEN.NAME = ECD.SCRN.NAME<ESN>
+   GOSUB 3010
+   SIV_LST_LINE<ESN,INT.REF> = ECD.SUB.NUM
+   IF PC.PORT.TYPE = "termulator" THEN
+      IF ECD.SCRN.PC<ESN> = "" THEN
+*PMCUTLCK ^
+         PREV_ECD_NUM = ECD.NUM
+         CALL PMCUTLCK("?")
+         ECD.NUM = PREV_ECD_NUM
+         IF ESN # BLD.SCRN.NO THEN GOSUB 2000
+         LOCATE ECD.NUM IN BLD.EXT.REF<1>,1 SETTING INT.REF ELSE
+            ERRMSG = "CANNOT LOCATE FIELD REFERENCED - ":ECD.NUM
+            GOSUB 90000; GOTO 4099
+         END
+*PMCUTLCK v
+      END
+      IF ECD.SCRN.PC<ESN> THEN
+*TOOLBAR ^
+         GOSUB 8300
+      END
+   END
+   REINPUT = 0
+*TOOLBAR v
+   ECD.VALDAT.ITEM = ""
+   IF ECD.SUB.NUM+0 < 2 THEN ECD.SUB.NUM = 1
+   MAT EDIT.COM.SAVE = MAT EDIT.COM
+   GOSUB 10000
+   MAT EDIT.COM = MAT EDIT.COM.SAVE
+   GUIFORM = ECD.SCRN.PC<ESN>
+4099 RETURN
+*--------------------------------*
+*---- DISPLAY SPECIFIED DATA ----*
+*--------------------------------*
+5000 IF ESN # BLD.SCRN.NO THEN GOSUB 2000
+   LOCATE ECD.NUM IN BLD.EXT.REF<1>,1 SETTING INT.REF ELSE
+      ERRMSG = "CANNOT LOCATE FIELD REFERENCED - ":ECD.NUM
+      GOSUB 90000; GOTO 5099
+   END
+   GOSUB 3010
+   IF FDEF<1,B.TYP> = 19 THEN
+      IF PC.PORT.TYPE = "termulator" AND ECD.SCRN.PC<ESN> THEN
+         GOSUB 8500
+      END
+   END ELSE
+      IF ECD.SUB.NUM+0 < 2 THEN ECD.SUB.NUM = 1
+      GOSUB 8000; GOSUB 8050
+      SIV_LST_LINE<ESN,INT.REF> = ECD.SUB.NUM
+   END
+5099 RETURN
+*-------------------------------*
+*---- CLEAR ALL DATA FIELDS ----*
+*-------------------------------*
+6000 BEGIN CASE
+      CASE ESN # BLD.SCRN.NO
+         GOSUB 2000
+      CASE PC.PORT.TYPE = "termulator" AND ECD.SCRN.PC<ESN>
+         FRMHNDL = ECD.SCRN.PC<ESN>
+         TU_FUNC = "TU.FORM.CLEAR":TU_VERNO
+         CALL @TU_FUNC(FRMHNDL,ERROR)
+         FOR INT.REF = 1 TO BLD.FIELD.CNT
+            GOSUB 3010
+            IF FDEF<1,B.TYP> = 19 THEN
+               BITMAP_NAME = FDEF<1,B.BITMAP>
+               IF BITMAP_NAME # "" THEN
+                  ECD.NUM = BLD.EXT.REF<1,INT.REF>
+                  GOSUB 8500
+               END
+            END
+         NEXT INT.REF
+      CASE PC.PORT.TYPE = "wIntegrate"
+         IF ECD.SCRN.PC<ESN> # "" THEN
+            FRMHNDL = ECD.SCRN.PC<ESN>
+            CALL WIN.SLOAD(FRMHNDL)
+         END ELSE
+            GOSUB 2000
+         END
+      CASE CRT.DSPLY.MODE = "STD"
+         SCREEN.NAME = ECD.SCRN.NAME<ESN>
+         READ BLD.CLR.DATA FROM CURR.SCREENS.FILE, SCREEN.NAME:"*CLR" THEN
+            CRT BLD.CLR.DATA:
+         END ELSE
+            GOSUB 2000
+         END
+      CASE 1
+         SCREEN.NAME = ECD.SCRN.NAME<ESN>
+         READ DCLREC FROM CURR.SCREENS.FILE, SCREEN.NAME:"*DCL" THEN
+            RCNT = DCOUNT(DCLREC,AM)
+            BLD.CLR.DATA = ""
+            FOR R = 1 TO RCNT
+               ML = DCLREC<R,3>
+               IF NUM(ML) THEN
+                  BLD.CLR.DATA = BLD.CLR.DATA:@(DCLREC<R,2>,DCLREC<R,1>):SPACE(ML)
+               END ELSE
+                  BLD.CLR.DATA = BLD.CLR.DATA:@(DCLREC<R,2>,DCLREC<R,1>):CL
+               END
+            NEXT R
+            DCLREC = ""
+            IF BLD.CLR.DATA = "" THEN
+               GOSUB 2000
+            END ELSE
+               CRT BLD.CLR.DATA:
+            END
+         END ELSE
+            READ BLD.CLR.DATA FROM CURR.SCREENS.FILE, SCREEN.NAME:"*CLR" THEN
+               CRT BLD.CLR.DATA:
+            END ELSE
+               GOSUB 2000
+            END
+         END
+   END CASE
+   RETURN
+*
+*---- DISPLAY MULTI-LINE FIELD
+*
+7000 IF ESN # BLD.SCRN.NO THEN GOSUB 2000
+   LOCATE ECD.NUM IN BLD.EXT.REF<1>,1 SETTING INT.REF ELSE
+      ERRMSG = "CANNOT LOCATE FIELD REFERENCED - ":ECD.NUM
+      GOSUB 90000; GOTO 7099
+   END
+   GOSUB 3010
+   SAVE.SUB.NUM = ECD.SUB.NUM
+   BEGIN CASE
+      CASE PC.PORT.TYPE = "termulator" AND ECD.SCRN.PC<ESN>
+         CRT GUI.LABEL:
+         FOR ECD.SUB.NUM = SAVE.SUB.NUM TO SAVE.SUB.NUM + MULTI.LN - 1
+            GOSUB 8000
+            IF CRT_OK THEN
+               SIV_LST_LINE<ESN,INT.REF> = ECD.SUB.NUM
+               IF OUTPUT = "" THEN
+                  CRT @(X,Y):SP:
+               END ELSE
+                  CRT @(X,Y):OUTPUT:
+               END
+            END
+         NEXT ECD.SUB.NUM
+         CRT GUI.END:
+      CASE ETX.EMBED
+         FOR ECD.SUB.NUM = SAVE.SUB.NUM TO SAVE.SUB.NUM + MULTI.LN - 1
+            GOSUB 8000
+            IF CRT_OK THEN
+               SIV_LST_LINE<ESN,INT.REF> = ECD.SUB.NUM
+               OUTPUT = OUTPUT FORM
+               CRT @(X,Y):OUTPUT:
+            END
+         NEXT ECD.SUB.NUM
+      CASE 1
+         FOR ECD.SUB.NUM = SAVE.SUB.NUM TO SAVE.SUB.NUM + MULTI.LN - 1
+            GOSUB 8000
+            IF CRT_OK THEN
+               SIV_LST_LINE<ESN,INT.REF> = ECD.SUB.NUM
+               OUTPUT = OUTPUT FORM
+               CRT @(X,Y):ETX.DIN:OUTPUT:ETX.DIN.OFF:
+            END
+         NEXT ECD.SUB.NUM
+   END CASE
+7099 RETURN
+*
+*---- DISPLAY DATA
+*
+8000 CRT_OK = 1
+   IF FDEF<1,B.PMSG> # "" THEN
+      CRT_OK = 0; GOTO 8049
+   END
+   GOSUB 8100
+   IF ECD.Y # "" THEN Y = ECD.Y
+   ECD.NUM = BLD.EXT.REF<1,INT.REF>
+   BEGIN CASE
+      CASE ECD.NUM < 1
+         ERRMSG = "ECD.NUM=":ECD.NUM; GOSUB 90000
+         CRT_OK = 0; GOTO 8049
+      CASE TYP = 19
+         OUTPUT = ""
+         CRT_OK = 0; GOTO 8049
+      CASE TYP = 9
+         OUTPUT = ECD.SUB.NUM
+      CASE 1
+         OUTPUT = SCV.REC(ECD.NUM)<ESN,ECD.SUB.NUM>
+   END CASE
+   IF DISPLAY.ALL AND OUTPUT = "" THEN
+      CRT_OK = 0; GOTO 8049
+   END
+   JUSTIFY = FDEF<1,B.JUSTIFY>
+   IF ECD.SCALER # "" THEN
+      SCALER = ECD.SCALER
+   END ELSE
+      SCALER = FDEF<1,B.SCALER>
+   END
+   BEGIN CASE
+      CASE TYP = 4 AND INDEX(OUTPUT,".",1)
+      CASE TYP = 4
+         CONV = "MD":SCALER
+         OUTPUT = OCONV(OUTPUT,CONV)
+      CASE TYP = 6
+         OUTPUT = OCONV(OUTPUT,"D2/")
+   END CASE
+   FORM = JUSTIFY:"#":MAXL
+   IF ECD.Y # "" THEN
+      Y = ECD.Y
+      ECD.Y = ""
+   END
+8049*
+   RETURN
+8050*
+   BEGIN CASE
+      CASE PC.PORT.TYPE = "termulator" AND ECD.SCRN.PC<ESN>
+         BEGIN CASE
+            CASE FDEF<1,B.PMSG> = ""
+               IF OUTPUT = "" THEN
+                  CRT @(X,Y):GUI.LABEL:SP:GUI.END:
+               END ELSE
+                  CRT @(X,Y):GUI.LABEL:OUTPUT:GUI.END:
+               END
+            CASE CRT_OK
+               GOSUB 8100
+               IF ECD.Y # "" THEN Y = ECD.Y
+               CRT @(X,Y):GUI.LABEL:SP:GUI.END:
+         END CASE
+      CASE NOT(CRT_OK)
+      CASE ETX.EMBED
+         OUTPUT = OUTPUT FORM
+         CRT @(X,Y):OUTPUT:
+      CASE 1
+         OUTPUT = OUTPUT FORM
+         CRT @(X,Y):ETX.DIN:OUTPUT:ETX.DIN.OFF:
+   END CASE
+   RETURN
+8100*
+   TYP = FDEF<1,B.TYP>
+   X = FDEF<1,B.X>
+   Y = FDEF<1,B.Y> + LINE.SPACE * MOD(ECD.SUB.NUM-1, MULTI.LN)
+   MAXL = FDEF<1,B.MAXL>
+   RETURN
+8200*
+   JUSTIFY = FDEF<1,B.JUSTIFY>
+   SCALER = FDEF<1,B.SCALER>
+   O.R = FDEF<1,B.O.R>
+   DEFAULT = FDEF<1,B.DEFAULT>
+   MINL = FDEF<1,B.MINL>
+   MINV = FDEF<1,B.MINV>
+   MAXV = FDEF<1,B.MAXV>
+   VALDAT = FDEF<1,B.VALDAT>
+   PATRN = FDEF<1,B.PATRN>
+   EMODE = FDEF<1,B.EMODE>
+   EX = FDEF<1,B.EX>
+   EY = FDEF<1,B.EY>
+   PMSG = FDEF<1,B.PMSG>
+   AUTO.RTN = FDEF<1,B.AUTO.RTN>
+   FILL.CHR = FDEF<1,B.FILL.CHR>
+   ORVALDAT = FDEF<1,B.ORVALDAT>
+   INVALCHR = FDEF<1,B.INVALCHR>
+   RETURN
+*---- Toolbar
+8300*
+   LOCATE ECD.NUM IN SIV_BAR_FLD<ESN>,1 SETTING BLOC THEN
+      BARNAME = SIV_BAR_NAME<ESN,BLOC>
+      BARFILE = SIV_BAR_FILE<ESN,BLOC>
+   END ELSE
+      IF SIV_BAR_ACTIVE<ESN> = ""  OR FDEF<1,B.FLDTYPE> = "M" THEN
+         LOCATE "MAIN" IN SIV_BAR_FLD<ESN>,1 SETTING BLOC THEN
+            BARNAME = SIV_BAR_NAME<ESN,BLOC>
+            BARFILE = SIV_BAR_FILE<ESN,BLOC>
+         END ELSE
+            BARNAME = "MAIN"
+            BARFILE = "PMCBARS"
+         END
+      END ELSE
+         BARNAME = ""
+         BARFILE = ""
+      END
+   END
+8350*
+   IF BARNAME # "" AND BARNAME # SIV_BAR_ACTIVE<ESN,1> THEN
+      BARHNDL = SIV_BAR_HNDL<ESN>
+      IF BARHNDL # "" THEN
+         TU_FUNC = "TU.TOOLBAR.KILL":TU_VERNO
+         CALL @TU_FUNC(BARHNDL,ERROR)
+         SIV_BAR_HNDL<ESN> = ""
+         SIV_BAR_ACTIVE<ESN> = ""
+      END
+      FRMHNDL = ECD.SCRN.PC<ESN>
+      IF BARFILE = "" THEN BARFILE = FIELD(BLD.PCNAME,".",2):"BARS"
+      TU_FUNC = "TU.TOOLBAR.LOAD":TU_VERNO
+      CALL @TU_FUNC(BARFILE,BARNAME,FRMHNDL,"",BARHNDL,ERROR)
+*COPY>CBABP>VSI_TU_ERR_SETUP
+      IF ERROR = 0 THEN
+         SIV_BAR_ACTIVE<ESN> = BARNAME
+         SIV_BAR_ACTIVE<ESN,2> = BARFILE
+         SIV_BAR_HNDL<ESN> = BARHNDL
+* TOOLBAR EFFECTS ^
+         IF ECD.TOOLBAR.EFF # "" THEN
+            CALL VSI_TOOLBAR_EFFECT (ERRMSG, BARHNDL, BARFILE, BARNAME, ECD.VALDAT)
+         END
+* TOOLBAR EFFECTS v
+      END ELSE
+         SIV_BAR_ACTIVE<ESN> = ""
+         SIV_BAR_HNDL<ESN> = ""
+      END
+   END
+   RETURN
+*---- Display all images
+8400*
+   BEGIN CASE
+      CASE ECD.ACTION = 0
+      CASE PC.PORT.TYPE = "termulator" AND ECD.SCRN.PC<ESN>
+         FOR INT.REF = 1 TO BLD.FIELD.CNT
+            GOSUB 3010
+            IF FDEF<1,B.TYP> = 19 THEN
+               BITMAP_NAME = FDEF<1,B.BITMAP>
+               IF BITMAP_NAME # "" THEN
+                  ECD.NUM = BLD.EXT.REF<1,INT.REF>
+                  GOSUB 8500
+               END
+            END
+         NEXT INT.REF
+   END CASE
+   RETURN
+*---- Display Bitmap
+8500*
+   BEGIN CASE
+      CASE BITMAP_NAME # ""
+      CASE SCV.REC(ECD.NUM)<ESN> # ""
+         BITMAP_NAME = SCV.REC(ECD.NUM)<ESN>
+      CASE 1
+         BITMAP_NAME = FDEF<1,B.BITMAP>
+   END CASE
+   FLDNAME = "_pmc":ECD.NUM
+   TU_FUNC = "TU.FORM.SETATTR":TU_VERNO
+   CALL @TU_FUNC(FLDNAME,"graphic",BITMAP_NAME,ERROR)
+   BITMAP_NAME = ""
+   RETURN
+*------------------------*
+*---- GET INPUT DATA ----*
+*------------------------*
+10000 GOSUB 8100
+   GOSUB 8200
+   BMSK = FDEF<1,B.MASK>
+   IF BMSK = "" THEN BMSK = "#"
+   MSKETX = SP
+   BLINK = FDEF<1,B.BLINK>
+   BLANK = FDEF<1,B.BLANK>
+   REVERSE = FDEF<1,B.REVERSE>
+   FLDTYPE = FDEF<1,B.FLDTYPE>
+   EXVALDAT = FDEF<1,B.EXVALDAT>
+   PSTACK = FDEF<1,B.PSTACK>
+   USERDATA = FDEF<1,B.USERDATA>
+   XREF_NAME = FDEF<1,B.XREF>
+   DATAFILE = FDEF<1,B.DATAFILE>
+   PVALUE = ""
+   DVALUE = ""
+   BLD.HMSG = ""
+   IF TYP < 1 OR TYP > 9 THEN RETURN
+*---- OVERRIDE SCREEN PARAMETERS
+   IF ECD.VALDAT # "" THEN VALDAT = ECD.VALDAT
+   IF ECD.HMSG # "" THEN BLD.HMSG = ECD.HMSG
+   IF ECD.Y # "" THEN Y = ECD.Y
+   IF ECD.PMSG # "" THEN PMSG = ECD.PMSG
+   IF ECD.MAXL # "" THEN MAXL = ECD.MAXL
+   IF ECD.MINV # "" THEN MINV = ECD.MINV
+   IF ECD.MAXV # "" THEN MAXV = ECD.MAXV
+   IF ECD.PATRN # "" THEN PATRN = ECD.PATRN
+   IF ECD.O.R # "" THEN O.R = ECD.O.R
+   IF ECD.SCALER # "" THEN SCALER = ECD.SCALER
+   ORG.O.R = O.R
+   BEGIN CASE
+      CASE SCV.REC(ECD.NUM)<ESN,ECD.SUB.NUM> # ""
+         O.R = "O"
+         DEFAULT = SCV.REC(ECD.NUM)<ESN,ECD.SUB.NUM>
+         PVALUE = DEFAULT
+      CASE ECD.DEFAULT # ""
+         O.R = "O"
+         DEFAULT = ECD.DEFAULT
+   END CASE
+   BEGIN CASE
+      CASE DEFAULT = ""
+      CASE TYP = 4
+         CONV = "MD":SCALER
+         DEFAULT = OCONV(DEFAULT,CONV)
+         IF MAXL - SCALER = 1 THEN DEFAULT = DEFAULT[2,MAXL];* T21177
+         IF PVALUE # "" THEN PVALUE = DEFAULT
+      CASE TYP = 6
+         IF DEFAULT = "DATE" THEN
+            DEFAULT = OCONV(DATE(),"D2/")
+         END ELSE
+            DEFAULT = OCONV(DEFAULT,"D2/")
+         END
+         IF PVALUE # "" THEN PVALUE = DEFAULT
+   END CASE
+   VCNT = DCOUNT(VALDAT,",")
+   PCNT = DCOUNT(PATRN,",")
+   DPX = 0
+   IF PC.PORT.TYPE = "termulator" AND ECD.SCRN.PC<ESN> THEN
+      SBCLIENT = 1
+      IF FLDTYPE = "M" OR FLDTYPE = "MP" THEN
+         SIV_PSTACK<ESN> = ""
+         SIV_EVENTS<ESN> = ""
+         SIV_FLD_STK<ESN> = ""
+         SIV_FLD_VAL<ESN> = ""
+         SIV_STACK = ""
+      END
+   END ELSE
+      SBCLIENT = 0
+   END
+   BEGIN CASE
+      CASE PMSG = ""
+      CASE SBCLIENT
+         PX = X; PY = Y
+         DPX = 3; X = 0
+         IF SIV_PSTACK<ESN> = "" THEN
+            BEGIN CASE
+               CASE PSTACK = 1
+                  SIV_PSTACK<ESN> = ECD.NUM
+               CASE TYP = "8"
+                  GOSUB 17130; GOTO 11050
+               CASE PSTACK > 1
+               CASE 1
+                  LOCATE "3" IN SIV_EVENTS<ESN>,1 SETTING FLD_LOC THEN
+                     PSTACK = 1
+                     BLD.SCRN(INT.REF)<1,B.PSTACK> = PSTACK
+                     SIV_PSTACK<ESN> = ECD.NUM
+                  END
+            END CASE
+         END ELSE
+            IF PSTACK = 1 AND SIV_PSTACK<ESN> # ECD.NUM THEN
+               ERRMSG = "Main Prompt Message was setup as (":SIV_PSTACK<ESN>:"), while calculated as (":ECD.NUM:")"
+               ERRTYP = "ERROR"; GOSUB 90000
+            END
+         END
+      CASE 1
+         PX = X; PY = Y; X = X + LEN(PMSG) + 1
+         IF VIDEO.PORT.TYPE # "STD" AND X + MAXL < (78 - ETX.EMBED) THEN
+            X = X + ETX.EMBED
+            IF PX = 0 THEN
+               DPX = ETX.EMBED
+            END ELSE
+               DPX = PX
+            END
+         END
+   END CASE
+   IF Y # 23 AND TRIM(DEFAULT) # "" AND O.R = "O" THEN P.DEFAULT = 1 ELSE P.DEFAULT = 0
+11000 BEGIN CASE
+      CASE PMSG = ""
+      CASE SBCLIENT
+         CRT @(DPX,PY):GUI.LABEL:PMSG:GUI.END:
+      CASE DPX
+         CRT @(X,Y):CL:
+         IF ETX.EMBED THEN
+            CRT @(DPX,PY):CL:PMSG:ETX.OFF:
+            CRT @(DPX-1,PY):ETX.PHD:
+         END ELSE
+            CRT @(DPX,PY):ETX.PHD:PMSG:ETX.OFF:CL:
+         END
+      CASE 1
+         CRT @(X,Y):CL:
+         CRT @(PX,PY):CL:PMSG:SPACE(1):
+   END CASE
+*---- Self learning
+   IF PSTACK THEN
+      LOCATE ECD.NUM IN SIV_FLD_STK<ESN>,1 SETTING STK_LOC THEN
+         STK_CNT = DCOUNT(SIV_FLD_STK<ESN>,VM)
+         IF STK_LOC = (STK_CNT - 1) THEN
+            LOCATE SIV_FLD_STK<ESN,STK_CNT> IN BLD.EXT.REF<1>,1 SETTING FLD_LOC THEN
+               BEGIN CASE
+                  CASE BLD.SCRN(FLD_LOC)<1,B.FLDTYPE> = "M"
+                  CASE BLD.SCRN(FLD_LOC)<1,B.USERDATA> = ""
+                     BLD.SCRN(FLD_LOC)<1,B.USERDATA> = SIV_FLD_VAL<ESN,STK_LOC>
+                     GOSUB 50000
+                  CASE (BLD.SCRN(FLD_LOC)<1,B.FLDTYPE> = "P" OR BLD.SCRN(FLD_LOC)<1,B.FLDTYPE> = "MP") AND BLD.SCRN(FLD_LOC)<1,B.USERDATA> = "^VALUE^"
+                  CASE BLD.SCRN(FLD_LOC)<1,B.USERDATA> = SIV_FLD_VAL<ESN,STK_LOC>
+*************************************************************
+*---- Disable learning adjustments
+*                 CASE 1
+*                    ERRMSG = "Field # ":SIV_FLD_STK<ESN,STK_CNT>:" was referenced as (":BLD.SCRN(FLD_LOC)<1,B.USERDATA>:"), while calculated as (":SIV_FLD_VAL<ESN,STK_LOC>:")"
+*                    BTN_HD = "Original":VM:"Calculated"
+*                    BTN_VAL = 1:VM:2
+*                    ERRTYP = "WARNING"; GOSUB 90000
+*                    IF ERRVAL = "2" THEN
+*                       BLD.SCRN(FLD_LOC)<1,B.USERDATA> = SIV_FLD_VAL<ESN,STK_LOC>
+*                       GOSUB 50000
+*                    END
+*************************************************************
+               END CASE
+            END
+         END
+         FOR STK_NUM = STK_CNT TO STK_LOC STEP -1
+            SIV_FLD_STK = DELETE(SIV_FLD_STK,ESN,STK_NUM,0)
+            SIV_FLD_VAL = DELETE(SIV_FLD_VAL,ESN,STK_NUM,0)
+         NEXT STK_NUM
+      END
+   END
+   BEGIN CASE
+      CASE P.DEFAULT
+         GOSUB 17110
+      CASE BLANK # "" AND PC.PORT.TYPE = "termulator"
+         GOSUB 17120
+      CASE BLANK = ""
+         GOSUB 17120
+      CASE VIDEO.PORT.TYPE # "STD" AND X > 0 AND X + MAXL < 80
+         GOSUB 17160
+      CASE 1
+         GOSUB 17165
+   END CASE
+11050*
+*TOOLBAR ^
+   IF REINPUT THEN
+      REINPUT = 0
+      GOTO 11000
+   END
+*TOOLBAR v
+11100*
+   IF DVALUE # "" AND DVALUE = SPACE(LEN(DVALUE)) THEN
+      DELETE.FLAG = 1
+      DVALUE = ""
+   END ELSE
+      DELETE.FLAG = 0
+   END
+   INLEN = LEN(DVALUE)
+   T.DVALUE = TRIM(DVALUE)
+*
+*---- CHECK INPUT LENGTH
+*
+   BEGIN CASE
+      CASE DELETE.FLAG AND ORG.O.R = "O"
+         MINL = 0
+         DVALUE = FDEF<1,B.DEFAULT>
+         INLEN = LEN(DVALUE)
+         IF DVALUE = "" THEN
+            VALUE = DVALUE
+            GOTO 17000
+         END
+      CASE INLEN < 1 AND O.R = "O"
+         MINL = 0
+         DVALUE = DEFAULT
+         INLEN = LEN(DVALUE)
+         IF DVALUE = "" THEN
+            VALUE = DVALUE
+            GOTO 17000
+         END
+      CASE INLEN < 1
+         ERRMSG = "** REQUIRED **"
+         GOSUB 19000; GOTO 11000
+*
+*---- CHECK END REQUEST
+*
+      CASE T.DVALUE = CHAR(27) OR T.DVALUE = "END" OR T.DVALUE = "^"
+         DVALUE = PVALUE
+         VALUE  = "END"
+         IF FLDTYPE = "M" OR FLDTYPE = "MP" THEN
+            IF NEW_FLD THEN
+               TMODE = "FILE"
+               CALL SCRN_FLD_M (TMODE)
+            END
+            IF SBCLIENT THEN
+               FRMHNDL = ECD.SCRN.PC<ESN>
+               TU_FUNC = "TU.FORM.KILL":TU_VERNO
+               CALL @TU_FUNC(FRMHNDL,ERROR)
+               ECD.SCRN.PC<ESN> = ""
+               ECD.SCRN.SEQ = DELETE(ECD.SCRN.SEQ,1,0,0);* PMCUTLCK
+               SIV_BAR_ACTIVE<ESN> = "";* Toolbar
+               SIV_BAR_HNDL<ESN> = "";* Toolbar
+               SIV_MOUSE_ON<ESN> = ""
+               SIV_PSTACK<ESN> = ""
+               SIV_EVENTS<ESN> = ""
+               SIV_FLD_STK<ESN> = ""
+               SIV_FLD_VAL<ESN> = ""
+               SIV_BAR_FLD<ESN> = ""
+               SIV_BAR_FILE<ESN> = ""
+               SIV_BAR_NAME<ESN> = ""
+               SIV_LST_LINE<ESN> = ""
+               ECD.RET.VALUE = VALUE
+               GOTO 17099
+            END
+         END
+         GOTO 17000
+*
+*----  CHECK HELP REQUEST
+*
+      CASE T.DVALUE = "?"
+         GOSUB 30000; GOTO 11000
+      CASE T.DVALUE = "!"
+         GOSUB 40000; GOTO 11000
+      CASE T.DVALUE = "~"
+         GOSUB 30500; GOTO 11000
+      CASE T.DVALUE = "]"
+         BEGIN CASE
+            CASE XREF_NAME = "" AND DATAFILE = ""
+               MAT EDIT.COM.SAVE = MAT EDIT.COM
+               GOSUB 17015
+11101          TYP = 11; X = 0; Y = 23; MAXL = 30; O.R = "O"
+               PMSG = "Enter field TABLE name :"
+               CALL EDIT.SUB
+               IF VALUE # "" AND VALUE # "END" THEN
+                  IF FILEINFO(SYS_FILES,0) = 0 THEN
+                     OPEN "","SYS_FILES" TO SYS_FILES ELSE
+                        ERRMSG = "Cannot Acceess the SYS_FILES table"
+                        GOSUB 90000; GOTO 11101
+                     END
+                  END
+                  MATREAD SFR.REC FROM SYS_FILES, VALUE ELSE
+                     ERRMSG = "Cannot locate SYS_FILES (":VALUE:")"
+                     GOSUB 90000; GOTO 11101
+                  END
+                  IF FILEINFO(VALUE,0) = 0 THEN
+                     OPEN "",VALUE TO TEMP_FILEOPEN ELSE
+                        ERRMSG = "Cannot Access the ":VALUE:" table"
+                        GOSUB 90000; GOTO 11101
+                     END
+                  END
+                  DATAFILE = VALUE
+                  BLD.SCRN(INT.REF)<1,B.DATAFILE> = DATAFILE
+                  IF NEW_FLD THEN
+                     TMODE = "FILE"
+                     CALL SCRN_FLD_M (TMODE)
+                  END
+               END
+               MAT EDIT.COM = MAT EDIT.COM.SAVE
+               GOTO 11000
+            CASE XREF_NAME = "NULL"
+               DVALUE = SP
+               GOTO 11100
+            CASE XREF_NAME = "???" OR XREF_NAME = "??"
+               DVALUE = XREF_NAME
+               GOTO 11100
+            CASE 1
+               IF FILEINFO(XREF.DATA,0) = 0 THEN
+                  OPEN "","XREF.DATA" TO XREF.DATA ELSE GOTO 11000
+               END
+               IF FILEINFO(PREFIX,0) = 0 THEN
+                  OPEN "","PREFIX" TO PREFIX ELSE GOTO 11000
+               END
+               IF XREF_NAME = "" THEN
+                  IF FILEINFO(SYS_FILES,0) = 0 THEN
+                     OPEN "","SYS_FILES" TO SYS_FILES ELSE GOTO 11000
+                  END
+                  MATREAD SFR.REC FROM SYS_FILES, DATAFILE ELSE GOTO 11000
+                  MATREAD XRFS.REC FROM XREF.DATA, SFR.XREF.ID ELSE GOTO 11000
+                  XRF_NAME = SFR.XREF.ID
+                  MAT XBR_SCN = ""
+                  XBR_XREF_FILE = SFR.XREF.FILE
+                  XBR_DATA_FILE = SFR.XREF.DATA.FILE
+                  XBR_SRCH_ID = SFR.XREF.SRCH.ID
+                  XBR_SRCH_HD = SFR.XREF.SRCH.HD
+                  XBR_VALUE1 = SFR.XREF.VALUE1
+                  XBR_VALUE2 = SFR.XREF.VALUE2
+                  XBR_VALUE3 = SFR.XREF.VALUE3
+                  XBR_VALUE4 = SFR.XREF.VALUE4
+                  XBR_VALUE5 = SFR.XREF.VALUE5
+               END ELSE
+                  MATREAD XRFS.REC FROM XREF.DATA, XREF_NAME ELSE GOTO 11000
+                  XRF_NAME = XREF_NAME
+                  XREF_ID = SCREEN.NAME:"_XRF":ECD.NUM
+                  MATREAD XBR_SCN FROM CURR.SCREENS.FILE, XREF_ID ELSE MAT XBR_SCN = ""
+               END
+               MAT GEN.XREF.REC = ""
+               BEGIN CASE
+                  CASE XRFS.XREF.FILE # "^VALUE^"
+                  CASE XBR_XREF_FILE = ""
+                     GOTO 11000
+                  CASE XBR_XREF_FILE[1,1] = "^"
+                     XPTR = FIELD(XBR_XREF_FILE,"^",2)
+                     IF NUM(XPTR) THEN
+                        IF SCV.REC(XPTR)<ESN,ECD.SUB.NUM> = "" THEN
+                           GOTO 11000
+                        END ELSE
+                           XRFS.XREF.FILE = SCV.REC(XPTR)<ESN,ECD.SUB.NUM>
+                        END
+                     END ELSE
+                        GOTO 11000
+                     END
+                  CASE 1
+                     XRFS.XREF.FILE = XBR_XREF_FILE
+               END CASE
+               BEGIN CASE
+                  CASE XRFS.DATA.FILE # "^VALUE^"
+                  CASE XBR_DATA_FILE = ""
+                     GOTO 11000
+                  CASE XBR_DATA_FILE[1,1] = "^"
+                     XPTR = FIELD(XBR_DATA_FILE,"^",2)
+                     IF NUM(XPTR) THEN
+                        IF SCV.REC(XPTR)<ESN,ECD.SUB.NUM> = "" THEN
+                           GOTO 11000
+                        END ELSE
+                           XRFS.DATA.FILE = SCV.REC(XPTR)<ESN,ECD.SUB.NUM>
+                           GXR.SORT.FILE = XRFS.DATA.FILE
+                        END
+                     END ELSE
+                        GOTO 11000
+                     END
+                  CASE 1
+                     XRFS.DATA.FILE = XBR_DATA_FILE
+                     GXR.SORT.FILE = XRFS.DATA.FILE
+               END CASE
+               BEGIN CASE
+                  CASE XBR_SRCH_ID = "^INPUT^"
+                     XPTR = Y
+                     MAT EDIT.COM.SAVE = MAT EDIT.COM
+                     GOSUB 17015
+                     TYP = 11; X = 0; Y = XPTR; MAXL = 30
+                     PMSG = XBR_SRCH_HD
+                     CALL EDIT.SUB
+                     XBR_SRCH_ID = VALUE
+                     MAT EDIT.COM = MAT EDIT.COM.SAVE
+                     IF XBR_SRCH_ID = "END" THEN GOTO 11000
+                  CASE XBR_SRCH_ID[1,1] = "^"
+                     XPTR_VALUE = XBR_SRCH_ID; GOSUB 17300
+                     IF XPTR_VALUE # "" THEN
+                        XBR_SRCH_ID = XPTR_VALUE
+                     END ELSE
+                        XPTR = FIELD(XBR_SRCH_ID,"^",2)
+                        IF NUM(XPTR) THEN
+                           LOCATE XPTR IN BLD.EXT.REF<1>,1 SETTING XPTR ELSE
+                              GOTO 11000
+                           END
+                           FDEF = BLD.SCRN(XPTR)
+                           MAT EDIT.COM.SAVE = MAT EDIT.COM
+                           GOSUB 8100; GOSUB 8200
+                           CALL EDIT.SUB
+                           XBR_SRCH_ID = VALUE
+                           MAT EDIT.COM = MAT EDIT.COM.SAVE
+                           FDEF = BLD.SCRN(INT.REF)
+                           IF XBR_SRCH_ID = "END" OR XBR_SRCH_ID = "" THEN GOTO 11000
+                        END ELSE
+                           GOTO 11000
+                        END
+                     END
+               END CASE
+               IF XRFS.CO.REQ # "N" THEN
+                  PORT.NO = "TTY"; CALL SYSVARS.SUB(PORT.NO)
+                  READV ECD_CO FROM SECURITY, "R.":PORT.NO,1 ELSE GOTO 11000
+                  GXR.CO = ECD_CO
+               END
+               GXR.NAME = XRF_NAME
+               IF XRFS.XREF.FILE = "CONTROL" THEN
+                  GXR.XREF = CONTROL
+               END ELSE
+                  GXR.OPEN.XREF = XRFS.XREF.FILE
+               END
+               GXR.OPEN.DATA = XRFS.DATA.FILE
+               XPTR_VALUE = XBR_SRCH_ID; GOSUB 17300
+               GXR.SRCH.ID = XPTR_VALUE
+               XPTR_VALUE = XBR_VALUE1; GOSUB 17300
+               GXR.VALUE1 = XPTR_VALUE
+               XPTR_VALUE = XBR_VALUE2; GOSUB 17300
+               GXR.VALUE2 = XPTR_VALUE
+               XPTR_VALUE = XBR_VALUE3; GOSUB 17300
+               GXR.VALUE3 = XPTR_VALUE
+               XPTR_VALUE = XBR_VALUE4; GOSUB 17300
+               GXR.VALUE4 = XPTR_VALUE
+               XPTR_VALUE = XBR_VALUE5; GOSUB 17300
+               GXR.VALUE5 = XPTR_VALUE
+               CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+               IF PC.PORT.TYPE = "STD" THEN
+                  SAVE.ECD.NUM = ECD.NUM; SAVE.INT.REF = INT.REF
+                  SAVE.ECD.SUB.NUM = ECD.SUB.NUM
+                  GOSUB 2000; GOSUB 3000
+                  ECD.NUM = SAVE.ECD.NUM; INT.REF = SAVE.INT.REF
+                  ECD.SUB.NUM = SAVE.ECD.SUB.NUM
+                  GOSUB 3010; GOSUB 8100
+               END
+               IF GXR.ID = "" THEN GOTO 11000
+               DVALUE = GXR.ID
+               GOTO 11100
+         END CASE
+      CASE T.DVALUE = ":"
+*        CALL CNV_SYS_FIELDS_SE
+         TMODE = ""
+         CALL SCRN_FLD_M (TMODE)
+         GOSUB 3010; GOTO 10000
+      CASE T.DVALUE = "}"
+         BEGIN CASE
+            CASE SBCLIENT
+               PERFORM "VSI_ZOOM"
+               GOTO 11000
+            CASE PC.PORT.TYPE = "wIntegrate"
+* T21177 ^
+               SCN_IMG = ""
+               CALL WIN.SSTATE(SCN_IMG,"")
+               CALL WIN.SPUSH
+               PERFORM "VSI_ZOOM"
+               CALL WIN.SPULL
+               CALL WIN.SSTATE("",SCN_IMG)
+* T21177 v
+               GOTO 11000
+            CASE 1
+*DT            GOTO 11100
+               GOTO 11000
+         END CASE
+*PMCUTLCK ^
+      CASE T.DVALUE = "|" AND SBCLIENT
+         CALL PMCUTLCK("")
+         GOTO 11000
+*PMCUTLCK v
+      CASE T.DVALUE = "["
+         BEGIN CASE
+            CASE SBCLIENT
+               TMODE = ""
+*              CALL SCRN_EDIT_CEO (TMODE)
+               GOTO 11000
+            CASE PC.PORT.TYPE = "wIntegrate"
+*              CALL WIN.TCL
+               GOTO 11000
+            CASE 1
+               GOTO 11000
+         END CASE
+   END CASE
+*
+*
+*--- CHECK (OR) VALID INPUT
+*
+   IF ORVALDAT AND VCNT THEN
+      GOSUB 17200
+      IF VLOC THEN
+         VALUE = DVALUE; GOTO 17000
+      END
+   END
+*
+*---- RANGE CHECK INPUT LENGTH
+*
+   BEGIN CASE
+      CASE INLEN < MINL
+         ERRMSG = "** MINIMUM LENGTH = " : MINL : " **"
+         GOSUB 19000; GOTO 11000
+*
+*---  CHECK ILLEGAL CHARACTER INPUT
+*
+      CASE INVALCHR # ""
+         ICNT = DCOUNT(INVALCHR,",")
+         FOR I = 1 TO ICNT
+            IF INDEX(DVALUE,FIELD(INVALCHR,",",I),1) THEN
+               ERRMSG = FIELD(INVALCHR,",",I)
+               ICNT = 0
+            END
+         NEXT I
+         IF NOT(ICNT) THEN
+            ERRMSG = "** INVALID CHARACTER (":ERRMSG:") INPUT - PLEASE RE-KEY **"
+            GOSUB 19000; GOTO 11000
+         END
+   END CASE
+   T.LEN = LEN(T.DVALUE)
+   FOR N = 1 TO T.LEN
+      DEC.EQUIV = SEQ(T.DVALUE[N,1])
+      IF DEC.EQUIV < 32 OR DEC.EQUIV > 126 THEN
+         ERRMSG = "** INVALID INPUT - PLEASE RE-KEY **"
+         GOSUB 19000; GOTO 11000
+      END
+   NEXT N
+*
+*---- THE FOLLOWING ALLOWS DATE OR SPECIFIED INPUT
+*
+   IF TYP = 6 AND VCNT > 0 AND ORVALDAT = "" THEN
+      GOSUB 17200
+      IF VLOC THEN
+         VALUE = DVALUE
+         GOTO 17000
+      END ELSE
+         VALDAT = ""
+      END
+   END
+   ERRMSG = ""
+*
+*---- ZERO OR BLANK FILL IF REQUESTED
+*
+   IF FILL.CHR # "" AND INLEN < MAXL THEN
+      IF FILL.CHR = "B" THEN FILL.CHR = SP
+      IF JUSTIFY = "R" THEN
+         IF NUM(DVALUE) THEN
+            DVALUE = STR(FILL.CHR,MAXL-INLEN):DVALUE
+         END
+      END ELSE
+         DVALUE = DVALUE:STR(FILL.CHR,MAXL-INLEN)
+      END
+   END
+*
+*---- PROCESS EDIT REQUEST
+*
+   ON TYP GOSUB 18100,18200,18300,18400,18500,18600,18700,18800,18900
+   IF ERRMSG # "" THEN
+      GOSUB 19000; GOTO 11000
+   END
+*
+*---- RANGE CHECK IF REQUESTED
+*
+   BEGIN CASE
+      CASE MINV = MAXV AND (MINV = 0 OR MINV = "")
+      CASE VALUE < MINV OR VALUE > MAXV
+         ERRMSG = "** OUT OF RANGE **"
+         GOSUB 19000; GOTO 11000
+   END CASE
+*
+*---- CHECK VALID INPUT
+*
+   IF VCNT > 0 AND ECD.VALDAT.CODE = "" AND ORVALDAT = "" THEN
+      GOSUB 17200
+      IF NOT(VLOC) THEN
+         ERRMSG = "** INVALID RESPONSE **"
+         GOSUB 19000; GOTO 11000
+      END
+   END
+17000 IF BLANK # "" THEN GOTO 17010
+   IF SBCLIENT THEN
+      PVALUE = DVALUE
+      IF PVALUE = "" THEN
+         CRT @(X,Y):GUI.LABEL:SP:GUI.END:
+      END ELSE
+         CRT @(X,Y):GUI.LABEL:PVALUE:GUI.END:
+      END
+   END ELSE
+      FORM = JUSTIFY:"#":MAXL
+      PVALUE = DVALUE FORM
+      IF ETX.EMBED THEN
+         CRT @(X,Y) : PVALUE :
+      END ELSE
+         CRT @(X,Y):ETX.DIN:PVALUE:ETX.DIN.OFF:
+      END
+   END
+17010 ECD.RET.VALUE = VALUE
+   IF ECD.RET.VALUE = "END" THEN GOTO 17099
+   IF ECD.VALDATION = "D" OR (ECD.VALDAT.CODE # "" AND ECD.RET.VALUE # "") THEN
+      VAL.ERR = 0
+      GOSUB 20000
+      IF VAL.ERR = 1 THEN GOTO 11000
+   END
+   IF PMSG = "" THEN
+      SCV.REC(ECD.NUM)<ESN,ECD.SUB.NUM> = ECD.RET.VALUE
+   END
+*---- Self learning
+   SIV_FLD_STK<ESN,-1> = ECD.NUM
+   SIV_FLD_VAL<ESN,-1> = VALUE
+17015*
+   TYP       = 1
+   PVALUE    = ""
+   MINL      = 1
+   MAXL      = 1
+   MINV      = ""
+   MAXV      = ""
+   O.R       = "R"
+   DEFAULT   = ""
+   JUSTIFY   = ""
+   SCALER    = 2
+   PATRN     = ""
+   EMODE     = 1
+   EX        = 0
+   EY        = 23
+   PMSG      = ""
+   HMSG      = ""
+   VALDAT    = ""
+   AUTO.RTN  = 0
+   FILL.CHR = ""
+   ORVALDAT = ""
+   INVALCHR = ""
+17099 RETURN
+*
+*********************  S U B R O U T I N E S  *************************
+*
+*---- Input Routines
+17110*
+   BEGIN CASE
+      CASE SBCLIENT
+         IF DEFAULT = "" THEN
+            CRT @(X,Y):GUI.LABEL:SP:GUI.END:
+         END ELSE
+            CRT @(X,Y):GUI.LABEL:DEFAULT:GUI.END:
+         END
+         GOSUB 17130
+      CASE TYP = 1 AND MAXL >= ECD.EDITLEN
+         BEGIN CASE
+            CASE PC.PORT.TYPE = "wIntegrate"
+               GOSUB 17140
+            CASE 1
+               GOSUB 17145
+         END CASE
+      CASE VIDEO.PORT.TYPE # "STD" AND X > 0 AND X + MAXL < 80
+         IF ETX.EMBED THEN
+            BEGIN CASE
+               CASE LEN(DEFAULT) < 70
+                  CRT @(0,23):CL:ETX.HHD.OFF:"DEFAULT":ETX.HHD.OFF:DEFAULT:ETX.HHD.OFF:
+                  CRT @(0,23):ETX.HHD:@(8,23):ETX.HHD:
+               CASE LEN(DEFAULT) < 78
+                  CRT @(0,23):CL:ETX.HHD.OFF:DEFAULT:ETX.HHD.OFF:
+                  CRT @(0,23):ETX.HHD:
+               CASE 1
+                  CRT @(0,23):CL:DEFAULT "L#79":
+            END CASE
+         END ELSE
+            BEGIN CASE
+               CASE LEN(DEFAULT) < 72
+                  CRT @(0,23):ETX.HHD:"DEFAULT":ETX.HHD.OFF:SP:ETX.HHD:DEFAULT:ETX.HHD.OFF:CL:
+               CASE LEN(DEFAULT) < 80
+                  CRT @(0,23):CL:ETX.HHD:DEFAULT:ETX.HHD.OFF:
+               CASE 1
+                  CRT @(0,23):DEFAULT "L#79":CL:
+            END CASE
+         END
+         GOSUB 17150
+         CRT @(0,23) : CL :
+      CASE 1
+         IF LEN(DEFAULT) > 70 THEN
+            CRT @(0,23):DEFAULT "L#79":CL:
+         END ELSE
+            CRT @(0,23):"DEFAULT- ":DEFAULT:CL:
+         END
+         GOSUB 17155
+         CRT @(0,23) : CL :
+   END CASE
+   RETURN
+17120*
+   BEGIN CASE
+      CASE SBCLIENT
+         IF DEFAULT = "" THEN
+            CRT @(X,Y):GUI.LABEL:SP:GUI.END:
+         END ELSE
+            CRT @(X,Y):GUI.LABEL:DEFAULT:GUI.END:
+         END
+         GOSUB 17130
+      CASE TYP = 1 AND MAXL >= ECD.EDITLEN
+         BEGIN CASE
+            CASE PC.PORT.TYPE = "wIntegrate"
+               GOSUB 17140
+            CASE 1
+               GOSUB 17145
+         END CASE
+      CASE VIDEO.PORT.TYPE # "STD" AND X > 0 AND X + MAXL < 80
+         GOSUB 17150
+         CRT @(0,23) : CL :
+      CASE 1
+         GOSUB 17155
+         CRT @(0,23) : CL :
+   END CASE
+   RETURN
+17130*
+*TOOLBAR ^
+   BEGIN CASE
+      CASE FLDTYPE = "M" AND SIV_MOUSE_ON<ESN>
+         FRMHNDL = ECD.SCRN.PC<ESN>
+         TU_FUNC = "ROC.SET":TU_VERNO
+         CALL @TU_FUNC(FRMHNDL, "forced_input",20,ERROR)
+         SIV_MOUSE_ON<ESN> = 0
+      CASE PSTACK AND NOT(SIV_MOUSE_ON<ESN>)
+         FRMHNDL = ECD.SCRN.PC<ESN>
+         TU_FUNC = "ROC.SET":TU_VERNO
+         CALL @TU_FUNC(FRMHNDL, "forced_input",0,ERROR)
+         SIV_MOUSE_ON<ESN> = 1
+   END CASE
+*TOOLBAR v
+   IF SIV_STACK = "" THEN
+      BEGIN CASE
+         CASE TYP = 8 AND PMSG # ""
+            ERRTYP = "DLG.INFO"
+            IF DEFAULT = "N" THEN
+               BTN_HD = "No":VM:"Yes"
+               BTN_VAL = "N":VM:"Y"
+               ERRHD = "N O   /   Y E S"
+            END ELSE
+               BTN_HD = "Yes":VM:"No"
+               BTN_VAL = "Y":VM:"N"
+               ERRHD = "Y E S   /   N O"
+            END
+            TU_FUNC = "TU.FORM.DIALOG":TU_VERNO
+            CALL @TU_FUNC(DVALUE,ERRTYP,PMSG,BTN_HD,BTN_VAL,ERRHD,ERROR)
+            IF DVALUE # "Y" AND DVALUE # "N" THEN DVALUE = "END"
+            ERRTYP = ""; BTN_HD = ""; BTN_VAL = ""
+            EVENT = ""; XVALUE = ""
+            GOTO 17139
+         CASE TYP = 1 AND PMSG # "" AND FLDTYPE = "VP"
+            MAT EDIT.COM.SAVE = MAT EDIT.COM
+            TYP = 11
+            X = 0
+            VALDAT = CHANGE(VALDAT,",",VM)
+            CALL EDIT.SUB
+            XVALUE = VALUE
+            MAT EDIT.COM = MAT EDIT.COM.SAVE
+            DVALUE = XVALUE
+            EVENT = ""; XVALUE = ""
+            GOTO 17139
+         CASE TYP = 6 AND PMSG # "" AND FLDTYPE = "VP"
+            MAT EDIT.COM.SAVE = MAT EDIT.COM
+            TYP = 16
+            X = 0
+*           VALDAT = CHANGE(VALDAT,",",VM)
+            CALL EDIT.SUB
+            IF VALUE = "END" OR VALUE = "" THEN
+               XVALUE = VALUE
+            END ELSE
+               XVALUE = OCONV(VALUE, "D2/")
+            END
+            MAT EDIT.COM = MAT EDIT.COM.SAVE
+            DVALUE = XVALUE
+            EVENT = ""; XVALUE = ""
+            GOTO 17139
+         CASE 1
+            FLDNAME = X:",":Y
+            TU_FUNC = "TU.FORM.INPUT":TU_VERNO
+            CALL @TU_FUNC(FLDNAME,DVALUE,XVALUE,EVENT,ERROR)
+      END CASE
+   END ELSE
+      EVENT = ""; XVALUE = ""
+      IF SIV_MOUSE_ON<ESN> THEN
+         IF PSTACK THEN
+*---- Check if returned to a non prompt message
+            DVALUE = SIV_STACK
+         END ELSE
+            DVALUE = ""
+            REINPUT = 1
+         END
+         SIV_STACK = ""
+      END ELSE
+         DVALUE = ""
+      END
+      GOTO 17139
+   END
+   BEGIN CASE
+*TOOLBAR ^
+**** Data field mouse click
+      CASE EVENT<1> = "gain_focus"
+         BEGIN CASE
+            CASE USERDATA = "^VALUE^"
+               FLDNAME = FIELD(EVENT<2>,":",2)
+               TU_FUNC = "TU.FORM.GETDATA":TU_VERNO
+               CALL @TU_FUNC(FLDNAME,XVALUE,ERROR)
+               IF ERROR THEN
+                  REINPUT = 1
+               END ELSE
+                  DVALUE = TRIM(XVALUE,SP,"B")
+               END
+            CASE NOT(PSTACK)
+*---- Check if field is acessable
+               IF BLD.SCRN(INT.REF)<1,B.USERDATA> = "" THEN
+                  REINPUT = 1
+               END ELSE
+                  DVALUE = ""
+                  IF XVALUE = "" THEN
+                     FLDNAME = FIELD(EVENT<2>,":",2)
+                     IF FLDNAME # "_pmc70" THEN
+                        REINPUT = 1
+                     END
+                  END ELSE
+                     SIV_STACK = XVALUE
+                  END
+               END
+            CASE NOT(XVALUE)
+               FLDNAME = FIELD(EVENT<2>,":",2)[5,99]
+               LOCATE FLDNAME IN BLD.EXT.REF<1>,1 SETTING FLD_LOC THEN
+                  XVALUE = BLD.SCRN(FLD_LOC)<1,B.USERDATA>
+               END
+               IF XVALUE = "" THEN
+                  REINPUT = 1
+               END ELSE
+                  DVALUE = XVALUE
+               END
+            CASE NUM(XVALUE)
+               DVALUE = XVALUE
+            CASE XVALUE[1,7] = "^IMAGE^"
+               REINPUT = 1
+               FLDNAME = FIELD(XVALUE,"^",3)
+               IF NUM(FLDNAME) AND FLDNAME > 0 THEN
+                  IF SCV.REC(FLDNAME)<ESN> # "" THEN
+                     CALL PMCIMAGE("PMCIMAGE",SCV.REC(FLDNAME)<ESN>,ERROR)
+                  END
+               END
+            CASE 1
+               REINPUT = 1
+         END CASE
+*** Tool bar mouse clicked
+      CASE DCOUNT(EVENT,AM) < 7
+         BEGIN CASE
+            CASE DVALUE = "END"
+            CASE EVENT<1> = "special" AND EVENT<3> = "prtsc"
+               APP.MACRO = CHAR(27):'_p'
+               TU_FUNC = "TU.MACRO":TU_VERNO
+               CALL @TU_FUNC(APP.MACRO,"V",ERROR)
+               REINPUT = 1
+* TOOLBAR CLICK ON RETURN icon ERROR ^
+* NEED TO CONVERT ALL TOOLBARS AND PUT {enter} AS AN icon VALUE
+* THIS WILL SOLVE THE PROBLEM OF ACCEPTING WHAT WAS ENTERED BUT DIDNOT 
+*     HIT <return>
+            CASE EVENT<1> = "special" AND EVENT<3> = "enter"
+* TOOLBAR CLICK ON RETURN icon ERROR v
+            CASE TRIM(DVALUE) = ""
+               DVALUE = ""
+            CASE DVALUE = "]" OR DVALUE = "}"
+            CASE DVALUE = "PMCVERSION"
+               CALL PMCIMAGE("PMC_VER","..\VSIPIC\PMCLOGOC.BMP",ERROR)
+               REINPUT = 1
+            CASE DVALUE[1,7] = "^IMAGE^"
+               REINPUT = 1
+               FLDNAME = FIELD(DVALUE,"^",3)
+               IF NUM(FLDNAME) AND FLDNAME > 0 THEN
+                  IF SCV.REC(FLDNAME)<ESN> # "" THEN
+                     CALL PMCIMAGE("PMCIMAGE",SCV.REC(FLDNAME)<ESN>,ERROR)
+                  END
+               END
+            CASE BARNAME # SIV_BAR_ACTIVE<ESN,1>
+               REINPUT = 1
+         END CASE
+*TOOLBAR v
+*---- Keyboard input
+      CASE EVENT<1> = "special" AND EVENT<3> = "27"
+         DVALUE = "END"
+      CASE EVENT<3> = "527"
+         DVALUE = "?"
+      CASE DVALUE[1,3] = "&V&"
+         OPEN "","PMC_PROCESS" TO PMC_PROCESS THEN
+            OPEN "","VOC" TO VOC THEN
+               PROC_ID = TRIM(DVALUE[4,999])
+               VOC_ID = "TTY"; CALL SYSVARS.SUB(VOC_ID)
+               VOC_ID = "E_":VOC_ID
+               CALL VSI_VERB_SUB(VOC_ID,VOC,PROC_ID,PMC_PROCESS,EXE_TYPE,EXE_VERB,ERRMSG)
+               IF EXE_VERB # "" THEN
+*PMCUTLCK ^
+*   EXECUTE EXE_VERB
+                  PREV_PROC_ID = @USER1
+                  @USER1 = PROC_ID
+                  EXECUTE EXE_VERB
+                  @USER1 = PREV_PROC_ID
+*PMCUTLCK v
+                  IF EXE_TYPE = "P" OR EXE_TYPE = "PB" THEN
+                     READU ITEM FROM VOC, VOC_ID THEN
+                        DELETE VOC, VOC_ID
+                     END ELSE
+                        RELEASE VOC, VOC_ID
+                     END
+                  END
+               END
+            END
+         END
+   END CASE
+17139*
+   RETURN
+17140*
+   FILLER = SPACE(MAXL)
+   GOSUB 17181
+   DVALUE = DEFAULT
+   CALL EDIT_WTG(X,Y,MAXL,DVALUE)
+   IF ETX.EMBED THEN
+      CRT @(X-1,Y):ETX.DHD:
+   END ELSE
+      CRT @(X,Y):ETX.OFF:
+   END
+   RETURN
+17145*
+   DVALUE = DEFAULT
+   CALL FIELD.EDIT(X,Y,MAXL,DVALUE,DEFAULT)
+   RETURN
+17150*
+   GOSUB 17180
+   INPUT DVALUE,MAXL _:
+   IF ETX.EMBED THEN
+      CRT @(X-1,Y):ETX.DHD:
+   END ELSE
+      CRT @(X,Y):ETX.OFF:
+   END
+   RETURN
+17155*
+   GOSUB 17185
+   INPUT DVALUE,MAXL _:
+   RETURN
+17160*
+   GOSUB 17180
+   ECHO OFF
+   INPUT DVALUE,MAXL _:
+   ECHO ON
+   IF ETX.EMBED THEN
+      CRT @(X-1,Y):ETX.DHD:
+   END ELSE
+      CRT @(X,Y):ETX.OFF:
+   END
+   RETURN
+17165*
+   GOSUB 17185
+   ECHO OFF
+   INPUT DVALUE,MAXL _:
+   ECHO ON
+   RETURN
+17180*
+   BEGIN CASE
+      CASE TYP = 6 AND MAXL = 8
+         FILLER = MSKETX:MSKETX:"/":MSKETX:MSKETX:"/":MSKETX:MSKETX
+      CASE TYP = 4 AND SCALER > 0
+         FILLER = STR(MSKETX,MAXL-SCALER-1):".":STR(MSKETX,SCALER)
+      CASE 1
+         FILLER = STR(MSKETX,MAXL)
+   END CASE
+17181*
+   IF ETX.EMBED THEN
+      CRT @(X-1,Y):ETX.DIN.OFF:FILLER:ETX.DIN.OFF:
+      CRT @(X-1,Y):ETX.DIN:
+   END ELSE
+      CRT @(X,Y):ETX.DIN:FILLER:
+      CRT @(X,Y):
+   END
+   RETURN
+17185*
+   BEGIN CASE
+      CASE TYP = 6 AND MAXL = 8
+         FILLER = BMSK:BMSK:"/":BMSK:BMSK:"/":BMSK:BMSK
+      CASE TYP = 4 AND SCALER > 0
+         FILLER = STR(BMSK,MAXL-SCALER-1):".":STR(BMSK,SCALER)
+      CASE 1
+         FILLER = STR(BMSK,MAXL)
+   END CASE
+   CRT @(X,Y):FILLER:@(X,Y):
+   RETURN
+*
+*---- Check VALDAT
+17200*
+   LIMIT = VCNT; VLOC = 0
+   FOR V = 1 TO LIMIT
+      IF DVALUE = FIELD(VALDAT,",",V) THEN
+         LIMIT = 0; VLOC = V
+         IF SBCLIENT THEN
+            IF EXVALDAT<1,1,V> = "Y" AND FLDTYPE = "MP" THEN
+               IF NEW_FLD THEN
+                  TMODE = "FILE"
+                  CALL SCRN_FLD_M (TMODE)
+               END
+               FRMHNDL = ECD.SCRN.PC<ESN>
+               TU_FUNC = "TU.FORM.KILL":TU_VERNO
+               CALL @TU_FUNC(FRMHNDL,ERROR)
+               ECD.SCRN.PC<ESN> = ""
+               ECD.SCRN.SEQ = DELETE(ECD.SCRN.SEQ,1,0,0);* PMCUTLCK
+               SIV_BAR_ACTIVE<ESN> = "";* Toolbar
+               SIV_BAR_HNDL<ESN> = "";* Toolbar
+               SIV_MOUSE_ON<ESN> = ""
+               SIV_PSTACK<ESN> = ""
+               SIV_EVENTS<ESN> = ""
+               SIV_FLD_STK<ESN> = ""
+               SIV_FLD_VAL<ESN> = ""
+               SIV_BAR_FLD<ESN> = ""
+               SIV_BAR_FILE<ESN> = ""
+               SIV_BAR_NAME<ESN> = ""
+               SIV_LST_LINE<ESN> = ""
+            END
+         END
+      END
+   NEXT V
+   RETURN
+17300*
+   IF XPTR_VALUE[1,1] = "^" THEN
+      XPTR = FIELD(XPTR_VALUE,"^",2)
+      IF NUM(XPTR) THEN
+         XPTR_VALUE = SCV.REC(XPTR)<ESN>
+      END ELSE
+         XPTR_VALUE = ""
+      END
+   END
+   RETURN
+*
+*---- EDIT ALPHANUMERIC INPUT
+*
+18100 VALUE = DVALUE
+   RETURN
+*
+*---- EDIT ALPHABETIC INPUT
+*
+18200*ALPHA(DVALUE) WORKS ONLY WITH NEW COMPILER
+   FOR I = 1 TO INLEN WHILE ERRMSG = ""
+      CHR = DVALUE[I,1]
+      IF CHR < "A" OR CHR > "Z" THEN
+         ERRMSG = "** ALPHA INPUT REQUIRED **"
+      END
+   NEXT I
+   IF ERRMSG = "" THEN
+      VALUE = DVALUE
+   END
+18299 RETURN
+*
+*---- EDIT NUMERIC INPUT
+*
+18300 IF DVALUE MATCHES "0N" THEN
+      VALUE = DVALUE
+   END ELSE
+      ERRMSG = "** NUMERIC INPUT REQUIRED **"
+   END
+18399 RETURN
+*
+*---- EDIT SCALED DECIMAL INPUT
+*
+18400 IF NOT(NUM(DVALUE)) THEN GOTO 18490
+   IF LEN(FIELD(DVALUE,".",1)) > (MAXL - SCALER - 1) THEN GOTO 18490
+   IF LEN(FIELD(DVALUE,".",2)) > SCALER THEN GOTO 18490
+   CNV = "MD" : SCALER
+   VALUE = ICONV(DVALUE,CNV)
+   DVALUE= OCONV(VALUE,CNV)
+   IF MINV = "" AND MAXV = "" THEN GOTO 18499
+   IF INDEX(MINV,".",1) > 0 THEN MINV = ICONV(MINV,CNV)
+   IF INDEX(MAXV,".",1) > 0 THEN MAXV = ICONV(MAXV,CNV)
+   GOTO 18499
+18490 ERRMSG = "** DECIMAL INPUT REQUIRED **"
+18499 RETURN
+*
+*---- EDIT ALPHANUMERIC WITH NO SPACES INPUT
+*
+18500 IF INDEX(DVALUE,SP,1) THEN
+      ERRMSG = "** INVALID SPACE CHARACTER INPUT **"
+   END ELSE
+      VALUE = DVALUE
+   END
+18599 RETURN
+*
+*---- EDIT DATE INPUT
+*
+18600 BEGIN CASE
+      CASE DVALUE = "DATE"
+         DVALUE = OCONV(DATE(),"D2")
+      CASE DVALUE = STR("?",INLEN)
+         ERRMSG = "** INVALID DATE **"
+         GOTO 18699
+   END CASE
+   VALUE = ICONV(DVALUE,"D")
+* T24110 v Do not allow negative dates
+* Undo this mod - Date must allow negatives - LMR 10/06/99
+   IF VALUE = DVALUE OR VALUE = "" THEN
+*     IF VALUE = DVALUE OR VALUE = "" OR VALUE < 0 THEN
+* T24110 ^
+      ERRMSG = "** INVALID DATE **"
+   END ELSE
+*T26141 v
+      IF MINV = "" AND MAXV = "" THEN ; * C40426
+         IF ABS(DATE() - VALUE) > 365*10 THEN
+            PSTRING = "DATE OUTSIDE 10 YEAR RANGE, CONTINUE (Y/N)? "
+            IF PROMPT_YES_NO(PSTRING) = 'N' THEN
+               ERRMSG = "Please enter a valid date"
+               RETURN
+            END
+         END
+      END ; * C40426
+*T26141 ^
+      DVALUE = OCONV(VALUE,"D2/")
+      IF MINV = MAXV AND (MINV = 0 OR MINV = "") THEN GOTO 18699
+*T26682 v
+*     IF MINV = "DATE" THEN MINV = DATE()
+*     IF MAXV = "DATE" THEN MAXV = DATE()
+      BEGIN CASE
+         CASE NUM(MINV)
+         CASE MINV = "DATE"
+            MINV = DATE()
+         CASE MINV[1,5] = "DATE+"
+*C40426 v
+*           MINV = DATE() + MINV[6,3]
+            BEGIN CASE
+               CASE TRIM(MINV[6,3]) MATCHES '0N'
+                  MINV = DATE() + MINV[6,3]
+               CASE MINV[7,1] = 'Y'
+                  MINV = DATE() + MINV[6,1] * 365
+               CASE MINV[8,1] = 'Y'
+                  MINV = DATE() + MINV[6,2] * 365
+            END CASE
+*C40426 ^
+         CASE MINV[1,5] = "DATE-"
+*C40426 v
+*           MINV = DATE() - MINV[6,3]
+            BEGIN CASE
+               CASE TRIM(MINV[6,3]) MATCHES '0N'
+                  MINV = DATE() - MINV[6,3]
+               CASE MINV[7,1] = 'Y'
+                  MINV = DATE() - MINV[6,1] * 365
+               CASE MINV[8,1] = 'Y'
+                  MINV = DATE() - MINV[6,2] * 365
+            END CASE
+*C40426 ^
+      END CASE
+      BEGIN CASE
+         CASE NUM(MAXV)
+         CASE MAXV = "DATE"
+            MAXV = DATE()
+         CASE MAXV[1,5] = "DATE+"
+*C40426 v
+*           MAXV = DATE() + MAXV[6,3]
+            BEGIN CASE
+               CASE TRIM(MAXV[6,3]) MATCHES '0N'
+                  MAXV = DATE() + MAXV[6,3]
+               CASE MAXV[7,1] = 'Y'
+                  MAXV = DATE() + MAXV[6,1] * 365
+               CASE MAXV[8,1] = 'Y'
+                  MAXV = DATE() + MAXV[6,2] * 365
+            END CASE
+*C40426 ^
+         CASE MAXV[1,5] = "DATE-"
+*C40426 v
+*           MAXV = DATE() - MAXV[6,3]
+            BEGIN CASE
+               CASE TRIM(MAXV[6,3]) MATCHES '0N'
+                  MAXV = DATE() - MAXV[6,3]
+               CASE MAXV[7,1] = 'Y'
+                  MAXV = DATE() - MAXV[6,1] * 365
+               CASE MAXV[8,1] = 'Y'
+                  MAXV = DATE() - MAXV[6,2] * 365
+            END CASE
+*C40426 ^
+      END CASE
+*T26682 ^
+   END
+18699 RETURN
+*
+*---- EDIT PATTERN INPUT
+*
+18700 FND = 0
+   FOR P = 1 TO PCNT UNTIL FND > 0
+      IF DVALUE MATCHES FIELD(PATRN,",",P) THEN FND = P
+   NEXT P
+   IF FND > 0 THEN
+      VALUE = DVALUE
+   END ELSE
+      ERRMSG = "** INVALID FORMAT **"
+   END
+18799 RETURN
+*
+*---- EDIT YES OR NO
+*
+18800 IF DVALUE # "Y" AND DVALUE # "N" THEN
+      ERRMSG = "** PLEASE RESPOND (Y) OR (N) **"
+   END ELSE
+      VALUE = DVALUE
+   END
+18899 RETURN
+*
+*---- EDIT (OPEN)
+*
+18900 VALUE = DVALUE
+18999 RETURN
+*
+*---- ERROR ROUTINE
+*
+19000 BEGIN CASE
+      CASE PC.PORT.TYPE = "termulator" AND ECD.SCRN.PC<ESN>
+         ERX = 3; ERY = 23
+         CRT BEL:
+         CRT @(ERX,ERY):GUI.LABEL:ERRMSG:GUI.END:
+         TU_FUNC = "TU.FORM.INPUT":TU_VERNO
+         CALL @TU_FUNC("_pmc90",STALL,XVALUE,EVENT,ERROR)
+         CRT @(ERX,ERY):GUI.LABEL:SP:GUI.END:
+         GOTO 19090
+      CASE EMODE = 1 OR EMODE = 4
+         ERX = EX
+         ERY = EY
+      CASE EMODE = 2 OR EMODE = 5
+         ERX = 40
+         ERY = EY
+      CASE EMODE = 3 OR EMODE = 6
+         ERX = EX
+         ERY = EY
+      CASE 1
+         ERX = 0
+         ERY = 23
+   END CASE
+   SP.LEN = 79 - ERX
+   CRT @(ERX,ERY):SPACE(SP.LEN):
+   IF ETX.EMBED THEN
+      CRT @(ERX,ERY):ETX.EHD.OFF:BEL:ERRMSG:ETX.EHD.OFF:
+      CRT @(ERX,ERY):ETX.EHD:@(ERX+LEN(ERRMSG)+2,ERY):
+   END ELSE
+      CRT @(ERX,ERY):BEL:ETX.EHD:ERRMSG:ETX.EHD.OFF:
+   END
+   IF EMODE < 4 THEN
+      INPUT STALL,1 _:
+      CRT @(ERX,ERY):SPACE(LEN(ERRMSG)+3):
+   END
+19090 ERRMSG = ""
+   RETURN
+*
+*---- PROCESS VALIDATION REQUEST
+*
+20000 IF ECD.VALDATION = "D" THEN
+      VLOC = 0
+      FOR SCV = 1 TO SCV.REC.SIZE WHILE VLOC = 0
+         IF SCV.REC(ECD.NUM)<ESN,SCV> = ECD.RET.VALUE THEN VLOC = SCV
+      NEXT SCV
+      IF VLOC AND VLOC # ECD.SUB.NUM THEN
+         ERRMSG = "* * " : ECD.RET.VALUE : " ALREADY EXIST ON LINE # " : VLOC : " * *"
+         GOSUB 90000
+         VAL.ERR = 1
+         GOTO 20099
+      END
+   END
+   IF ECD.VALDAT.CODE # "" AND ECD.RET.VALUE # "" THEN
+      IF VCNT # "" AND ORVALDAT = "" THEN
+         GOSUB 17200
+      END ELSE
+         VLOC = 0
+      END
+      IF NOT(VLOC) THEN
+         VLOC = 1
+         IF ECD.VALDAT.CODE # "5" THEN
+            READ ECD.VALDAT.ITEM FROM ECD.VALDAT.FILE, ECD.PREFIX.ID : ECD.RET.VALUE ELSE
+               VLOC = 0
+               ECD.VALDAT.ITEM = ""
+               BEGIN CASE
+                  CASE ECD.VALDAT.CODE = "1"
+                     ERRMSG = ECD.RET.VALUE : " IS NOT ON FILE"
+                     GOSUB 90000
+                  CASE ECD.VALDAT.CODE = "2"
+                     ERRMSG = ECD.RET.VALUE : " IS NOT ON FILE TRY AGAIN !"
+                     GOSUB 90000
+                     VAL.ERR = 1
+                     GOTO 20099
+                  CASE ECD.VALDAT.CODE = "4"
+                     ERRMSG = ECD.RET.VALUE : " IS NOT ON FILE. DO YOU WANT TO ADD (Y/N) :"
+                     GOSUB 90000
+                     IF ERRVAL # "Y" THEN
+                        VAL.ERR = 1
+                        GOTO 20099
+                     END
+               END CASE
+            END
+         END ELSE
+        * T26126 v
+            READU ECD.VALDAT.ITEM FROM ECD.VALDAT.FILE, ECD.PREFIX.ID : ECD.RET.VALUE LOCKED
+               VLOC = 0 ; ECD.VALDAT.ITEM = ""
+               ERRMSG = 'Record is locked by user - ':GETUSERNAME(STATUS())
+               GOSUB 90000 ; VAL.ERR = 1
+               GOTO 20099
+            END ELSE
+        * T26126 ^
+               VLOC = 0
+               ECD.VALDAT.ITEM = ""
+               ERRMSG = ECD.RET.VALUE : " IS NOT ON FILE TRY AGAIN !"
+               GOSUB 90000
+               VAL.ERR = 1
+               GOTO 20099
+            END
+         END
+         IF VLOC AND ECD.VALDAT.CODE = "3" THEN
+            ERRMSG = "** ":ECD.RET.VALUE:" ALREADY EXISTS ON FILE **"
+            GOSUB 90000
+            VAL.ERR = 1
+            GOTO 20099
+         END
+      END
+   END
+20099 RETURN
+*
+*---- PROCESS HELP REQUEST
+30000*
+   IF BLD.HMSG = "" THEN
+      HBOX.FILE = CURR.SCREENS.FILE
+      HBOX.ID = SCREEN.NAME:"*HMSG":ECD.NUM
+   END ELSE
+      HBOX.MSG = BLD.HMSG
+      HBOX.ID = ""
+   END
+   HBOX.SEP = "SM"
+*C43383 v
+*  CALL @TCC.HLP.SUB
+   IF TCC.HLP.SUB = "" THEN TCC.HLP.SUB = "HELP.ASCII"
+   IF TCC.HLP.SUB = 'HELP1.ASCII' THEN
+      CALL @TCC.HLP.SUB(MAT TCC.REC,MAT GRAPH.REC,MAT VIDEO.REC,MAT KSEL.REC,MAT HBOX.REC)
+   END ELSE
+      CALL @TCC.HLP.SUB
+   END
+*C43383 ^
+   RETURN
+*
+*---- PROCESS TECHNICAL HELP REQUEST
+30500*
+   HBOX.MSG = "Ref No=":ECD.NUM
+   IF ECD.SUB.NUM > 1 THEN
+      HBOX.MSG = HBOX.MSG:", LN=":ECD.SUB.NUM
+   END
+   HBOX.MSG = HBOX.MSG : ", TYP=":TYP
+   IF TYP = 4 THEN
+      HBOX.MSG = HBOX.MSG:", SCALER=":SCALER
+   END
+   HBOX.MSG = HBOX.MSG:", MAXL=":MAXL
+   IF MINL > 1 THEN
+      HBOX.MSG = HBOX.MSG:", MINL=":MINL
+   END
+   IF MINV # MAXV OR (MINV # 0 AND MINV # "") THEN
+      HBOX.MSG = HBOX.MSG:", MAXV=":MAXV
+      HBOX.MSG = HBOX.MSG:", MINV=":MINV
+   END
+   HMV = 1
+   IF PATRN # "" THEN
+      MVP = 1
+      PVAL = FIELD(PATRN,",",MVP)
+      PVAR = ", PATRN="
+      LOOP
+         IF LEN(HBOX.MSG<1,HMV>) + LEN(PVAL) + LEN(PVAR) > 67 THEN
+            HMV = HMV + 1
+            IF MVP = 1 THEN
+               HBOX.MSG<1,HMV> = "PATRN=":PVAL
+            END ELSE
+               HBOX.MSG<1,HMV> = "& PATRN=":PVAL
+            END
+         END ELSE
+            HBOX.MSG<1,HMV> = HBOX.MSG<1,HMV>:PVAR:PVAL
+         END
+         MVP = MVP + 1
+         PVAL = FIELD(PATRN,",",MVP)
+      WHILE PVAL # "" DO
+         PVAR = ","
+      REPEAT
+   END
+   IF ORVALDAT # "" THEN
+      IF LEN(HBOX.MSG<1,HMV>) + LEN(ORVALDAT) + 11 > 67 THEN
+         HMV = HMV + 1
+         HBOX.MSG<1,HMV> = "ORVALDAT=":ORVALDAT
+      END ELSE
+         HBOX.MSG<1,HMV> = HBOX.MSG<1,HMV>:", ORVALDAT=":ORVALDAT
+      END
+   END
+   IF VALDAT # "" THEN
+      MVP = 1
+      PVAL = FIELD(VALDAT,",",MVP)
+      PVAR = ", VALDAT="
+      LOOP
+         IF LEN(HBOX.MSG<1,HMV>) + LEN(PVAL) + LEN(PVAR) > 67 THEN
+            HMV = HMV + 1
+            IF MVP = 1 THEN
+               HBOX.MSG<1,HMV> = "VALDAT=":PVAL
+            END ELSE
+               HBOX.MSG<1,HMV> = "& VALDAT=":PVAL
+            END
+         END ELSE
+            HBOX.MSG<1,HMV> = HBOX.MSG<1,HMV>:PVAR:PVAL
+         END
+         MVP = MVP + 1
+         PVAL = FIELD(VALDAT,",",MVP)
+      WHILE PVAL # "" DO
+         PVAR = ","
+      REPEAT
+   END
+   IF PC.PORT.TYPE = "termulator" THEN
+      IF ECD.SCRN.PC<ESN> # "" THEN
+         IF BARNAME # "" THEN
+            HMV = HMV + 1
+            HBOX.MSG<1,HMV> = "TOOLBAR=":BARNAME
+            HBOX.MSG<1,HMV> = HBOX.MSG<1,HMV> : ", BAR FILE=":BARFILE
+         END
+         IF PSTACK # "" THEN
+            HBOX.MSG<1,HMV> = HBOX.MSG<1,HMV> : ", Prompt Stack=":PSTACK
+         END
+         IF USERDATA # "" THEN
+            HBOX.MSG<1,HMV> = HBOX.MSG<1,HMV> : ", User Data=":USERDATA
+         END
+      END
+   END
+   BEGIN CASE
+      CASE XREF_NAME = ""
+      CASE XREF_NAME = "NULL"
+      CASE XREF_NAME = "??"
+      CASE XREF_NAME = "???"
+      CASE 1
+         HMV = HMV + 1
+         HBOX.MSG<1,HMV> = "XREF = ":XREF_NAME
+         IF DATAFILE # "" THEN
+            HBOX.MSG<1,HMV> = HBOX.MSG<1,HMV> : ', DATA FILE = ' : DATAFILE
+         END
+   END CASE
+   HMV = HMV + 1
+   HBOX.MSG<1,HMV> = "SCREEN = ":ECD.SCRN.NAME<ECD.SCRN.NO> : ", S# = ":ECD.SCRN.NO:', GUIFORM = ':ECD.SCRN.PC:', FORMS = ':CHANGE(ECD.SCRN.SEQ,AM,";")
+   HMV = HMV + 1
+   HBOX.MSG<1,HMV> ='FORMS = ':CHANGE(ECD.SCRN.SEQ,AM,";"):', GUIFORM = ':ECD.SCRN.PC
+   HBOX.ID = ""
+   HBOX.SEP = "VM"
+*C43383 v
+*  CALL @TCC.HLP.SUB
+   IF TCC.HLP.SUB = "" THEN TCC.HLP.SUB = "HELP.ASCII"
+   IF TCC.HLP.SUB = 'HELP1.ASCII' THEN
+      CALL @TCC.HLP.SUB(MAT TCC.REC,MAT GRAPH.REC,MAT VIDEO.REC,MAT KSEL.REC,MAT HBOX.REC)
+   END ELSE
+      CALL @TCC.HLP.SUB
+   END
+*C43383 ^
+   RETURN
+*
+*---- ENTER HELP MESSAGE
+40000*
+   HBOX.FILE = CURR.SCREENS.FILE
+   HBOX.ID = SCREEN.NAME:"*HMSG":ECD.NUM
+   HBOX.MSG = BLD.HMSG
+   HBOX.SEP = "SM"
+   CALL @SCL.HLP.SUB
+   RETURN
+*
+*---- UPDATE TUF
+*
+50000*
+   IF PC.PORT.TYPE = "termulator" AND ECD.SCRN.PC<ESN> THEN
+      FLDNAME = "_pmc":BLD.EXT.REF<1,FLD_LOC>
+      T.USERDATA = BLD.SCRN(FLD_LOC)<1,B.USERDATA>
+      TU_FUNC = "TU.FORM.SETATTR":TU_VERNO
+      BEGIN CASE
+         CASE T.USERDATA = ""
+            CALL @TU_FUNC(FLDNAME,"user_data",T.USERDATA,ERROR)
+         CASE T.USERDATA = "^VALUE^"
+            CALL @TU_FUNC(FLDNAME,"user_data",T.USERDATA,ERROR)
+         CASE T.USERDATA = "^IMAGE^"
+            CALL @TU_FUNC(FLDNAME,"user_data","",ERROR)
+         CASE NOT(NUM(T.USERDATA))
+            CALL @TU_FUNC(FLDNAME,"user_data",T.USERDATA,ERROR)
+         CASE NUM(T.USERDATA) AND T.USERDATA > 0
+            CALL @TU_FUNC(FLDNAME,"user_data",T.USERDATA,ERROR)
+         CASE 1
+            CALL @TU_FUNC(FLDNAME,"user_data","",ERROR)
+      END CASE
+   END
+   RETURN
+*
+*---- CHECK SERIAL NUMBER
+*
+80000*
+   CALL CHECK.SYSTEM.SN("",SER)
+   LSER = LEN(SER)
+   CS1 = 0; CS2 = 0
+   FOR N = 1 TO LSER
+      IF MOD(N,2) THEN
+         CS1 = CS1 + SEQ(SER[N,1])
+      END ELSE
+         CS2 = CS2 + SEQ(SER[N,1])
+      END
+   NEXT N
+   TS1 = 1; TS2 = 1
+   FOR N = 1 TO LSER
+      IF MOD(N,2) THEN
+         TS1 = TS1 * (CS2 + SEQ(SER[N,1]))
+      END ELSE
+         TS2 = TS2 * (CS1 + SEQ(SER[N,1]))
+      END
+   NEXT N
+   SID = TS2:TS1
+   FOUND = 1 ; ITEM.SID = ""
+   OPEN "","SECURITY" TO SECURITY ELSE FOUND = 0
+   IF FOUND = 1 THEN
+      READV ITEM.SID FROM SECURITY, "SID",1 ELSE FOUND = 0
+   END
+   IF NOT(FOUND) OR ITEM.SID # SID THEN
+      CRT @(-1):CHAR(7)
+      CRT "**********************************************************"
+      CRT "*                                                        *"
+      CRT "*  This Software and documentation related thereto, and  *"
+      CRT "*  the information disclosed therein are confidential    *"
+      CRT "*  and proprietary to Computer Business Associates.      *"
+      CRT "*  Neither the software, regardless of the form, nor     *"
+      CRT "*  such data, nor information, may be used by or dis-    *"
+      CRT "*  closed to others for any purpose except as specific-  *"
+      CRT "*  ally authorized in writing by Computer Business       *"
+      CRT "*  Associates.                                           *"
+      CRT "*                                                        *"
+      CRT "**********************************************************"
+      RQM 10
+      DELETE SECURITY, "R.":PORT.NO
+      CHAIN "LO"
+   END
+   OPEN "","CONTROL" TO CONTROL THEN
+      READV ECD.EDITLEN FROM CONTROL, "EDIT.CTRL",1 ELSE
+         ECD.EDITLEN = 80
+      END
+   END ELSE
+      ECD.EDITLEN = 80
+   END
+   RETURN
+*
+*---- ERROR ROUTINE
+*
+90000 BEGIN CASE
+      CASE PC.PORT.TYPE = "termulator" AND ECD.SCRN.PC<ESN>
+         IF ERRTYP = "" THEN
+            CRT @(3,23):GUI.LABEL:ERRMSG:GUI.END:
+            FLDNAME = "0,23"
+            TU_FUNC = "TU.FORM.INPUT":TU_VERNO
+            CALL @TU_FUNC(FLDNAME,ERRVAL,XVALUE,EVENT,ERROR)
+            CRT @(3,23):GUI.LABEL:SP:GUI.END:
+         END ELSE
+            ML = LEN(ERRTYP)
+            ERRHD = ERRTYP[1,1]
+            FOR I = 2 TO ML
+               ERRHD = ERRHD :SP:ERRTYP[I,1]
+            NEXT I
+            ERRTYP = "DLG.":ERRTYP
+            TU_FUNC = "TU.FORM.DIALOG":TU_VERNO
+            CALL @TU_FUNC(ERRVAL,ERRTYP,ERRMSG,BTN_HD,BTN_VAL,ERRHD,ERROR)
+            ERRTYP = ""; BTN_HD = ""; BTN_VAL = ""
+         END
+      CASE ETX.EMBED
+         CRT @(0,23):ETX.EHD.OFF:CL:ERRMSG:ETX.EHD.OFF:
+         CRT @(0,23):ETX.EHD:@(LEN(ERRMSG)+2,23):
+         INPUT ERRVAL,1 _:
+         CRT @(0,23):CL:
+      CASE 1
+         CRT @(0,23):ETX.EHD:ERRMSG:ETX.EHD.OFF:CL:
+         INPUT ERRVAL,1 _:
+         CRT @(0,23):CL:
+   END CASE
+   RETURN
+   RETURN
+END

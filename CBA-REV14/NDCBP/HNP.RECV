@@ -1,0 +1,260 @@
+**************************************************************************
+*
+* PROGRAM - HNP.RECV
+*
+* AUTHOR  - NICK AMENDOLA, NASTech, Inc.
+*
+* DATE    - 05/22/95
+*
+* DESCRIPTION
+*
+* This program is used to receive file transfer data from PROCOMM
+* using the ASCII file transfer protocol. The program uses a "?"
+* as the pacing character.
+*
+**************************************************************************
+*
+*---- DIMENSIONED ARRAYS
+*
+      REC.SIZE = 2000
+      DIM REC(REC.SIZE)
+*
+*---- OPEN ALL FILES
+*
+      OPEN "","HNP.XFER" TO FVAR ELSE
+         PRINT "CANNOT OPEN HNP.XFER FILE"
+         GOTO 99999
+      END
+*
+*---- INITIALIZATION
+*
+      PROMPT ""
+      TEMPFILE = "HNP.TRANSFER"
+      ITEMNAME = ""
+      CMDFLAG = CHAR(1)
+      CFL = LEN(CMDFLAG)
+*
+*---- MAIN PROCESSING
+*
+100 *
+*     PRINT
+*     GOSUB 1100                                ;* GET FILE NAME
+*     IF VALUE = CHAR(27) THEN GOTO 99999
+*
+*     GOSUB 1200                                ;* GET ITEM NAME
+*     IF VALUE = CHAR(27) THEN GOTO 100
+*
+      PRINT
+      PRINT "READY"
+      MAT REC = ""
+      LCNT = 0
+      BCNT = 0
+      LINECOUNT = 0
+      BYTECOUNT = 0
+      XDONE = 0
+      ECHO OFF
+      LOOP
+         INPUT INDATA,1:
+         PRINT "?":
+         INPUT INDATA2 FOR 2 ELSE INDATA2 = ""
+         INDATA = INDATA:INDATA2
+         BEGIN CASE
+         CASE INDATA = CHAR(27)
+            XDONE = 1
+         CASE INDATA = CMDFLAG:"END"
+            XDONE = 1
+         END CASE
+      UNTIL XDONE DO
+         IF INDATA[1,CFL] = CMDFLAG THEN
+            P = INDEX(INDATA,"=",1)
+            COMMAND = TRIM(INDATA[(CFL+1),(P-(CFL+1))])
+            PVALUE = TRIM(INDATA[(P+1),999])
+         END ELSE
+            COMMAND = ""
+         END
+         BEGIN CASE
+         CASE LCNT = 0 AND TRIM(FIELD(INDATA,"=",1)) = "COMMAND-FLAG"
+            CMDFLAG = TRIM(FIELD(INDATA,"=",2))
+            CFL = LEN(CMDFLAG)
+         CASE COMMAND = "FILE-NAME"
+            FILENAME = PVALUE
+         CASE COMMAND = "ITEM-NAME"
+            ITEMNAME = PVALUE
+         CASE COMMAND = "LINE-COUNT"
+            LINECOUNT = PVALUE
+         CASE COMMAND = "BYTE-COUNT"
+            BYTECOUNT = PVALUE
+         CASE COMMAND = "FILE-TYPE"
+            FILETYPE = PVALUE
+            BEGIN CASE
+            CASE FILETYPE = "BIN8-1"
+               MSG = ""
+               MSG<1> = "@START"
+               MSG<2> = "DELETE^TEMP.XFR"
+               MSG<3> = "OPEN-BIN^78^TEMP.XFR"
+               NETID = 1
+               FOR M = 1 TO 3
+                  CALL ADDQUEUE(NETID,MSG<M>,OUT.QUEUE,QPTR,STATUS)
+               NEXT M
+            CASE PVALUE = "BIN8-2"
+            END CASE
+         CASE COMMAND = "END"
+            BEGIN CASE
+            CASE FILETYPE = "BIN8-1"
+               MSG = ""
+               MSG<1> = "CLOSE^78"
+               MSG<2> = "@SLEEP^2"
+               MSG<3> = "DELETE^":FILEBASE:".003"
+               MSG<4> = "@SLEEP^2"
+               MSG<5> = "RENAME^":FILEBASE:".002":"^":FILEBASE:".003"
+               MSG<6> = "@SLEEP^2"
+               MSG<7> = "RENAME^":FILEBASE:".001":"^":FILEBASE:".002"
+               MSG<8> = "@SLEEP^2"
+               MSG<9> = "RENAME^":FILENAME:"^":FILEBASE:".001"
+               MSG<10> = "@SLEEP^2"
+               MSG<11> = "RENAME^TEMP.XFR^":FILENAME
+               MSG<12> = "@SLEEP^2"
+               MSG<13> = "DELETE^TEMP.XFR"
+               MSG<14> = "@SLEEP^2"
+               MSG<15> = "@STOP"
+               NETID = 1
+               FOR M = 1 TO 15
+                  CALL ADDQUEUE(NETID,MSG<M>,OUT.QUEUE,QPTR,STATUS)
+               NEXT M
+            CASE FILETYPE = "BIN8-2"
+            END CASE
+         CASE 1
+            IF ITEMNAME = "" AND INDATA[1,1] = "*" THEN
+               PLINE = TRIM(INDATA[2,99])
+               IF PLINE[1,7] = "PROGRAM" THEN
+                  PLINE = TRIM(PLINE[8,99])
+                  PL1 = PLINE[1,1]
+                  BEGIN CASE
+                  CASE PL1 = "-"
+                     ITEMNAME = TRIM(PLINE[2,99])
+                  CASE PL1 = ":"
+                     ITEMNAME = TRIM(PLINE[2,99])
+                  CASE PL1 = "="
+                     ITEMNAME = TRIM(PLINE[2,99])
+                  END CASE
+               END
+            END
+            BCNT = BCNT + LEN(INDATA)
+            BEGIN CASE
+            CASE FILETYPE = "BIN8-1"
+               LCNT = LCNT + 1
+               INDATA = "PUT-BIN8^78^":INDATA
+               CALL ADDQUEUE(NETID,INDATA,OUT.QUEUE,QPTR,STATUS)
+            CASE FILETYPE = "BIN8-2"
+               LCNT = LCNT + 1
+               CALL ADDQUEUE(NETID,INDATA,OUT.QUEUE,QPTR,STATUS)
+            CASE 1
+               IF LCNT < REC.SIZE THEN
+                  LCNT = LCNT + 1
+                  REC(LCNT) = INDATA
+                  APTR = 1
+                  IF MOD(LCNT,100) = 0 THEN
+                     MATWRITE REC ON FVAR, "TEMPXFR"
+                  END
+               END ELSE
+                  APTR = APTR + 1
+                  REC(LCNT)<APTR> = INDATA
+               END
+            END CASE
+         END CASE
+      REPEAT
+            BEGIN CASE
+            CASE FILETYPE = "BIN8-1"
+               MSG = ""
+               MSG<1> = "CLOSE^78"
+               MSG<2> = "@SLEEP^2"
+               MSG<3> = "DELETE^":FILEBASE:".003"
+               MSG<4> = "@SLEEP^2"
+               MSG<5> = "RENAME^":FILEBASE:".002":"^":FILEBASE:".003"
+               MSG<6> = "@SLEEP^2"
+               MSG<7> = "RENAME^":FILEBASE:".001":"^":FILEBASE:".002"
+               MSG<8> = "@SLEEP^2"
+               MSG<9> = "RENAME^":FILENAME:"^":FILEBASE:".001"
+               MSG<10> = "@SLEEP^2"
+               MSG<11> = "RENAME^TEMP.XFR^":FILENAME
+               MSG<12> = "@SLEEP^2"
+               MSG<13> = "DELETE^TEMP.XFR"
+               MSG<14> = "@SLEEP^2"
+               MSG<15> = "@STOP"
+               NETID = 1
+               FOR M = 1 TO 15
+                  CALL ADDQUEUE(NETID,MSG<M>,OUT.QUEUE,QPTR,STATUS)
+               NEXT M
+            CASE FILETYPE = "BIN8-2"
+            END CASE
+      MATWRITE REC ON FVAR, "TEMPXFR"
+      ECHO ON
+      IF ITEMNAME = "" THEN
+         LOOP
+            ITEMNAME = "TRANSFER"
+            GOSUB 1200                          ;* GET ITEM NAME
+         WHILE VALUE = "" OR VALUE = CHAR(27) DO
+         REPEAT
+      END
+      MATWRITE REC ON FVAR, ITEMNAME
+      DELETE FVAR, "TEMPXFR"
+      PRINT
+      PRINT
+      IF LINECOUNT > 0 THEN
+         PRINT OCONV(LINECOUNT,"MD0,")"R#9":" lines sent, ":
+      END
+      PRINT OCONV(LCNT,"MD0,")"R#9":" lines received"
+      IF BYTECOUNT > 0 THEN
+         PRINT OCONV(BYTECOUNT,"MD0,")"R#9":" bytes sent, ":
+      END
+      PRINT OCONV(BCNT,"MD0,")"R#9":" bytes received"
+      GOTO 99999
+*
+*---- GET FILE NAME
+*
+1100 *
+      PRINT "File Name (":TEMPFILE:"): ":
+      INPUT VALUE
+      BEGIN CASE
+      CASE VALUE = CHAR(27)
+         RETURN
+      CASE VALUE = ""
+         VALUE = TEMPFILE
+      END CASE
+      OPEN "",VALUE TO FVAR ELSE
+         PRINT "INVALID FILE NAME"
+         GOTO 1100
+      END
+      TEMPFILE = VALUE
+      RETURN
+*
+*---- GET ITEM NAME
+*
+1200 *
+      PRINT "Item Name (":ITEMNAME:"): ":
+      INPUT VALUE
+      BEGIN CASE
+      CASE VALUE = CHAR(27)
+         RETURN
+      CASE VALUE = ""
+         VALUE = ITEMNAME
+      END CASE
+      IF VALUE # "" THEN
+         READ XREC FROM FVAR, VALUE THEN
+            LOOP
+               PRINT "Overwrite (Y/N): ":
+               INPUT OWFLAG
+            UNTIL OWFLAG = "Y" OR OWFLAG = "N" DO
+            REPEAT
+            IF OWFLAG = "N" THEN GOTO 1200
+         END
+      END
+      ITEMNAME = VALUE
+      RETURN
+*
+*---- END OF PROGRAM
+*
+99999*
+      ECHO ON
+      PRINT "TERMINATED"
+   END

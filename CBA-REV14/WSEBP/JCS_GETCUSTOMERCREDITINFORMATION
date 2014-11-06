@@ -1,0 +1,187 @@
+SUBROUTINE JCS_GETCUSTOMERCREDITINFORMATION(CONO, CUSTOMERID,MODULE,OUT_PARAM,ERRMSG)
+********************************************************************************
+* Program name :- JCS_GETCUSTOMERCREDITINFORMATION
+* Created:- 07/31/2007
+*------------------------------------------------------------------------------*
+*
+********************************************************************************
+* Insert method code here
+$INCLUDE PMC.CPYLIB CUSTOMER
+$INCLUDE ARS.CPYLIB OPEN.RECV
+$INCLUDE PMC.CPYLIB COMPANY
+$INCLUDE CPYLIB CHAR
+ERRMSG = ''
+* Open files
+OPEN '', 'CUSTOMER' TO CUSTOMER ELSE 
+  ERRMSG = 'CANNOT OPEN CUSTOMER FILE'
+  RETURN
+END
+OPEN '', 'COMPANY' TO COMPANY ELSE 
+  ERRMSG = 'CANNOT OPEN COMPANY FILE'
+  RETURN
+END
+OPEN '', 'CONTROL' TO CONTROL ELSE 
+  ERRMSG = 'CANNOT OPEN CONTROL FILE'
+  RETURN
+END
+OPEN '', 'OPEN.RECV' TO OPEN.RECV ELSE 
+  ERRMSG = 'CANNOT OPEN CONTROL FILE'
+  RETURN
+END
+IF ERRMSG # '' THEN
+  RETURN
+END
+* Get all properties
+ID = CONO:CUSTOMERID
+* Get CONO
+MATREAD COMP.REC FROM COMPANY, CONO ELSE
+  ERRMSG = 'Invalid Company ID (':CONO:').'
+  RETURN
+END
+* Get periods
+TODAY = DATE()
+IF MODULE="JCS" THEN
+ READV PER FROM CONTROL , CONO:"JCFISCAL" , 1 ELSE
+            ERRMSG = "FISCAL PERIOD MISSING" 
+	    RETURN
+ END
+END
+IF MODULE="ARS" THEN
+READV PER FROM CONTROL , CONO:"ARSFISCAL", 1 ELSE
+ERRMSG = "FISCAL PERIOD MISSING"
+  RETURN
+END
+END
+PER = PER<1,1>
+LY.PER = PER[1,4] - 1:PER[5,2]
+*Read Customer table to populate CUSTOMER CPYLIB
+MATREAD CUST.REC FROM CUSTOMER,ID ELSE
+   ERRMSG = "INVALID CUSTOMER. TRY AGAIN !" 
+   RETURN
+END
+*Main processing
+JOB.BALANCE  = SUM(CUST.JOB.BAL)
+ORD.BALANCE  = SUM(CUST.ORD.BAL)
+CREDIT.LIMIT = CUST.CR.LIMIT
+IF CUST.CREDIT = "E" OR CUST.CREDIT = "AE" THEN
+  CREDIT.AVAIL = CREDIT.LIMIT * 100 - CUST.AR.BAL - ORD.BALANCE - JOB.BALANCE
+END ELSE
+  CREDIT.AVAIL = 0
+END
+IF CUST.INVOICE.CNT<1,1> + 0 = 0 THEN
+  AVG.INV = 0
+END ELSE
+  AVG.INV = INT((CUST.TOT.AMT / CUST.INVOICE.CNT<1,1>) + .5)
+END
+IF CUST.INVOICE.CNT<1,2> + 0 = 0 THEN
+  DAYS.TO.PAY = 0
+END ELSE
+  DAYS.TO.PAY = INT(CUST.DAYS.TO.PAY / CUST.INVOICE.CNT<1,2>)
+END
+ICNT = DCOUNT(CUST.INVOICE,VM)
+BAL.CR = 0; BAL.30 = 0; BAL.60 = 0; BAL.90 = 0; BAL.OVER = 0
+FOR I = 1 TO ICNT
+  IF CO.ARS = 'Y' THEN
+    MATREAD OR.REC FROM OPEN.RECV, CONO : CUST.INVOICE<1,I> ELSE CONTINUE
+    DAYS.DUE = TODAY - OR.INV.DATE
+    BEGIN CASE
+      CASE OR.BAL < 0
+        BAL.CR = BAL.CR + OR.BAL
+      CASE DAYS.DUE < 31 
+        BAL.30 = BAL.30 + OR.BAL
+      CASE DAYS.DUE < 61 
+        BAL.60 = BAL.60 + OR.BAL
+      CASE DAYS.DUE < 91 
+        BAL.90 = BAL.90 + OR.BAL
+      CASE 1 
+        BAL.OVER = BAL.OVER + OR.BAL
+    END CASE
+  END 
+NEXT I
+HCNT = DCOUNT(CUST.HIGH.BAL,VM)
+HIGH.BAL = 0
+FOR H = 1 TO HCNT
+  IF (TODAY - CUST.HIGH.BAL.DATE<1,H>) < 366 THEN 
+    IF CUST.HIGH.BAL<1,H> > HIGH.BAL THEN
+      HIGH.BAL = CUST.HIGH.BAL<1,H>
+    END
+  END
+NEXT H
+SALES.CNT = DCOUNT(CUST.SALES.PER, VM)
+Y.SALES = 0 ; LY.SALES = 0
+FOR SAL = 1 TO SALES.CNT
+  BEGIN CASE
+    CASE PER[1,4] = CUST.SALES.PER<1,SAL>[1,4]
+      Y.SALES = Y.SALES + CUST.SALES<1,SAL>
+    CASE LY.PER[1,4] = CUST.SALES.PER<1,SAL>[1,4]
+      LY.SALES = LY.SALES + CUST.SALES<1,SAL>
+  END CASE
+NEXT SAL
+* Set properties
+CCICurrYearSales      = OCONV(Y.SALES,"MD2,")
+CCILastYearSales      = OCONV(LY.SALES,"MD2,") 
+CCICreditAvailable    = OCONV(CREDIT.AVAIL,"MD2,")
+CCICreditLimit        = OCONV(CREDIT.LIMIT,"MD0,")
+CCIHighBalance        = OCONV(HIGH.BAL,"MD2,")
+CCIOpenReceivable     = OCONV(CUST.AR.BAL,"MD2,")
+CCIAverageInvoice     = OCONV(AVG.INV,"MD2,")
+CCIAverageDaysToPay   = DAYS.TO.PAY
+CCICredits0_30        = OCONV(BAL.30,"MD2,") 
+CCICredits31_60       = OCONV(BAL.60,"MD2,") 
+CCICredits61_90       = OCONV(BAL.90,"MD2,") 
+CCICredits91AndOver   = OCONV(BAL.OVER,"MD2,") 
+CCIOpenOrders         = OCONV(ORD.BALANCE,"MD2,")
+CCIOpenJobs           = OCONV(JOB.BALANCE,"MD2,")
+CCITotalBalance       = OCONV(ORD.BALANCE+JOB.BALANCE+CUST.AR.BAL,"MD2,")
+CCITotalCredits       = OCONV(BAL.CR,"MD2,")
+CCILastPaymentAmount  = OCONV(FIELD(CUST.LAST.PMT,":",2),"MD2,")
+CCILastSaleDate       = OCONV(CUST.LAST.SALE,"D2/")
+CCILastPaymentDate    = OCONV(FIELD(CUST.LAST.PMT,":",1),"D2/")
+CCICurrPeriod         = PER<1,1>
+CCICurrPeriodSales    = ''
+CCICurrYear           = PER[1,4]
+CCILastYear           = LY.PER[1,4] 
+CCILYCurrPeriod       = LY.PER
+CCILYCurrPeriodSales  = ''
+LOCATE PER IN CUST.SALES.PER<1>,1 SETTING TFND THEN 
+  CCICurrPeriodSales = OCONV(CUST.SALES<1,TFND>, "MD2,") 
+END
+LOCATE LY.PER IN CUST.SALES.PER<1>,1 SETTING LFND THEN 
+  CCILYCurrPeriodSales = OCONV(CUST.SALES<1,LFND>, "MD2,") 
+END
+*CREDIT INFORMATION
+OUT_PARAM = ""
+OUT_PARAM := '<CCICreditLimit>' : CCICreditLimit : '</CCICreditLimit>'
+OUT_PARAM := '<CCICreditAvailable>' : CCICreditAvailable : '</CCICreditAvailable>'
+*
+OUT_PARAM := '<CCIHighBalance>' : CCIHighBalance : '</CCIHighBalance>'
+OUT_PARAM := '<CCIAverageInvoice>' : CCIAverageInvoice : '</CCIAverageInvoice>'
+OUT_PARAM := '<CCIAverageDaysToPay>' : CCIAverageDaysToPay : '</CCIAverageDaysToPay>'
+OUT_PARAM := '<CCILastPaymentDate>' : CCILastPaymentDate : '</CCILastPaymentDate>'
+OUT_PARAM := '<CCILastPaymentAmount>' : CCILastPaymentAmount : '</CCILastPaymentAmount>'
+OUT_PARAM := '<CCILastSaleDate>' : CCILastSaleDate : '</CCILastSaleDate>'
+*
+*
+*SALES INFORMATION
+OUT_PARAM := '<CCICurrPeriod>' : CCICurrPeriod : '</CCICurrPeriod>'
+OUT_PARAM := '<CCICurrPeriodSales>' : CCICurrPeriodSales : '</CCICurrPeriodSales>'
+OUT_PARAM := '<CCILYCurrPeriod>' : CCILYCurrPeriod : '</CCILYCurrPeriod>'
+OUT_PARAM := '<CCILYCurrPeriodSales>' : CCILYCurrPeriodSales : '</CCILYCurrPeriodSales>'
+OUT_PARAM := '<CCICurrYear>' : CCICurrYear : '</CCICurrYear>'
+OUT_PARAM := '<CCICurrYearSales>' : CCICurrYearSales : '</CCICurrYearSales>'
+OUT_PARAM := '<CCILastYear>' : CCILastYear : '</CCILastYear>'
+OUT_PARAM := '<CCILastYearSales>' : CCILastYearSales : '</CCILastYearSales>'
+*
+*BALANCES INFORMATION
+OUT_PARAM := '<CCIOpenReceivable>' : CCIOpenReceivable : '</CCIOpenReceivable>'
+OUT_PARAM := '<CCIOpenOrders>' : CCIOpenOrders : '</CCIOpenOrders>'
+OUT_PARAM := '<CCIOpenJobs>' : CCIOpenJobs : '</CCIOpenJobs>'
+OUT_PARAM := '<CCITotalBalance>' : CCITotalBalance : '</CCITotalBalance>'
+*
+*OPEN RECEIVABLES AGING
+OUT_PARAM := '<CCICredits0_30>' : CCICredits0_30 : '</CCICredits0_30>'
+OUT_PARAM := '<CCICredits31_60>' : CCICredits31_60 : '</CCICredits31_60>'
+OUT_PARAM := '<CCICredits61_90>' : CCICredits61_90 : '</CCICredits61_90>'
+OUT_PARAM := '<CCICredits91AndOver>' : CCICredits91AndOver : '</CCICredits91AndOver>'
+OUT_PARAM := '<CCITotalCredits>' : CCITotalCredits : '</CCITotalCredits>'
+RETURN

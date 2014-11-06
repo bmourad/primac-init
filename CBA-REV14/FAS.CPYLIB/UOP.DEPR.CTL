@@ -1,0 +1,10 @@
+***************************
+*  REVISION - [08.1]      *
+*  ID = CONO:"UOP.DEPR"   *
+***************************
+DEPR.CTL.REC.SIZE=5
+DIM UOP.DEPR.CTL(5)
+EQU UDC.CUR.PER   TO UOP.DEPR.CTL(1)
+EQU UDC.CUR.DATE  TO UOP.DEPR.CTL(2)
+EQU UDC.PRT.FLG   TO UOP.DEPR.CTL(3)
+EQU UDC.EOM.PER   TO UOP.DEPR.CTL(4)

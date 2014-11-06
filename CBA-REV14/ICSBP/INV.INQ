@@ -1,0 +1,886 @@
+   SUBROUTINE INV.INQ(CONO,PROD.ID)
+*COPY>CPYLIB>COM1
+*COPY>ICS.CPYLIB>COM.INV.INQ
+*********************************************************************
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - ICSBP
+* PROGRAM     - INV.INQ
+* BY          - EDVARD PITKA
+* DATE        - 07/18/01
+* DESCRIPTION
+* This program provides inquiry capability for all product types
+* stored on the INVENTORY file.
+*NOTE :
+*T25887 cmykleb 01/23/2002 * Add a detailed BOL/Invoice Inquiry screen
+*                            for Finished Goods Items.
+*T25740 epitka 02/08/2002 * REV12
+*T26556 cmykleb 04/22/2002 * Do not display # rolls if qty is 0 (231).
+*C40858 cmykleb 10/10/2002 * Add lead time days back on inquiry screen.
+*T27487 thompson 08/19/2003 * Merge India Changes
+*R12BFX1000 gprao 06/10/2003 *if warehouse is changed in sub screen
+*********************************************************************
+*
+**** INSERT FILES EQUATES
+*
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>WAREHOUSE
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>ICS.CPYLIB>INV.WHSE.LOC
+*COPY>ICS.CPYLIB>INV.STATS
+*COPY>ICS.CPYLIB>FNGD.STATS
+*COPY>ICS.CPYLIB>INV_SERIAL
+*COPY>ICS.CPYLIB>INV_RECEIPTS
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>GEN.XREF.SUB
+*COPY>CPYLIB>SYSCOM
+   MAT SYSCOM.REC = ""; SYS.TYPE = 2
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>ICS.CPYLIB>CATEGORY
+*
+   DEFFUN DIVISION.POSITION (CONO,CONTROL.FILE,DIV.CODE)
+   DEFFUN CURRENT.PERIOD(CONO,CONTROL.FILE,DIV.POS,FISCAL.FLAG)
+   GEN.DIV='00'
+*
+   DIM HOLD.IWH.REC(IWH.REC.SIZE)
+   MAT HOLD.IWH.REC = ""
+   DIM HOLD.IWLO.REC(IWLO.REC.SIZE)
+   MAT HOLD.IWLO.REC = ""
+   MAT IWLO.REC = ""
+   WORK.REC = ""
+   MATREAD COMP.REC FROM COMPANY, CONO ELSE MAT COMP.REC = ''
+*
+*---- SET UP GEN.XREF.REC
+*
+   MAT GEN.XREF.REC = ""
+   GXR.CO = CONO
+   ESN = ECD.SCRN.NO
+100*
+   IF ESN = 1 THEN
+      MAT SCV.REC = ""
+   END ELSE
+      FOR I = 1 TO 75
+         SCV.REC(I)<ESN> = ""
+      NEXT I
+   END
+   GOSUB ACTION.6
+   HAVE.PROD= 0
+   IF PROD.ID # "" THEN
+      PROD.NUM = PROD.ID
+      ECD.RET.VALUE = PROD.NUM
+      ECD.NUM = 5; SCV.REC(ECD.NUM)<ESN> = PROD.NUM
+      GOSUB ACTION.5
+      HAVE.PROD = 1
+   END
+*
+   IF NOT(HAVE.PROD) THEN
+200   ECD.NUM = 5
+      GOSUB ACTION.4
+      PROD.NUM = ECD.RET.VALUE
+   END
+   BEGIN CASE
+      CASE ECD.RET.VALUE = "END"
+         GOTO 99999
+      CASE ECD.RET.VALUE = ""
+         ECD.NUM = 7
+         GOSUB ACTION.4
+         IF ECD.RET.VALUE = "" OR ECD.RET.VALUE = "END" THEN GOTO 200
+         GXR.NAME = "INVENTORY"
+         GXR.XREF = INVENTORY.XREF
+         GXR.FILE = INVENTORY
+         GXR.SRCH.ID = ECD.RET.VALUE
+         CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+         GOSUB ACTION.2
+         IF GXR.ID = "" THEN
+            ECD.NUM = 7; SCV.REC(ECD.NUM)<ESN> = ""
+            GOSUB ACTION.5
+            GOTO 200
+         END ELSE
+            MATREAD INV.REC FROM INVENTORY, CONO:GXR.ID ELSE
+               ECD.NUM = 7; SCV.REC(ECD.NUM)<ESN> = ""
+               GOSUB ACTION.5
+               ERRMSG = "Cannot locate Product # ":GXR.ID
+               GOSUB 91000; GOTO 200
+            END
+            PROD.NUM = GXR.ID
+            SCV.REC(5)<ESN> = PROD.NUM
+         END
+      CASE 1
+         MATREAD INV.REC FROM INVENTORY, CONO:ECD.RET.VALUE ELSE
+            ERRMSG = "Cannot locate Product # ":ECD.RET.VALUE
+            GOSUB 91000
+            IF PROD.ID = "" THEN
+               GOTO 200
+            END ELSE
+               GOTO 99999
+            END
+         END
+         PROD.NUM = ECD.RET.VALUE
+   END CASE
+   WHSE.CNT = DCOUNT(INV.WHSE.CODE<1>,VM)
+   IF WHSE.CNT < 1 THEN
+      ERRMSG = "NO WAREHOUSES ARE SET UP FOR PRODUCT - ":PROD.NUM
+      GOSUB 91000
+      IF PROD.ID = "" THEN
+         GOTO 100
+      END ELSE
+         GOTO 99999
+      END
+   END
+   MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE ELSE
+      MAT CATG.REC = ""
+   END
+   ECD.SCRN.CNT = 17
+   IF INV.M.LINE = "FNGD" THEN
+      FNGD.FLG = 1
+      PLN.NO = 48
+      ECD.SCRN.NAME<13> = "FNGD.ORD.INQ"
+      ECD.SCRN.NAME<12> = "FNGD.JOB.INQ"
+   END ELSE
+      FNGD.FLG = 0
+      PLN.NO = 42
+   END
+   ;*
+*COPY>ICSBP>INV.UM.CNV
+   ;*
+   INV.ON.PO = ""; INV.ALLOC = ""; INV.ON.HAND = ""
+   INV.RESV = ""
+   FOR I = WHSE.CNT TO 1 STEP -1
+      IWH.ID = CONO:PROD.NUM:"!":INV.WHSE.CODE<1,I>
+      MATREAD IWH.REC FROM INV.WHSE, IWH.ID THEN
+         IF FNGD.FLG THEN
+            MATREAD FGS.REC FROM FNGD.STATS,IWH.ID THEN
+               INV.ON.PO<I> = SUM(FGS.M.QTY)
+               INV.ALLOC<I> = SUM(FGS.A.QTY)
+            END ELSE
+               INV.ON.PO<I> = 0
+               INV.ALLOC<I> = 0
+            END
+         END ELSE
+            MATREAD INV.STAT.REC FROM INV.STATS, IWH.ID THEN
+               INV.ON.PO<I> = SUM(ISTAT.PO.QTY)
+               INV.ALLOC<I> = 0; PO.CNT = DCOUNT(ISTAT.PO,VM)
+               FOR J = 1 TO PO.CNT
+                  INV.ALLOC<I> = INV.ALLOC<I> + SUM(ISTAT.PO.JOB.QTY<1,J>)
+               NEXT J
+            END ELSE
+               INV.ON.PO<I> = 0
+               INV.ALLOC<I> = 0
+            END
+         END
+         IF IWH.ON.HAND < 0 THEN
+            INV.ON.HAND<I>=INT(((IWH.ON.HAND/ICR.DV1)*ICR.MT1)/ICR.DV2-.5)
+         END ELSE
+            INV.ON.HAND<I>=INT(((IWH.ON.HAND/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+         END
+         IF IWH.RESV < 0 THEN
+            INV.RESV<I>=INT(((IWH.RESV/ICR.DV1)*ICR.MT1)/ICR.DV2-.5)
+         END ELSE
+            INV.RESV<I>=INT(((IWH.RESV/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+         END
+         IF INV.ON.PO<I> < 0 THEN
+            INV.ON.PO<I>=INT(((INV.ON.PO<I>/ICR.DV1)*ICR.MT1)/ICR.DV2-.5)
+         END ELSE
+            INV.ON.PO<I>=INT(((INV.ON.PO<I>/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+         END
+         IF INV.ALLOC<I> < 0 THEN
+            INV.ALLOC<I>=INT(((INV.ALLOC<I>/ICR.DV1)*ICR.MT1)/ICR.DV2-.5)
+         END ELSE
+            INV.ALLOC<I>=INT(((INV.ALLOC<I>/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+         END
+         SCV.REC(29)<ESN>=SCV.REC(29)<ESN>+INV.ON.HAND<I>
+         SCV.REC(32)<ESN>=SCV.REC(32)<ESN>+INV.RESV<I>
+         SCV.REC(39)<ESN>=SCV.REC(39)<ESN>+INV.ON.PO<I>
+         SCV.REC(44)<ESN>=SCV.REC(44)<ESN>+INV.ALLOC<I>
+      END ELSE
+         ERRMSG = "WAREHOUSE (":INV.WHSE.CODE<1,I>:") IS NOT SETUP FOR PRODUCT ":PROD.NUM
+         GOSUB 91000
+         INV.WHSE.CODE = DELETE(INV.WHSE.CODE,1,I,0)
+         INV.ON.PO = DELETE(INV.ON.PO,I,0,0)
+         INV.ALLOC = DELETE(INV.ALLOC,I,0,0)
+         INV.ON.HAND = DELETE(INV.ON.HAND,I,0,0)
+         INV.RESV = DELETE(INV.RESV,I,0,0)
+      END
+   NEXT I
+   WHSE.CNT = DCOUNT(INV.WHSE.CODE,VM)
+   IF WHSE.CNT < 1 THEN
+      ERRMSG = "NO WAREHOUSES ARE SET UP FOR PRODUCT - ":PROD.NUM
+      GOSUB 91000
+      IF PROD.ID = "" THEN
+         GOTO 100
+      END ELSE
+         GOTO 99999
+      END
+   END
+   SCV.REC(6)<ESN> = INV.PAP.TYPE
+   SCV.REC(7)<ESN> = INV.FULL.DESC
+   SCV.REC(8)<ESN> = INV.M.LINE
+   SCV.REC(9)<ESN> = INV.UNIT<1,3>
+   SCV.REC(10)<ESN> = INV.LA.PUR
+   SCV.REC(11)<ESN> = INV.LINE
+*C40858 v
+   TOT.LD.DAYS = SUM(INV.LEAD.TIME) + 0
+   IF TOT.LD.DAYS GT 0 THEN
+      SCV.REC(12)<ESN> = TOT.LD.DAYS
+   END
+*C40858 ^
+   SCV.REC(13)<ESN> = INV.LA.SALE
+   SCV.REC(14)<ESN> = INV.M.WT
+   SCV.REC(15)<ESN> = INV.COLOR
+   SCV.REC(17)<ESN> = INV.BAS.WT
+   SCV.REC(18)<ESN> = INV.UNIT<1,2>
+   SCV.REC(19)<ESN> = INV.COST.WT
+   SCV.REC(20)<ESN> = INV.WEIGHT
+   SCV.REC(21)<ESN> = INV.PAP.LEN
+   SCV.REC(22)<ESN> = INV.SBR
+   SCV.REC(23)<ESN> = INV.VOLUME
+   SCV.REC(24)<ESN> = INV.PAP.WIDTH
+   SCV.REC(25)<ESN> = INV.PAP.FINSH
+   SCV.REC(46)<ESN> = INV.CUST
+   IF INV.CUST # "" THEN
+      MATREAD CUST.REC FROM CUSTOMER,CONO:INV.CUST ELSE
+         MAT CUST.REC = ""; CUST.NAME = STR("?",30)
+      END
+      SCV.REC(47)<ESN> = CUST.NAME
+   END
+   SCV.REC(34)<ESN> = SCV.REC(29)<ESN> - SCV.REC(32)<ESN>
+   SCV.REC(29)<ESN> = OCONV(SCV.REC(29)<ESN>,ICR.CNV1)
+   SCV.REC(32)<ESN> = OCONV(SCV.REC(32)<ESN>,ICR.CNV1)
+   SCV.REC(34)<ESN> = OCONV(SCV.REC(34)<ESN>,ICR.CNV1)
+   SCV.REC(39)<ESN> = OCONV(SCV.REC(39)<ESN>,ICR.CNV1)
+   SCV.REC(43)<ESN> = INV.SOQ
+   SCV.REC(44)<ESN> = OCONV(SCV.REC(44)<ESN>,ICR.CNV1)
+   GOSUB ACTION.3
+   GOSUB 2000
+   IF CURR.WHSE = "" THEN
+      IF PROD.ID = "" THEN
+         GOTO 100
+      END ELSE
+         GOTO 99999
+      END
+   END
+   LOOP
+      ECD.NUM = PLN.NO; SCV.REC(ECD.NUM)<ESN> = ""
+      GOSUB ACTION.4
+      REQ = ECD.RET.VALUE
+      BEGIN CASE
+         CASE REQ = "E" OR REQ = "END"
+            REQ = "END"
+         CASE REQ = "W"
+            GOSUB 2000
+         CASE REQ = "L"
+            GOSUB 4000
+         CASE REQ = "J"
+            IF FNGD.FLG AND CO.OPS = "Y" THEN
+               IF FGS.JOB = "" THEN
+                  ERRMSG = "Cannot locate any jobs with manufacture/allocate qty"
+                  GOSUB 91000
+               END ELSE
+                  ECD.SCRN.NO = ESN + 11; GOSUB 1000
+                  PROD = PROD.NUM
+                  WHSE = CURR.WHSE
+                  CALL FNGD.JOB.INQ(CONO,PROD,WHSE)
+                  ECD.SCRN.NO=ESN
+                  GOSUB ACTION.3
+               END
+            END ELSE
+               IF ISTAT.JOB = "" THEN                                   
+                  ERRMSG = "Cannot locate any jobs with reserve/used qty"
+                  GOSUB 91000                                            
+               END ELSE                                                 
+                  ECD.SCRN.NO = ESN + 6; GOSUB 1000                      
+                  PROD = PROD.NUM
+                  WHSE = CURR.WHSE
+                  CALL INV.JOB.INQ(CONO,PROD,WHSE)
+                  ECD.SCRN.NO=ESN
+                  GOSUB ACTION.3
+               END                                                      
+            END
+         CASE REQ = "P"
+            IF ISTAT.PO = "" THEN
+               ERRMSG = "Cannot locate any purchase orders with open qty"
+               GOSUB 91000
+            END ELSE
+               ECD.SCRN.NO = ESN + 4; GOSUB 1000
+               CALL INV.PO.INQ(CONO)
+               ECD.SCRN.NO =ESN
+               GOSUB ACTION.3
+            END
+         CASE REQ = "S"
+            BEGIN CASE
+               CASE CATG.TRK.LVL='G'
+                  ERRMSG = "This is for Serial Tracked Products only"
+                  GOSUB 91000
+               CASE 1
+                  IF TMP.SERIAL<1> = "" THEN
+                     ERRMSG = "There has not been anything received and placed into Inventory"
+                     GOSUB 91000
+                  END ELSE
+                     MIN.QTY = 0; JOB.NO = "ALL"; R.DATE = "ALL"; FIFO.NO = "ALL"
+                     ECD.SCRN.NO = ESN + 3; GOSUB 1000
+                     OLD.TEMP.REC = TMP.SERIAL
+                     CALL BARCODE.REC.INQ(CONO,CURR.LOC,MIN.QTY,JOB.NO,R.DATE,FIFO.NO,OLD.TEMP.REC,INV.WHSE.CODE,PROD.NUM,CURR.WHSE)
+                     TMP.SERIAL = OLD.TEMP.REC
+                     ECD.SCRN.NO =ESN
+*                     GOSUB ACTION.3
+*                  END
+*            END CASE
+*T27487
+*R12BFX1000 v 
+                     LOCATE CURR.WHSE IN INV.WHSE.CODE<1>,1 SETTING WFND ELSE
+                        WFND = 0
+                        ERRMSG = "WAREHOUSE # (":ECD.RET.VALUE:") IS NOT SET UP"
+                        GOSUB 91000; GOTO 2000
+                     END
+                     GOSUB ACTION.3
+                     MATREAD WHSE.REC FROM WAREHOUSE,CONO:CURR.WHSE ELSE 
+                        ERRMSG='Warehouse record ':CURR.WHSE:' is missing.'
+                        GOSUB 93000
+                     END
+                     IF WHS.DIV='' THEN WHS.DIV=GEN.DIV
+                     DIV.POS=DIVISION.POSITION(CONO,CONTROL,WHS.DIV)
+                     BEGIN CASE                                              
+                        CASE DIV.POS<1,1>=''                                  
+                           DIV.POS=DIV.POS<1,2>                                
+                           CUR.PERIOD=CURRENT.PERIOD(CONO,CONTROL,DIV.POS,"IC")
+                           IF CUR.PERIOD<1,1>='' THEN                          
+                              CUR.PERIOD=CUR.PERIOD<1,2>                        
+                           END ELSE                                            
+                              IF CUR.PERIOD<1,2>='-2' THEN                      
+                                 ERRMSG=CUR.PERIOD<1,2>                          
+                                 GOSUB 93000                                     
+                              END                                               
+                           END                                                 
+                        CASE DIV.POS<1,1>='-1'                                
+                           ERRMSG=DIV.POS<1,2>                                 
+                           GOSUB 91000                                         
+                        CASE DIV.POS<1,1>='-2'                                
+                           ERRMSG=DIV.POS<1,2>                                 
+                           GOSUB 93000                                         
+                     END CASE                                                
+                     IWH.ID = CONO:PROD.NUM:"!":CURR.WHSE
+                     MATREAD IWH.REC FROM INV.WHSE, IWH.ID ELSE
+                        MAT IWH.REC = ""
+                     END
+                     MATREAD INV.STAT.REC FROM INV.STATS, IWH.ID ELSE
+                        MAT INV.STAT.REC = ""
+                     END
+                     IF FNGD.FLG THEN                              
+                        MATREAD FGS.REC FROM FNGD.STATS, IWH.ID ELSE
+                           MAT FGS.REC = ""                          
+                        END                                         
+                     END ELSE                                      
+                        MAT FGS.REC = ""                            
+                     END       
+                     ECD.NUM = 27; SCV.REC(ECD.NUM)<ESN> = CURR.WHSE
+                     GOSUB ACTION.5                                       
+                     ECD.NUM = 30; SCV.REC(ECD.NUM)<ESN> = OCONV(INV.ON.HAND<WFND>,ICR.CNV1)
+                     GOSUB ACTION.5
+                     ECD.NUM = 33; SCV.REC(ECD.NUM)<ESN> = OCONV(INV.RESV<WFND>,ICR.CNV1)
+                     GOSUB ACTION.5
+                     ECD.NUM = 35; SCV.REC(ECD.NUM)<ESN> = OCONV((INV.ON.HAND<WFND> - INV.RESV<WFND>),ICR.CNV1); GOSUB ACTION.5
+                     ECD.NUM = 40; SCV.REC(ECD.NUM)<ESN> = OCONV(INV.ON.PO<WFND>,ICR.CNV1); GOSUB ACTION.5
+                     ECD.NUM = 45; SCV.REC(ECD.NUM)<ESN> = OCONV(INV.ALLOC<WFND>,ICR.CNV1); GOSUB ACTION.5
+                     LOC.CNT = DCOUNT(IWH.LOC,VM)
+                  END
+            END CASE
+*****************************
+            LFND = 0
+            LOC.FLAG = 0
+            BEGIN CASE
+               CASE LOC.CNT < 1
+         *ERRMSG = "All locations have zero quantity on hand"
+         *GOSUB 91000
+                  LOC.FLAG = 1
+                  ECD.NUM = 28 
+                  SCV.REC(28)<ESN> = ""
+                  GOSUB ACTION.5
+                  ECD.NUM = 31 
+                  SCV.REC(31)<ESN> = ""
+                  GOSUB ACTION.5
+                  ECD.NUM = 49 
+                  SCV.REC(49)<ESN> = ""
+                  GOSUB ACTION.5
+                  ECD.NUM = 50 
+                  SCV.REC(50)<ESN> = ""
+                  GOSUB ACTION.5
+               CASE LOC.CNT = 1
+                  LFND = 1 ; CURR.LOC = IWH.LOC<1,1>
+               CASE 1                                                    
+                  IF IWH.LOC # "" THEN                                    
+                     ECD.O.R = "O"                                         
+                     ECD.DEFAULT = IWH.LOC<1,1>                            
+                  END                                                     
+                  ECD.VALDAT = IWH.LOC<1,1>  
+                  CURR.LOC = IWH.LOC<1,1>                         
+                  LFND = 1
+                  L = 1                                                   
+                  ECD.HMSG<1,1,L> = "LOCATION - " : IWH.LOC<1,1>          
+                  FOR I = 2 TO LOC.CNT                                    
+                     ECD.VALDAT = ECD.VALDAT : "," : IWH.LOC<1,I>          
+                     IF LEN(ECD.HMSG<1,1,L>) > 50 THEN                     
+                        L = L + 1                                           
+                        ECD.HMSG<1,1,L> = "LOCATION - ": IWH.LOC<1,I>       
+                     END ELSE                                              
+                        ECD.HMSG<1,1,L> = ECD.HMSG<1,1,L> :", ":IWH.LOC<1,I>
+                     END                                                   
+                  NEXT I
+         *GOSUB ACTION.4
+         *IF ECD.RET.VALUE # "END" THEN
+         *  CURR.LOC = ECD.RET.VALUE
+         *   LOCATE CURR.LOC IN IWH.LOC<1>,1 SETTING LFND ELSE LFND = 0
+         *END
+            END CASE
+            IWLO.ID = CONO:PROD.NUM:"!":CURR.WHSE:"!":CURR.LOC
+            MATREAD IWLO.REC FROM INV.WHSE.LOC,IWLO.ID ELSE MAT IWLO.REC = ""
+            ECD.NUM = 28 ; SCV.REC(ECD.NUM)<ESN> = CURR.LOC; GOSUB ACTION.5
+            PROD = PROD.NUM
+            WHSE = CURR.WHSE
+            CALL GET.ALL.WHSE.SERIALS(CONO,PROD,WHSE,TMP.SERIAL)
+*GOSUB 5000
+********----------------------
+            IF LFND = 0 THEN
+               SCV.REC(31)<ESN> = ""
+               ECD.NUM = 28 
+               SCV.REC(28)<ESN> = ""
+               GOSUB ACTION.5
+               ECD.NUM = 31 
+               SCV.REC(31)<ESN> = ""
+               GOSUB ACTION.5
+               ECD.NUM = 49 
+               SCV.REC(49)<ESN> = ""
+               GOSUB ACTION.5
+               ECD.NUM = 50 
+               SCV.REC(50)<ESN> = ""
+               GOSUB ACTION.5   
+            END ELSE
+               IF IWLO.LOC.ON.HAND  < 0 THEN                                       
+                  LOH = INT(((IWLO.LOC.ON.HAND / ICR.DV1) * ICR.MT1) / ICR.DV2 - .5)
+               END ELSE                                                            
+                  LOH = INT(((IWLO.LOC.ON.HAND / ICR.DV1) * ICR.MT1) / ICR.DV2 + .5)
+               END                                                                 
+               SCV.REC(31)<ESN> = OCONV(LOH,ICR.CNV1)
+            END
+            ECD.NUM = 31; GOSUB ACTION.5
+            R.S.CNT=''
+            IF CATG.TRK.LVL='S' THEN
+               R.S.FLG = 0
+               R.S.CNT = 0
+               PTR = 1
+               LOCATE CURR.LOC IN TMP.SERIAL<1>,1 SETTING WINDX ELSE WINDX = 0
+               IF CATG.TRK.LVL='S' AND WINDX>0 THEN
+                  IF WINDX>0 THEN
+                     TOT.RS.CNT = DCOUNT(TMP.SERIAL<2,WINDX>,SVM)
+                     R.S.CNT=0
+                     FOR TRC=1 TO TOT.RS.CNT
+                        IF TMP.SERIAL<3,WINDX,TRC>#0 THEN
+                           R.S.CNT+=1
+                        END
+                     NEXT TRC
+                     R.S.FLG = 1
+                  END
+                  BEGIN CASE
+                     CASE NOT(R.S.FLG)
+                        SCV.REC(49)<ESN> = ""
+                        SCV.REC(50)<ESN> = ""
+                     CASE INV.PAP.TYPE = "REGULAR"
+                        SCV.REC(49)<ESN> = "# Serials  :"
+                        SCV.REC(50)<ESN> = R.S.CNT
+                     CASE INV.PAP.TYPE = "SHEET"
+                        SCV.REC(49)<ESN> = "# Skids    :"
+                        SCV.REC(50)<ESN> = R.S.CNT
+                     CASE 1
+                        SCV.REC(49)<ESN> = "# Rolls    :"
+                        SCV.REC(50)<ESN> = R.S.CNT
+                  END CASE
+*T26556  ECD.NUM = 49; GOSUB ACTION.5
+*T26556  ECD.NUM = 50; GOSUB ACTION.5
+               END
+            END
+*T26556 v
+            IF R.S.CNT + 0 = 0 THEN
+               SCV.REC(49)<ESN> = ""
+               SCV.REC(50)<ESN> = ""
+            END
+            ECD.NUM = 49; GOSUB ACTION.5
+            ECD.NUM = 50; GOSUB ACTION.5
+*T26556 ^
+
+
+**************************            
+*R12BFX1000 ^            
+         CASE REQ = "H"
+            ECD.SCRN.NO = ESN + 1; GOSUB 1000
+            CALL INV.HIST.INQ(CONO,PROD.NUM,CURR.WHSE,CUR.PERIOD)
+            ECD.SCRN.NO =ESN
+            GOSUB ACTION.3
+         CASE REQ = "I"
+            GOSUB GET.SEL.DATA
+            IF WORK.REC<1> = "" THEN
+               ERRMSG = "Cannot locate any items in inventory for this product"
+               GOSUB 91000
+            END ELSE
+               ECD.SCRN.NO = ESN + 10
+               SCV.REC(1)<ECD.SCRN.NO> = PROD.NUM
+               SCV.REC(2)<ECD.SCRN.NO> = "ALL"
+               SCV.REC(3)<ECD.SCRN.NO> = "ALL"
+               SCV.REC(4)<ECD.SCRN.NO> = 0
+               SCV.REC(5)<ECD.SCRN.NO> = "R"
+               CALL INV.SEL.INQ(CONO,WORK.REC) 
+               ECD.SCRN.NO =ESN
+               GOSUB ACTION.3
+            END
+         CASE REQ = "R" OR REQ="RS"
+            ECD.SCRN.NO = ESN + 2; GOSUB 1000
+            CALL INV.REC.INQ(CONO,PROD.NUM,CURR.WHSE,REQ)
+            ECD.SCRN.NO =ESN
+            GOSUB ACTION.3
+         CASE REQ = "O" AND FNGD.FLG
+            IF FGS.ORDER = "" THEN
+               ERRMSG = "Cannot locate any orders with open qty"
+               GOSUB 91000
+            END ELSE
+               ECD.SCRN.NO = ESN + 12; GOSUB 1000
+               PROD = PROD.NUM
+               WHSE = CURR.WHSE
+               CALL FNGD.ORD.INQ(CONO,PROD,WHSE)
+               ECD.SCRN.NO =ESN
+               GOSUB ACTION.3
+            END
+*T25887 v
+         CASE REQ = "B" AND FNGD.FLG
+            ECD.SCRN.NO = 8 ; GOSUB 1000
+            CALL SHIPMENT.INQ(CONO,PROD.NUM)
+            ECD.SCRN.NO = 1; ECD.ACTION = 3; CALL SCRN.EDIT
+         CASE REQ = "H"
+            ECD.SCRN.NO = ESN + 1; GOSUB 1000
+            CALL INV.HIST.INQ(CONO,PROD.NUM,CURR.WHSE,CUR.PERIOD)
+            ECD.SCRN.NO =ESN
+            GOSUB ACTION.3
+         CASE REQ = "I"
+            GOSUB GET.SEL.DATA
+            IF WORK.REC<1> = "" THEN
+               ERRMSG = "Cannot locate any items in inventory for this product"
+               GOSUB 91000
+            END ELSE
+               ECD.SCRN.NO = ESN + 10
+               SCV.REC(1)<ECD.SCRN.NO> = PROD.NUM
+               SCV.REC(2)<ECD.SCRN.NO> = "ALL"
+               SCV.REC(3)<ECD.SCRN.NO> = "ALL"
+               SCV.REC(4)<ECD.SCRN.NO> = 0
+               SCV.REC(5)<ECD.SCRN.NO> = "R"
+               CALL INV.SEL.INQ(CONO,WORK.REC) 
+               ECD.SCRN.NO =ESN
+               GOSUB ACTION.3
+            END
+         CASE REQ = "R" OR REQ="RS"
+            ECD.SCRN.NO = ESN + 2; GOSUB 1000
+            CALL INV.REC.INQ(CONO,PROD.NUM,CURR.WHSE,REQ)
+            ECD.SCRN.NO =ESN
+            GOSUB ACTION.3
+         CASE REQ = "O" AND FNGD.FLG
+            IF FGS.ORDER = "" THEN
+               ERRMSG = "Cannot locate any orders with open qty"
+               GOSUB 91000
+            END ELSE
+               ECD.SCRN.NO = ESN + 12; GOSUB 1000
+               PROD = PROD.NUM
+               WHSE = CURR.WHSE
+               CALL FNGD.ORD.INQ(CONO,PROD,WHSE)
+               ECD.SCRN.NO =ESN
+               GOSUB ACTION.3
+            END
+*T25887 v
+         CASE REQ = "B" AND FNGD.FLG
+            ECD.SCRN.NO = 8 ; GOSUB 1000
+            CALL SHIPMENT.INQ(CONO,PROD.NUM)
+            ECD.SCRN.NO = 1; ECD.ACTION = 3; CALL SCRN.EDIT
+*T25887 ^
+      END CASE
+   WHILE REQ # "END" DO REPEAT
+   IF PROD.ID = "" THEN
+      GOTO 100
+   END ELSE
+      GOTO 99999
+   END
+*
+1000 
+*
+   SCV.REC(1)<ECD.SCRN.NO> = PROD.NUM
+   SCV.REC(2)<ECD.SCRN.NO> = INV.FULL.DESC
+   SCV.REC(3)<ECD.SCRN.NO> = CURR.WHSE
+   FOR I = 4 TO 75
+      SCV.REC(I)<ECD.SCRN.NO> = ""
+   NEXT I
+   RETURN
+*
+2000 
+*
+   BEGIN CASE
+      CASE WHSE.CNT = 1
+         WFND = 1
+         ECD.NUM = 27; SCV.REC(ECD.NUM)<ESN> = INV.WHSE.CODE<1,1>
+         GOSUB ACTION.5
+         GOSUB 3000; GOSUB 4000
+      CASE 1
+2100     CURR.WHSE = ""
+         IF INV.WHSE.CODE # "" THEN
+            ECD.O.R = "O"
+            ECD.DEFAULT = INV.WHSE.CODE<1,1>
+         END
+         ECD.NUM = 27
+         ECD.VALDAT = INV.WHSE.CODE<1,1>
+         ECD.HMSG = "WAREHOUSE - " : INV.WHSE.CODE<1,1>
+         FOR I = 2 TO WHSE.CNT
+            ECD.VALDAT = ECD.VALDAT : "," : INV.WHSE.CODE<1,I>
+            ECD.HMSG = ECD.HMSG : ", " : INV.WHSE.CODE<1,I>
+         NEXT I
+         GOSUB ACTION.4
+         ECD.VALDAT = ""; ECD.HMSG = ""
+         IF ECD.RET.VALUE = "END" THEN RETURN
+         LOCATE ECD.RET.VALUE IN INV.WHSE.CODE<1>,1 SETTING WFND ELSE
+            WFND = 0
+            ERRMSG = "WAREHOUSE # (":ECD.RET.VALUE:") IS NOT SET UP"
+            GOSUB 91000; GOTO 2000
+         END
+         GOSUB 3000; GOSUB 4000
+   END CASE
+   RETURN
+3000 CURR.WHSE = INV.WHSE.CODE<1,WFND>
+   MATREAD WHSE.REC FROM WAREHOUSE,CONO:CURR.WHSE ELSE 
+      ERRMSG='Warehouse record ':CURR.WHSE:' is missing.'
+      GOSUB 93000
+   END
+   IF WHS.DIV='' THEN WHS.DIV=GEN.DIV
+   DIV.POS=DIVISION.POSITION(CONO,CONTROL,WHS.DIV)
+   BEGIN CASE                                              
+      CASE DIV.POS<1,1>=''                                  
+         DIV.POS=DIV.POS<1,2>                                
+         CUR.PERIOD=CURRENT.PERIOD(CONO,CONTROL,DIV.POS,"IC")
+         IF CUR.PERIOD<1,1>='' THEN                          
+            CUR.PERIOD=CUR.PERIOD<1,2>                        
+         END ELSE                                            
+            IF CUR.PERIOD<1,2>='-2' THEN                      
+               ERRMSG=CUR.PERIOD<1,2>                          
+               GOSUB 93000                                     
+            END                                               
+         END                                                 
+      CASE DIV.POS<1,1>='-1'                                
+         ERRMSG=DIV.POS<1,2>                                 
+         GOSUB 91000                                         
+      CASE DIV.POS<1,1>='-2'                                
+         ERRMSG=DIV.POS<1,2>                                 
+         GOSUB 93000                                         
+   END CASE                                                
+   IWH.ID = CONO:PROD.NUM:"!":CURR.WHSE
+   MATREAD IWH.REC FROM INV.WHSE, IWH.ID ELSE
+      MAT IWH.REC = ""
+   END
+   MATREAD INV.STAT.REC FROM INV.STATS, IWH.ID ELSE
+      MAT INV.STAT.REC = ""
+   END
+   IF FNGD.FLG THEN                              
+      MATREAD FGS.REC FROM FNGD.STATS, IWH.ID ELSE
+         MAT FGS.REC = ""                          
+      END                                         
+   END ELSE                                      
+      MAT FGS.REC = ""                            
+   END                                           
+   ECD.NUM = 30; SCV.REC(ECD.NUM)<ESN> = OCONV(INV.ON.HAND<WFND>,ICR.CNV1)
+   GOSUB ACTION.5
+   ECD.NUM = 33; SCV.REC(ECD.NUM)<ESN> = OCONV(INV.RESV<WFND>,ICR.CNV1)
+   GOSUB ACTION.5
+   ECD.NUM = 35; SCV.REC(ECD.NUM)<ESN> = OCONV((INV.ON.HAND<WFND> - INV.RESV<WFND>),ICR.CNV1); GOSUB ACTION.5
+   ECD.NUM = 40; SCV.REC(ECD.NUM)<ESN> = OCONV(INV.ON.PO<WFND>,ICR.CNV1); GOSUB ACTION.5
+   ECD.NUM = 45; SCV.REC(ECD.NUM)<ESN> = OCONV(INV.ALLOC<WFND>,ICR.CNV1); GOSUB ACTION.5
+   LOC.CNT = DCOUNT(IWH.LOC,VM)
+   RETURN
+*
+4000 *
+*
+   ECD.NUM = 28; CURR.LOC = ""; LFND = 0
+   BEGIN CASE
+      CASE LOC.CNT < 1
+         ERRMSG = "All locations have zero quantity on hand"
+         GOSUB 91000
+      CASE LOC.CNT = 1
+         LFND = 1 ; CURR.LOC = IWH.LOC<1,1>
+      CASE 1                                                    
+         IF IWH.LOC # "" THEN                                    
+            ECD.O.R = "O"                                         
+            ECD.DEFAULT = IWH.LOC<1,1>                            
+         END                                                     
+         ECD.VALDAT = IWH.LOC<1,1>                               
+         L = 1                                                   
+         ECD.HMSG<1,1,L> = "LOCATION - " : IWH.LOC<1,1>          
+         FOR I = 2 TO LOC.CNT                                    
+            ECD.VALDAT = ECD.VALDAT : "," : IWH.LOC<1,I>          
+            IF LEN(ECD.HMSG<1,1,L>) > 50 THEN                     
+               L = L + 1                                           
+               ECD.HMSG<1,1,L> = "LOCATION - ": IWH.LOC<1,I>       
+            END ELSE                                              
+               ECD.HMSG<1,1,L> = ECD.HMSG<1,1,L> :", ":IWH.LOC<1,I>
+            END                                                   
+         NEXT I
+         GOSUB ACTION.4
+         IF ECD.RET.VALUE # "END" THEN
+            CURR.LOC = ECD.RET.VALUE
+            LOCATE CURR.LOC IN IWH.LOC<1>,1 SETTING LFND ELSE LFND = 0
+         END
+   END CASE
+   IWLO.ID = CONO:PROD.NUM:"!":CURR.WHSE:"!":CURR.LOC
+   MATREAD IWLO.REC FROM INV.WHSE.LOC,IWLO.ID ELSE MAT IWLO.REC = ""
+   SCV.REC(ECD.NUM)<ESN> = CURR.LOC; GOSUB ACTION.5
+*  GOSUB 4600
+   PROD = PROD.NUM
+   WHSE = CURR.WHSE
+   CALL GET.ALL.WHSE.SERIALS(CONO,PROD,WHSE,TMP.SERIAL)
+   GOSUB 5000
+   RETURN
+*****************
+GET.SEL.DATA: 
+*****************
+*
+   WORK.REC=""
+   MAT HOLD.IWH.REC = MAT IWH.REC
+   W.CNT = DCOUNT(INV.WHSE.CODE,VM)
+   FOR W = 1 TO W.CNT
+      IWH.ID = CONO:PROD.NUM:"!":INV.WHSE.CODE<1,W>
+      MATREAD IWH.REC FROM INV.WHSE,IWH.ID THEN
+      END
+      L.CNT = DCOUNT(IWH.LOC<1>,VM)
+      FOR L = 1 TO L.CNT
+         IWLO.ID = IWH.ID:"!":IWH.LOC<1,L>
+         MATREAD IWLO.REC FROM INV.WHSE.LOC,IWLO.ID THEN
+            S.CNT = DCOUNT(IWLO.SERIAL,VM)
+            FOR S = 1 TO S.CNT
+               ISTK.ID = CONO:IWLO.SERIAL<1,S>
+               MATREAD ISTK.REC FROM INV_SERIAL,ISTK.ID THEN
+                  RECP.ID = CONO:ISTK.RECP
+                  MATREAD INVR.REC FROM INV_RECEIPTS,RECP.ID ELSE
+                     MAT INVR.REC = ""
+                  END
+                  WORK.REC = INSERT(WORK.REC,1,-1,0,ISTK.WHSE)     
+                  WORK.REC = INSERT(WORK.REC,2,-1,0,ISTK.LOC)      
+                  IF CATG.TRK.LVL='S' THEN
+                     WORK.REC = INSERT(WORK.REC,3,-1,0,IWLO.SERIAL<1,S>)     
+                  END ELSE
+                     RECP=IWLO.SERIAL<1,S>[2,99]
+                     RECP=OCONV(RECP,"G!1")
+                     WORK.REC=INSERT(WORK.REC,3,-1,0,RECP)
+                  END
+                  CURR.QTY = ISTK.CUR.QTY
+                  CURR.QTY = INT(((CURR.QTY/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+                  WORK.REC = INSERT(WORK.REC,4,-1,0,CURR.QTY) 
+                  WORK.REC = INSERT(WORK.REC,5,-1,0,INVR.ENT.DATE)
+*                  RESERVED = ISTK.CUR.QTY - ISTK.RSVB.QTY
+*                  RESERVED = INT(((RESERVED/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+*                  WORK.REC = INSERT(WORK.REC,6,-1,0,RESERVED)
+*                  AVL = ISTK.RSVB.QTY
+*                  AVL = INT(((AVL/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+*                  WORK.REC = INSERT(WORK.REC,7,-1,0,AVL)
+               END
+            NEXT S
+         END
+      NEXT L.CNT
+   NEXT W
+   MAT IWH.REC = MAT HOLD.IWH.REC
+   RETURN
+*
+5000 *
+*
+   IF LFND = 0 THEN
+      SCV.REC(31)<ESN> = ""
+   END ELSE
+      IF IWLO.LOC.ON.HAND  < 0 THEN                                       
+         LOH = INT(((IWLO.LOC.ON.HAND / ICR.DV1) * ICR.MT1) / ICR.DV2 - .5)
+      END ELSE                                                            
+         LOH = INT(((IWLO.LOC.ON.HAND / ICR.DV1) * ICR.MT1) / ICR.DV2 + .5)
+      END                                                                 
+      SCV.REC(31)<ESN> = OCONV(LOH,ICR.CNV1)
+   END
+   ECD.NUM = 31; GOSUB ACTION.5
+   R.S.CNT=''
+   IF CATG.TRK.LVL='S' THEN
+      R.S.FLG = 0
+      R.S.CNT = 0
+      PTR = 1
+      LOCATE CURR.LOC IN TMP.SERIAL<1>,1 SETTING WINDX ELSE WINDX = 0
+      IF CATG.TRK.LVL='S' AND WINDX>0 THEN
+         IF WINDX>0 THEN
+            TOT.RS.CNT = DCOUNT(TMP.SERIAL<2,WINDX>,SVM)
+            R.S.CNT=0
+            FOR TRC=1 TO TOT.RS.CNT
+               IF TMP.SERIAL<3,WINDX,TRC>#0 THEN
+                  R.S.CNT+=1
+               END
+            NEXT TRC
+            R.S.FLG = 1
+         END
+         BEGIN CASE
+            CASE NOT(R.S.FLG)
+               SCV.REC(49)<ESN> = ""
+               SCV.REC(50)<ESN> = ""
+            CASE INV.PAP.TYPE = "REGULAR"
+               SCV.REC(49)<ESN> = "# Serials  :"
+               SCV.REC(50)<ESN> = R.S.CNT
+            CASE INV.PAP.TYPE = "SHEET"
+               SCV.REC(49)<ESN> = "# Skids    :"
+               SCV.REC(50)<ESN> = R.S.CNT
+            CASE 1
+               SCV.REC(49)<ESN> = "# Rolls    :"
+               SCV.REC(50)<ESN> = R.S.CNT
+         END CASE
+*T26556  ECD.NUM = 49; GOSUB ACTION.5
+*T26556  ECD.NUM = 50; GOSUB ACTION.5
+      END
+   END
+*T26556 v
+   IF R.S.CNT + 0 = 0 THEN
+      SCV.REC(49)<ESN> = ""
+      SCV.REC(50)<ESN> = ""
+   END
+   ECD.NUM = 49; GOSUB ACTION.5
+   ECD.NUM = 50; GOSUB ACTION.5
+*T26556 ^
+   RETURN
+*
+*************                            
+ACTION.1: 
+*************                            
+   ECD.ACTION = 1 ; CALL SCRN.EDIT ; RETURN
+*************                            
+ACTION.2: 
+*************                            
+   ECD.ACTION = 2 ; CALL SCRN.EDIT ; RETURN
+*************                            
+ACTION.3: 
+*************                            
+   ECD.ACTION = 3 ; CALL SCRN.EDIT ; RETURN 
+*************                            
+ACTION.4: 
+*************                            
+   ECD.ACTION = 4 ; CALL SCRN.EDIT ; RETURN 
+*************                            
+ACTION.5: 
+*************                            
+   ECD.ACTION = 5 ; CALL SCRN.EDIT ; RETURN 
+*************
+ACTION.6: 
+*************
+   ECD.ACTION = 6 ; CALL SCRN.EDIT ; RETURN 
+*************                            
+ACTION.7: 
+*************                            
+   ECD.ACTION = 7 ; CALL SCRN.EDIT ; RETURN 
+**                                       
+*---- ERRMSG Routines
+91000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+93000 ERR.TYPE=3;CALL SYSCOM(MAT SYSCOM.REC)
+99999 RETURN
+END

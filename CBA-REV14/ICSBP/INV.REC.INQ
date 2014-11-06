@@ -1,0 +1,332 @@
+   SUBROUTINE INV.REC.INQ(CONO,PROD,WHSE,SOURCE)
+*COPY>CPYLIB>COM1
+*COPY>ICS.CPYLIB>COM.INV.INQ
+*********************************************************************
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - ICSBP
+* PROGRAM     - INV.REC.INQ
+* BY          - EDVARD PITKA
+* DESCRIPTION - THIS SUBROTINE DISPLAYS ALL RECEIPTS FOR ONE PRODUCT
+*               AND FOR ONE WHSE.
+*
+* ICS REWRITE
+* T25473  edvard 04/27/2001 REV12
+*T25740 epitka 06/20/2002 * WHEN RETURNING BACK FROM RI INQUIRY SCREEN
+*                           SHOULD BE REDISLPAYED AS IT WAS LEFT.
+*T27347 lhelms 03/25/2003 * CHANGE HEADER SCREEN TO SHP/ADJ QTY
+*T27396 lross 05/15/2003 * For "R" source use IWH.RECP.PERIOD.
+*T28087 lross 04/26/2004 * Receipts should display in newest to oldest
+*                          order per task 22124.
+*ENDDOC
+*********************************************************************
+*
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>INV_RECEIPTS
+*COPY>ICS.CPYLIB>INV_RECP_WHSE
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+*
+   MAT SYSCOM.REC =  "";SYS.TYPE = 2
+*
+   PAGE.SIZE = 6
+   START = 1
+   RECP.NO = "";RECP.DATE = "";RECP.PO = "";RECP.VEND = ""
+   RECP.PER = "";RECP.COST = "";RECP.BUY = "";RECP.ORG = ""
+   RECP.CNV=''
+   RECP.ORG="" ; RECP.RSVD="" ; RECP.CURR="" ; RECP.USED=""
+   SORT.DATA='' ;*T28087
+*
+   ESN = ECD.SCRN.NO
+   ECD.ACTION = 2 ; CALL SCRN.EDIT
+   GOSUB GET.DATA
+   GOSUB BUILD.SCREEN
+   ECD.ACTION = 3;CALL SCRN.EDIT
+*
+   LINES = DCOUNT(RECP.NO,VM)
+   IF LINES = 0 THEN
+      ERRMSG = "THERE ARE NO RECEIPTS FOR THIS WAREHOUSE";GOSUB 91000;GOTO 99999
+   END
+*
+* MAIN LOOP
+*
+   LOOP
+      ECD.NUM = 30;SCV.REC(ECD.NUM)<ESN> = ""
+      ECD.ACTION = 4;CALL SCRN.EDIT
+      ACTION = ECD.RET.VALUE
+      BEGIN CASE
+         CASE ACTION = "" OR ACTION = "END"
+            ACTION = "END"
+         CASE ACTION[1,1] = "S"
+            GOSUB SCROLL
+         CASE ACTION="RI"
+            GOSUB ENT.LINE.NUM
+            IF LNNO#'' THEN
+               READV TEST FROM INV_RECEIPTS,CONO:RECP.NO<1,LNNO>,1 THEN
+                  ECD.SCRN.NO=14
+                  XSTAT=1
+                  CALL RECP.TRACK.INQ(CONO,RECP.NO<1,LNNO>,XSTAT)
+                  IF XSTAT THEN
+                     ECD.ACTION=99; CALL SCRN.EDIT
+                  END
+                  ECD.SCRN.NO=3 ; GOSUB BUILD.SCREEN
+                  ECD.ACTION=2 ; CALL SCRN.EDIT
+                  ECD.NUM=1;ECD.ACTION=5;CALL SCRN.EDIT
+                  ECD.NUM=36;ECD.ACTION=5;CALL SCRN.EDIT
+                  ECD.NUM=3;ECD.ACTION=5;CALL SCRN.EDIT
+                  ECD.NUM=2;ECD.ACTION=5;CALL SCRN.EDIT
+                  GOSUB DISP.DETAIL
+               END ELSE
+                  ERRMSG="Invalid receipt number ":RECP.NO<1,LNNO>:" on line ":LNNO
+                  GOSUB 91000
+               END
+            END
+         CASE 1
+            ERRMSG = "Invalid entry, please re-enter"
+            GOSUB 91000
+      END CASE
+   WHILE ACTION # "END" DO REPEAT
+   GOTO 99999
+*
+**************************************************************************
+******* S U B R O U T I N E S ********************************************
+**************************************************************************
+*
+*************
+GET.DATA: 
+*************
+*
+   LN.CNT = 0
+   LN.NUM = ""
+   RCP.CNT = DCOUNT(IWH.RECP.NO,VM)
+   FOR R = 1 TO RCP.CNT
+      RECP = IWH.RECP.NO<1,R>
+      RECP.ID = CONO:RECP
+      MATREAD INVR.REC FROM INV_RECEIPTS,RECP.ID THEN
+*T28087 v
+         TMP=INVR.PERIOD'R%6':INVR.ENT.DATE'R%5':RECP'R%9'
+         IF SOURCE='RS' THEN
+            IF INVR.ORG.WHSE=WHSE THEN
+               LOCATE TMP IN SORT.DATA<1> BY 'DL' SETTING TX ELSE
+*T28087 ^
+                  RECP.NO = INSERT(RECP.NO,1,TX,0,RECP)             
+                  RECP.DATE = INSERT(RECP.DATE,1,TX,0,INVR.ENT.DATE)
+                  RECP.PO = INSERT(RECP.PO,1,TX,0,INVR.PO)          
+                  RECP.VEND = INSERT(RECP.VEND,1,TX,0,INVR.VEND)    
+                  RECP.PER = INSERT(RECP.PER,1,TX,0,INVR.PERIOD)    
+                  COST = OCONV(INVR.UNIT.COST,"MD4")               
+                  RECP.COST = INSERT(RECP.COST,1,TX,0,COST)         
+                  LN.CNT +=1
+                  LN.NUM<1,LN.CNT> = LN.CNT
+                  ;*
+                  ;* get quantities
+                  ;*
+                  CURR = 0
+                  RSVBALE = 0
+                  W.CNT = DCOUNT(INV.WHSE.CODE,VM)
+                  FOR W = 1 TO W.CNT
+                     IRW.ID=CONO:RECP:"!":INV.WHSE.CODE<1,W>
+                     MATREAD IRW.REC FROM INV_RECP_WHSE,IRW.ID THEN
+                        CURR+= IRW.CUR.QTY
+                        RSVBALE += IRW.RSVB.QTY ; *resevable qty
+                     END
+                  NEXT W
+                  ;* reserved
+                  RSVD.QTY = CURR - RSVBALE
+                  RSVD.QTY=INT(((RSVD.QTY/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+                  RSVD.QTY = OCONV(RSVD.QTY,ICR.CNV1)
+                  RECP.RSVD = INSERT(RECP.RSVD,1,TX,0,RSVD.QTY)
+                  ;*used
+                  USED = INVR.ORG.QTY - CURR
+                  ;*adjustment of the original receipt on the same day
+                  ;*and a same unit price is dislayed as negative used
+                  ;*quantity.
+                  IF USED < 0 THEN
+                     USED = INT(((USED/ICR.DV1)*ICR.MT1)/ICR.DV2-.5)
+                  END ELSE
+                     USED = INT(((USED/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+                  END
+                  USED = OCONV(USED,ICR.CNV1)
+                  RECP.USED = INSERT(RECP.USED,1,TX,0,USED)
+                  ;*original
+                  ORG.QTY=INT(((INVR.ORG.QTY/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+                  ORG.QTY = OCONV(ORG.QTY,ICR.CNV1)
+                  RECP.ORG = INSERT(RECP.ORG,1,TX,0,ORG.QTY)
+                  ;*on-hand
+                  CURR = INT(((RSVBALE/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+                  CURR = OCONV(CURR,ICR.CNV1)
+                  RECP.CURR = INSERT(RECP.CURR,1,TX,0,CURR)
+               END
+            END
+         END
+         IF SOURCE="R" THEN
+*T28087 v
+*           LOCATE RECP IN RECP.NO<1>,1 BY "DR" SETTING TX ELSE
+            LOCATE TMP IN SORT.DATA<1> BY 'DL' SETTING TX ELSE
+*T28087 ^
+               RECP.NO = INSERT(RECP.NO,1,TX,0,RECP)             
+               RECP.DATE = INSERT(RECP.DATE,1,TX,0,INVR.ENT.DATE)
+               RECP.PO = INSERT(RECP.PO,1,TX,0,INVR.PO)          
+               RECP.VEND = INSERT(RECP.VEND,1,TX,0,INVR.VEND)    
+*T27396 RECP.PER = INSERT(RECP.PER,1,TX,0,INVR.PERIOD)    
+               RECP.PER = INSERT(RECP.PER,1,TX,0,IWH.RECP.PERIOD<1,R>)    
+               COST = OCONV(INVR.UNIT.COST,"MD4")               
+               RECP.COST = INSERT(RECP.COST,1,TX,0,COST)         
+               LN.CNT +=1                                        
+               LN.NUM<1,LN.CNT> = LN.CNT                         
+               CURR = 0   
+               RSVBALE = 0
+               IRW.ID=CONO:RECP:"!":WHSE
+               MATREAD IRW.REC FROM INV_RECP_WHSE,IRW.ID THEN 
+                  CURR+= IRW.CUR.QTY                           
+                  RSVBALE += IRW.RSVB.QTY ; *resevable qty     
+               END                                            
+               ;* reserved                                          
+               RSVD.QTY = CURR - RSVBALE                            
+               RSVD.QTY=INT(((RSVD.QTY/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+               RSVD.QTY = OCONV(RSVD.QTY,ICR.CNV1)                  
+               RECP.RSVD = INSERT(RECP.RSVD,1,TX,0,RSVD.QTY)        
+               ;*used                                                  
+               USED = IRW.ORG.QTY - CURR                              
+               IF USED < 0 THEN                                        
+                  USED = INT(((USED/ICR.DV1)*ICR.MT1)/ICR.DV2-.5)       
+               END ELSE                                                
+                  USED = INT(((USED/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)       
+               END                                                     
+               USED = OCONV(USED,ICR.CNV1)                             
+               RECP.USED = INSERT(RECP.USED,1,TX,0,USED)               
+               ;*original                                              
+               ORG.QTY=INT(((IRW.ORG.QTY/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+               ORG.QTY = OCONV(ORG.QTY,ICR.CNV1)                       
+               RECP.ORG = INSERT(RECP.ORG,1,TX,0,ORG.QTY)              
+               ;*on-hand                                               
+               CURR = INT(((RSVBALE/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)         
+               CURR = OCONV(CURR,ICR.CNV1)                             
+               RECP.CURR = INSERT(RECP.CURR,1,TX,0,CURR)               
+            END
+         END
+      END
+   NEXT R
+   RETURN
+*
+************
+BUILD.SCREEN: 
+*************
+*
+   SCV.REC(1)<ESN> = PROD
+   SCV.REC(2)<ESN> = INV.DESC
+   SCV.REC(3)<ESN> = WHSE
+   SCV.REC(32)<ESN> = INV.UNIT<1,2> ; *STOCK UOM
+   SCV.REC(10)<ESN> = LN.NUM
+   SCV.REC(11)<ESN> = RECP.DATE
+   SCV.REC(17)<ESN> = RECP.NO
+   SCV.REC(12)<ESN> = RECP.PO
+   SCV.REC(19)<ESN> = RECP.PER
+   SCV.REC(13)<ESN> = RECP.COST
+   SCV.REC(15)<ESN> = "???"
+   SCV.REC(16)<ESN> = RECP.ORG
+   SCV.REC(18)<ESN> = RECP.VEND
+   SCV.REC(15)<ESN> = RECP.RSVD
+   SCV.REC(33)<ESN> = RECP.USED
+   SCV.REC(34)<ESN> = RECP.CURR
+   IF SOURCE="RS" THEN
+      SCV.REC(36)<ESN>="Original Warehouse :"
+   END ELSE
+      SCV.REC(36)<ESN>="         Warehouse :"
+   END
+*IF INV.M.LINE='FNGD' THEN
+*  SCV.REC(37)<ESN>="Shp/Adj Qty"
+*END ELSE
+*  SCV.REC(37)<ESN>="Used Qty."
+*END
+*
+   SCV.REC(37)<ESN> = "Activity"
+*
+   ;* make border same for all labels
+   P_FIELDS="_pmc36" ; P_ATTRS="border_style" ; P_VALUES="raised"
+   CALL VSI_SETATTR(P_FIELDS,P_ATTRS,P_VALUES,ERROR)
+   P_FIELDS="_pmc36" ; P_ATTRS="font" ; P_VALUES="Fixedsys*10*normal*normal*charset_ansi*pitch_fixed"
+   CALL VSI_SETATTR(P_FIELDS,P_ATTRS,P_VALUES,ERROR)
+   P_FIELDS="_pmc37" ; P_ATTRS="border_style" ; P_VALUES="raised"
+   CALL VSI_SETATTR(P_FIELDS,P_ATTRS,P_VALUES,ERROR)
+   P_FIELDS="_pmc37" ; P_ATTRS="font" ; P_VALUES="Fixedsys*10*normal*normal*charset_ansi*pitch_fixed"
+   CALL VSI_SETATTR(P_FIELDS,P_ATTRS,P_VALUES,ERROR)
+   RETURN
+*
+************
+SCROLL: 
+************
+*
+   LN.CNT = DCOUNT(RECP.NO<1>,VM)
+   BEGIN CASE                                    
+      CASE ACTION = "S" OR ACTION = "SF"          
+         IF LN.CNT > PAGE.SIZE THEN                
+            START +=PAGE.SIZE                       
+            IF START > LN.CNT THEN START = 1        
+         END                                       
+      CASE ACTION = "SR"                          
+         IF LN.CNT > PAGE.SIZE THEN                
+            START -=PAGE.SIZE                       
+            IF START<0 THEN START = 1          
+         END                                       
+      CASE ACTION = "ST"                          
+         START = 1                                 
+      CASE ACTION = "SB"                          
+         START=LN.CNT
+      CASE ACTION[1,1] = "S" AND NUM(ACTION[2,99])
+         START = ACTION[2,99]+0                    
+         IF START < 1 OR START > LN.CNT THEN       
+            ERRMSG = "** Invalid selection **"      
+            GOSUB 91000                             
+         END                                       
+   END CASE
+   GOSUB DISP.DETAIL
+   RETURN
+*
+*******************
+DISP.DETAIL: 
+*******************
+*
+   START=1+INT((START-1)/PAGE.SIZE)*PAGE.SIZE 
+   ECD.NUM=10 ; ECD.SUB.NUM=START ; ECD.ACTION=7 ; CALL SCRN.EDIT
+   ECD.NUM=12 ; ECD.SUB.NUM=START ; ECD.ACTION=7 ; CALL SCRN.EDIT
+   ECD.NUM=11 ; ECD.SUB.NUM=START ; ECD.ACTION=7 ; CALL SCRN.EDIT
+   ECD.NUM=19 ; ECD.SUB.NUM=START ; ECD.ACTION=7 ; CALL SCRN.EDIT
+   ECD.NUM=17 ; ECD.SUB.NUM=START ; ECD.ACTION=7 ; CALL SCRN.EDIT
+   ECD.NUM=18 ; ECD.SUB.NUM=START ; ECD.ACTION=7 ; CALL SCRN.EDIT
+   ECD.NUM=13 ; ECD.SUB.NUM=START ; ECD.ACTION=7 ; CALL SCRN.EDIT
+   ECD.NUM=16 ; ECD.SUB.NUM=START ; ECD.ACTION=7 ; CALL SCRN.EDIT
+   ECD.NUM=15; ECD.SUB.NUM=START ; ECD.ACTION=7 ; CALL SCRN.EDIT
+   ECD.NUM=33; ECD.SUB.NUM=START ; ECD.ACTION= 7 ; CALL SCRN.EDIT
+   ECD.NUM=34; ECD.SUB.NUM=START ; ECD.ACTION= 7 ; CALL SCRN.EDIT
+   RETURN
+*
+*************
+ENT.LINE.NUM: 
+*************
+*
+   LNNO=''
+   ECD.NUM=35
+   ECD.MAXV = START+PAGE.SIZE
+   IF ECD.SUB.NUM='' THEN ECD.SUB.NUM=1
+   ECD.MINV = ECD.SUB.NUM
+   IF ECD.MAXV > LINES THEN ECD.MAXV=LINES
+   ECD.ACTION=4 ; CALL SCRN.EDIT
+   IF ECD.RET.VALUE#"END" AND ECD.RET.VALUE#"E" THEN
+      LNNO=ECD.RET.VALUE
+   END
+   RETURN
+*
+*---- Error message routine
+91000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+*
+*---- End of job
+99999* 
+   ECD.ACTION=99;CALL SCRN.EDIT
+   RETURN
+END

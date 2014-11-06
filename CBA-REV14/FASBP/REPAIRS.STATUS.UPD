@@ -1,0 +1,176 @@
+*********************************************************************
+* REVISION    - [08.1]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - FASBP
+* PROGRAM     - REPAIRS.STATUS.UPD
+* BY          - Ziad Yamout, Vercom Software, Inc.
+* DATE        - 10/20/88
+* MODIFIED    - 11/07/95 TERRY NORTHCUTT TASK 19408 DIVISIONALIZATION
+*
+* DESCRIPTION - Updates the Equipment REPAIRS.DETAIL status to
+*               "PRINTED" OR "UPDATED" OR "REJECTED"
+*********************************************************************
+*--- Data structure libraries
+*
+*COPY>FAS.CPYLIB>ASSETS
+*COPY>FAS.CPYLIB>EQUIP.FILE
+*COPY>FAS.CPYLIB>REPAIRS
+*COPY>FAS.CPYLIB>REPAIRS.DETAIL
+*COPY>CPYLIB>CHAR
+*
+*---- Get PROC selection
+*
+      PROCREAD BUFFER ELSE
+         ERRMSG = "Must be executed from a PROC"
+         GOTO 93000
+      END
+      BEGIN CASE
+      CASE BUFFER<10> = "U"
+         UPD.FLG = 1
+      CASE BUFFER<10> = "P"
+         UPD.FLG = 0
+      CASE 1
+         ERRMSG = "An invalid update parameter was passed from the PROC"
+         GOTO 93000
+      END CASE
+      DIV.OWNER = BUFFER<9> ; *---- TASK 19408
+*
+*--- Open files
+*
+      OPEN "ASSETS" TO ASSETS ELSE
+         ERRMSG = "Cannot locate the ASSETS file"
+         GOTO 93000
+      END
+      OPEN "EQUIP.FILE" TO EQUIP.FILE ELSE
+         ERRMSG = "Cannot locate the EQUIP.FILE file"
+         GOTO 93000
+      END
+      OPEN "REPAIRS" TO REPAIRS ELSE
+         ERRMSG = "Cannot locate the REPAIRS file"
+         GOTO 93000
+      END
+      OPEN "REPAIRS.DETAIL" TO REPAIRS.DETAIL ELSE
+         ERRMSG = "Cannot locate the REPAIRS.DETAIL file"
+         GOTO 93000
+      END
+*
+*---- Update REPAIRS.DETAIL
+*
+      READNEXT RDR.ID ELSE
+         ERRMSG = "No items selected"
+         GOTO 93000
+      END
+      EQP.ID = RDR.ID[1,10]
+      GOSUB 2000
+      GOSUB 3000
+      DATA = 1
+      LOOP
+         READNEXT RDR.ID ELSE DATA = 0
+      WHILE DATA DO
+         EQP.ID = RDR.ID[1,10]
+         IF EQP.ID # O.EQP.ID THEN
+            GOSUB 4000
+            GOSUB 2000
+         END
+         GOSUB 3000
+      REPEAT
+      GOSUB 4000
+      GOTO 99999
+*
+*---- Check EQUIP.FILE record
+2000*
+      O.EQP.ID = EQP.ID
+      M.EMSG = "check REPAIR"
+      MATREADU RPR.REC FROM REPAIRS, EQP.ID ELSE
+         M.EMSG = "Invalid REPAIR"
+         SKIP.FLG = 2; GOTO 2099
+      END
+      RPR.EMSG = ""
+      MATREAD AST.REC FROM ASSETS, EQP.ID ELSE
+         RPR.EMSG = "Cannot locate ASSET # ":EQP.ID
+         SKIP.FLG = 1; GOTO 2099
+      END
+*---- TASK 19408
+      IF AST.DIV # DIV.OWNER AND DIV.OWNER # "ALL" THEN
+         RPR.EMSG = "Asset not owned by selected DIVISION ":DIV.OWNER
+         SKIP.FLG = 1
+         GOTO 2099
+      END
+*---- TASK 19408
+      MATREAD EQP.REC FROM EQUIP.FILE, EQP.ID ELSE
+         RPR.EMSG = "Cannot locate EQUIP.FILE # ":EQP.ID
+         SKIP.FLG = 1; GOTO 2099
+      END
+      SKIP.FLG = 0
+2099*
+      RETURN
+*
+*---- Check the REPAIRS.DETAIL record
+3000*
+      MATREADU RDR.REC FROM REPAIRS.DETAIL, RDR.ID ELSE
+         RELEASE REPAIRS.DETAIL, RDR.ID
+         GOTO 3099
+      END
+      BEGIN CASE
+      CASE RDR.UPD = "UPDATED"
+         RELEASE REPAIRS.DETAIL, RDR.ID
+         GOTO 3099
+      CASE SKIP.FLG
+         RDR.EMSG = M.EMSG
+         RDR.UPD = "REJECTED"; GOTO 3090
+      END CASE
+      TYPE = RDR.ID[11,1]
+      BEGIN CASE
+      CASE TYPE = "M"
+         MAX.NO = RPR.M.NO
+      CASE TYPE = "R"
+         MAX.NO = RPR.R.NO
+      CASE TYPE = "O"
+         MAX.NO = RPR.O.NO
+      CASE TYPE = "U"
+         MAX.NO = RPR.U.NO
+      CASE 1
+         RDR.EMSG = "Invalid type (":TYPE:")"
+         RDR.UPD = "REJECTED"; GOTO 3090
+      END CASE
+      OCUR = RDR.ID[12,99]
+      BEGIN CASE
+      CASE NOT(NUM(OCUR))
+         RDR.EMSG = "Invalid ocur (":OCUR:")"
+         RDR.UPD = "REJECTED"; GOTO 3090
+      CASE OCUR < 1 OR OCUR > MAX.NO
+         RDR.EMSG = "Invalid ocur (":OCUR:")"
+         RDR.UPD = "REJECTED"; GOTO 3090
+      END CASE
+      BEGIN CASE
+      CASE RDR.SRC = "FA"
+      CASE RDR.SRC = "JC"
+      CASE RDR.SRC = "AP"
+      CASE 1
+         RDR.EMSG = "Invalid src (":RDR.SRC:")"
+         RDR.UPD = "REJECTED"; GOTO 3090
+      END CASE
+      IF UPD.FLG THEN
+         RDR.UPD = "UPDATED"
+      END ELSE
+         RDR.UPD = "PRINTED"
+      END
+      RDR.EMSG = ""
+3090*
+      MATWRITE RDR.REC ON REPAIRS.DETAIL, RDR.ID
+3099*
+      RETURN
+*
+*---- Update the master files
+4000*
+      IF SKIP.FLG = 2 THEN
+         RELEASE REPAIRS, O.EQP.ID
+      END ELSE
+         MATWRITE RPR.REC ON REPAIRS, O.EQP.ID
+      END
+      RETURN
+93000*
+      PRINT @(0,23):ERRMSG:
+      INPUT XX:
+99999END

@@ -1,0 +1,471 @@
+SUBROUTINE GLS_BUD_UPDATE
+********************************************************************************
+*   Program name :- GLS_BUD_UPDATE
+*   Created:- 9/15/2003
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE PMC.CPYLIB COMPANY   
+$INCLUDE PMC.CPYLIB FISCAL
+$INCLUDE PMC.CPYLIB GLTABLE
+$INCLUDE PMC.CPYLIB COA
+$INCLUDE GLS.CPYLIB GLM
+$INCLUDE GLS.CPYLIB COA.BAL
+* Insert method code here
+
+ERRMSG = ''
+OPEN '','COMPANY' TO COMPANY ELSE ERRMSG = 'COMPANY FILE MISSING' ; GOTO 99999
+OPEN '','GLS.SCREENS' TO M.SCREENS ELSE ERRMSG = 'GLS.SCREENS FILE MISSING' ; GOTO 99999
+OPEN '','PREFIX' TO PREFIX ELSE ERRMSG = 'PREFIX FILE MISSING' ; GOTO 99999
+OPEN '','CONTROL' TO CONTROL ELSE  ERRMSG = 'CONTROL FILE IS MISSING';GOTO 99999
+OPEN '','COA' TO COA ELSE  ERRMSG = 'COA FILE IS MISSING';GOTO 99999
+OPEN '','GLM' TO GLM ELSE  ERRMSG = 'GLM FILE IS MISSING';GOTO 99999
+OPEN '','GLA' TO GLA ELSE  ERRMSG = 'GLA FILE IS MISSING';GOTO 99999
+OPEN '','GLX' TO GLX ELSE  ERRMSG = 'GLX FILE IS MISSING';GOTO 99999
+
+
+VAL = RBO.getProperty('','ID',ID)
+VAL = RBO.getProperty('','period',PERIOD)
+VAL = RBO.getProperty('','CURR_PER',CURR.PER)
+VAL = RBO.getProperty('','Per',PER)
+PER='1'
+CONO = ID[1,3]
+MATREAD COMP.REC FROM COMPANY,CONO ELSE
+	ERRMSG = "CANNOT LOCATE COMPANY " : CONO
+	GOTO 99999
+END
+
+ACCT.LEN = LEN(CO.ACCT.PIC)
+CO.ID.LEN = ACCT.LEN + 3
+DV.ID.LEN = ACCT.LEN + 5
+DP.ID.LEN = ACCT.LEN + 7
+CC.ID.LEN = ACCT.LEN + 10
+
+IF CO.GLS.HIST<1,1> = "Y" THEN
+	OPEN '','GLH' TO GLH ELSE
+       	ERRMSG = 'GLH FILE IS MISSING'
+              GOTO 99999
+      	END
+      	OPEN '','GLHX' TO GLHX ELSE
+         	ERRMSG = 'GLHX FILE IS MISSING'
+         	GOTO 99999
+      	END
+      	OPEN '','CO.COA.BAL' TO CO.COA.BAL ELSE
+       	ERRMSG = 'CO.COA.BAL FILE IS MISSING'
+         	GOTO 99999
+      	END
+      	OPEN '','DV.COA.BAL' TO DV.COA.BAL ELSE
+       	ERRMSG = 'DV.COA.BAL FILE IS MISSING'
+         	GOTO 99999
+      	END
+      	OPEN '','DP.COA.BAL' TO DP.COA.BAL ELSE
+       	ERRMSG = 'DP.COA.BAL FILE IS MISSING'
+         	GOTO 99999
+      	END
+      	OPEN '','CC.COA.BAL' TO CC.COA.BAL ELSE
+       	ERRMSG = 'CC.COA.BAL FILE IS MISSING'
+            	GOTO 99999
+      	END
+END
+
+SELECT GLA
+	CNT = 0
+	DATA = 1
+       LOOP
+       	READNEXT ID ELSE DATA = 0
+            	WHILE DATA DO
+             		IF ID[1,3] <> CONO THEN GOTO 199
+			MATREADU GLM.REC FROM GLA, ID ELSE
+                  		RELEASE GLA, ID
+                  		GOTO 199
+               	END
+               	BEGIN CASE
+                  		CASE GLM.MON < PERIOD
+                     		DELETE GLA, ID
+                  		CASE GLM.MON = PERIOD
+                     		CNT = CNT + 1
+                     		RELEASE GLA, ID
+                  		CASE 1
+                     		RELEASE GLA, ID
+               	END CASE
+199	REPEAT
+
+IF CNT > 0 THEN
+	NO.CLOSE = 1
+       ERRMSG = '(':CNT:') RECORDS NOT PROCESSED IN GLA FILE FOR THIS PERIOD'
+       *GOSUB 91000; GOTO 999
+	 GOTO 99999
+END
+SELECT GLM
+	DATA = 1
+      	IF CO.GLS.HIST<1,1> # "Y" THEN GOTO 400
+200   	READU NEXT.NO FROM CONTROL, CONO : "GLACOUNTER" ELSE NEXT.NO = 1
+      	LOOP
+       	READNEXT ID ELSE DATA = 0
+            	WHILE DATA DO
+              	IF ID[1,3] <> CONO THEN GOTO 299
+               	MATREADU GLM.REC FROM GLM, ID ELSE
+                  		RELEASE GLM, ID
+                  		GOTO 299
+               	END
+               	IF GLM.AMT + 0 <> 0 THEN
+                  		DV.NO = ID[4,2]
+                  		DP.NO = ID[6,2]
+                  		CC.NO = ID[8,3]
+                  		AC.NO = ID[11,ACCT.LEN]
+                 		CC.ID = ID[1,CC.ID.LEN]
+                  		DP.ID = CONO : DV.NO : DP.NO : AC.NO
+                  		DV.ID = CONO : DV.NO : AC.NO
+                  		CO.ID = CONO : AC.NO
+                  		GLM.NO = ID[CC.ID.LEN+1,6]
+                  		READU DUMMY FROM GLH, ID ELSE
+                     		MATWRITE GLM.REC ON GLH, ID
+                     		GLH.NO = GLM.NO
+                     		GOTO 250
+                  		END
+                  		PTR = 1
+                  		LOOP
+                     		GLH.NO = NEXT.NO
+	                     	IF GLH.NO > 999999 THEN GLH.NO = 1
+       	              	NEXT.NO = GLH.NO + 1
+              	       	GLH.NO = STR("0",6-LEN(GLH.NO)) : GLH.NO
+                     		READ DUMMY FROM GLH, CC.ID : GLH.NO ELSE PTR = 0
+	                  	WHILE PTR DO REPEAT
+       	           	MATWRITE GLM.REC ON GLH, CC.ID : GLH.NO
+              	    	RELEASE GLH, ID
+250               		READU GLX.REC FROM GLX, CO.ID ELSE GLX.REC = ""
+	                  	LOCATE DV.NO IN GLX.REC,1 SETTING FND ELSE NULL
+       	           	GLX.REC<FND> = DV.NO
+              	    	WRITE GLX.REC ON GLX, CO.ID
+                  		READU GLX.REC FROM GLX, DV.ID ELSE GLX.REC = ""
+	                  	LOCATE DP.NO IN GLX.REC,1 SETTING FND ELSE NULL
+       	           	GLX.REC<FND> = DP.NO
+              	    	WRITE GLX.REC ON GLX, DV.ID
+                  		READU GLX.REC FROM GLX, DP.ID ELSE GLX.REC = ""
+	                  	LOCATE CC.NO IN GLX.REC,1 SETTING FND ELSE NULL
+       	           	GLX.REC<FND> = CC.NO
+              	    	WRITE GLX.REC ON GLX, DP.ID
+                  		READU GLX.REC FROM GLX, CC.ID ELSE GLX.REC = ""
+	                  	LOCATE GLM.NO IN GLX.REC,1 SETTING FND ELSE NULL
+       	           	GLX.REC<FND> = GLH.NO
+              	    	WRITE GLX.REC ON GLX, CC.ID
+	           	END	
+               	DELETE GLM, ID
+299    REPEAT
+WRITE NEXT.NO ON CONTROL, CONO : "GLACOUNTER"
+
+
+SELECT GLX
+	DATA = 1
+      	LOOP
+       	READNEXT ID ELSE DATA = 0
+            	WHILE DATA DO
+              	IF ID[1,3] <> CONO THEN GOTO 399
+               	READU GLX.REC FROM GLX, ID ELSE
+                  		RELEASE GLX, ID
+                  		GOTO 399
+               	END
+               	ID.LEN = LEN(ID)
+               	BEGIN CASE
+                  		CASE ID.LEN = CO.ID.LEN
+                     		MATREAD CB.REC FROM CO.COA.BAL, ID ELSE MAT CB.REC = ""
+                     		GLX.REC = INSERT(GLX.REC,1,0,0,CB.CREDITS)
+                     		GLX.REC = INSERT(GLX.REC,1,0,0,CB.DEBITS)
+                  		CASE ID.LEN = DV.ID.LEN
+                     		MATREAD CB.REC FROM DV.COA.BAL, ID ELSE MAT CB.REC = ""
+                     		GLX.REC = INSERT(GLX.REC,1,0,0,CB.CREDITS)
+                     		GLX.REC = INSERT(GLX.REC,1,0,0,CB.DEBITS)
+                  		CASE ID.LEN = DP.ID.LEN
+                     		MATREAD CB.REC FROM DP.COA.BAL, ID ELSE MAT CB.REC = ""
+                     		GLX.REC = INSERT(GLX.REC,1,0,0,CB.CREDITS)
+                     		GLX.REC = INSERT(GLX.REC,1,0,0,CB.DEBITS)
+                  		CASE 1
+                     		MATREAD CB.REC FROM CC.COA.BAL, ID ELSE MAT CB.REC = ""
+                     		GLX.REC = INSERT(GLX.REC,1,0,0,CB.CREDITS)
+                    			GLX.REC = INSERT(GLX.REC,1,0,0,CB.DEBITS)
+               	END CASE
+               	WRITE GLX.REC ON GLHX, ID : PERIOD
+               	DELETE GLX, ID
+399	REPEAT
+       GOTO 600
+400    LOOP
+       	READNEXT ID ELSE DATA = 0
+            	WHILE DATA DO
+              	IF ID[1,3] <> CONO THEN GOTO 499
+               	READU DUMMY FROM GLM, ID ELSE
+                  		RELEASE GLM, ID
+                  		GOTO 499
+               	END
+               	DELETE GLM, ID
+499    REPEAT
+
+SELECT GLX
+	DATA = 1
+       LOOP
+       	READNEXT ID ELSE DATA = 0
+            	WHILE DATA DO
+              	IF ID[1,3] <> CONO THEN GOTO 599
+               	READU GLX.REC FROM GLX, ID ELSE
+                  		RELEASE GLX, ID
+                  		GOTO 599
+               	END
+               	DELETE GLX, ID
+599   	REPEAT
+600    FR.CLOSE.DATE = DATE()
+       IF CURR.PER > PER THEN
+       	MATWRITE FISCAL.REC ON CONTROL, CONO : "FISCALMON"
+             	DELETE CONTROL, CONO : "FISCAL"
+             	DELETE CONTROL, CONO:"GLS.BUD.CHK" ; * T26008
+      	END ELSE
+       	MATWRITE FISCAL.REC ON CONTROL, CONO : 'FISCAL'
+             	WRITE 'OK' ON CONTROL, CONO:"GLS.BUD.CHK" ; * T26008
+      	END
+      	DELETE CONTROL, CONO:"GLS.UPD.CHK"
+       FND = 1
+       READU REC FROM CONTROL, CONO:"JE":PERIOD ELSE
+       	FND = 0
+             	RELEASE CONTROL, CONO:"JE":PERIOD
+      	END
+       IF FND THEN
+       	DELETE CONTROL, CONO:"JE":PERIOD
+      	END
+       FND = 1
+       READU REC FROM CONTROL, CONO:"JE.REVERSE":PERIOD ELSE
+       	FND = 0
+             	RELEASE CONTROL, CONO:"JE.REVERSE":PERIOD
+      	END
+      	IF FND THEN
+       	DELETE CONTROL, CONO:"JE.REVERSE":PERIOD
+    	END
+       FND = 1
+       READU REC FROM CONTROL, CONO:"JE.RECUR":PERIOD ELSE
+       	FND = 0
+       	RELEASE CONTROL, CONO:"JE.RECUR":PERIOD
+      	END
+       IF FND THEN
+       	DELETE CONTROL, CONO:"JE.RECUR":PERIOD
+	END
+      	FND = 1
+       READU REC FROM CONTROL, CONO:"COA.DIST" ELSE
+       	FND = 0
+*T26480 v      RELEASE CONTROL, CONO:"COA.DIST":PERIOD
+            	RELEASE CONTROL, CONO:"COA.DIST"
+	END
+       IF FND THEN
+*T26480 v      DELETE CONTROL, CONO:"COA.DIST":PERIOD
+       	DELETE CONTROL, CONO:"COA.DIST"
+	END
+999
+   RELEASE CONTROL, CONO : "FISCAL"
+   RELEASE CONTROL, CONO:"GLS.UPD.CHK"
+
+
+*** CHECK FOR A COMPLETED EOM CLOSE *** this is GLS.BUD.UPDATE ----ROUTINE
+DIM OCB.REC(300)
+READU CHECKIT FROM CONTROL, CONO:"GLS.BUD.CHK" ELSE GOTO 99999
+IF CHECKIT<1> # 'OK' THEN GOTO 99999
+MATREAD FISCAL.REC FROM CONTROL, CONO : "FISCAL" ELSE
+	ERRMSG = "CONTROL FISCAL IS MISSING"; GOTO 99999
+END
+READ PERIOD.REC FROM CONTROL, CONO : "ACCT.PERIODS" ELSE
+	PERIOD.REC = ""
+      	PERIOD.REC<1> = 12
+END
+NUM.PERIODS = PERIOD.REC<1>
+CURR.YR = FR.CURR.PER[1,4]
+CURR.PER = FR.CURR.PER[5,2]
+IF CURR.PER < 1 OR CURR.PER > NUM.PERIODS THEN
+	ERRMSG = "INVALID CURRENT PERIOD IN CONTROL FISCAL"; GOTO 99999
+END
+BUD.MON = CURR.YR : CURR.PER
+
+*** CHECK TO SEE IF THIS CURRENT MONTH EXISTS AND IF IT DOES   ***
+*** UPDATE THE BUDGET INFORMATION FOR THIS PERIOD IF IT EXISTS ***
+OPEN "","COA" : BUD.MON TO COA.BUD ELSE GOTO 99999
+OPEN "","CO.COA" : BUD.MON TO CO.COA.BAL.BUD ELSE
+	ERRMSG = "CO.COA" : BUD.MON : " FILE IS MISSING"
+      	GOTO 99999
+END
+OPEN "","DV.COA" : BUD.MON TO DV.COA.BAL.BUD ELSE
+	ERRMSG = "DV.COA" : BUD.MON : " FILE IS MISSING"
+      	GOTO 99999
+END
+OPEN "","DP.COA" : BUD.MON TO DP.COA.BAL.BUD ELSE
+	ERRMSG = "DP.COA" : BUD.MON : " FILE IS MISSING"
+      	GOTO 99999
+END
+OPEN "","CC.COA" : BUD.MON TO CC.COA.BAL.BUD ELSE
+	ERRMSG = "CC.COA" : BUD.MON : " FILE IS MISSING"
+      	GOTO 99999
+END
+
+
+PROC.LINE = ""
+PROC.LINE<1> = CONO
+PROC.LINE<2> = BUD.MON
+1000 
+BEG.BUD = CB.BUD + 1
+END.BUD = CB.SDB + 1
+SELECT CO.COA.BAL
+DATA = 1
+LOOP
+   	READNEXT CO.ID ELSE DATA = 0
+WHILE DATA DO
+   	IF CO.ID[1,3] <> CONO THEN GOTO 1100
+      	MATREADU CB.REC FROM CO.COA.BAL, CO.ID ELSE
+       	RELEASE CO.COA.BAL, CO.ID
+         	GOTO 1100
+      	END
+      	MATREADU OCB.REC FROM CO.COA.BAL.BUD, CO.ID ELSE
+       	MAT OCB.REC = ""
+      	END
+	FOR PR = BEG.BUD TO END.BUD
+       	CB.REC(PR) = OCB.REC(PR)
+      	NEXT PR
+      	MATWRITE CB.REC ON CO.COA.BAL, CO.ID
+      	DELETE CO.COA.BAL.BUD, CO.ID
+1100 
+REPEAT
+
+SELECT CO.COA.BAL.BUD
+	DATA = 1
+LOOP
+	READNEXT CO.ID ELSE DATA = 0
+WHILE DATA DO
+      	IF CO.ID[1,3] <> CONO THEN GOTO 1150
+      	MATREAD OCB.REC FROM CO.COA.BAL.BUD, CO.ID ELSE GOTO 1150
+      	MATREADU CB.REC FROM CO.COA.BAL, CO.ID ELSE MAT CB.REC = ""
+      	FOR PR = BEG.BUD TO END.BUD
+      		CB.REC(PR) = OCB.REC(PR)
+      	NEXT PR
+      	MATWRITE CB.REC ON CO.COA.BAL, CO.ID
+1150 
+REPEAT
+
+SELECT DV.COA.BAL
+DATA = 1
+LOOP
+	READNEXT DV.ID ELSE DATA = 0
+WHILE DATA DO
+	IF DV.ID[1,3] <> CONO THEN GOTO 1200
+      	MATREADU CB.REC FROM DV.COA.BAL, DV.ID ELSE
+       	RELEASE DV.COA.BAL, DV.ID
+         	GOTO 1200
+      	END
+      	MATREADU OCB.REC FROM DV.COA.BAL.BUD, DV.ID ELSE
+       	MAT OCB.REC = ""
+      	END
+      	FOR PR = BEG.BUD TO END.BUD
+       	CB.REC(PR) = OCB.REC(PR)
+      	NEXT PR
+      	MATWRITE CB.REC ON DV.COA.BAL, DV.ID
+      	DELETE DV.COA.BAL.BUD, DV.ID
+1200 
+REPEAT
+
+SELECT DV.COA.BAL.BUD
+	DATA = 1
+LOOP
+	READNEXT DV.ID ELSE DATA = 0
+WHILE DATA DO
+	IF DV.ID[1,3] <> CONO THEN GOTO 1250
+      	MATREAD OCB.REC FROM DV.COA.BAL.BUD, DV.ID ELSE GOTO 1250
+      	MATREADU CB.REC FROM DV.COA.BAL, DV.ID ELSE MAT CB.REC = ""
+      	FOR PR = BEG.BUD TO END.BUD
+       	CB.REC(PR) = OCB.REC(PR)
+      	NEXT PR
+      	MATWRITE CB.REC ON DV.COA.BAL, DV.ID
+1250 
+REPEAT
+
+SELECT DP.COA.BAL
+	DATA = 1
+LOOP
+	READNEXT DP.ID ELSE DATA = 0
+WHILE DATA DO
+	IF DP.ID[1,3] <> CONO THEN GOTO 1300
+      	MATREADU CB.REC FROM DP.COA.BAL, DP.ID ELSE
+       	RELEASE DP.COA.BAL, DP.ID
+         	GOTO 1300
+      	END
+      	MATREADU OCB.REC FROM DP.COA.BAL.BUD, DP.ID ELSE
+       	MAT OCB.REC = ""
+     	END
+      	FOR PR = BEG.BUD TO END.BUD
+       	CB.REC(PR) = OCB.REC(PR)
+      	NEXT PR
+      	MATWRITE CB.REC ON DP.COA.BAL, DP.ID
+      	DELETE DP.COA.BAL.BUD, DP.ID
+1300 REPEAT
+
+SELECT DP.COA.BAL.BUD
+   DATA = 1
+   LOOP
+      READNEXT DP.ID ELSE DATA = 0
+   WHILE DATA DO
+      IF DP.ID[1,3] <> CONO THEN GOTO 1350
+      MATREAD OCB.REC FROM DP.COA.BAL.BUD, DP.ID ELSE GOTO 1350
+      MATREADU CB.REC FROM DP.COA.BAL, DP.ID ELSE MAT CB.REC = ""
+      FOR PR = BEG.BUD TO END.BUD
+         CB.REC(PR) = OCB.REC(PR)
+      NEXT PR
+      MATWRITE CB.REC ON DP.COA.BAL, DP.ID
+1350 REPEAT
+
+SELECT CC.COA.BAL
+	DATA = 1
+LOOP
+	READNEXT CC.ID ELSE DATA = 0
+WHILE DATA DO
+	IF CC.ID[1,3] <> CONO THEN GOTO 1400
+      	MATREADU CB.REC FROM CC.COA.BAL, CC.ID ELSE
+       	RELEASE CC.COA.BAL, CC.ID
+         	GOTO 1400
+      	END
+      	MATREADU OCB.REC FROM CC.COA.BAL.BUD, CC.ID ELSE
+       	MAT OCB.REC = ""
+      	END
+      	FOR PR = BEG.BUD TO END.BUD
+       	CB.REC(PR) = OCB.REC(PR)
+      	NEXT PR
+      	MATWRITE CB.REC ON CC.COA.BAL, CC.ID
+      	DELETE CC.COA.BAL.BUD, CC.ID
+1400 
+REPEAT
+
+SELECT CC.COA.BAL.BUD
+	DATA = 1
+LOOP
+	READNEXT CC.ID ELSE DATA = 0
+WHILE DATA DO
+	IF CC.ID[1,3] <> CONO THEN GOTO 1450
+      	MATREAD OCB.REC FROM CC.COA.BAL.BUD, CC.ID ELSE GOTO 1450
+      	MATREADU CB.REC FROM CC.COA.BAL, CC.ID ELSE MAT CB.REC = ""
+      	FOR PR = BEG.BUD TO END.BUD
+       	CB.REC(PR) = OCB.REC(PR)
+      	NEXT PR
+      	MATWRITE CB.REC ON CC.COA.BAL, CC.ID
+1450 
+REPEAT
+DELETE CONTROL, CONO:"GLS.BUD.CHK"
+
+99999
+IF ERRMSG # '' THEN
+	VAL = RBO.setProperty('','ServerStatus','E')
+	VAL = RBO.setProperty('','NO_CLOSE',NO.CLOSE)
+	VAL = RBO.setProperty('','ServerMessage',ERRMSG)
+END ELSE
+	VAL = RBO.setProperty('','ServerStatus','')
+END
+* End of method code
+RETURN
+

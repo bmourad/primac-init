@@ -1,0 +1,200 @@
+SUBROUTINE WIN.OBMETHOD(NAME,METHOD,FLAGS,MAT ARGS, RET.FLAG, RET.VAL)
+* Run an objects method
+* Compile for: GENERIC AP MD ME PI.SUB PR.SUB SQ UD UL UP UV UC IN GA
+* (C) Copyright IBM Corporation 2003. All rights reserved
+* Copyright (c) 1991-1999. Impact Business Systems
+*
+AMVM=1; AMVM<1,2>=2; AMVM<2>=3
+AM=AMVM[4,1]
+VM=AMVM[2,1]
+STX=CHAR(2)
+EOL=CHAR(13)
+DIM ARGS(20)
+ECHO OFF
+PROMPT ""
+*
+MNAME = NAME:'.':METHOD
+PRE.METHOD = ""
+POST.METHOD = ""
+ARG.LIST = ""
+ARG.SEND = ""
+ARG.RET = ""
+*
+* Set up arguments
+L = LEN(FLAGS)
+FOR ARG = 1 TO L
+  ARG.TYPE = FLAGS[ARG,1]
+  ARG.NAME = 'a':ARG
+  IF ARG > 1 THEN ARG.LIST = ARG.LIST:","
+  BEGIN CASE
+  CASE ARG.TYPE = 'I'
+     GOSUB 100; * Add argument to list
+  CASE ARG.TYPE = 'O'
+     ARG.LIST = ARG.LIST:ARG.NAME
+     ARG.RET<ARG> = 1
+  CASE ARG.TYPE = 'B'
+     GOSUB 110;* Set up argument
+     ARG.LIST = ARG.LIST:ARG.NAME
+     ARG.RET<ARG> = 1
+  CASE ARG.TYPE = 'N'
+     ARG.LIST = ARG.LIST : ARGS(ARG)
+  CASE ARG.TYPE = "D"
+     ARG.LIST = ARG.LIST : 'VarType(9,"':ARGS(ARG):'")'
+  END CASE
+  IF ARG.RET<ARG> = "1" THEN
+     POST.METHOD = POST.METHOD : ";"
+     POST.METHOD = "Host Send ":ARG.NAME
+   END
+NEXT ARG
+*
+BEGIN CASE
+CASE RET.FLAG = 1
+   METHOD.LINE = "Host Send ":MNAME:"("
+CASE RET.FLAG = 2
+   METHOD.LINE = "Object Set ":RET.VAL:"=":MNAME:"("
+CASE RET.FLAG = 0
+   METHOD.LINE = MNAME:" "
+END CASE
+*
+METHOD.LINE = METHOD.LINE : ARG.LIST
+IF RET.FLAG THEN METHOD.LINE = METHOD.LINE : ")"
+*
+SCRIPT = PRE.METHOD:METHOD.LINE:POST.METHOD
+IF LEN(SCRIPT) < 120 THEN
+   CALL WIN.COMSUB(SCRIPT)
+END ELSE
+   CALL WIN.COMSUB("Host Get Hscript;Execute HScript,C")
+   VALUE = SCRIPT; GOSUB 700;* Send up script line
+END
+IF ARG.SEND # "" THEN
+   N = COUNT(ARG.SEND,AM)+1
+   FOR J = 1 TO N
+       IF ARG.SEND<J> = "1" THEN VALUE = ARGS(J); GOSUB 700;* Send argument
+   NEXT J
+END
+IF RET.FLAG = 1 THEN
+   GOSUB 800;* Get value
+   RET.VAL = VALUE
+END
+IF ARG.RET # "" THEN
+   N = COUNT(ARG.RET,AM)+1
+   FOR J = 1 TO N
+       IF ARG.RET<J> = "1" THEN
+          GOSUB 800;* Get argument
+          ARGS(J) = VALUE
+       END
+   NEXT J
+END
+*
+ECHO ON
+*
+RETURN
+*
+* Set up argument input to method argument
+100 GOSUB 500;* Check best method to send to PC
+    IF SIMPLE.VALUE THEN
+       ARG.LIST = ARG.LIST:VALUE
+    END ELSE
+       ARG.LIST = ARG.LIST:ARG.NAME
+       ARG.SEND<ARG> = 1
+       PRE.METHOD = PRE.METHOD:"Host Get ":ARG.NAME:";"
+    END
+    RETURN
+*
+* Set up and input/output to method argument
+110 GOSUB 500;* Check best method to send to PC
+    IF SIMPLE.VALUE THEN
+       PRE.METHOD = PRE.METHOD:ARG.NAME:"=":VALUE:";"
+    END ELSE
+       ARG.SEND<ARG> = 1
+       PRE.METHOD = PRE.METHOD:"Host Get ":ARG.NAME:";"
+    END
+    RETURN
+*
+* Check argument to see if it can be easily included in
+* script generated for the method call or if it needs to
+* be sent up with the Host Get routine
+500 SIMPLE.VALUE = 1
+    IF INDEX(ARGS(ARG),AM,1) THEN SIMPLE.VALUE = 0
+    IF INDEX(ARGS(ARG),VM,1) THEN SIMPLE.VALUE = 0
+    IF SIMPLE.VALUE THEN
+       IF INDEX(ARGS(ARG),'`',1) THEN
+          SIMPLE.VALUE = 0
+       END ELSE
+          VALUE = "`":ARGS(ARG):"`"
+       END
+    END
+    RETURN
+*
+* Send VALUE from host to PC
+700 S = "\";R ="\\"; GOSUB 750
+    S = AM;R = "\r"; GOSUB 750
+    S = VM;R = "\t"; GOSUB 750
+    L = LEN(VALUE)
+    PRINT STX:"bs":VALUE[1,118]:EOL:
+    IF L > 118 THEN
+      FOR P = 119 TO L STEP 120
+        PRINT STX:VALUE[P,120]:EOL:
+      NEXT P
+    END
+    PRINT STX:EOL:
+    RETURN
+*
+* Convert from S to R in VALUE
+750 POS = 1
+  LOOP
+    C = INDEX(VALUE[POS,99999],S,1)
+  WHILE C DO
+    POS = POS + C - 1
+    VALUE = VALUE[1,POS-1] : R : VALUE[POS+1,99999]
+    POS = POS + LEN(R)
+  REPEAT
+*
+  RETURN
+*
+* Get VALUE from PC to Host
+800 VALUE = ""
+CNV = ""
+LOOP
+  INPUT DUM:
+  IF INDEX(DUM,STX,1) THEN
+    DUM = FIELD(DUM,STX,2)
+    IF CNV = "" THEN
+      CNV = DUM[1,2]
+      VALUE = VALUE : DUM[3,9999]
+    END ELSE
+      VALUE = VALUE : DUM
+    END
+  END ELSE
+    DUM = "X"
+  END
+UNTIL DUM = "" DO
+REPEAT
+IF CNV # "no" THEN GOSUB 850;* Convert
+RETURN
+*
+* Convert data
+850 TYPE = CNV[1,1]
+SUBTYPE= CNV[2,1]
+IF TYPE = "b" THEN
+  POS = 1
+  LOOP
+    C = INDEX(VALUE[POS,99999],'\',1)
+  UNTIL C = 0 DO
+    POS = POS + C - 1
+    CH = VALUE[POS+1,1]
+    BEGIN CASE
+      CASE CH = 'r'; CH = AM
+      CASE CH = 't'; CH = VM
+      CASE CH = '\'; CH = '\'
+      CASE CH = 'd'; CH = CHAR(127)
+    END CASE
+    VALUE = VALUE[1,POS-1]:CH:VALUE[POS+2,99999]
+    POS = POS + 1
+  REPEAT
+END ELSE
+  PRINT "Invalid conversion type ":CNV
+END
+RETURN
+*
+END

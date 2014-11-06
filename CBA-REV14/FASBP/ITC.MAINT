@@ -1,0 +1,221 @@
+*COPY>CPYLIB>COM1
+*********************************************************************
+* REVISION    - [08.1]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SOURCE        - FASBP
+* PROGRAM       - ITC.MAINT
+* BY            - Ziad Yamout, VERCOM Software, Inc.
+* DATE          - 01/27/89
+* DESCRIPTION   -
+* 08/14/91 DLG MODIFIED FOR AIX O/S - FOR NEW RECORDS
+*T25978 adelgado 02/13/2002 * Add the use of prompts (S,SR,SB,ST).
+*T26126 adelgado 02/28/2002 * Implement the LOCKED clause for READU.
+*ENDDOC
+*********************************************************************
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>FAS.CPYLIB>ITC
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>CHAR
+*
+*--- Setup SYSCOM
+*
+  SYS.TYPE = 1
+  CALL SYSCOM(MAT SYSCOM.REC)
+*
+*--- Open files
+*
+  OPEN "","FAS.SCREENS" TO M.SCREENS ELSE
+    ERRMSG = "Cannot locate M.SCREENS file"; GOTO 93000
+  END
+  OPEN "","CONTROL" TO CONTROL ELSE
+    ERRMSG = "Cannot locate CONTROL file"; GOTO 93000
+  END
+  OPEN "","COMPANY" TO COMPANY ELSE
+    ERRMSG = "Cannot locate COMPANY file"; GOTO 93000
+  END
+  OPEN "","ITC" TO ITC ELSE
+    ERRMSG = "Cannot locate ITC file"; GOTO 93000
+  END
+*
+*--- Get company
+*
+  MAT COMP.REC = ""
+  CONO = ""
+  CALL GET.CONO(CONO,MAT COMP.REC)
+  IF CONO = "END" THEN GOTO 99999
+*
+*--- Setup EDIT.SUB & SCRN.EDIT
+*
+*     MAT EDIT.COM = ""
+*     TYP = 0
+*     CALL EDIT.SUB
+  FILL = "#"
+  MAT EDIT.COM.DRIVER = ""
+  ECD.SCRN.CNT = 1
+  ECD.SCRN.NAME<1> = "ITC.MAINT"
+  ECD.ACTION = 1;CALL SCRN.EDIT
+  ECD.SCRN.NO = 1
+*
+*--- Initialization
+*
+  LINE.SPACE = 1
+  PAGE.SIZE = 16
+  BEGIN.PAGE = 4
+*
+*--- Main processing
+*
+
+  MAT SCV.REC = ""
+  ECD.ACTION = 2;CALL SCRN.EDIT
+  ITC.ID = CONO : "ITC"
+  * T26126 v
+  MATREADU ITC.REC FROM ITC, ITC.ID LOCKED
+    ERRMSG = 'INVESTMENT TABLE record is locked by user - ':GETUSERNAME(STATUS())
+    GOSUB 91000;GOTO 99999 
+  END ELSE
+    MAT ITC.REC = ""
+  END
+  * T26126 ^
+  LINES = 19; LN = 1; OLD.START.LINE = 0; GOSUB 8000
+*
+*--- Prompt line routine
+*
+  LOOP
+    ECD.NUM = 21; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ""
+    ECD.ACTION = 4;CALL SCRN.EDIT
+    OPTION = ECD.RET.VALUE
+    BEGIN CASE
+      CASE OPTION = "E" OR OPTION = "END" OR OPTION = ""
+        RELEASE ITC, ITC.ID
+        OPTION = "END"
+      CASE OPTION = "F"
+        MATWRITE ITC.REC ON ITC, ITC.ID
+        OPTION = "END"
+      CASE OPTION = "S"
+        LN = 1 + INT((LN-1)/PAGE.SIZE) * PAGE.SIZE + PAGE.SIZE
+        IF LN > LINES THEN LN = 1
+        GOSUB 8000
+      * T25978 v
+      CASE OPTION = 'SR'
+        LN = 1 + INT((LN-1)/PAGE.SIZE) * PAGE.SIZE - PAGE.SIZE
+        IF LN < 1 THEN LN = 1
+        GOSUB 8000
+      CASE OPTION = 'ST'
+        LN = 1
+        GOSUB 8000
+      CASE OPTION = 'SB'
+        LN = LINES
+        GOSUB 8000
+      * T25978 ^
+      CASE NOT(NUM(OPTION))
+        ERRMSG = "*** Invalid selection ***"; GOSUB 91000
+      CASE OPTION < 1 OR OPTION > LINES
+        ERRMSG = "*** Out of range ***"; GOSUB 91000
+        REM      CASE OPTION > 1 AND ITC.REC(OPTION-1) < 1
+        REM         ERRMSG = "Life years should be in ascending order, gaps are not allowed"
+        REM         GOSUB 91000
+        REM DLG GAVE INDEX/DIMENSION MATRIX OUT OF RANGE ERROR  ON ITC.REC(0)
+      CASE OPTION > 1 AND ITC.REC(OPTION)=""
+        ERR=0
+        FOR TEST = OPTION-1 TO 1 STEP -1
+          IF ITC.REC(TEST) = '' THEN
+            ERR=1
+          END
+        NEXT TEST
+        IF ERR = 1 THEN
+          ERRMSG = "Life years should be in ascending order, gaps are not allowed"
+          GOSUB 91000
+        END ELSE
+          LN = OPTION
+          GOSUB 8000
+          GOSUB 1000
+        END
+      CASE 1
+        LN = OPTION
+        GOSUB 8000
+        GOSUB 1000
+    END CASE
+  WHILE OPTION # "END" DO REPEAT
+  GOTO 99999
+*
+*--- Life years
+*
+1000*
+  SLN = BEGIN.PAGE + LINE.SPACE * MOD(LN-1,PAGE.SIZE)
+  P_X  = 0 ; P_Y = SLN ; P_VALUE = "" ; P_OPT = "CL"
+  P_X  := AM:0 ; P_Y := AM:SLN ; P_VALUE := AM:LN "R#3"
+  CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+1100*
+  X = 9; Y = SLN; TYP = 3; MAXL = 2
+  MINV = 1; MAXV = 99
+  IF ITC.REC(LN) # "" THEN
+    O.R = "O"; DEFAULT = ITC.REC(LN)
+  END
+  CALL EDIT.SUB
+  BEGIN CASE
+    CASE VALUE = "END"
+      P_X  = 0 ; P_Y = SLN ; P_VALUE = LN "R#3" ; P_OPT = "CL"
+      P_X  := AM:9 ; P_Y := AM:SLN ; P_VALUE := AM:ITC.REC(LN) "R#2"
+      P_X  := AM:20 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(ITC.REC(LN+LINES),"MD2") "R#5"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      GOTO 1999
+    CASE VALUE >= ITC.REC(LN+1) AND ITC.REC(LN+1) > 0
+      ERRMSG = "Life years should be in ascending order, check next line"
+      GOSUB 91000; GOTO 1100
+    CASE LN < 2
+    CASE VALUE <= ITC.REC(LN-1)
+      ERRMSG = "Life years should be in ascending order, check prior line"
+      GOSUB 91000; GOTO 1100
+  END CASE
+  ITC.REC(LN) = VALUE
+1200*
+  X = 20; Y = SLN; TYP = 4; SCALER = 2; MAXL = 5
+  IF ITC.REC(LN+LINES) # "" THEN
+    O.R = "O"; DEFAULT = OCONV(ITC.REC(LN+LINES),"MD2")
+  END
+  CALL EDIT.SUB
+  IF VALUE = "END" THEN GOTO 1100
+  ITC.REC(LN+LINES) = VALUE
+1999*
+  RETURN
+*
+*--- SCROLL ROUTINE
+*
+8000*
+  START.LINE = 1 + INT((LN-1)/PAGE.SIZE) * PAGE.SIZE
+  LAST.LINE = START.LINE + PAGE.SIZE - 1
+  IF LAST.LINE > LINES THEN LAST.LINE = LINES
+  IF START.LINE = OLD.START.LINE THEN GOTO 8099
+  OLD.START.LINE = START.LINE
+  CNT = 1
+  FOR N = START.LINE TO LAST.LINE
+    SLN = BEGIN.PAGE + LINE.SPACE * MOD(N-1,PAGE.SIZE)
+    P_X  = 0 ; P_Y = SLN ; P_VALUE = N "R#3" ; P_OPT = "CL"
+    P_X  := AM:9 ; P_Y := AM:SLN ; P_VALUE := AM:ITC.REC(N) "R#2"
+    P_X  := AM:20 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(ITC.REC(N+LINES),"MD2") "R#5"
+    CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+    CNT = CNT + 1
+  NEXT N
+  FOR M = CNT TO PAGE.SIZE
+    SLN = BEGIN.PAGE + LINE.SPACE * MOD(M-1,PAGE.SIZE)
+    P_X  = 0 ; P_Y = SLN ; P_VALUE = "" ; P_OPT = "CL"
+    CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+  NEXT M
+8099*
+  RETURN
+*--- Error message routine
+91000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+* 91000*
+*       PRINT @(0,23) : ERRMSG : CL :
+*       INPUT REPLY :
+*       PRINT @(0,23) : CL :
+*       RETURN
+93000 ERR.TYPE=3;CALL SYSCOM(MAT SYSCOM.REC)
+* 93000*
+*       ERR.TYPE = 3; CALL SYSCOM(MAT SYSCOM.REC)
+99999*
+  ECD.ACTION = 99 ; CALL SCRN.EDIT
+END

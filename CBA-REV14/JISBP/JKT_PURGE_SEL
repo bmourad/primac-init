@@ -1,0 +1,244 @@
+*COPY>CPYLIB>COM1
+************************************************************************
+* REVISION     - [10.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM       - PRIMAC
+* SOURCE       - DEVBP
+* PROGRAM      - JKT_PURGE_SEL
+* BY           - BILAL MOURAD
+* DATE         -
+* DESCRIPTION  -
+*T21177 diane 01/22/1997 * REV11 UPG
+*T22451 rik 02/06/1998 * PURGE NOT WORKING FOR STATUS = CANCELLED
+*T26556 cmykleb 06/04/2002 * Change pgm to get the purge date from
+*                            the proc and remove the notice because
+*                            it is now added to the rpt #.
+************************************************************************
+*
+*---- Data Structure Libraries
+*
+*COPY>JCS.CPYLIB>JOB_TKT
+*COPY>JIS.CPYLIB>JOB_TKT_TAG
+*COPY>JCS.CPYLIB>JOB
+*COPY>CPYLIB>EDIT.COM
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+*
+*--- SETUP SYSTEM ERROR MESSAGES
+*
+   SYS.TYPE = 1
+   CALL SYSCOM(MAT SYSCOM.REC)
+*T26556 v
+*
+*--- READ FROM PROC
+*
+   PROCREAD BUFFER ELSE
+      ERRMSG = "MUST RUN FROM PROC"
+      GOSUB 91000
+      GOTO 99999
+   END
+*T26556 ^
+*
+*---- Initialization
+*
+   MAT SCV.REC = ""
+*
+*---- Open Files
+*
+   OPEN "", "COMPANY" TO COMPANY ELSE
+      ERRMSG = "COMPANY FILE IS MISSING"
+      GOSUB 91000; GOTO 99999
+   END
+   OPEN "", "CONTROL" TO CONTROL ELSE
+      ERRMSG = "CONTROL FILE IS MISSING"
+      GOSUB 91000; GOTO 99999
+   END
+   OPEN "", "JIS.SCREENS" TO M.SCREENS ELSE
+      ERRMSG = "JIS.SCREENS FILE IS MISSING"
+      GOSUB 91000; GOTO 99999
+   END
+   OPEN "", "JOB_TKT" TO JOB_TKT ELSE
+      ERRMSG = "JOB_TKT FILE IS MISSING"
+      GOSUB 91000; GOTO 99999
+   END
+   OPEN "", "JOB_TKT_TAG" TO JOB_TKT_TAG ELSE
+      ERRMSG = "JOB_TKT_TAG FILE IS MISSING"
+      GOSUB 91000; GOTO 99999
+   END
+   OPEN "", "JOB" TO JOB ELSE
+      ERRMSG = " JOB FILE IS MISSING"
+      GOSUB 91000; GOTO 99999
+   END
+*
+*---- Get Company Number
+*
+   CONO = ""
+   CALL GET.CONO(CONO,MAT COMP.REC)
+   IF CONO = "END" THEN GOTO 99999
+*
+*---- Paint the screen
+*
+   ECD.SCRN.CNT = 1
+   ECD.SCRN.NAME = "JKT_PURGE_SEL"
+   ECD.ACTION = 1; CALL SCRN.EDIT
+   ECD.SCRN.NO = 1; ECD.ACTION = 2; CALL SCRN.EDIT
+*
+*---- Write the DATE
+*
+   ECD.NUM = 1
+   SCV.REC(ECD.NUM)<ECD.SCRN.NO> = OCONV(DATE(),"D2/")
+   ECD.ACTION = 5; CALL SCRN.EDIT
+*
+*---- Ask For Purge Date
+*
+10*
+*T26556 v
+*  ECD.NUM = 3;ECD.ACTION = 4; CALL SCRN.EDIT
+*  IF ECD.RET.VALUE = "END" THEN GOTO 99990
+*  P_DATE = ECD.RET.VALUE
+   P_DATE = BUFFER<3>
+   ECD.NUM = 3
+   SCV.REC(ECD.NUM)<ECD.SCRN.NO> = P_DATE
+   ECD.ACTION = 5 ; CALL SCRN.EDIT
+*T26556 ^
+*
+*---- Confirm The Purge Job
+*
+   ECD.NUM = 21; ECD.ACTION = 4; CALL SCRN.EDIT
+*T26556 v
+*  IF ECD.RET.VALUE = "N" THEN GOTO 99990
+   IF ECD.RET.VALUE = "N" THEN ERRMSG = "N" ; GOTO 99990
+*T26556 ^
+*
+*---- Check and Clearfile in JOB_TKT_TAG
+*
+   SELECT JOB_TKT_TAG
+20*
+   READNEXT JTT_ID THEN
+      IF JTT_ID[1,3] # CONO THEN
+         GOTO 20
+      END
+      ECD.NUM = 22; ECD.ACTION = 4; CALL SCRN.EDIT
+      IF ECD.RET.VALUE = "Y" THEN
+         MORE = 1
+         LOOP
+            IF JTT_ID[1,3] = CONO THEN
+               READU JTT FROM JOB_TKT_TAG, JTT_ID THEN
+                  DELETE JOB_TKT_TAG, JTT_ID 
+               END ELSE 
+                  RELEASE JOB_TKT_TAG, JTT_ID
+               END
+            END
+            READNEXT JTT_ID ELSE MORE = 0
+         WHILE MORE DO REPEAT
+      END ELSE
+         CLEARSELECT
+         GOTO 99990
+      END
+   END
+*
+*---- Show Process in Progress Message
+*
+   SELECT JOB_TKT
+   MORE = 1
+   P_X  = 3 ; P_Y = 21 ; P_VALUE = "PROCESSING:" ; P_OPT = "CL"
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   LOOP
+      READNEXT JKT_ID ELSE MORE = 0
+   WHILE MORE DO
+      IF JKT_ID[1,3] # CONO THEN GOTO 90
+      JTT_ID = FIELD(JKT_ID,"-",1)
+      MATREAD JKT.REC FROM JOB_TKT, JKT_ID ELSE GOTO 90
+      P_X  = 3 ; P_Y = 21 ; P_VALUE = 'PROCESSING: ':JKT_ID[4,99] ; P_OPT = "CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+*T22451 v
+*        JOB_ID = CONO: JKT.JOB.NO
+      JOB_ID = CONO: JKT.FLD.001
+*T22451 ^
+      MATREAD JOB.REC FROM JOB, JOB_ID ELSE GOTO 90
+      CALL JOB.STATUS.SUB(JOB.STATUS,JOB.TRACK.DATE,STATUS)
+*T22451 CANCELLED STATUS WAS MISPELLED
+      IF STATUS="READY TO PURGE" OR STATUS="WAS PURGED" OR STATUS="CANCELLED" OR STATUS="INVOICED" OR STATUS="COMPLETED" THEN
+*T26556 v
+*        IF JOB.STAT.DATE<1,1> <= P_DATE THEN
+         IF JOB.STAT.DATE<1,1> <= ICONV(P_DATE,"D2/") THEN
+*T26556 ^
+            MATREADU JTT_REC FROM JOB_TKT_TAG, JTT_ID ELSE MAT JTT_REC = ""
+            P = DCOUNT(JTT_REV_ID,VM) + 1
+*T22451 v
+*              JTT_JOB = JKT.JOB.NO
+            JTT_JOB = JKT.FLD.001
+*T22451 ^
+            IF JTT_LAST_REV = "" THEN
+               JTT_LAST_REV = JKT_ID[4,99]
+            END ELSE
+               REV = FIELD(JKT_ID,"-",2)
+               JTT_REV = FIELD(JTT_LAST_REV,"-",2)
+               IF REV > JTT_REV THEN
+                  JTT_REV_ID<1,P> = JTT_LAST_REV
+                  JTT_LAST_REV = JKT_ID[4,99]
+               END ELSE
+                  J.DON = 0
+                  FOR J = 1 TO P UNTIL J.DON
+                     IF REV < FIELD(JTT_REV_ID<1,J>,"-",2) THEN
+                        JTT_REV_ID = INSERT(JTT_REV_ID,1,J,0,JKT_ID[4,99])
+                        J.DON = 1
+                     END
+                  NEXT J
+               END
+            END
+            MATWRITE JTT_REC ON JOB_TKT_TAG, JTT_ID
+         END
+      END
+90*
+   REPEAT
+   P_X  = 0 ; P_Y = 21 ; P_VALUE = "" ; P_OPT = "CL"
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+*
+*---- Check if any Record is Selected
+*
+   SELECT JOB_TKT_TAG
+   MORE = 1; SEL = 0
+   LOOP
+      READNEXT JTT_ID ELSE MORE = 0
+   WHILE MORE DO
+      MATREADU JTT_REC FROM JOB_TKT_TAG, JTT_ID THEN
+         IF JTT_REV_ID = "" THEN 
+            DELETE JOB_TKT_TAG, JTT_ID
+         END ELSE
+            SEL = 1
+            RELEASE JOB_TKT_TAG, JTT_ID
+         END
+      END ELSE
+         RELEASE JOB_TKT_TAG, JTT_ID
+      END
+   REPEAT
+   IF SEL = 0 THEN
+      ERRMSG = "Could not locate any tickets with the selected criteria"
+      GOSUB 91000
+   END
+*
+*---- End of Main Program
+*
+99990 *
+   ECD.ACTION = 99 ; CALL SCRN.EDIT
+   GOTO 99999
+*
+*--- CALLS FOR SYSCOM
+*
+91000 *
+   ERR.TYPE = 1;CALL SYSCOM(MAT SYSCOM.REC); RETURN
+92000 *
+   ERR.TYPE = 2;CALL SYSCOM(MAT SYSCOM.REC); RETURN
+93000 *
+   ERR.TYPE = 3;CALL SYSCOM(MAT SYSCOM.REC)
+*
+*---- END
+*
+99999*
+   IF ERRMSG # "" THEN BUFFER<1> = "END"
+   PROCWRITE BUFFER ; * T26556
+END

@@ -1,0 +1,291 @@
+*COPY>CPYLIB>COM1
+***************************************************************
+* REVISION    - [10.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - POSBP
+* PROGRAM     - MISC.DAILY.REC.RPT
+* AUTHOR      - GRAHAM JARVIS, PRISYS PTY LTD
+* DATE        - 16 MAR 90
+* DESCRIPTION -
+* This program produces the Daily Miscellaneous Purchase
+* Order Receipt Report sorted by Warehouse.
+*
+* TASK
+* MOD CLW 10/01/94 Task 17919 - move to standard
+*     19403 - LLH 11/07/95 DIVISION
+*
+*T26090 ajibaly 03/22/2002 * CONVERT TO R12 REPORT.SCRN
+*T26186 lhelms 05/02/2002 * REV12 UPGRADE ADD PERIOD
+*T27357 adelgado 03/28/2003 * Add selection of period.
+*ENDDOC
+***************************************************************
+*
+*---- FILE EQUATES
+*
+*COPY>CPYLIB>SYSCOM
+*COPY>POS.CPYLIB>MISC.PO
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>FILE.VARS
+*COPY>PMC.CPYLIB>COMPANY
+*
+  DEFFUN CENTER.ON.STRING(STR1,STR2)
+*
+*---- SETUP FOR SYSTEM ERROR MESSAGES
+*
+  SYS.TYPE = 1
+  CALL SYSCOM(MAT SYSCOM.REC)
+*
+*---- OPEN FILES
+*
+  OPEN "","MISC.PO" TO MISC.PO ELSE ERRMSG = "MISC.PO FILE MISSING";GOTO 93000
+  OPEN "","COMPANY" TO COMPANY ELSE ERRMSG = "COMPANY FILE MISSING";GOTO 93000
+  OPEN "","CONTROL" TO CONTROL ELSE ERRMSG = "CONTROL FILE MISSING";GOTO 93000
+*
+*---- INITIALIZATION
+*
+  PROCREAD BUFF ELSE
+    ERRMSG = "MUST BE RUN FROM A PROC"; GOTO 93000
+  END
+*
+* T27357 v
+  IF BUFF<4> = 'ALL' THEN
+    START.DATE = BUFF<4>
+  END ELSE
+    START.DATE = ICONV(BUFF<4>,'D')
+  END
+  IF BUFF<5> = 'ALL' THEN
+    END.DATE = BUFF<5>
+  END ELSE
+    END.DATE = ICONV(BUFF<5>,'D')
+  END
+* T27357 ^
+*     WAREHOUSE = BUFF<3>
+  DIV        = BUFF<3>
+  BEG.PERIOD = BUFF<6>        ;* T27357
+  END.PERIOD = BUFF<7>        ;* T27357
+*
+  PG.NO = 0
+  FIRST.FLAG = 1
+  LINE.CNT = 0
+  ERRMSG = ""
+*T26090 v
+*    RPT.NO = "XXXX"
+  RPT.NO = BUFF<2>
+*T26090 ^
+  BY.SORT = "WAREHOUSE"
+  PREVIOUS.WHSE = ""
+  DISC.PRICE = ""
+  TOT.VALUE.REC = 0
+  GRAND.TOT.VALUE.REC = 0
+  ORDERED = 0
+  RECVD = 0
+  MAT MPO.REC = ""
+  PRINTER ON
+*
+*---- GET COMPANY NUMBER
+*
+  CONO = ""
+  CALL GET.CONO(CONO,MAT COMP.REC)
+  IF CONO = "END" THEN GOTO 99999
+*
+*---- GET REPORT NUMBER
+*
+*
+*---- MAIN PROCESSING
+*
+10*
+  IF FIRST.FLAG = 1 THEN FIRST.FLAG = 0; GOSUB 20
+  READNEXT MPO.KEY ELSE GOTO 15
+  MATREAD MPO.REC FROM MISC.PO,MPO.KEY ELSE GOTO 10
+  OPEN.FLG = 0
+  OPEN.CNT = COUNT(MPO.PROD.DESC,VM) + (MPO.PROD.DESC # "")
+  NEW.LINE.CNT = LINE.CNT + OPEN.CNT
+  IF NEW.LINE.CNT = 50 OR NEW.LINE.CNT > 50 THEN GOSUB 20
+  V = 0
+  FOR V = 1 TO OPEN.CNT
+    PROCEED=1
+    IF DIV # "ALL" THEN
+      PROCEED=0
+      IF MPO.MISC.DIV<1,V> = DIV THEN
+        PROCEED=1
+      END
+    END
+    IF PROCEED THEN
+      IF MPO.REC.DATE<1,V> # "" THEN
+        FOR VV = 1 TO 999
+          IF MPO.REC.DATE<1,V,VV> = '' THEN GO 14
+* T27357 v
+          GO.TO.NEXT = 0
+          IF START.DATE # 'ALL' THEN
+            IF MPO.REC.DATE<1,V,VV> < START.DATE THEN GO.TO.NEXT = 1
+          END
+          IF END.DATE # 'ALL' THEN
+            IF MPO.REC.DATE<1,V,VV> > END.DATE THEN GO.TO.NEXT = 1
+          END
+          IF BEG.PERIOD # 'ALL' THEN
+            IF MPO.REC.PER<1,V,VV> < BEG.PERIOD THEN GO.TO.NEXT = 1
+          END
+          IF END.PERIOD # 'ALL' THEN
+            IF MPO.REC.PER<1,V,VV> > END.PERIOD THEN GO.TO.NEXT = 1
+          END
+*         IF MPO.REC.DATE<1,V,VV> >= START.DATE AND MPO.REC.DATE<1,V,VV> <= END.DATE THEN
+          IF GO.TO.NEXT = 0 THEN
+* T27357 ^
+            PROD.NUM = MPO.PROD.NUM<1,V>
+            RECEIPT.WHSE = MPO.SHIP.WHSE<1>
+            PROD.DESC = MPO.PROD.DESC<1,V,1>
+            GROS.PRICE = MPO.GROS.PRICE<1,V>
+            DISCOUNT = MPO.DISCOUNT<1,V>
+            TOT.ONORD = MPO.TOT.ONORD<1,V>
+            TOT.RECEVED = MPO.REC.QTY<1,V,VV>
+            GOSUB 30
+            OPEN.FLG = 1
+          END
+        NEXT VV
+      END
+    END
+14*
+  NEXT V
+  GOTO 10
+15*
+  GOSUB 50
+  GOSUB 60
+  GOTO 99999
+*
+*---- PRINT THE HEADING
+*
+20*
+  PRINT CHAR(12):
+  LINE.CNT = 0
+  NEW.LINE.CNT = 0
+  PG.NO = PG.NO + 1
+  H.LINE = "";HLINE1 = "";HLINE2 = "";HLINE3 = ""
+  HLINE1 = "REPORT NO: ":RPT.NO"L#4":SPACE(26)
+  REMAIN = 50 - LEN(CO.NAME)
+  HALF = INT(REMAIN / 2)
+  K = SPACE(HALF)
+  HLINE2 = K:CO.NAME:K
+  HLINE3 = SPACE(33):"PAGE: ":PG.NO
+  H.LINE = HLINE1:HLINE2:HLINE3
+*T26090     PRINT H.LINE
+  H.LINE = ""
+  H.LINE = H.LINE:"DATE   : ":OCONV(DATE(),"D2/"):SPACE(27):"MISCELLANEOUS PURCHASE ORDER RECEIPT REPORT"
+*T26090 v
+*    PRINT H.LINE
+  HD1 = ''; HD2 = ''
+  CONO.NAME = ''; RPT.NAME = ''
+  RPT.DATE = DATE()
+  CALL GET.PROG.HEAD(CONO,CONO.NAME,RPT.NAME,RPT.NO,RPT.DATE,HD1,HD2)
+  HD1:= PG.NO
+  PRINT HD1; PRINT HD2
+*T26090 ^
+  HLINE = ''
+*T26090 v
+*    H.LINE = H.LINE:SPACE(59):"BY ":BY.SORT
+  H.LINE = SPACE(33):CENTER.ON.STRING("BY ":BY.SORT,SPACE(85))
+*T26090 ^
+  PRINT H.LINE
+  H.LINE = ""
+*T26090v
+*    H.LINE = SPACE(50):'From : ':BUFF<4>:'  to : ':BUFF<5>
+  H.LINE = SPACE(33):CENTER.ON.STRING('From : ':BUFF<4>:'  to : ':BUFF<5>,SPACE(85))
+*T26090^
+  PRINT H.LINE
+* T27357 v
+  H.LINE = "Division : ":DIV'L#5':SPACE(17):CENTER.ON.STRING('From Period : ':BUFF<6>:'  to : ':BUFF<7>,SPACE(85))
+  PRINT H.LINE
+* T27357  ^
+  PRINT
+  H.LINE = ''
+*     H.LINE = H.LINE:"   PO    Whse  Vendor      Product               Product             Po     Recvd     Ordered     Recvd   Recvd Value"
+  H.LINE = H.LINE:"   PO    Whse  Vendor      Product               Product               Po    Recvd    Ordered      Recvd  Recvd          Recvd"
+  PRINT H.LINE
+  H.LINE = ""
+  H.LINE = H.LINE:" Number        Number      Number              Description           Date     Date        Qty        Qty Period          Value"
+  PRINT H.LINE
+  H.LINE = ""
+  H.LINE = H.LINE:"-------- ---- -------- --------------- ------------------------- -------- --------  ---------  --------- ------  -------------"
+  PRINT H.LINE
+  LINE.CNT = LINE.CNT + 9
+  RETURN
+*
+*---- PRINT THE VALUES
+*
+30*
+  IF PREVIOUS.WHSE # "" AND PREVIOUS.WHSE # RECEIPT.WHSE THEN
+    GOSUB 50
+  END
+*
+  GOSUB 40
+  P.LINE = ""
+  P.LINE = P.LINE:MPO.NUM"L#8":" ":MPO.SHIP.WHSE "L#4":" ":MPO.VEND.NO"L#8":" ":PROD.NUM"L#15":" ":PROD.DESC"L#25":" ":OCONV(MPO.DATE,"D2/"):" "
+  P.LINE = P.LINE:OCONV(MPO.REC.DATE<1,V,VV>,"D2/")"R#8":" ":OCONV(ORDERED,'MD2')"R#10":" ":OCONV(RECVD,"MD2")"R#10":" ":MPO.REC.PER<1,V,VV>"R#6":" ":OCONV(VALUE.REC,"MD2,")"R#14"
+  PRINT P.LINE
+  PRINT 
+  LINE.CNT = LINE.CNT + 2
+  ORDERED = 0;RECVD = 0;VALUE.OPEN = 0
+  DISC.PRICE = ""
+  PREVIOUS.WHSE = RECEIPT.WHSE
+  RETURN
+*
+*---- GET FIELD VALUES, CALCULATE AND ACCUMULATE
+*
+40*
+  MPO.NUM = MPO.KEY[4,8]
+  IF DISCOUNT > 0 THEN
+    DISC.VAL = INT((GROS.PRICE/100 * (DISCOUNT / 10000)*100)+.5)
+  END ELSE
+    DISC.VAL = 0 
+  END
+  DISC.PRICE = GROS.PRICE - DISC.VAL
+  ORDERED = TOT.ONORD
+  RECVD = TOT.RECEVED
+  VALUE.REC = INT((DISC.PRICE * RECVD) / 10000 + .5)
+  TOT.VALUE.REC = TOT.VALUE.REC + VALUE.REC
+  GRAND.TOT.VALUE.REC = GRAND.TOT.VALUE.REC + VALUE.REC
+  RETURN
+*
+*---- PRINT WAREHOUSE TOTALS
+*
+50*
+  T.LINE = ''
+  T.LINE = T.LINE:SPACE(112):"--------------"
+  PRINT T.LINE
+  T.LINE = "WAREHOUSE TOTAL""R#111 "
+  T.LINE = T.LINE:OCONV(TOT.VALUE.REC,"MD2,")"R#14"
+  PRINT T.LINE
+  TOT.VALUE.REC = 0
+  PRINT
+  LINE.CNT = LINE.CNT + 3
+  RETURN
+*
+*---- PRINT GRAND TOTAL
+*
+60*
+  PRINT
+  GT.LINE = ""
+  GT.LINE = GT.LINE:SPACE(112):"--------------"
+  PRINT GT.LINE
+  GT.LINE = "GRAND TOTAL""R#111 "
+  GT.LINE = GT.LINE:OCONV(GRAND.TOT.VALUE.REC,"MD2,")"R#14"
+  PRINT GT.LINE
+  PRINTER OFF
+  RETURN
+*
+*---- CALLS FOR SYSCOM
+*
+91000*
+  ERR.TYPE = 1
+  CALL SYSCOM(MAT SYSCOM.REC)
+  RETURN
+92000*
+  ERR.TYPE = 2
+  CALL SYSCOM(MAT SYSCOM.REC)
+  RETURN
+93000*
+  ERR.TYPE = 3
+  CALL SYSCOM(MAT SYSCOM.REC)
+99999*
+  PRINT @(-1):
+END

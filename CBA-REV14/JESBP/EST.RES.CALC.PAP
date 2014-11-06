@@ -1,0 +1,231 @@
+   SUBROUTINE EST.RES.CALC.PAP(CONO, ACTION, DEL.NO)
+*********************************************************************
+*
+* REVISION - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+*
+* PROGRAM  - EST.RES.CALC.PAP
+*
+* AUTHOR   - STRAKA, VERCOM SOFTWARE
+*
+* DATE     - 04/18/91
+*
+* DESCRIPTION
+*
+* This program is used to re-calculate roll paper pricing
+*
+*T22172 gat 08/26/1997 * FIX LINEAL FOOTAGE CALCULATION
+*T23918 markt 04/29/1999 * Problem with inventory price getting
+*                          overlaid.
+*T24348 cm 09/16/1999 * When using an inventory product in the stock
+*                       section that has no receipts when recalced the
+*                       stock price & paper price are changed.
+*T24518 cm 11/24/1999 * On an existing estimate if you add addtl qtys
+*                       the matl price for the new qtys moves 2 decimal
+*                       places to the right.
+*T25740 epitka 11/30/2001 * REV12
+*T26413 cm 02/01/2002 * If an estimate qty is deleted the stock prices
+*                       get out of order if the stock prices are different
+*T26454 lross 02/25/2002 * When adding a qty the price on 'P' screen is
+*                          null.
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>JES.CPYLIB>SCOMMON.ESTIMATE
+*COPY>JES.CPYLIB>ESTIMATE
+*COPY>JES.CPYLIB>ESTIMATE.MATL
+*COPY>JES.CPYLIB>ESTIMATE.BIND.SPOIL
+*COPY>JES.CPYLIB>ESTIMATE.RES.PRESS.SPOIL
+*COPY>JES.CPYLIB>ESTIMATE.RES
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>JES.CPYLIB>JES.FILE.VARS
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+   MAT SYSCOM.REC =  ""; SYS.TYPE = 2
+*
+   IF FILEINFO(WAREHOUSE,0)=0 THEN        
+      OPEN '','WAREHOUSE' TO WAREHOUSE ELSE
+         ERRMSG='WAREHOUSE FILE IS MISSING' 
+         GOSUB 93000                        
+      END                                  
+   END                                    
+*
+*---- MAIN PROCESSING
+*
+*T26413 v
+   IF DEL.NO # "" THEN
+      PCNT=DCOUNT(EST.PROD.OS.PROD<1,1>,SVM)
+      FOR MPTR=1 TO PCNT
+         MACRO DELVAL;EST.RL.PAP.PRICE<1,1,MPTR>;"!";DEL.NO
+      NEXT PCNT
+   END
+*T26413 ^
+   SAVE.PAP.PRICE=EST.RL.PAP.PRICE
+   PRICE.FLAG = CO.JES.PARAM<1,11>
+   IF PRICE.FLAG = "" THEN; ***** T23918
+      PRICE.FLAG='X'
+   END; ***** T23918
+*
+*--- Calculate Roll Label Paper Details
+*
+   QQTY=DCOUNT(EST.QTY,VM)
+   UCNT=DCOUNT(EST.PROD.OS.USAGE,SM)
+   FOR COMP=1 TO UCNT
+      PCNT=DCOUNT(EST.PROD.OS.PROD<1,COMP>,SVM)
+      FOR MPTR=1 TO PCNT
+         MATREAD ESTM.REC FROM ESTIMATE.MATL, CONO:"R":EST.PROD.OS.USAGE<1,COMP,MPTR> ELSE MAT ESTM.REC=""
+         LOCATE EST.PROD.OS.PROD<1,COMP,MPTR> IN ESTM.PROD<1>,1 SETTING MP ELSE MP=1
+         FOR Y=1 TO QQTY
+            GOSUB 1000
+            TOT.MSI=INT(((EST.PROD.OS.WIDTH<1,COMP,MPTR>/10000*TOT.PC)/1000)+.9)
+            INV.ID=EST.PROD.INV.ID<1,COMP,MPTR>
+            IF PRICE.FLAG # "X" AND INV.ID # "" THEN
+               GOSUB 2000
+            END ELSE
+               PRICE.BRK.COUNT=DCOUNT(ESTM.END.QTY<1,MP>,SVM)
+               FLG=0
+               UNIT.PR = 0 ; * T26454
+               FOR X=1 TO PRICE.BRK.COUNT UNTIL FLG
+                  TEST.QTY=ESTM.END.QTY<1,MP,X>
+                  IF TOT.MSI <= TEST.QTY THEN
+                     UNIT.PR=ESTM.QCOST<1,MP,X>
+                     FLG=1
+                  END
+               NEXT X
+               IF NOT(FLG) THEN
+                  UNIT.PR=ESTM.QCOST<1,MP,PRICE.BRK.COUNT>
+               END
+            END
+*T26454 v
+*T24348 v
+*           IF UNIT.PR+0=0 THEN
+*               UNIT.PR=FIELD(SAVE.PAP.PRICE<1,COMP,MPTR>,'!',Y)
+*           END
+            IF UNIT.PR+0 = 0 THEN
+               SAVE.PR = FIELD(SAVE.PAP.PRICE<1,COMP,MPTR>,'!',Y)
+               IF SAVE.PR+0 = 0 AND Y > 1 THEN
+                  SAVE.PR = FIELD(SAVE.PAP.PRICE<1,COMP,MPTR>,'!',Y-1)
+               END
+               IF SAVE.PR # '' THEN UNIT.PR = SAVE.PR
+            END
+*T24348 ^
+*T26454 ^
+            MACRO REPVAL;EST.RL.TOTAL.PC<1,COMP,MPTR>;"!";Y;INT(TOT.PC)
+            MACRO REPVAL;EST.RL.PAP.MSI<1,COMP,MPTR>;"!";Y;TOT.MSI
+            MACRO REPVAL;EST.RL.PAP.PRICE<1,COMP,MPTR>;"!";Y;UNIT.PR
+         NEXT Y
+         PLC=DCOUNT(EST.RL.PAP.MSI<1,COMP,MPTR>,"!")
+         FOR X=PLC TO QQTY+1 STEP -1
+            MACRO DELVAL;EST.RL.TOTAL.PC<1,COMP,MPTR>;"!";X
+            MACRO DELVAL;EST.RL.PAP.MSI<1,COMP,MPTR>;"!";X
+            MACRO DELVAL;EST.RL.PAP.PRICE<1,COMP,MPTR>;"!";X
+         NEXT X
+      NEXT MPTR
+   NEXT COMP
+   GOTO 99999
+*
+*---- EQUATIONS TO CALCULATE MSQ
+*
+1000 *
+*
+   IF EST.RL.DIE.REPEAT<1,COMP,1> # "" AND EST.RL.DIE.NO.ACR<1,COMP,1> # "" AND EST.RL.DIE.NO.ARD<1,COMP,1> # "" THEN
+      VAR1 = EST.QTY<1,Y>*(EST.RL.DIE.REPEAT<1,COMP,1>/10000)
+      IF EST.RL.DIE.NO.ARD<1,COMP,1>='' THEN
+         VAR3 = 1
+      END ELSE
+         VAR3 = EST.RL.DIE.NO.ARD<1,COMP,1>
+      END
+      VAR4 = EST.RL.SETS<1,COMP,2>
+      IF VAR4 = '' THEN VAR4 = 1
+* T22172
+      VAR2 = (EST.RL.DIE.NO.ACR<1,COMP,1>*VAR3)/VAR4
+*        VAR2 = (EST.RL.DIE.NO.ACR<1,COMP,1>>/VAR4
+* T22172
+*     BASE.PC = INT((VAR1/VAR2)/1000+.5);*METRIC
+      BASE.PC = INT((VAR1/VAR2)+.5);*IMPERIAL
+      PR.SPOIL.PC = 0
+      FIN.SPOIL.PC = 0
+      MR.PC=0
+*
+*--- Call routine to calculate Spoilage's
+*
+      CALL EST.RES.CALC.SPOIL(CONO,ACTION,COMP,EST.QTY<1,Y>,BASE.PC,PR.SPOIL.PC,FIN.SPOIL.PC,MR.PC)
+*
+      TOT.PC=BASE.PC+MR.PC+PR.SPOIL.PC+FIN.SPOIL.PC
+   END ELSE
+      TOT.PC=0
+   END
+   RETURN
+*
+*---- GET INVENTORY PRICE
+*
+2000 *
+   ICOST = ""
+   MATREAD INV.REC FROM INVENTORY, CONO:INV.ID ELSE
+      MAT INV.REC = ""
+   END
+   WCNT = DCOUNT(INV.WHSE.CODE,VM)
+   FOR WP = 1 TO WCNT
+      WHSE = INV.WHSE.CODE<1,WP>
+      IWH.ID = CONO:INV.ID:"!":WHSE
+      MATREAD IWH.REC FROM INV.WHSE,IWH.ID THEN
+         MAT IWH.REC = ""
+      END
+      SCOST = ""
+      BEGIN CASE
+         CASE PRICE.FLAG = "L"
+            IF IWH.LIST.COST # "" THEN
+*T24518 v
+*                 SCOST = INT(IWH.LIST.COST / 100 + 0.99)
+               SCOST = IWH.LIST.COST
+*T24518 ^
+            END
+         CASE PRICE.FLAG = "A"
+            IF IWH.AVG.COST # "" THEN
+*T24518 v
+*                 SCOST = INT(IWH.AVG.COST / 100 + 0.99)
+               SCOST = IWH.AVG.COST
+*T24518 ^
+            END
+         CASE PRICE.FLAG = "S"
+            IF IWH.STD.COST # "" THEN
+*T24518 v
+*                 SCOST = INT(IWH.STD.COST / 100 + 0.99)
+               SCOST = IWH.STD.COST
+*T24518 ^
+            END
+         CASE PRICE.FLAG = "R"
+            DIV.POS='' ; FISCAL.FLAG='IC' ; TRAN.PERIOD=''
+            CALL GET.LAST.COST(IWH.ID,MAT IWH.REC,WAREHOUSE,CONTROL,ERR.FLG,ERRMSG,DIV.POS,FISCAL.FLAG,TRAN.PERIOD,LAST.PRICE)
+            BEGIN CASE
+               CASE ERR.FLG=''
+                  SCOST=INT(LAST.PRICE)
+               CASE ERR.FLG="-1"
+                  GOSUB 90000
+                  CONTINUE
+               CASE ERR.FLG='-2'
+                  GOSUB 93000
+            END CASE
+      END CASE
+      BEGIN CASE
+         CASE SCOST = ""
+         CASE ICOST = ""
+            ICOST = SCOST
+         CASE SCOST > ICOST
+            ICOST = SCOST
+      END CASE
+   NEXT WP
+   UNIT.PR = ICOST
+   RETURN
+*
+*---- ERROR ROUTINE
+*
+90000 ERR.TYPE=1;CALL SI_SYSCOM(MAT SYSCOM.REC);RETURN
+93000 ERR.TYPE=3;CALL SI_SYSCOM(MAT SYSCOM.REC)
+99999 *
+   RETURN
+END

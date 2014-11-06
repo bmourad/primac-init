@@ -1,0 +1,4 @@
+COM INV.REC(90),IWH.REC(80),IWLO.REC(30)
+COM CATG.REC(45)
+COM ORG.IWH.REC(80) ;*original INV.WHSE.REC set after reading IWH.REC beforecalling OPSUB
+COM DFR.REC(40)

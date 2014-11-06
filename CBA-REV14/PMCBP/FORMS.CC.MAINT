@@ -1,0 +1,347 @@
+*COPY>CPYLIB>COM1
+**********************************************
+* REVISION    - [12.0]
+* Copyright 1995 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - PMCBP
+* PROGRAM     - FORMS.CC.MAINT
+* BY          - ABDULLAH JIBALY; CBA
+* DATE        - 08/07/2002
+* DESCRIPTION - THIS PROGRAM MAINTAINS THE COPY-TO EMAILS FOR PRIMAC
+*               GENERATED FORMS (ex: POs, Invoices...)
+*
+*ENDDOC
+**********************************************
+*
+*---CPYLIBS
+*
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>PMC.CPYLIB>COMPANY
+*
+*---ERROR MESSAGES
+*
+   SYS.TYPE=1
+   CALL SYSCOM(MAT SYSCOM.REC)
+*
+*---OPEN FILES
+*
+   OPEN '', 'PMC.SCREENS' TO M.SCREENS ELSE
+      ERRMSG = 'PMC.SCREENS FILE IS MISSING'
+      GOSUB 91000; RETURN
+   END
+   OPEN '', 'CONTROL' TO CONTROL ELSE
+      ERRMSG = 'CONTROL FILE IS MISSING'
+      GOSUB 91000; RETURN
+   END
+   OPEN '', 'COMPANY' TO COMPANY ELSE
+      ERRMSG = 'COMPANY FILE IS MISSING'
+      GOSUB 91000; RETURN
+   END
+   OPEN '', 'DIVISION' TO DIVISION ELSE
+      ERRMSG = 'DIVISION FILE IS MISSING'
+      GOSUB 91000; RETURN
+   END
+*
+*---INITIALIZATION SECTION
+*
+   MAT EDIT.COM.DRIVER = ''
+   ECD.SCRN.CNT = 1
+   ECD.SCRN.NAME = 'FORMS.CC.MAINT'
+   ECD.ACTION=1; CALL SCRN.EDIT
+   ECD.SCRN.NO = 1
+   ESN = ECD.SCRN.NO
+   ;*
+   ;* Read company record
+   ;*
+   MAT COMP.REC = ''
+   CONO = ''
+   CALL GET.CONO(CONO,MAT COMP.REC)
+   IF CONO = 'END' THEN
+      ERRMSG = 'Company number cannot be located!'
+      GOSUB 91000; RETURN
+   END
+   ;*
+   ;* Main program loop
+   ;*
+   MORE = 1
+   LOOP
+      GOSUB MAIN
+   WHILE MORE REPEAT
+   RETURN
+*
+*---BODY OF PROGRAM SECTION
+*
+MAIN: 
+   ;*
+   ;* Setup scrolling variables
+   ;*
+   REF.NO = ''
+   LN.NO = 0
+   FIELD.COUNT = 0
+   LINE.COUNT = 12
+   ;*
+   ;* Draw screen
+   ;*
+   MAT SCV.REC = ''
+   ECD.ACTION=2;CALL SCRN.EDIT
+   ;*
+   ;* Get the division and form type to compose the CONTROL record id
+   ;*
+   LOOP
+      GOSUB SET.DIV
+      IF ECD.RET.VALUE = 'END' THEN
+         MORE=0; RETURN
+      END
+      GOSUB SET.FORM.TYPE
+      IF ECD.RET.VALUE # 'END' THEN EXIT
+   REPEAT
+   ;*
+   ;* Read the addresses for this DIV:TYPE, otherwise add to new record
+   ;*
+   GOSUB GET.FCCE.ID
+   READ FCCE.ADDRESSES FROM CONTROL,FCCE.ID ELSE
+      FCCE.ADDRESSES = ''
+      GOSUB SET.ADDRESSES
+   END
+   ;*
+   ;* Display the email addresses
+   ;*
+   SCV.REC(8)<ESN> = FCCE.ADDRESSES
+   FIELD.COUNT = DCOUNT(FCCE.ADDRESSES,@VM)
+   GOSUB SCROLL
+   ;*
+   ;* Get an option for the main prompt
+   ;*
+   LOOP
+      ECD.NUM = 5
+      ECD.ACTION = 4; CALL SCRN.EDIT
+      OPTION = UPCASE(ECD.RET.VALUE)
+      BEGIN CASE
+         CASE OPTION = "END" OR OPTION = "E"
+            RETURN
+         CASE OPTION = "F"
+            WRITE FCCE.ADDRESSES ON CONTROL, FCCE.ID
+            RETURN
+         CASE OPTION = "C"
+            COPY.RECORD.CONFIRM = 'Copy this record to division *DIV*? (y/n):'
+            GOSUB COPY.RECORD
+         CASE OPTION = "M"
+            OLD.FCCE.ID = FCCE.ID
+            COPY.RECORD.CONFIRM = 'Move this record to division *DIV*? (y/n):'
+            GOSUB COPY.RECORD
+            IF FCCE.ID # OLD.FCCE.ID THEN
+               DELETE CONTROL, OLD.FCCE.ID
+            END
+         CASE OPTION = "D"
+            READ REC FROM CONTROL, FCCE.ID ELSE
+               ERRMSG = 'This record has not been filed yet!'; GOSUB 91000
+               CONTINUE
+            END
+            ECD.NUM = 11
+            ECD.PMSG = 'Are you sure you want to delete this record? (y/N):'
+            ECD.ACTION = 4; CALL SCRN.EDIT
+            IF ECD.RET.VALUE = 'Y' THEN
+               DELETE CONTROL, FCCE.ID
+               RETURN
+            END
+         CASE OPTION = "A"
+            GOSUB SET.ADDRESSES
+         CASE 1
+            ERRMSG = "INVALID OPTION, PLEASE TRY AGAIN!"; GOSUB 91000
+      END CASE
+   REPEAT
+   RETURN
+*
+SCROLL: 
+   ;*
+   ;* Required variables:
+   ;* - LN.NO           :  Current line you're on
+   ;* - LINE.COUNT      :  Total number of lines in scroll area
+   ;* - REF.NO          :  Internally updated in this sub
+   ;*                      (set this to '' to force redraw)
+   ;* - FIELD.COUNT     :  Number of lines with data
+   ;*
+   CUR.LN = LN.NO
+   CUR.LNS = LINE.COUNT
+   START.REF.NO = 1 + INT((CUR.LN-1)/CUR.LNS)*CUR.LNS
+   IF START.REF.NO = REF.NO THEN RETURN
+   REF.NO = START.REF.NO
+   CUR.PAGE = CUR.LN/CUR.LNS
+   IF INT(CUR.PAGE) # CUR.PAGE OR CUR.PAGE = 0 THEN
+      CUR.PAGE = INT(CUR.PAGE)+1
+   END
+   LAST.PAGE = FIELD.COUNT/CUR.LNS
+   IF INT(LAST.PAGE) # LAST.PAGE OR LAST.PAGE = 0 THEN
+      LAST.PAGE = INT(LAST.PAGE)+1
+   END
+   IF CUR.PAGE > LAST.PAGE THEN LAST.PAGE = CUR.PAGE
+   ;*
+   ;* Display line numbers and addresses
+   ;* Get around scrolling bug in ECD.ACTION=7 by using ECD.ACTION=5
+   ;*
+   FOR IDX = REF.NO TO REF.NO+CUR.LNS-1
+      ECD.SUB.NUM=IDX;ECD.NUM=7
+      SCV.REC(ECD.NUM)<ESN,IDX> = IDX
+      ECD.ACTION=5; CALL SCRN.EDIT
+      ECD.SUB.NUM=IDX;ECD.NUM=8;ECD.ACTION=5;CALL SCRN.EDIT
+   NEXT IDX
+   ;*
+   ;* Display current page
+   ;*
+   ECD.NUM = 9
+   SCV.REC(ECD.NUM)<ESN> = CUR.PAGE
+   ECD.ACTION = 5; CALL SCRN.EDIT
+   ;*
+   ;* Display total pages
+   ;*
+   ECD.NUM = 10
+   SCV.REC(ECD.NUM)<ESN> = LAST.PAGE
+   ECD.ACTION = 5; CALL SCRN.EDIT
+   RETURN
+*
+SCROLL.OPTIONS: 
+   BEGIN CASE
+      CASE SCROLL.OPTION = "S"
+         LN.NO = REF.NO + LINE.COUNT
+         IF LN.NO > FIELD.COUNT THEN LN.NO = 1
+         GOSUB SCROLL
+      CASE SCROLL.OPTION = "SR"
+         LN.NO = REF.NO - LINE.COUNT
+         IF LN.NO < 1 THEN LN.NO = FIELD.COUNT
+         GOSUB SCROLL
+      CASE SCROLL.OPTION = "SB"
+         LN.NO = FIELD.COUNT
+         GOSUB SCROLL
+      CASE SCROLL.OPTION = "ST"
+         LN.NO = 1
+         GOSUB SCROLL
+   END CASE
+   RETURN
+*
+COPY.RECORD: 
+   LOOP
+      ECD.NUM = 12
+      ECD.PMSG = "Enter new division number: "
+      ECD.ACTION=4;CALL SCRN.EDIT
+      IF ECD.RET.VALUE = 'END' THEN RETURN
+      READ REC FROM CONTROL,ECD.RET.VALUE:FCCE.FORM.TYPE THEN
+         ERRMSG = 'Division ':ECD.RET.VALUE:' already has a record!'
+         GOSUB 91000
+         ECD.RET.VALUE = ''
+      END
+   WHILE ECD.RET.VALUE = '' REPEAT
+   NEW.FCCE.DIV = ECD.RET.VALUE
+   ECD.NUM = 11
+   ECD.PMSG = CHANGE(COPY.RECORD.CONFIRM,'*DIV*',NEW.FCCE.DIV)
+   ECD.ACTION = 4; CALL SCRN.EDIT
+   IF ECD.RET.VALUE = 'Y' THEN
+      FCCE.DIV = NEW.FCCE.DIV
+      GOSUB GET.FCCE.ID
+      WRITE FCCE.ADDRESSES ON CONTROL, FCCE.ID
+      SCV.REC(1)<ESN> = FCCE.DIV
+      ECD.NUM = 1; ECD.ACTION = 5; CALL SCRN.EDIT
+   END
+   RETURN
+*
+GET.FCCE.ID:
+   ;* Returns        :  FCCE.ID
+   ;* Required Inputs:  FCCE.DIV and FCCE.FORM.TYPE
+   ;*
+   FCCE.PREFIX = CONO:"_FORMS_CC_EMAILS_"
+   FCCE.ID = FCCE.PREFIX:FCCE.DIV:FCCE.FORM.TYPE
+   RETURN
+*
+SET.DIV:
+   ECD.NUM = 1
+   ECD.ACTION = 4; CALL SCRN.EDIT
+   IF ECD.RET.VALUE # 'END' THEN FCCE.DIV = ECD.RET.VALUE
+   RETURN
+*
+SET.FORM.TYPE:
+   LOOP
+      ECD.NUM = 4
+      ECD.ACTION = 4; CALL SCRN.EDIT
+   WHILE ECD.RET.VALUE = '' DO REPEAT
+   IF ECD.RET.VALUE = 'END' THEN RETURN
+   ;*
+   ;* Set the form type based on the option chosen
+   ;*
+   BEGIN CASE
+      CASE ECD.RET.VALUE = 1
+         FCCE.FORM.TYPE = "PO"
+         ECD.NUM = 2
+      CASE ECD.RET.VALUE = 2
+         FCCE.FORM.TYPE = "AR"
+         ECD.NUM = 3
+   END CASE
+   ;*
+   ;* place a check mark next to the appropriate form type
+   ;*
+   SCV.REC(ECD.NUM)<ESN> = "X"
+   ECD.ACTION = 5; CALL SCRN.EDIT
+   RETURN
+*
+SET.ADDRESSES: 
+   ECD.RET.VALUE = ''
+   LOOP
+      IF FIELD.COUNT > 0 THEN
+         ECD.NUM = 6
+         ECD.ACTION = 4; CALL SCRN.EDIT
+         OPTION = UPCASE(ECD.RET.VALUE)
+      END ELSE
+         IF ECD.RET.VALUE # "END" THEN OPTION = "A" ELSE OPTION = "END"
+      END
+      BEGIN CASE
+         CASE OPTION = "END" OR OPTION = "E" OR OPTION = ""
+            ECD.RET.VALUE = ""
+            EXIT
+         CASE OPTION[1,1] = "S"
+            SCROLL.OPTION = OPTION; GOSUB SCROLL.OPTIONS
+         CASE OPTION = "A"
+            LN.NO = FIELD.COUNT
+            LOOP
+               LN.NO += 1
+               GOSUB SCROLL
+               LOOP
+                  ECD.NUM = 8; ECD.SUB.NUM = LN.NO
+                  ECD.ACTION = 4; CALL SCRN.EDIT
+                  IF ECD.RET.VALUE = 'END' THEN EXIT
+                  ;*
+                  ;* Basic checking for correct email address format
+                  ;*
+                  AT.IDX = INDEX(ECD.RET.VALUE,"@",1)
+                  IF AT.IDX > 1 AND AT.IDX # LEN(ECD.RET.VALUE) THEN EXIT
+               REPEAT
+               IF ECD.RET.VALUE = 'END' THEN EXIT
+               FCCE.ADDRESSES<1,LN.NO> = ECD.RET.VALUE
+               FIELD.COUNT += 1
+            REPEAT
+            SCV.REC(8)<ESN> = DELETE(SCV.REC(8),ESN,LN.NO)
+            LN.NO -= 1
+            REF.NO = ''; GOSUB SCROLL
+         CASE OPTION = "D"
+            ECD.NUM = 12
+            ECD.MINV = REF.NO
+            ECD.MAXV = MINIMUM((REF.NO+LINE.COUNT-1):@AM:FIELD.COUNT)
+            ECD.ACTION = 4; CALL SCRN.EDIT
+            IF ECD.RET.VALUE = 'END' THEN CONTINUE
+            LN = ECD.RET.VALUE
+            SCV.REC(8)<ESN> = DELETE(SCV.REC(8),ESN,LN)
+            LN.NO = LN-1
+            FCCE.ADDRESSES = SCV.REC(8)<ESN>
+            FIELD.COUNT -= 1
+            REF.NO = ''
+            GOSUB SCROLL
+      END CASE
+   REPEAT
+   RETURN
+*
+*
+*---STANDARD SUBROUTINES
+*
+91000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+99999 RETURN
+END

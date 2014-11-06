@@ -1,0 +1,769 @@
+*COPY>CPYLIB>COM1
+***************************************************************
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* PROGRAM       - HIST.GL.DETAIL.LIST
+* SYSTEM        - GLSBP
+* BY            - RHONDA PERRIN, COMPUTER BUSINESS ASSOCIATES
+* DATE          - 09/23/85
+* DESCRIPTION   -
+* This program produces a General Ledger Detail List by period.
+*
+*T24263 cm 12/08/1999 * Correct the GL Detail History Report because
+*                       it has never been correct.
+*T25196 aron 06/21/2000 * DO NOT PRINT FIRST 3 CHARS OF JE#, 
+*                         REFER# = PO# FOR VR (VOUCHER), 
+*                         NO "-" IN G/L# ON PAGE BREAKS
+*T26005 alex 07/25/2001 * Display Beginning and Ending Balances.
+*T26090 cmykleb 05/20/2002 * Change pgm to get the rpt # from the proc
+*                            and use that # to get the rpt name.
+*ENDDOC
+***************************************************************
+*
+*---- FILE EQUATES
+*
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>FILE.VARS
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>COA
+*COPY>GLS.CPYLIB>COA.BAL
+*COPY>GLS.CPYLIB>GLM
+*COPY>PMC.CPYLIB>DIVISION
+*COPY>PMC.CPYLIB>DEPARTMENT
+*COPY>PMC.CPYLIB>COST.CNTR
+*COPY>PMC.CPYLIB>VEND
+*COPY>APS.CPYLIB>SQV
+*
+*---- SETUP FOR SYSTEM ERROR MESSAGES
+*
+     SYS.TYPE = 1
+     CALL SYSCOM(MAT SYSCOM.REC)
+*
+*---- PROCREAD
+*
+     PROCREAD XX ELSE ERRMSG = "MUST BE RUN FROM PROC";GOSUB 91000;GOTO 99999
+     CONO = XX<1>
+     CO.NAME = XX<2>
+     BEG.PERIOD = XX<3>
+     END.PERIOD = XX<4>
+     LEVEL = XX<5>
+     S.LEVEL = XX<6>
+     BEG.ACCT = XX<7>
+     END.ACCT = XX<8>
+     BEG.DIV = XX<9>
+     END.DIV = XX<10>
+     BEG.DEPT = XX<11>
+     END.DEPT = XX<12>
+     BEG.CCTR = XX<13>
+     END.CCTR = XX<14>
+     IF BEG.ACCT = 'ALL' THEN END.ACCT = 'ALL'
+     IF BEG.DIV = 'ALL' THEN END.DIV = 'ALL'
+     IF BEG.DEPT = 'ALL' THEN END.DEPT = 'ALL'
+     IF BEG.CCTR = 'ALL' THEN END.CCTR = 'ALL'
+*
+*---- DIMENSION RECORDS
+*
+*
+*---- OPEN FILES
+*
+     OPEN 'COMPANY' TO COMPANY ELSE ERRMSG = 'COMPANY FILE MISSING';GOTO 93000
+     MATREAD COMP.REC FROM COMPANY, CONO ELSE
+        ERRMSG = 'CANNOT LOCATE COMPANY ' : CONO
+        GOTO 93000
+     END
+     OPEN 'CONTROL' TO CONTROL ELSE ERRMSG = 'CONTROL FILE MISSING';GOTO 93000
+     OPEN XX<15> TO GLR ELSE ERRMSG = 'GLR FILE MISSING';GOTO 93000
+     OPEN 'DIVISION' TO DIVISION ELSE ERRMSG = 'DIVISION FILE MISSING';GOTO 93000
+     OPEN 'DEPARTMENT' TO DEPARTMENT ELSE ERRMSG = 'DEPARTMENT FILE MISSING';GOTO 93000
+     OPEN 'COST.CNTR' TO COST.CNTR ELSE ERRMSG = 'COST.CNTR FILE MISSING';GOTO 93000
+     OPEN 'COA' TO COA ELSE ERRMSG = 'COA FILE MISSING';GOTO 93000
+     OPEN XX<20> TO COA.BAL ELSE ERRMSG = 'COA.BAL FILE MISSING';GOTO 93000
+     OPEN 'BACKUP.0' TO CO.COA.BAL ELSE ERRMSG = 'CO.COA.BAL FILE MISSING';GOTO 93000
+     OPEN 'BACKUP.1' TO DV.COA.BAL ELSE ERRMSG = 'DV.COA.BAL FILE MISSING';GOTO 93000
+     OPEN 'BACKUP.2' TO DP.COA.BAL ELSE ERRMSG = 'DP.COA.BAL FILE MISSING';GOTO 93000
+     OPEN 'BACKUP.3' TO CC.COA.BAL ELSE ERRMSG = 'CC.COA.BAL FILE MISSING';GOTO 93000
+     OPEN 'VEND' TO VEND ELSE ERRMSG = 'VEND FILE MISSING';GOTO 93000
+     OPEN 'SQV' TO SQV ELSE ERRMSG = 'SQV FILE MISSING';GOTO 93000
+*
+*---- INITIALIZATION
+*
+     PG.NO = 0
+     LINE.CNT = 99
+     ERRMSG = ""
+     UNKNOWN = STR("?",30)
+     SP1 = SPACE(1)
+     DSH2 = STR('-',2)
+     DSH8 = STR('-',8)
+     DSH13 = STR('-',13)
+     DSH15 = STR('-',15)
+     DSH35 = STR('-',35)
+     ACCT.LEN = LEN(CO.ACCT.PIC)
+     MACCT.LEN = FIELD(CO.ACCT.STRUC,'-',1)
+     ODIV = ""
+     ODEPT = ""
+     OCCTR = ""
+     OACCT = ""
+     OMACCT = ""
+     PREV.BAL = ""
+     PREV.ACCT = ""
+     OPN = CB.OPN + BEG.PERIOD[5,2]
+*T24263 v
+     DB.BEG = 160 + (2 * BEG.PERIOD[5,2])
+     CR.BEG = 161 + (2 * BEG.PERIOD[5,2])
+     DB.END = 160 + (2 * END.PERIOD[5,2])
+     CR.END = 161 + (2 * END.PERIOD[5,2])
+*T24263 ^
+     NODATA = 1
+     STRUC = CO.ACCT.MASK:STR("#",15 - LEN(CO.ACCT.MASK))
+     SLINE = DSH15:SP1:DSH35:SP1:DSH8:SP1:DSH2:SP1:DSH8:SP1:DSH15:SP1:DSH13:SP1:DSH13:SP1:DSH15
+*T26090 v
+*    H.LINE = "ACCOUNT HISTORY DETAIL REPORT"
+*    CALL GET.PROG.HEAD(CONO,CO.NAME,H.LINE,"","",HD1,HD2)
+     CO.NAME = ""
+     RPT.NAME = ""
+     RPT.NO = XX<2>
+     CALL GET.PROG.HEAD(CONO,CO.NAME,RPT.NAME,RPT.NO,"",HD1,HD2)
+*T26090 ^
+     PRINTER ON
+*
+*---- MAIN PROCESSING
+*
+10*
+     DATA = 1
+     FIRST.TIME = 1
+     MACCT = ''
+     LOOP
+        READNEXT ID ELSE DATA = 0
+     WHILE DATA DO
+        IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+        DIV = ID[4,2]
+        DEPT = ID[6,2]
+        CCTR = ID[8,3]
+        MACCT = ID[11,MACCT.LEN]
+        ACCT = ID[11,ACCT.LEN]
+        SEQ = ID[11 + ACCT.LEN,6]
+        BEGIN CASE
+        CASE MACCT <> OMACCT AND MACCT.LEN <> ACCT.LEN
+           IF LINE.CNT >= 55 THEN GOSUB 20
+           IF HEAD.FLG AND LINE.CNT = 8 THEN
+              HEAD.FLG = 0
+           END ELSE
+              PRINT SLINE
+              LINE.CNT = LINE.CNT + 1
+              IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+           END
+           IF MACCT.LEN <> ACCT.LEN THEN
+              OMACCT = MACCT
+              MATREAD CB.REC FROM COA.BAL,CONO:MACCT ELSE
+                 MAT CB.REC = ""
+              END
+*T24263 v
+*             OPEN.BAL = CB.REC(OPN)
+              OPEN.BAL = CB.REC(3)
+*T24263 ^
+              END.BAL = OPEN.BAL + CB.DEBITS - CB.CREDITS
+              PRINT MACCT "L#15":SPACE(58):OCONV(OPEN.BAL,"MD2Z,C")"R#15":
+              PRINT SP1:OCONV(CB.DEBITS,"MD2Z,")"R#13":SP1:
+              PRINT OCONV(CB.CREDITS,"MD2Z,")"R#13":SP1:OCONV(END.BAL,"MD2Z,C")"R#15"
+              LINE.CNT = LINE.CNT + 1
+              IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+           END
+           OACCT = ACCT
+           MATREAD CB.REC FROM CO.COA.BAL, CONO : ACCT ELSE
+              MAT CB.REC = ''
+           END
+           OPEN.BAL = CB.REC(OPN)
+*T24263 v
+          CB.DEBITS = '' ; CB.CREDITS = ''
+          FOR I = DB.BEG TO DB.END STEP 2
+          CB.DEBITS = CB.DEBITS + SUM(CB.REC(I))
+          NEXT I
+          FOR I = CR.BEG TO CR.END STEP 2
+          CB.CREDITS = CB.CREDITS + SUM(CB.REC(I))
+          NEXT I
+*T24263 ^
+           END.BAL = OPEN.BAL + CB.DEBITS - CB.CREDITS
+           PREV.BAL = END.BAL
+           MATREAD COA.REC FROM COA,CONO:ACCT ELSE COA.DESC = ""
+           B.LINE = ACCT STRUC:SP1:COA.DESC "L#35":SP1
+           LINE = SPACE(21):OCONV(OPEN.BAL,"MD2Z,C")"R#15":SP1:OCONV(CB.DEBITS,"MD2Z,")"R#13":SP1:OCONV(CB.CREDITS,"MD2Z,")"R#13":SP1:OCONV(END.BAL,"MD2Z,C")"R#15"
+           IF LEVEL > 0 THEN
+              IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+              ODIV = DIV 
+              MATREAD CB.REC FROM DV.COA.BAL, CONO:DIV:ACCT ELSE
+                 MAT CB.REC = ''
+              END
+              OPEN.BAL = CB.REC(OPN)
+*T24263 v
+              CB.DEBITS = '' ; CB.CREDITS = ''
+              FOR I = DB.BEG TO DB.END STEP 2
+              CB.DEBITS = CB.DEBITS + SUM(CB.REC(I))
+              NEXT I
+              FOR I = CR.BEG TO CR.END STEP 2
+              CB.CREDITS = CB.CREDITS + SUM(CB.REC(I))
+              NEXT I
+*T24263 ^
+              END.BAL = OPEN.BAL + CB.DEBITS - CB.CREDITS
+              IF DIV = "00" AND PREV.BAL = END.BAL THEN
+                 NULL
+              END ELSE
+                 MATREAD DIV.REC FROM DIVISION,CONO:DIV ELSE 
+                    DIV.DESC = "GENERAL DIVISION"
+                 END
+                 PRINT B.LINE:LINE
+                 LINE.CNT = LINE.CNT + 1
+                 IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+                 DIV.NUM = "DIV ":DIV
+                 DIV.NAME = DIV.DESC:" DIV"
+                 B.LINE = SPACE(2):DIV.NUM "L#13":SPACE(3):DIV.NAME "L#33":SP1
+                 LINE = SPACE(21):OCONV(OPEN.BAL,"MD2Z,C")"R#15":SP1:OCONV(CB.DEBITS,"MD2Z,")"R#13":SP1:OCONV(CB.CREDITS,"MD2Z,")"R#13":SP1:OCONV(END.BAL,"MD2Z,C")"R#15"
+              END
+              PREV.BAL = END.BAL
+              IF LEVEL > 1 THEN
+                 IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+                 ODEPT = DEPT 
+                 MATREAD CB.REC FROM DP.COA.BAL, CONO:DIV:DEPT:ACCT ELSE
+                    MAT CB.REC = ''
+                 END
+                 OPEN.BAL = CB.REC(OPN)
+*T24263 v
+                 CB.DEBITS = '' ; CB.CREDITS = ''
+                 FOR I = DB.BEG TO DB.END STEP 2
+                 CB.DEBITS = CB.DEBITS + SUM(CB.REC(I))
+                 NEXT I
+                 FOR I = CR.BEG TO CR.END STEP 2
+                 CB.CREDITS = CB.CREDITS + SUM(CB.REC(I))
+                 NEXT I
+*T24263 ^
+                 END.BAL = OPEN.BAL + CB.DEBITS - CB.CREDITS
+                 IF DEPT = "00" AND PREV.BAL = END.BAL THEN
+                    NULL
+                 END ELSE
+                    MATREAD DEPT.REC FROM DEPARTMENT,CONO:DEPT ELSE
+                       DEPT.DESC = "GENERAL DEPARTMENT"
+                    END
+                    PRINT B.LINE:LINE
+                    LINE.CNT = LINE.CNT + 1
+                    IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+                    DEPT.NUM = "DEPT ":DEPT
+                    DEPT.NAME = DEPT.DESC:" DEPT"
+                    B.LINE = SPACE(4):DEPT.NUM "L#11":SPACE(5):DEPT.NAME "L#31":SP1
+                    LINE = SPACE(21):OCONV(OPEN.BAL,"MD2Z,C")"R#15":SP1:OCONV(CB.DEBITS,"MD2Z,")"R#13":SP1:OCONV(CB.CREDITS,"MD2Z,")"R#13":SP1:OCONV(END.BAL,"MD2Z,C")"R#15"
+                 END
+                 PREV.BAL = END.BAL
+                 IF LEVEL > 2 THEN
+                    IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+                    OCCTR = CCTR 
+                    MATREAD CB.REC FROM CC.COA.BAL, CONO:DIV:DEPT:CCTR:ACCT ELSE
+                       MAT CB.REC = ''
+                    END
+                    OPEN.BAL = CB.REC(OPN)
+*T24263 v
+                    CB.DEBITS = '' ; CB.CREDITS = ''
+                    FOR I = DB.BEG TO DB.END STEP 2
+                    CB.DEBITS = CB.DEBITS + SUM(CB.REC(I))
+                    NEXT I
+                    FOR I = CR.BEG TO CR.END STEP 2
+                    CB.CREDITS = CB.CREDITS + SUM(CB.REC(I))
+                    NEXT I
+*T24263 ^
+                    END.BAL = OPEN.BAL + CB.DEBITS - CB.CREDITS
+                    IF CCTR = "000" AND PREV.BAL = END.BAL THEN
+                       PRINT B.LINE:LINE
+                       LINE.CNT = LINE.CNT + 1
+                       IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+                    END ELSE
+                       MATREAD CCTR.REC FROM COST.CNTR,CONO:CCTR ELSE
+                          CCTR.DESC = "GENERAL COST CENTER"
+                       END
+                       PRINT B.LINE:LINE
+                       CCTR.NUM = "CCTR ":CCTR
+                       CCTR.NAME = CCTR.DESC:" CCTR"
+                       PRINT SPACE(6):CCTR.NUM "L#9":SPACE(7):CCTR.NAME "L#29":SPACE(22):
+                       PRINT OCONV(OPEN.BAL,"MD2Z,C")"R#15":SP1:OCONV(CB.DEBITS,"MD2Z,")"R#13":SP1:OCONV(CB.CREDITS,"MD2Z,")"R#13":SP1:OCONV(END.BAL,"MD2Z,C")"R#15"
+                       LINE.CNT = LINE.CNT + 2
+                       IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+                    END
+                    PREV.BAL = END.BAL
+                 END ELSE
+                   PRINT B.LINE:LINE
+                   LINE.CNT = LINE.CNT + 1
+                    IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+                 END
+              END ELSE
+                 PRINT B.LINE:LINE
+                 LINE.CNT = LINE.CNT + 1
+                 IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+              END
+           END ELSE
+              PRINT B.LINE:LINE
+              LINE.CNT = LINE.CNT + 1
+              IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+           END
+        CASE ACCT <> OACCT
+           IF LINE.CNT >= 55 THEN GOSUB 20
+           IF HEAD.FLG AND LINE.CNT = 8 THEN
+              HEAD.FLG = 0
+           END ELSE
+              PRINT SLINE
+              LINE.CNT = LINE.CNT + 1
+              IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+           END
+           OACCT = ACCT
+           MATREAD COA.REC FROM COA,CONO:ACCT ELSE COA.DESC = ""
+           MATREAD CB.REC FROM CO.COA.BAL, CONO:ACCT ELSE
+              MAT CB.REC = ''
+           END
+           OPEN.BAL = CB.REC(OPN)
+*T24263 v
+           CB.DEBITS = '' ; CB.CREDITS = ''
+           FOR I = DB.BEG TO DB.END STEP 2
+           CB.DEBITS = CB.DEBITS + SUM(CB.REC(I))
+           NEXT I
+           FOR I = CR.BEG TO CR.END STEP 2
+           CB.CREDITS = CB.CREDITS + SUM(CB.REC(I))
+           NEXT I
+*T24263 ^
+           END.BAL = OPEN.BAL + CB.DEBITS - CB.CREDITS
+           PREV.BAL = END.BAL
+           B.LINE = ACCT STRUC:SP1:COA.DESC "L#35":SP1
+           LINE = SPACE(21):OCONV(OPEN.BAL,"MD2Z,C")"R#15":SP1:OCONV(CB.DEBITS,"MD2Z,")"R#13":SP1:OCONV(CB.CREDITS,"MD2Z,")"R#13":SP1:OCONV(END.BAL,"MD2Z,C")"R#15"
+           IF LEVEL > 0 THEN
+              IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+              ODIV = DIV 
+              MATREAD CB.REC FROM DV.COA.BAL, CONO:DIV:ACCT ELSE
+                 MAT CB.REC = ''
+              END
+              OPEN.BAL = CB.REC(OPN)
+*T24263 v
+              CB.DEBITS = '' ; CB.CREDITS = ''
+              FOR I = DB.BEG TO DB.END STEP 2
+              CB.DEBITS = CB.DEBITS + SUM(CB.REC(I))
+              NEXT I
+              FOR I = CR.BEG TO CR.END STEP 2
+              CB.CREDITS = CB.CREDITS + SUM(CB.REC(I))
+              NEXT I
+*T24263 ^
+              END.BAL = OPEN.BAL + CB.DEBITS - CB.CREDITS
+              IF DIV = "00" AND PREV.BAL = END.BAL THEN
+                 NULL
+              END ELSE
+                 MATREAD DIV.REC FROM DIVISION,CONO:DIV ELSE 
+                    DIV.DESC = "GENERAL DIVISION"
+                 END
+                 PRINT B.LINE:LINE
+                 LINE.CNT = LINE.CNT + 1
+                 IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+                 DIV.NUM = "DIV ":DIV
+                 DIV.NAME = DIV.DESC:" DIV"
+                 B.LINE = SPACE(2):DIV.NUM "L#13":SPACE(3):DIV.NAME "L#33":SP1
+                 LINE = SPACE(21):OCONV(OPEN.BAL,"MD2Z,C")"R#15":SP1:OCONV(CB.DEBITS,"MD2Z,")"R#13":SP1:OCONV(CB.CREDITS,"MD2Z,")"R#13":SP1:OCONV(END.BAL,"MD2Z,C")"R#15"
+              END
+              PREV.BAL = END.BAL
+              IF LEVEL > 1 THEN
+                 IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+                 ODEPT = DEPT 
+                 MATREAD CB.REC FROM DP.COA.BAL, CONO:DIV:DEPT :ACCT ELSE
+                    MAT CB.REC = ''
+                 END
+                 OPEN.BAL = CB.REC(OPN)
+*T24263 v
+                 CB.DEBITS = '' ; CB.CREDITS = ''
+                 FOR I = DB.BEG TO DB.END STEP 2
+                 CB.DEBITS = CB.DEBITS + SUM(CB.REC(I))
+                 NEXT I
+                 FOR I = CR.BEG TO CR.END STEP 2
+                 CB.CREDITS = CB.CREDITS + SUM(CB.REC(I))
+                 NEXT I
+*T24263 ^
+                 END.BAL = OPEN.BAL + CB.DEBITS - CB.CREDITS
+                 IF DEPT = "00" AND PREV.BAL = END.BAL THEN
+                    NULL
+                 END ELSE
+                    MATREAD DEPT.REC FROM DEPARTMENT,CONO:DEPT ELSE
+                       DEPT.DESC = "GENERAL DEPARTMENT"
+                    END
+                    PRINT B.LINE:LINE
+                    LINE.CNT = LINE.CNT + 1
+                    IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+                    DEPT.NUM = "DEPT ":DEPT
+                    DEPT.NAME = DEPT.DESC:" DEPT"
+                    B.LINE = SPACE(4):DEPT.NUM "L#11":SPACE(5):DEPT.NAME "L#31":SP1
+                    LINE = SPACE(21):OCONV(OPEN.BAL,"MD2Z,C")"R#15":SP1:OCONV(CB.DEBITS,"MD2Z,")"R#13":SP1:OCONV(CB.CREDITS,"MD2Z,")"R#13":SP1:OCONV(END.BAL,"MD2Z,C")"R#15"
+                 END
+                 PREV.BAL = END.BAL
+                 IF LEVEL > 2 THEN
+                    IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+                    OCCTR = CCTR 
+                    MATREAD CB.REC FROM CC.COA.BAL, CONO:DIV:DEPT:CCTR:ACCT ELSE
+                       MAT CB.REC = ''
+                    END
+                    OPEN.BAL = CB.REC(OPN)
+*T24263 v
+                    CB.DEBITS = '' ; CB.CREDITS = ''
+                    FOR I = DB.BEG TO DB.END STEP 2
+                    CB.DEBITS = CB.DEBITS + SUM(CB.REC(I))
+                    NEXT I
+                    FOR I = CR.BEG TO CR.END STEP 2
+                    CB.CREDITS = CB.CREDITS + SUM(CB.REC(I))
+                    NEXT I
+*T24263 ^
+                    END.BAL = OPEN.BAL + CB.DEBITS - CB.CREDITS
+                    IF CCTR = "000" AND PREV.BAL = END.BAL THEN
+                       PRINT B.LINE:LINE
+                       LINE.CNT = LINE.CNT + 1
+                       IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+                    END ELSE
+                       MATREAD CCTR.REC FROM COST.CNTR,CONO:CCTR ELSE
+                          CCTR.DESC = "GENERAL COST CENTER"
+                       END
+                       PRINT B.LINE:LINE
+                       LINE.CNT = LINE.CNT + 2
+                       IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+                       CCTR.NUM = "CCTR ":CCTR
+                       CCTR.NAME = CCTR.DESC:" CCTR"
+                       PRINT SPACE(6):CCTR.NUM "L#9":SPACE(7):CCTR.NAME "L#29":SPACE(22):
+                       PRINT OCONV(OPEN.BAL,"MD2Z,C")"R#15":SP1:OCONV(CB.DEBITS,"MD2Z,")"R#13":SP1:OCONV(CB.CREDITS,"MD2Z,")"R#13":SP1:OCONV(END.BAL,"MD2Z,C")"R#15"
+                    END
+                    PREV.BAL = END.BAL
+                 END ELSE
+                    PRINT B.LINE:LINE
+                    LINE.CNT = LINE.CNT + 1
+                    IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+                 END
+              END ELSE
+                 PRINT B.LINE:LINE
+                 LINE.CNT = LINE.CNT + 1
+                 IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+              END
+           END ELSE
+              PRINT B.LINE:LINE
+              LINE.CNT = LINE.CNT + 1
+              IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+           END
+        CASE LEVEL < 1
+           IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+        CASE DIV <> ODIV
+           IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+           ODIV = DIV 
+           MATREAD DIV.REC FROM DIVISION,CONO:DIV ELSE 
+              DIV.DESC = "GENERAL DIVISION"
+           END
+           MATREAD CB.REC FROM DV.COA.BAL, CONO:DIV:ACCT ELSE
+              MAT CB.REC = ''
+           END
+           OPEN.BAL = CB.REC(OPN)
+*T24263 v
+           CB.DEBITS = '' ; CB.CREDITS = ''
+           FOR I = DB.BEG TO DB.END STEP 2
+           CB.DEBITS = CB.DEBITS + SUM(CB.REC(I))
+           NEXT I
+           FOR I = CR.BEG TO CR.END STEP 2
+           CB.CREDITS = CB.CREDITS + SUM(CB.REC(I))
+           NEXT I
+*T24263 ^
+           END.BAL = OPEN.BAL + CB.DEBITS - CB.CREDITS
+           PREV.BAL = END.BAL
+           DIV.NUM = "DIV ":DIV
+           DIV.NAME = DIV.DESC:" DIV"
+           B.LINE = SPACE(2):DIV.NUM "L#13":SPACE(3):DIV.NAME "L#33":SP1
+           LINE = SPACE(21):OCONV(OPEN.BAL,"MD2Z,C")"R#15":SP1:OCONV(CB.DEBITS,"MD2Z,")"R#13":SP1:OCONV(CB.CREDITS,"MD2Z,")"R#13":SP1:OCONV(END.BAL,"MD2Z,C")"R#15"
+           IF LEVEL > 1 THEN
+              IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+              ODEPT = DEPT 
+              MATREAD CB.REC FROM DP.COA.BAL, CONO:DIV:DEPT:ACCT ELSE
+                 MAT CB.REC = ''
+              END
+              OPEN.BAL = CB.REC(OPN)
+*T24263 v
+              CB.DEBITS = '' ; CB.CREDITS = ''
+              FOR I = DB.BEG TO DB.END STEP 2
+              CB.DEBITS = CB.DEBITS + SUM(CB.REC(I))
+              NEXT I
+              FOR I = CR.BEG TO CR.END STEP 2
+              CB.CREDITS = CB.CREDITS + SUM(CB.REC(I))
+              NEXT I
+*T24263 ^
+              END.BAL = OPEN.BAL + CB.DEBITS - CB.CREDITS
+              IF DEPT = "00" AND PREV.BAL = END.BAL THEN
+                 NULL
+              END ELSE
+                 MATREAD DEPT.REC FROM DEPARTMENT,CONO:DEPT ELSE
+                    DEPT.DESC = "GENERAL DEPARTMENT"
+                 END
+                 PRINT B.LINE:LINE
+                 LINE.CNT = LINE.CNT + 1
+                 IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+                 DEPT.NUM = "DEPT ":DEPT
+                 DEPT.NAME = DEPT.DESC:" DEPT"
+                 B.LINE = SPACE(4):DEPT.NUM "L#11":SPACE(5):DEPT.NAME "L#31":SP1
+                 LINE = SPACE(21):OCONV(OPEN.BAL,"MD2Z,C")"R#15":SP1:OCONV(CB.DEBITS,"MD2Z,")"R#13":SP1:OCONV(CB.CREDITS,"MD2Z,")"R#13":SP1:OCONV(END.BAL,"MD2Z,C")"R#15"
+              END
+              PREV.BAL = END.BAL
+              IF LEVEL > 2 THEN
+                 IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+                 OCCTR = CCTR 
+                 MATREAD CB.REC FROM CC.COA.BAL, CONO:DIV:DEPT:CCTR:ACCT ELSE
+                    MAT CB.REC = ''
+                 END
+                 OPEN.BAL = CB.REC(OPN)
+*T24263 v
+                 CB.DEBITS = '' ; CB.CREDITS = ''
+                 FOR I = DB.BEG TO DB.END STEP 2
+                 CB.DEBITS = CB.DEBITS + SUM(CB.REC(I))
+                 NEXT I
+                 FOR I = CR.BEG TO CR.END STEP 2
+                 CB.CREDITS = CB.CREDITS + SUM(CB.REC(I))
+                 NEXT I
+*T24263 ^
+                 END.BAL = OPEN.BAL + CB.DEBITS - CB.CREDITS
+                 IF CCTR = "000" AND PREV.BAL = END.BAL THEN
+                    PRINT B.LINE:LINE
+                    LINE.CNT = LINE.CNT + 1
+                    IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+                 END ELSE
+                    MATREAD CCTR.REC FROM COST.CNTR,CONO:CCTR ELSE
+                       CCTR.DESC = "GENERAL COST CENTER"
+                    END
+                    PRINT B.LINE:LINE
+                    LINE.CNT = LINE.CNT + 2
+                    IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+                    CCTR.NUM = "CCTR ":CCTR
+                    CCTR.NAME = CCTR.DESC:" CCTR"
+                    PRINT SPACE(6):CCTR.NUM "L#9":SPACE(7):CCTR.NAME "L#29":SPACE(22):
+                    PRINT OCONV(OPEN.BAL,"MD2Z,C")"R#15":SP1:OCONV(CB.DEBITS,"MD2Z,")"R#13":SP1:OCONV(CB.CREDITS,"MD2Z,")"R#13":SP1:OCONV(END.BAL,"MD2Z,C")"R#15"
+                 END
+                 PREV.BAL = END.BAL
+              END ELSE
+                 PRINT B.LINE:LINE
+                 LINE.CNT = LINE.CNT + 1
+                 IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+              END
+           END ELSE
+              PRINT B.LINE:LINE
+              LINE.CNT = LINE.CNT + 1
+              IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+           END
+        CASE LEVEL < 2
+           IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+        CASE DEPT <> ODEPT
+           IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+           ODEPT = DEPT 
+           MATREAD DEPT.REC FROM DEPARTMENT,CONO:DEPT ELSE
+              DEPT.DESC = "GENERAL DEPARTMENT"
+           END
+           MATREAD CB.REC FROM DP.COA.BAL, CONO:DIV:DEPT :ACCT ELSE
+              MAT CB.REC = ''
+           END
+           OPEN.BAL = CB.REC(OPN)
+*T24263 v
+           CB.DEBITS = '' ; CB.CREDITS = ''
+           FOR I = DB.BEG TO DB.END STEP 2
+           CB.DEBITS = CB.DEBITS + SUM(CB.REC(I))
+           NEXT I
+           FOR I = CR.BEG TO CR.END STEP 2
+           CB.CREDITS = CB.CREDITS + SUM(CB.REC(I))
+           NEXT I
+*T24263 ^
+           END.BAL = OPEN.BAL + CB.DEBITS - CB.CREDITS
+           PREV.BAL = END.BAL
+           DEPT.NUM = "DEPT ":DEPT
+           DEPT.NAME = DEPT.DESC:" DEPT"
+           B.LINE = SPACE(4):DEPT.NUM "L#11":SPACE(5):DEPT.NAME "L#31":SP1
+           LINE = SPACE(21):OCONV(OPEN.BAL,"MD2Z,C")"R#15":SP1:OCONV(CB.DEBITS,"MD2Z,")"R#13":SP1:OCONV(CB.CREDITS,"MD2Z,")"R#13":SP1:OCONV(END.BAL,"MD2Z,C")"R#15"
+           IF LEVEL > 2 THEN
+              IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+              OCCTR = CCTR 
+              MATREAD CB.REC FROM CC.COA.BAL, CONO:DIV:DEPT:CCTR:ACCT ELSE
+                 MAT CB.REC = ''
+              END
+              OPEN.BAL = CB.REC(OPN)
+*T24263 v
+              CB.DEBITS = '' ; CB.CREDITS = ''
+              FOR I = DB.BEG TO DB.END STEP 2
+              CB.DEBITS = CB.DEBITS + SUM(CB.REC(I))
+              NEXT I
+              FOR I = CR.BEG TO CR.END STEP 2
+              CB.CREDITS = CB.CREDITS + SUM(CB.REC(I))
+              NEXT I
+*T24263 ^
+              END.BAL = OPEN.BAL + CB.DEBITS - CB.CREDITS
+              IF CCTR = "000" AND PREV.BAL = END.BAL THEN
+                 PRINT B.LINE:LINE
+                 LINE.CNT = LINE.CNT + 1
+                 IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+              END ELSE
+                 MATREAD CCTR.REC FROM COST.CNTR,CONO:CCTR ELSE
+                    CCTR.DESC = "GENERAL COST CENTER"
+                 END
+                 PRINT B.LINE:LINE
+                 LINE.CNT = LINE.CNT + 2
+                 IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+                 CCTR.NUM = "CCTR ":CCTR
+                 CCTR.NAME = CCTR.DESC:" CCTR"
+                 PRINT SPACE(6):CCTR.NUM "L#9":SPACE(7):CCTR.NAME "L#29":SPACE(22):
+                 PRINT OCONV(OPEN.BAL,"MD2Z,C")"R#15":SP1:OCONV(CB.DEBITS,"MD2Z,")"R#13":SP1:OCONV(CB.CREDITS,"MD2Z,")"R#13":SP1:OCONV(END.BAL,"MD2Z,C")"R#15"
+              END
+              PREV.BAL = END.BAL
+           END ELSE
+              PRINT B.LINE:LINE
+              LINE.CNT = LINE.CNT + 1
+              IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+           END
+        CASE LEVEL < 3
+           IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+        CASE CCTR <> OCCTR
+           IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+           OCCTR = CCTR 
+           MATREAD CCTR.REC FROM COST.CNTR,CONO:CCTR ELSE
+              CCTR.DESC = "GENERAL COST CENTER"
+           END
+           MATREAD CB.REC FROM CC.COA.BAL, CONO:DIV:DEPT:CCTR:ACCT ELSE
+              MAT CB.REC = ''
+           END
+           OPEN.BAL = CB.REC(OPN)
+*T24263 v
+           CB.DEBITS = '' ; CB.CREDITS = ''
+           FOR I = DB.BEG TO DB.END STEP 2
+           CB.DEBITS = CB.DEBITS + SUM(CB.REC(I))
+           NEXT I
+           FOR I = CR.BEG TO CR.END STEP 2
+           CB.CREDITS = CB.CREDITS + SUM(CB.REC(I))
+           NEXT I
+*T24263 ^
+           END.BAL = OPEN.BAL + CB.DEBITS - CB.CREDITS
+           PREV.BAL = END.BAL
+           CCTR.NUM = "CCTR ":CCTR
+           CCTR.NAME = CCTR.DESC:" CCTR"
+           PRINT SPACE(6):CCTR.NUM "L#9":SPACE(7):CCTR.NAME "L#29":SPACE(22):
+           PRINT OCONV(OPEN.BAL,"MD2Z,C")"R#15":SP1:OCONV(CB.DEBITS,"MD2Z,")"R#13":SP1:OCONV(CB.CREDITS,"MD2Z,")"R#13":SP1:OCONV(END.BAL,"MD2Z,C")"R#15"
+           LINE.CNT = LINE.CNT + 1
+           IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+        END CASE
+        MATREAD GLM.REC FROM GLR,ID ELSE MAT GLM.REC = ""
+        IF SEQ <> 0 THEN
+*T24263    G.DATE = OCONV(GLM.DATE,"D2/")"R#8"
+           G.DATE = ' ':GLM.MON:' '
+           SR = GLM.SRC"L#2"
+           REF.NO = GLM.REF "L#8"
+*T25196 v
+ 
+     PO.NUMS=''
+     REF.OUTPUT = ''
+     IF GLM.SRC = "VR" THEN
+       MATREAD VEND.REC FROM VEND,CONO:GLM.REF THEN
+         SQV.ID = GLM.DESC[1,6]
+         MATREAD SQV.REC FROM SQV,CONO:SQV.ID THEN
+           IF SQV.PO.NOS = '' THEN
+             REF.NO = "NO PO#"
+           END ELSE
+             PO.CNT=DCOUNT(SQV.PO.NOS,VM)
+             FOR X=1 TO PO.CNT
+               LOCATE SQV.PO.NOS<1,X> IN PO.NUMS<1>,1 SETTING FND ELSE
+                 PO.NUMS<1,FND>=SQV.PO.NOS<1,X>
+               END
+             NEXT X
+             REF.NO = PO.NUMS<1,1>
+           END
+         END
+       END
+       IF REF.NO = '' THEN REF.NO= GLM.REF
+       REF.NO = REF.NO "R#8"
+     END
+ 
+           IF SR = "JE" THEN REF.NO = REF.NO[4,LEN(REF.NO)-3] "L#8"
+*          IF SR = "VR" THEN 
+*            PO.NUM = ""
+*            SQV.KEY = CONO:FIELD(GLM.DESC," ",1)
+*            READV PO.NUM FROM SQV,SQV.KEY,14 ELSE PO.NUM = "NO PO"
+*            IF PO.NUM = "" THEN PO.NUM = "NO PO" "R#8"
+*            REF.NO = PO.NUM<1,1> "R#8"
+*          END
+*T25196 ^
+           IF GLM.AMT > 0 THEN
+              DEBIT = OCONV(GLM.AMT,"MD2Z,")"R#13"
+              CREDIT = SPACE(13)
+           END ELSE
+              CREDIT = OCONV((GLM.AMT * (-1)),"MD2Z,")"R#13"
+              DEBIT = SPACE(13)
+           END
+           IF LEN(GLM.DESC) > 35 THEN
+              PRINT GLM.DESC "R#51" :
+           END ELSE
+              PRINT SPACE(16) : GLM.DESC "L#35" :
+           END
+           PRINT SP1:G.DATE:SP1:SR:SP1:REF.NO:SPACE(17):DEBIT:SP1:CREDIT
+*T25196 v PRINT VM PO NUMBERS
+           IF SR = "VR" THEN
+              PO.COUNT = DCOUNT(PO.NUMS,VM)
+              IF PO.COUNT > 1 THEN
+                FOR PO.IDX = 2 TO PO.COUNT 
+                  PRINT SPACE(64):PO.NUMS<1,PO.IDX> "R#8"
+                  LINE.CNT = LINE.CNT + 1
+                  IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+                NEXT PO.IDX
+              END
+           END
+*T25196 ^
+           LINE.CNT = LINE.CNT + 1
+           IF LINE.CNT >= 55 THEN GOSUB 20;PRINT;LINE.CNT = LINE.CNT + 1
+        END
+        PREV.ACCT = ACCT
+     REPEAT
+     PRINT SLINE
+     PRINTER OFF
+     GOTO 99999
+*
+*---- PRINT THE HEADINGS
+*
+20*
+     PRINT CHAR(12)
+     PRINT
+     PG.NO = PG.NO + 1
+     PRINT HD1:PG.NO
+     PRINT HD2
+     PRINT SPACE(60):"FOR PERIOD ":BEG.PERIOD:" ENDING ":END.PERIOD
+*T24426 v
+     I.LINE = 'FOR LEVEL ':LEVEL
+     I.LINE = I.LINE:', SUP LEVEL ':S.LEVEL
+     I.LINE = I.LINE:', ACCT: ':BEG.ACCT:' TO ':END.ACCT
+     I.LINE = I.LINE:', DIV: ':BEG.DIV:' TO ':END.DIV
+     I.LINE = I.LINE:', DEPT: ':BEG.DEPT:' TO ':END.DEPT
+     I.LINE = I.LINE:', CCTR: ':BEG.CCTR:' TO ':END.CCTR
+     PRINT SPACE(25):I.LINE
+*T24426 ^
+     PRINT
+     H.LINE = " ACCT/DV/DP/CTR":SPACE(13):"DESCRIPTION":SPACE(14):"PERIOD  SR  REFER#    OPEN BALANCE      DEBIT        CREDIT      ENDING BALANCE"
+     PRINT H.LINE
+     H.LINE = DSH15:SP1:DSH35:SP1:DSH8:SP1:DSH2:SP1:DSH8:SP1:DSH15:SP1:DSH13:SP1:DSH13:SP1:DSH15
+     PRINT H.LINE
+     IF FIRST.TIME = 0 THEN
+        IF LEVEL LE 1 THEN
+           IF PREV.ACCT = ACCT THEN PRINT MACCT
+        END ELSE
+*T25196    PRINT ACCT[1,3]:'-':ACCT[4,3]
+           PRINT ACCT[1,6]
+        END
+     END ELSE
+        PRINT
+     END
+     LINE.CNT = 7
+     HEAD.FLG = 1
+     FIRST.TIME = 0
+     RETURN
+*
+*---- CALLS FOR SYSCOM
+*
+91000*
+     PRINTER OFF
+     ERR.TYPE = 1
+     CALL SYSCOM(MAT SYSCOM.REC)
+     PRINTER ON
+     RETURN
+93000*
+     PRINTER OFF
+     ERR.TYPE = 3
+     CALL SYSCOM(MAT SYSCOM.REC)
+99999*
+     END

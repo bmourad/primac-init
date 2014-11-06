@@ -1,0 +1,310 @@
+* REVISION   -[08.0]
+*T25690 edwin 03/23/2001*TO ADD CODE TO FIX MULTI FIFO BUCKET
+*                          INSERTION/DELETION PROBLEM
+*T25740 epitka 06/04/2002 * REV12
+*T26948 epitka 10/15/02 mods for actual costing
+*T28320 lross 11/05/2004 * 'AC' Costing with 'N' reserves at serial
+*                          level allow over-reserves to occur.
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+*
+CUR.PRICE=0
+STD.PRICE=0
+ERRMSG=''
+BEGIN CASE
+  CASE RESV.QTY>0 AND CATG.TRACK.QOH#'Y'
+    BEGIN CASE
+      CASE CATG.COST.TYPE='SD'
+        CHECK.COST=IWH.STD.COST
+      CASE CATG.COST.TYPE='AV'
+        CHECK.COST=IWH.AVG.COST
+      CASE CATG.COST.TYPE='LT'
+        CHECK.COST=IWH.LIST.COST
+      CASE 1
+        CHECK.COST=0
+    END CASE
+    CHECK.QTY=RESV.QTY
+    FLOC=DCOUNT(IJS.RECP.NO,VM)
+    BEGIN CASE
+      CASE FLOC < 1
+        FLOC=1
+        IJS.RECP.NO<1,FLOC>=0
+        IJS.FI.ORG<1,FLOC>=CHECK.QTY
+        IJS.FI.QTY<1,FLOC>=CHECK.QTY
+        IJS.FI.AMT<1,FLOC>=CHECK.COST
+      CASE IJS.RECP.NO<1,FLOC>=0 AND IJS.FI.AMT<1,FLOC>=CHECK.COST
+        IJS.FI.ORG<1,FLOC>+=CHECK.QTY
+        IJS.FI.QTY<1,FLOC>+=CHECK.QTY
+      CASE 1
+        FLOC=FLOC+ 1
+        IJS.RECP.NO<1,FLOC>=0
+        IJS.FI.ORG<1,FLOC>=CHECK.QTY
+        IJS.FI.QTY<1,FLOC>=CHECK.QTY
+        IJS.FI.AMT<1,FLOC>=CHECK.COST
+    END CASE
+    IJS.JOB.QTY+=CHECK.QTY
+    STD.PRICE+=INT((CHECK.COST/10000)*((CHECK.QTY/10)/(INV.COST.WT/100)))
+    CUR.PRICE=0
+    RESV.QTY=0
+  CASE RESV.QTY>0
+    IF CATG.TRK.LVL='S' THEN
+      USAGE=RESV.ARR<4> ;* if 1 then it is a usage
+      BEGIN CASE
+        CASE CATG.RSV.SERIAL='Y' AND CATG.COST.TYPE='AC'
+          ;*RESV.ARR is set in SERIAL.RESERVE.SEL program
+          ;*and contains list of receipts,serials
+          ;*and qty to be reserved.
+          ;*if it is not passed in then current
+          ;*receipt that is being processed will be
+          ;*reserved and serials that belong to that receipt 
+          ;*in fifo order.
+          GOSUB 1070
+        CASE CATG.RSV.SERIAL='N' AND CATG.COST.TYPE='AC'
+          IF RESV.ARR<1>#'' THEN
+            GOSUB 1070
+          END ELSE
+            ;* do not reserve any serials/receipts
+            ;* since for this scenario reserve is kept
+            ;* at the warehouse level
+*T28320 v
+*           IF (RESV.QTY-IWH.ON.HAND)<=0 THEN
+            IF (RESV.QTY-(IWH.ON.HAND - IWH.RESV))<=0 THEN
+              IWH.RESV+=RESV.QTY
+              IJS.JOB.QTY+=RESV.QTY
+              RESV.QTY=0
+            END
+          END
+*T28320 v This ability has been removed.
+*       CASE CATG.RSV.SERIAL='Y' AND CATG.COST.TYPE#'AC'
+*         IF RESV.ARR<1>#'' THEN
+*           GOSUB 1070
+*         END ELSE
+*           GOSUB 1060
+*         END
+        CASE 1
+          GOSUB 1060
+      END CASE
+    END ELSE
+      GOSUB 1060
+    END
+    IF RESV.QTY <> 0 THEN
+*T27341 v
+       RQTY = CALC_STK_QTY_PRIDGET(RESV.QTY,MAT INV.CNV.REC,'.5','')
+*      ERRMSG='RSV QTY IS MORE THAN AVAIL, QTY.LEFT=':OCONV(INT(RESV.QTY/10),"MD2")
+       ERRMSG='RSV QTY IS MORE THAN AVAIL, QTY LEFT=':OCONV(RQTY,ICR.CNV)
+*T27341 ^
+    END
+  CASE RESV.QTY < 0
+    RESV.QTY=0-RESV.QTY
+    IF CATG.TRK.LVL='S' AND CATG.COST.TYPE='AC' AND CATG.RSV.SERIAL='N' THEN
+      IWH.RESV-=RESV.QTY
+      IJS.JOB.QTY-=RESV.QTY
+      RESV.QTY=0
+    END
+    QCNT=DCOUNT(IJS.RECP.NO,VM)
+    FOR Q=QCNT TO 1 STEP -1 WHILE RESV.QTY <> 0
+      IF CATG.TRK.LVL='S' THEN
+        IF RESV.ARR<1>#'' THEN
+          LOCATE IJS.RECP.NO<1,Q> IN RESV.ARR<1> SETTING RRIDX THEN
+            CHECK.QTY=IJS.FI.QTY<1,Q>-SUM(RESV.ARR<3,RRIDX>)
+            IF CHECK.QTY=0 THEN CONTINUE
+          END ELSE
+            CONTINUE
+          END
+        END
+      END
+      RSV.RECP=IJS.RECP.NO<1,Q>
+      LOCATE RSV.RECP IN IWH.RECP.NO<1> SETTING FNO ELSE NULL
+      CHECK.QTY=IJS.FI.QTY<1,Q>
+      BEGIN CASE
+        CASE CHECK.QTY > RESV.QTY
+          CHECK.QTY=RESV.QTY
+          STD.PRICE-=INT((IJS.FI.AMT<1,Q>/10000)*((CHECK.QTY/10)/(INV.COST.WT/100)))
+          IJS.FI.ORG<1,Q>-=CHECK.QTY
+          IJS.FI.QTY<1,Q>-=CHECK.QTY
+        CASE IJS.FI.ORG<1,Q> <> CHECK.QTY
+          STD.PRICE-=INT((IJS.FI.AMT<1,Q>/10000)*((CHECK.QTY/10)/(INV.COST.WT/100)))
+          IJS.FI.ORG<1,Q>-=CHECK.QTY
+          IJS.FI.QTY<1,Q>=0
+        CASE IJS.JMT.SEQ<1,Q>=''
+*T27755 v STD.PRICE-=INT((IJS.FI.AMT<1,Q>/100)*((CHECK.QTY/10)/(INV.COST.WT/100)))
+          STD.PRICE-=INT((IJS.FI.AMT<1,Q>/10000)*((CHECK.QTY/10)/(INV.COST.WT/100)))
+          IJS.RECP.NO=DELETE(IJS.RECP.NO,1,Q,0)
+          IJS.FI.ORG=DELETE(IJS.FI.ORG,1,Q,0)
+          IJS.FI.QTY=DELETE(IJS.FI.QTY,1,Q,0)
+          IJS.FI.AMT=DELETE(IJS.FI.AMT,1,Q,0)
+          IJS.JMT.SEQ=DELETE(IJS.JMT.SEQ,1,Q,0)
+          IJS.JMT.QTY=DELETE(IJS.JMT.QTY,1,Q,0)
+        CASE 1
+          STD.PRICE-=INT((IJS.FI.AMT<1,Q>/10000)*((CHECK.QTY/10)/(INV.COST.WT/100)))
+          IJS.FI.ORG<1,Q>-=CHECK.QTY
+          IJS.FI.QTY<1,Q>=0
+      END CASE
+      IJS.JOB.QTY-=CHECK.QTY
+      IF RSV.RECP > 0 THEN
+        IWH.RSV.FI<1,FNO>+=CHECK.QTY
+        IWH.RESV-=CHECK.QTY
+        CUR.PRICE -=INT((IWH.COST.FI<1,FNO>/10000)*((CHECK.QTY/10)/(INV.COST.WT/100)))
+      END
+      RESV.QTY-=CHECK.QTY
+    NEXT Q
+    IF RESV.QTY <> 0 THEN
+*T27341 v
+       RQTY = CALC_STK_QTY_PRIDGET(RESV.QTY,MAT INV.CNV.REC,'.5','')
+*      ERRMSG='ADJUST QTY IS MORE THAN AVAIL, QTY.LEFT=':OCONV(INT(RESV.QTY/10),"MD2")
+       ERRMSG='ADJUST QTY IS MORE THAN AVAIL, QTY LEFT=':OCONV(RQTY,ICR.CNV)
+*T27341 ^
+    END
+END CASE
+GOTO END.OF.FIFO.RESV.SUB.INCLUDE
+**************************************************************************
+*
+**************
+1000: 
+**************
+*
+UPD.FLAG=0
+PTR=1
+LOOP
+  LOCATE RECP.NO IN IJS.RECP.NO<1>,PTR BY 'AR' SETTING FLOC THEN
+    IF IJS.FI.AMT<1,FLOC>=CHECK.COST THEN
+      IJS.FI.ORG<1,FLOC>+=CHECK.QTY
+      IJS.FI.QTY<1,FLOC>+=CHECK.QTY
+      UPD.FLAG=1
+    END ELSE
+      PTR=FLOC+ 1
+    END
+  END ELSE
+    IJS.RECP.NO=INSERT(IJS.RECP.NO,1,FLOC,0,RECP.NO)
+    IJS.FI.ORG=INSERT(IJS.FI.ORG,1,FLOC,0,CHECK.QTY)
+    IJS.FI.QTY=INSERT(IJS.FI.QTY,1,FLOC,0,CHECK.QTY)
+    IJS.FI.AMT=INSERT(IJS.FI.AMT,1,FLOC,0,CHECK.COST)
+    IJS.JMT.SEQ=INSERT(IJS.JMT.SEQ,1,FLOC,0,'')
+    IJS.JMT.QTY=INSERT(IJS.JMT.QTY,1,FLOC,0,'')
+    UPD.FLAG=1
+  END
+UNTIL UPD.FLAG REPEAT
+IJS.JOB.QTY+=CHECK.QTY
+IWH.RESV+=CHECK.QTY
+IWH.RSV.FI<1,FNO>-=CHECK.QTY
+STD.PRICE+=INT((CHECK.COST/10000)*((CHECK.QTY/10)/(INV.COST.WT/100)))
+CUR.PRICE+=INT((IWH.COST.FI<1,FNO>/10000)*((CHECK.QTY/10)/(INV.COST.WT/100)))
+RESV.QTY-=CHECK.QTY
+RETURN
+*
+**************
+1050: 
+**************
+*
+;* if Reserving then RESV.ARR contains all of the
+;* serials reserved or to be reserved for a job.
+;* if Using then RESV.ARR contains only receipt/serial
+;* for that usage transaction. 
+UPD.FLAG=0
+PTR=1
+CHECK.QTY=0
+LOOP
+  LOCATE RECP.NO IN IJS.RECP.NO<1>,PTR BY 'AR' SETTING FLOC THEN
+    IF IJS.FI.AMT<1,FLOC>=CHECK.COST THEN
+      IF (USAGE) THEN 
+        DIFF=TOT.CHECK.QTY
+      END ELSE
+        DIFF=TOT.CHECK.QTY-IJS.FI.ORG<1,FLOC>
+      END
+      IJS.FI.ORG<1,FLOC>+=DIFF
+      IF (USAGE) THEN
+        DIFF=TOT.CHECK.QTY
+      END ELSE
+        DIFF=TOT.CHECK.QTY-IJS.FI.QTY<1,FLOC>
+      END
+      IJS.FI.QTY<1,FLOC>+=DIFF
+      CHECK.QTY=DIFF
+      UPD.FLAG=1
+    END ELSE
+      PTR=FLOC+ 1
+    END
+  END ELSE
+    IF TOT.CHECK.QTY>0 THEN
+      IJS.RECP.NO=INSERT(IJS.RECP.NO,1,FLOC,0,RECP.NO)
+      IJS.FI.ORG=INSERT(IJS.FI.ORG,1,FLOC,0,TOT.CHECK.QTY)
+      IJS.FI.QTY=INSERT(IJS.FI.QTY,1,FLOC,0,TOT.CHECK.QTY)
+      IJS.FI.AMT=INSERT(IJS.FI.AMT,1,FLOC,0,CHECK.COST)
+      IJS.JMT.SEQ=INSERT(IJS.JMT.SEQ,1,FLOC,0,'')
+      IJS.JMT.QTY=INSERT(IJS.JMT.QTY,1,FLOC,0,'')
+      CHECK.QTY=TOT.CHECK.QTY
+      UPD.FLAG=1
+    END ELSE
+      UPD.FLAG=1
+    END
+  END
+UNTIL UPD.FLAG REPEAT
+IJS.JOB.QTY+=CHECK.QTY
+IWH.RESV+=CHECK.QTY
+IWH.RSV.FI<1,FNO>-=CHECK.QTY
+STD.PRICE+=INT((CHECK.COST/10000)*((CHECK.QTY/10)/(INV.COST.WT/100)))
+CUR.PRICE+=INT((IWH.COST.FI<1,FNO>/10000)*((CHECK.QTY/10)/(INV.COST.WT/100)))
+RESV.QTY-=CHECK.QTY
+RETURN
+*
+*******
+1060: 
+*******
+*
+QCNT=DCOUNT(IWH.RSV.FI,VM)
+FOR FNO=1 TO QCNT WHILE RESV.QTY <> 0
+  IF IWH.RSV.FI<1,FNO>+ 0 <> 0 THEN
+    RECP.NO=IWH.RECP.NO<1,FNO>
+    BEGIN CASE
+      CASE CATG.COST.TYPE='FI'
+        CHECK.COST=IWH.COST.FI<1,FNO>
+      CASE CATG.COST.TYPE='LC'
+        CHECK.COST=IWH.COST.FI<1,QCNT>
+      CASE CATG.COST.TYPE='SD'
+        CHECK.COST=IWH.STD.COST
+      CASE CATG.COST.TYPE='AV'
+        CHECK.COST=IWH.AVG.COST
+      CASE CATG.COST.TYPE='LT'
+        CHECK.COST=IWH.LIST.COST
+      CASE 1
+        CHECK.COST=0
+    END CASE
+    IF RESV.QTY > IWH.RSV.FI<1,FNO> THEN
+      CHECK.QTY=IWH.RSV.FI<1,FNO>
+    END ELSE
+      CHECK.QTY=RESV.QTY
+    END
+    GOSUB 1000
+  END
+NEXT FNO
+RETURN
+*
+*********
+1070: 
+*********
+*
+;* RESV.ARR<1,R>=receipt numbers
+;* RESV.ARR<2,R,S>=serial numbers per receipt
+;* RESV.ARR<3,R,S>=quantity per serial 
+;* RESV.ARR<4>=1  if usage then USAGE otherwise ''
+QCNT=DCOUNT(RESV.ARR<1>,VM)
+FOR QQ=1 TO QCNT
+  RECP.NO=RESV.ARR<1,QQ>
+  LOCATE RECP.NO IN IWH.RECP.NO<1> SETTING FNO THEN
+    CHECK.COST=IWH.COST.FI<1,FNO>
+  END ELSE
+    CHECK.COST=0
+  END
+  TOT.CHECK.QTY=SUM(RESV.ARR<3,QQ>)
+  IF (USAGE) THEN
+    IF IWH.RSV.FI<1,FNO> >= TOT.CHECK.QTY THEN
+      GOSUB 1050
+    END ELSE
+      EXIT
+    END
+  END ELSE
+    GOSUB 1050
+  END
+NEXT QQ
+RETURN
+*
+END.OF.FIFO.RESV.SUB.INCLUDE: 
+*

@@ -1,0 +1,147 @@
+SUBROUTINE QUEM_DEFAULT_ENABLE_DISABLE_JOB
+********************************************************************************
+*   Program name :- QUEM_DEFAULT_ENABLE_DISABLE_JOB
+*   Created:- 5/29/2006
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE CPYLIB CHAR
+$INCLUDE PMC.CPYLIB SECURITY
+
+* Insert method code here
+
+ERRMSG = ""
+RSW = 0
+WIN = 0
+
+OPEN '','SECURITY' TO SECURITY ELSE 
+    ERRMSG = 'SECURITY FILE IS MISSING'
+    GO TO 93000
+END
+
+STATUS = RBO.getProperty('', 'QUEUE',ID)
+STATUS = RBO.getProperty('', 'OPTION',OPTION)
+STATUS = RBO.getProperty('','PMCProperty',PMCProperty)
+CONO = PMCProperty<1,4>
+
+OS = "OS"
+OS = SYSTEM(33)
+IF OS[1,7] = 'Windows' THEN WIN = 1 ELSE WIN = 0
+
+  IF WIN THEN
+     EXECUTE "SP.STATUS" CAPTURING MSG
+  END ELSE
+     EXECUTE "!lpstat" CAPTURING MSG
+  END
+
+* EXECUTE 'GET.QUEUES' CAPTURING MSG  
+  MQ = DCOUNT(MSG,@AM)
+*FOR X=3 TO X+1  UNTIL MSG<X>[15,1]=""
+  FOR X = 3 TO MQ 
+    IF MSG<X>[15,1] = "" THEN GO 115
+    IF MSG<X>[15,1] = "-" THEN GO 115
+    IF MSG<X>[1,1] = ' ' THEN GO 115
+    NETQ=INDEX(MSG<X>,':',1)
+    IF NETQ THEN GO 115
+    QUEUE<QCNT> = MSG<X>[1,23]
+    QCNT=QCNT+1
+    IF MSG<X>[1,1] # " " THEN
+      PQUEUE<PQCNT> = MSG<X>[1,23]
+      CHKQUE<PQCNT> = FIELD(PQUEUE<PQCNT>," ",1)
+      PQCNT = PQCNT + 1
+    END
+115 *
+  NEXT X
+  LINES = DCOUNT(QUEUE,AM)
+
+ECD.SCRN.NO = 1
+LOG_NAME = PMCProperty<1,3>
+ BEGIN CASE
+   CASE OPTION = 'DEF'
+*     SEC.ID = CONO:OCONV(@LOGNAME,'MCU')
+      SEC.ID = CONO:OCONV(LOG_NAME,'MCU')
+      MATREAD SEC.REC FROM SECURITY,SEC.ID ELSE
+        ERRMSG = 'SECURITY RECORD ':SEC.ID:' IS MISSING'
+      END
+      SEC.DFLT.QUEUE = FIELD(ID,' ',1)
+      MATWRITE SEC.REC ON SECURITY,SEC.ID
+    CASE OPTION = 'D'
+      CMD = '!disable ':ID
+      HUSH ON
+      UDTEXECUTE CMD CAPTURING RET.VALUE
+      HUSH OFF
+      RSW = 1 
+    CASE OPTION = 'E'
+      CMD = '!enable ':ID
+      HUSH ON
+      UDTEXECUTE CMD CAPTURING RET.VALUE
+      HUSH OFF
+      RSW = 1
+    CASE OPTION = 'J'
+      KILL.FLAG = 0
+      GOSUB 12000      
+    CASE 1
+      RSW = 0
+  END CASE
+
+STATUS = RBO.setProperty('', 'JOB_LIST',JOB.LIST)
+STATUS = RBO.setProperty('', 'FILE_LIST',FILE.LIST)
+STATUS = RBO.setProperty('', 'OWN_LIST',OWN.LIST)
+
+93000
+     STATUS = RBO.setProperty('', 'ServerMessage', ERRMSG)
+RETURN
+
+
+***  SUBROUTINES
+12000*
+  GOSUB 12010
+  IF JOB.LIST = "" AND ECD.SCRN.NO = 1 THEN
+*   ERRMSG='There are no Jobs in this Queue for user ':@LOGNAME
+    ERRMSG='There are no Jobs in this Queue for user ':PMCProperty<1,3>
+    RETURN
+  END
+RETURN
+
+12010*
+* CMD = "!qchk -P'":ID:"' -u'":@LOGNAME:"'"
+CMD = "!qchk -P'":ID:"' -u'":PMCProperty<1,3>:"'"
+  HUSH ON
+  UDTEXECUTE CMD CAPTURING RET.DATA
+  HUSH OFF
+  DG = DCOUNT(RET.DATA,AM)
+  JOB.LIST = '' ; OWN.LIST = '' ; FILE.LIST = ''
+  FOR ABC = 1 TO DG
+    RET.QUEUE = FIELD(RET.DATA<ABC>,' ',1)
+    IF RET.QUEUE = ID THEN
+      JOB.LIST = ''
+      OWN.LIST = ''
+      FILE.LIST = ''
+      FOR BCD = ABC TO DG
+        RET.QUEUE = FIELD(RET.DATA<BCD>,' ',1)
+        IF RET.DATA<BCD>[15,6] = 'RUNNIN' OR RET.DATA<BCD>[15,6] = 'QUEUED' OR RET.DATA<BCD>[15,4] = 'DOWN' THEN
+          JOB.LIST<1,-1> = RET.DATA<BCD>[25,3]
+          FILE.LIST<1,-1> = RET.DATA<BCD>[29,17]
+          OWN.LIST<1,-1> = RET.DATA<BCD>[48,8]
+        END ELSE
+          GO 12015
+        END
+      NEXT BCD
+    END
+12015 *
+  NEXT ABC
+  RETURN
+
+
+* End of method code
+RETURN
+

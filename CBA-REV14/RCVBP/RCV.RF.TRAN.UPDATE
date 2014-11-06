@@ -1,0 +1,815 @@
+   SUBROUTINE RCV.RF.TRAN.UPDATE(CONO,PO.CODE,PO.VEND.NO,FNGD.MODE,ERRMSG,ORIG)
+*COPY>CPYLIB>SCOMMON1
+*COPY>ICS.CPYLIB>COM.TRN
+*********************************************************************
+*
+* PROGRAM  - RCV.RF.TRAN.UPDATE
+*
+* AUTHOR   - JULIANNE MATHESON, NASTech, Inc.
+*
+* DATE     - 05/05/00
+*
+* DESCRIPTION
+*
+*********************************************************************
+**** INSERT FILES EQUATES
+*COPY>ICS.CPYLIB>TRANSFER
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>JCS.CPYLIB>JOB.STATS
+*COPY>ICS.CPYLIB>CATEGORY
+*COPY>ICS.CPYLIB>WAREHOUSE
+*COPY>ICS.CPYLIB>INV.TRAN.HIST
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>ICS.CPYLIB>INV.HIST
+*COPY>ICS.CPYLIB>INV.WHSE.LOC
+*COPY>GLS.CPYLIB>GLA
+*COPY>PMC.CPYLIB>COA
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>FISCAL
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*
+**** TO INV.WHSE.LOC CPYLIB
+*
+   DIM TIWLO.REC(65)
+   EQU TIWLO.LOC.ON.HAND      TO TIWLO.REC(1)
+   EQU TIWLO.LOC.INPRCS       TO TIWLO.REC(2)
+   EQU TIWLO.LA.PO            TO TIWLO.REC(3)
+   EQU TIWLO.LA.USED          TO TIWLO.REC(4)
+   EQU TIWLO.R.S.ID           TO TIWLO.REC(5)
+   EQU TIWLO.ORIG.WT          TO TIWLO.REC(6)
+   EQU TIWLO.CURR.WT          TO TIWLO.REC(7)
+   EQU TIWLO.ORIG.DIAM        TO TIWLO.REC(8)
+   EQU TIWLO.CURR.DIAM        TO TIWLO.REC(9)
+   EQU TIWLO.ORIG.SHEET       TO TIWLO.REC(10)
+   EQU TIWLO.CURR.SHEET       TO TIWLO.REC(11)
+   MAT TIWLO.REC = ""
+   DIM SIWH.REC(10)
+   EQU SIWH.STD.COST       TO SIWH.REC(01)
+   EQU SIWH.LIST.COST      TO SIWH.REC(02)
+   EQU SIWH.AVG.COST       TO SIWH.REC(03)
+   EQU SIWH.MARKUP         TO SIWH.REC(04)
+   EQU SIWH.FOH.PCT        TO SIWH.REC(05)
+   EQU SIWH.MIN.QTY        TO SIWH.REC(06)
+   EQU SIWH.MAX.QTY        TO SIWH.REC(07)
+   MAT SIWH.REC = ""
+*
+   MATREAD COMP.REC FROM COMPANY, CONO ELSE MAT COMP.REC = ""
+   IF CO.GLS # "N" THEN
+      IF CO.GL.LINK<1,5> = "Y" THEN
+         OPEN "","GLA" TO GLA ELSE ERRMSG="GLA FILE IS MISSING";GOTO 99999
+      END
+      OPEN "","COA" TO COA ELSE ERRMSG="COA FILE IS MISSING"; GOTO 99999
+      EQV.FLG = 1
+      OPEN "","COA.EQUIV" TO COA.EQUIV ELSE EQV.FLG = 0
+   END
+   MATREAD FISCAL.REC FROM CONTROL, CONO:'ICFISCAL' ELSE
+      ERRMSG = 'CANNOT LOCATE CONTROL, ICFISCAL'
+      GOTO 99999
+   END
+   STMT.HEAD = "INVENTORY"
+   TODAY = DATE()
+   IDATE = TODAY
+   UNKNOWN = "NOT ON FILE"
+   IN.ACCT.LEN = LEN(CO.ACCT.PIC)
+   SYS.FISCAL = "ICFISCAL"
+*
+**** UPDATE TRANSFER FROM
+   PCNT = DCOUNT(TRAN.PROD.NO,VM)
+   FOR P = 1 TO PCNT
+      PROD=TRAN.PROD.NO<1,P>
+      IF TRAN.DATE.PROSS<1,P>  # "" OR TRAN.LOC.DATE.PROSS<1,P> # "" THEN GOTO 1900
+      ERRMSG = ''
+      KEYS.FROM = "" ; KEYS.TO = ""
+      MATREADU INV.REC FROM INVENTORY, CONO:PROD ELSE
+         ERRMSG = 'CANNOT LOCATE INVENTORY # ':PROD; GOTO 1900
+      END
+*CSF12760
+      MATREADU IH.REC FROM INV.HIST, CONO : PROD ELSE MAT IH.REC = ""
+*
+      MATREAD CATG.REC FROM CATEGORY, CONO : INV.LINE ELSE MAT CATG.REC = ''
+      FROM.WHSE = TRAN.FROM.WHSE<1,P>; TO.WHSE = TRAN.TO.WHSE<1,P>
+      LOCATE FROM.WHSE IN INV.WHSE.CODE<1>,1 SETTING FWHSE ELSE
+         ERRMSG = 'CANNOT LOCATE WAREHOUSE # ':FROM.WHSE; GOTO 1900
+      END
+      IWH.FROM.ID = CONO:PROD:'!':FROM.WHSE
+      IWH.TO.ID = CONO:PROD:'!':TO.WHSE
+      IF FROM.WHSE = TO.WHSE THEN
+         MATREADU IWH.REC FROM INV.WHSE, IWH.FROM.ID ELSE
+            ERRMSG = 'CANNOT LOCATE INV.WHSE # ':IWH.FROM.ID; GOTO 1900
+         END
+         ITH.PTR = 0; ITH.ID = IWH.FROM.ID : '!' : TODAY
+         MATREADU ITH.REC FROM INV.TRAN.HIST, ITH.ID ELSE
+            ITH.PTR = 1; MAT ITH.REC = ''
+         END
+         IF ITH.PTR = 0 THEN ITH.PTR = COUNT(ITH.TYPE,VM) + (ITH.TYPE # '') + 1
+         ITH.PPTR = ITH.PTR + 1
+         LCNT = COUNT(TRAN.FROM.LOC<1,P>,SVM) + (TRAN.FROM.LOC<1,P> # '')
+         FOR L = 1 TO LCNT WHILE ERRMSG = ''
+            FROM.LOC = TRAN.FROM.LOC<1,P,L>; TO.LOC = TRAN.TO.LOC<1,P,L>
+            IF ("X":FROM.LOC) = ("X":TO.LOC) THEN
+               ERRMSG = 'CANNOT TRANSFER TO THE SAME WAREHOUSE AND LOCATION'; GOTO 1700
+            END
+            LOCATE FROM.LOC IN IWH.LOC<1>,1 SETTING FLLOC ELSE
+               ERRMSG = 'CANNOT LOCATE LOCATION # ':FROM.LOC; GOTO 1700
+            END
+            LLF = 0
+            FOR LL = L - 1 TO 1 STEP -1 UNTIL LLF
+               IF ("X":FROM.LOC) = ("X":TRAN.FROM.LOC<1,P,LL>) THEN
+                  LLF = LL
+                  KEYS.ID = KEYS.FROM<1,LLF,1>
+               END ELSE
+                  IF ("X":FROM.LOC) = ("X":TRAN.TO.LOC<1,P,LL>) THEN
+                     LLF = LL
+                     KEYS.ID = KEYS.TO<1,LLF,1>
+                  END
+               END
+            NEXT LL
+            IF LLF = 0 THEN
+               MATREADU IWLO.REC FROM INV.WHSE.LOC, IWH.FROM.ID:"!":FROM.LOC ELSE
+                  ERRMSG = "INV.WHSE.LOC RECORD FOR LOCATION # ":FROM.LOC:" IS MISSING"; GOTO 1700
+               END
+            END ELSE
+               MATREAD IWLO.REC FROM CONTROL, KEYS.ID ELSE
+                  MAT IWLO.REC = ""
+               END
+            END
+            IF TRAN.WHT<1,P,L> > IWLO.LOC.ON.HAND THEN
+               ERRMSG = 'CANNOT TRANSFER MORE THAN ':OCONV(INT(IWLO.LOC.ON.HAND/100),"MD2"):' FOR LOCATION ':FROM.LOC; GOTO 1700
+            END
+            LOCATE TO.LOC IN IWH.LOC<1>,1 SETTING TLLOC ELSE
+               IWH.LOC<1,TLLOC> = TO.LOC
+            END
+            LLT = 0
+            FOR LL = L-1 TO 1 STEP -1 UNTIL LLT
+               IF ("X":TO.LOC) = ("X":TRAN.TO.LOC<1,P,LL>) THEN
+                  LLT = LL
+                  KEYS.ID = KEYS.TO<1,LLT,1>
+               END ELSE
+                  IF ("X":TO.LOC) = ("X":TRAN.FROM.LOC<1,P,LL>) THEN
+                     LLT = LL
+                     KEYS.ID = KEYS.FROM<1,LLT,1>
+                  END
+               END
+            NEXT LL
+            IF LLT = 0 THEN
+               MATREADU TIWLO.REC FROM INV.WHSE.LOC, IWH.FROM.ID:"!":TO.LOC ELSE
+                  MAT TIWLO.REC = ""
+                  TIWLO.LOC.ON.HAND = 0
+                  TIWLO.LOC.INPRCS = 0
+                  TIWLO.LA.PO = ''
+                  TIWLO.LA.USED = ''
+               END
+            END ELSE
+               MATREADU TIWLO.REC FROM CONTROL, KEYS.ID ELSE
+                  MAT TIWLO.REC = ''
+                  TIWLO.LOC.ON.HAND = 0
+                  TIWLO.LOC.INPRCS = 0
+                  TIWLO.LA.PO = 0
+                  TIWLO.LA.USED = 0
+               END
+            END
+            R.S.ID = TRAN.RS.ID<1,P,L>
+            IF R.S.ID # '' THEN
+               LOCATE R.S.ID IN IWLO.R.S.ID<1>,1 SETTING FRLOC ELSE
+                  ERRMSG = 'CANNOT LOCATE R.S.ID # ':R.S.ID; GOTO 1700
+               END
+               IF IWLO.CURR.WT<1,FRLOC>+0 = 0 THEN
+                  ERRMSG = 'ZERO QUANTITY ROLL/SKID ':R.S.ID; GOTO 1700
+               END
+               IF CATG.R.S.ID = 'Y' THEN
+                  ITH.R.S<1,ITH.PTR> = R.S.ID
+                  R.S.ID = TO.WHSE : '!' : TO.LOC
+                  ITH.R.S<1,ITH.PPTR> = R.S.ID
+                  ITH.QTY<1,ITH.PTR> = TRAN.WHT<1,P,L> * (-1)
+                  ITH.QTY<1,ITH.PPTR> = TRAN.WHT<1,P,L>
+                  LOCATE R.S.ID IN TIWLO.R.S.ID<1>,1 SETTING TRLOC ELSE
+                     TIWLO.R.S.ID<1,TRLOC> = R.S.ID
+                     TIWLO.LA.PO<1,TRLOC> = TODAY
+                     TIWLO.LA.USED<1,TRLOC> = ""
+                  END
+                  TIWLO.ORIG.WT<1,TRLOC> = TIWLO.ORIG.WT<1,TRLOC> + TRAN.WHT<1,P,L>
+                  TIWLO.CURR.WT<1,TRLOC> = TIWLO.CURR.WT<1,TRLOC> + TRAN.WHT<1,P,L>
+                  TIWLO.ORIG.SHEET<1,TRLOC> = TIWLO.ORIG.SHEET<1,TRLOC> + TRAN.SHEET<1,P,L>
+                  TIWLO.CURR.SHEET<1,TRLOC> = TIWLO.CURR.SHEET<1,TRLOC> + TRAN.SHEET<1,P,L>
+                  TIWLO.ORIG.DIAM<1,TRLOC> = TIWLO.ORIG.DIAM<1,TRLOC> + TRAN.DIAM<1,P,L>
+                  TIWLO.CURR.DIAM<1,TRLOC> = TIWLO.CURR.DIAM<1,TRLOC> + TRAN.DIAM<1,P,L>
+                  IF IWLO.CURR.WT<1,FRLOC> - TRAN.WHT<1,P,L> > 0 THEN
+                     IWLO.ORIG.WT<1,FRLOC> = IWLO.ORIG.WT<1,FRLOC> - TRAN.WHT<1,P,L>
+                     IWLO.CURR.WT<1,FRLOC> = IWLO.CURR.WT<1,FRLOC> - TRAN.WHT<1,P,L>
+                     IWLO.ORIG.SHEET<1,FRLOC> = IWLO.ORIG.SHEET<1,FRLOC> - TRAN.SHEET<1,P,L>
+                     IWLO.CURR.SHEET<1,FRLOC> = IWLO.CURR.SHEET<1,FRLOC> - TRAN.SHEET<1,P,L>
+                     IWLO.ORIG.DIAM<1,FRLOC> = IWLO.ORIG.DIAM<1,FRLOC> - TRAN.DIAM<1,P,L>
+                     IWLO.CURR.DIAM<1,FRLOC> = IWLO.CURR.DIAM<1,FRLOC> - TRAN.DIAM<1,P,L>
+                  END ELSE
+                     IWLO.R.S.ID = DELETE(IWLO.R.S.ID,1,FRLOC,0)
+                     IWLO.ORIG.WT = DELETE(IWLO.ORIG.WT,1,FRLOC,0)
+                     IWLO.CURR.WT = DELETE(IWLO.CURR.WT,1,FRLOC,0)
+                     IWLO.ORIG.SHEET = DELETE(IWLO.ORIG.SHEET,1,FRLOC,0)
+                     IWLO.CURR.SHEET = DELETE(IWLO.CURR.SHEET,1,FRLOC,0)
+                     IWLO.ORIG.DIAM = DELETE(IWLO.ORIG.DIAM,1,FRLOC,0)
+                     IWLO.CURR.DIAM = DELETE(IWLO.CURR.DIAM,1,FRLOC,0)
+                     IWLO.LA.USED = DELETE(IWLO.LA.USED,1,FRLOC,0)
+                     IWLO.LA.PO = DELETE(IWLO.LA.PO,1,FRLOC,0)
+                  END
+               END ELSE
+                  FND = 1
+                  LOCATE R.S.ID IN TIWLO.R.S.ID<1>,1 SETTING TRLOC ELSE
+                     TIWLO.R.S.ID<1,TRLOC> = R.S.ID
+                     TIWLO.LA.PO<1,TRLOC> = TODAY
+                     TIWLO.LA.USED<1,TRLOC> = ''
+                     FND = 0
+                  END
+                  IF FND THEN
+                     ERRMSG = 'R.S.ID ALREADY EXIST IN LOCATION # ':IWH.LOC<1,TLLOC>; GOTO 1700
+                  END
+                  ITH.R.S<1,ITH.PTR> = R.S.ID
+                  ITH.R.S<1,ITH.PPTR> = R.S.ID
+                  ITH.QTY<1,ITH.PTR> = IWLO.CURR.WT<1,FRLOC> * (-1)
+                  ITH.QTY<1,ITH.PPTR> = IWLO.CURR.WT<1,FRLOC>
+                  TIWLO.ORIG.WT<1,TRLOC> = IWLO.ORIG.WT<1,FRLOC>
+                  TIWLO.CURR.WT<1,TRLOC> = IWLO.CURR.WT<1,FRLOC>
+                  TIWLO.ORIG.SHEET<1,TRLOC> = IWLO.ORIG.SHEET<1,FRLOC>
+                  TIWLO.CURR.SHEET<1,TRLOC> = IWLO.CURR.SHEET<1,FRLOC>
+                  TIWLO.ORIG.DIAM<1,TRLOC> = IWLO.ORIG.DIAM<1,FRLOC>
+                  TIWLO.CURR.DIAM<1,TRLOC> = IWLO.CURR.DIAM<1,FRLOC>
+                  IWLO.R.S.ID = DELETE(IWLO.R.S.ID,1,FRLOC,0)
+                  IWLO.ORIG.WT = DELETE(IWLO.ORIG.WT,1,FRLOC,0)
+                  IWLO.CURR.WT = DELETE(IWLO.CURR.WT,1,FRLOC,0)
+                  IWLO.ORIG.SHEET = DELETE(IWLO.ORIG.SHEET,1,FRLOC,0)
+                  IWLO.CURR.SHEET = DELETE(IWLO.CURR.SHEET,1,FRLOC,0)
+                  IWLO.ORIG.DIAM = DELETE(IWLO.ORIG.DIAM,1,FRLOC,0)
+                  IWLO.CURR.DIAM = DELETE(IWLO.CURR.DIAM,1,FRLOC,0)
+                  IWLO.LA.USED = DELETE(IWLO.LA.USED,1,FRLOC,0)
+                  IWLO.LA.PO = DELETE(IWLO.LA.PO,1,FRLOC,0)
+               END
+            END ELSE
+               TIWLO.LA.PO = TODAY
+               ITH.QTY<1,ITH.PTR> = TRAN.WHT<1,P,L> * (-1)
+               ITH.QTY<1,ITH.PPTR> = TRAN.WHT<1,P,L>
+            END
+            TIWLO.LOC.ON.HAND = TIWLO.LOC.ON.HAND + TRAN.WHT<1,P,L>
+            IWLO.LOC.ON.HAND = IWLO.LOC.ON.HAND - TRAN.WHT<1,P,L>
+*T21586  IF IWLO.LOC.ON.HAND = 0 AND IWLO.LOC.INPRCS+0 = 0 THEN
+*           IWH.LOC = DELETE(IWH.LOC,1,FLLOC,0)
+*        END
+* SLEEP.1 = ICONV(1,"U407A")
+            RQM
+            SAVE.TIME = TIME()
+            KEYS.FROM<1,L,1> = IWH.FROM.ID:"!":FROM.LOC:"|":SAVE.TIME
+            KEYS.TO<1,L,1> = IWH.TO.ID:"!":TO.LOC:"|":SAVE.TIME
+            KEYS.FROM<1,L,2> = IWH.FROM.ID:"|":L:"|":SAVE.TIME
+            MATWRITE IWLO.REC ON CONTROL, KEYS.FROM<1,L,1>
+            MATWRITE TIWLO.REC ON CONTROL, KEYS.TO<1,L,1>
+            MATWRITE IWH.REC ON CONTROL, KEYS.FROM<1,L,2>
+            ITH.TYPE<1,ITH.PTR> = 'O'
+            ITH.TYPE<1,ITH.PPTR> = 'I'
+            ITH.LOC<1,ITH.PTR> = TRAN.FROM.LOC<1,P,L>
+            ITH.LOC<1,ITH.PPTR> = TRAN.TO.LOC<1,P,L>
+            ITH.TRAN<1,ITH.PTR> = PO.CODE
+            ITH.TRAN<1,ITH.PPTR> = PO.CODE
+            ITH.JOB<1,ITH.PTR> = PO.VEND.NO
+            ITH.JOB<1,ITH.PPTR> = PO.VEND.NO
+            ITH.COST<1,ITH.PTR> = 0
+            ITH.COST<1,ITH.PPTR> = 0
+            ITH.PTR = ITH.PTR + 2
+            ITH.PPTR = ITH.PTR + 1
+            KEYS.FROM<1,L,3> = ITH.ID:"|":L:"|":SAVE.TIME
+            MATWRITE ITH.REC ON CONTROL, KEYS.FROM<1,L,3>
+1700     NEXT L
+         IF ERRMSG = '' THEN
+            KS.CNT = COUNT(KEYS.FROM,VM) + (KEYS.FROM # "")
+*T21586 v Reverse mod of 2/14/97 - chronology is IMportant!
+            FOR KS = 1 TO KS.CNT
+*        FOR KS = KS.CNT TO 1 STEP -1
+*T21586 ^
+               MATREAD IWLO.REC FROM CONTROL, KEYS.FROM<1,KS,1> ELSE
+                  ERRMSG = "CANNOT LOCATE (INV.WHSE.LOC, FROM)  CONTROL, ":KEYS.FROM<1,KS,1>
+                  GOTO 1900
+               END
+               MATREAD IWH.REC FROM CONTROL, KEYS.FROM<1,KS,2> ELSE
+                  ERRMSG = "CANNOT LOCATE (INV.WHSE, FROM) CONTROL, ":KEYS.FROM<1,KS,2>
+                  GOTO 1900
+               END
+               MATREAD ITH.REC FROM CONTROL, KEYS.FROM<1,KS,3> ELSE
+                  ERRMSG = "CANNOT LOCATE (INV.TRANS.HIST, FROM) CONTROL, ":KEYS.FROM<1,KS,3>
+                  GOTO 1900
+               END
+               MATREAD TIWLO.REC FROM CONTROL, KEYS.TO<1,KS,1> ELSE
+                  ERRMSG = "CANNOT LOCATE (INV.WHSE.LOC, TO) CONTROL, ":KEYS.TO<1,KS,1>
+                  GOTO 1900
+               END
+               IWLO.ID = FIELD(KEYS.FROM<1,KS,1>,"|",1)
+               TIWLO.ID = FIELD(KEYS.TO<1,KS,1>,"|",1)
+               IWH.W.ID = FIELD(KEYS.FROM<1,KS,2>,"|",1)
+               ITH.W.ID = FIELD(KEYS.FROM<1,KS,3>,"|",1)
+               MATWRITE IWLO.REC ON INV.WHSE.LOC, IWLO.ID
+               MATWRITE TIWLO.REC ON INV.WHSE.LOC, TIWLO.ID
+               MATWRITE IWH.REC ON INV.WHSE, IWH.W.ID
+               MATWRITE ITH.REC ON INV.TRAN.HIST, ITH.W.ID
+               DELETE CONTROL, KEYS.FROM<1,KS,1>
+               DELETE CONTROL, KEYS.FROM<1,KS,2>
+               DELETE CONTROL, KEYS.FROM<1,KS,3>
+               DELETE CONTROL, KEYS.TO<1,KS,1>
+               TRAN.LOC.DATE.PROSS<1,P,KS> = TODAY
+               IF TRAN.DATE.PROSS<1,P> = "" THEN TRAN.DATE.PROSS<1,P> = TODAY
+            NEXT KS
+         END
+      END ELSE
+         IF TO.WHSE # "INTR" THEN
+            LOCATE TO.WHSE IN INV.WHSE.CODE<1>,1 SETTING TWHSE ELSE
+               ERRMSG = 'CANNOT LOCATE WAREHOUSE # ':TO.WHSE; GOTO 1900
+            END
+         END ELSE
+            LOCATE TO.WHSE IN INV.WHSE.CODE<1>,1 SETTING TWHSE ELSE
+               INV.WHSE.CODE<1,TWHSE> = TO.WHSE
+            END
+         END
+         MATREADU IWH.REC FROM INV.WHSE, IWH.FROM.ID ELSE
+            ERRMSG = 'C.L.I.W # ':IWH.FROM.ID; GOTO 1900
+         END
+         SIWH.STD.COST = IWH.STD.COST
+         SIWH.LIST.COST = IWH.LIST.COST
+         SIWH.AVG.COST = IWH.AVG.COST
+         SIWH.MARKUP = IWH.MARKUP
+         SIWH.FOH.PCT = IWH.FOH.PCT
+         SIWH.MIN.QTY = IWH.MIN.QTY
+         SIWH.MAX.QTY = IWH.MAX.QTY
+         ITH.PTR = 0; ITH.FROM.ID = IWH.FROM.ID : '!' : TODAY
+         MATREADU ITH.REC FROM INV.TRAN.HIST, ITH.FROM.ID ELSE
+            ITH.PTR = 1; MAT ITH.REC = ''
+         END
+         IF ITH.PTR = 0 THEN ITH.PTR = DCOUNT(ITH.TYPE,VM) + 1
+         LCNT = DCOUNT(TRAN.FROM.LOC<1,P>,SVM)
+         TQTY = ''; TAMT = ''; ORIG.WT = ''; ORIG.SHEET = ''; ORIG.DIAM = ''
+         FOR L = 1 TO LCNT WHILE ERRMSG = ''
+            FROM.LOC = TRAN.FROM.LOC<1,P,L>
+            LOCATE FROM.LOC IN IWH.LOC<1>,1 SETTING FLLOC ELSE
+               ERRMSG = 'CANNOT LOCATE LOCATION # ':FROM.LOC; GOTO 1800
+            END
+            LLF = 0
+            FOR LL = L - 1 TO 1 STEP -1 UNTIL LLF
+               IF ("X":FROM.LOC) = ("X":TRAN.FROM.LOC<1,P,LL>) THEN
+                  LLF = LL
+               END
+            NEXT LL
+            IF LLF = 0 THEN
+               MATREADU IWLO.REC FROM INV.WHSE.LOC, IWH.FROM.ID:"!":FROM.LOC ELSE
+                  ERRMSG = "INV.WHSE.LOC RECORD FOR LOCATION # ":FROM.LOC:" IS MISSING"; GOTO 1800
+               END
+            END ELSE
+               MATREAD IWLO.REC FROM CONTROL, KEYS.FROM<1,LLF,1> ELSE
+                  MAT IWLO.REC = ""
+               END
+            END
+            IF TRAN.WHT<1,P,L> > IWLO.LOC.ON.HAND THEN
+               ERRMSG = 'CANNOT TRANSFER MORE THAN ':OCONV(INT(IWLO.LOC.ON.HAND/100),"MD2"):' FOR LOCATION ':FROM.LOC; GOTO 1800
+            END
+            RECV.QTY = TRAN.WHT<1,P,L> * (-1)
+            TOT.PRICE = 0; QPTR = 1
+            IF IWH.ON.HAND + RECV.QTY < IWH.RESV THEN
+               ERRMSG = 'NOT ENOUGH NET AVALIABLE QTY'; GOTO 1800
+            END
+            SUB.QTY = 0 - RECV.QTY
+            QCNT = DCOUNT(IWH.QTY.FI,VM)
+            FOR Q = 1 TO QCNT WHILE SUB.QTY <> 0
+               BEGIN CASE
+                  CASE IWH.RSV.FI<1,Q> = 0
+                  CASE SUB.QTY > IWH.RSV.FI<1,Q>
+                     TQTY<1,L,QPTR> = IWH.RSV.FI<1,Q>
+                     TAMT<1,L,QPTR> = IWH.COST.FI<1,Q>
+                     QPTR = QPTR + 1
+                     TOT.PRICE = TOT.PRICE - INT((IWH.COST.FI<1,Q>/10000) * ((IWH.RSV.FI<1,Q>/10) / (INV.COST.WT/100)))
+                     SUB.QTY = SUB.QTY - IWH.RSV.FI<1,Q>
+                     IWH.QTY.FI<1,Q> = IWH.QTY.FI<1,Q> - IWH.RSV.FI<1,Q>
+                     IWH.RSV.FI<1,Q> = 0
+                  CASE 1
+                     TQTY<1,L,QPTR> = SUB.QTY
+                     TAMT<1,L,QPTR> = IWH.COST.FI<1,Q>
+                     QPTR = QPTR + 1
+                     TOT.PRICE = TOT.PRICE - INT((IWH.COST.FI<1,Q>/10000) * ((SUB.QTY/10) / (INV.COST.WT/100)))
+                     IWH.RSV.FI<1,Q> = IWH.RSV.FI<1,Q> - SUB.QTY
+                     IWH.QTY.FI<1,Q> = IWH.QTY.FI<1,Q> - SUB.QTY
+                     SUB.QTY = 0
+               END CASE
+            NEXT Q
+            IF SUB.QTY <> 0 THEN
+               ERRMSG = 'NOT ENOUGH NET AVALIABLE FI QTY'; GOTO 1800
+            END
+            ITH.QTY<1,ITH.PTR> = RECV.QTY
+            R.S.ID = TRAN.RS.ID<1,P,L>
+            IF R.S.ID # '' THEN
+               LOCATE R.S.ID IN IWLO.R.S.ID<1>,1 SETTING FRLOC ELSE
+                  ERRMSG = 'CANNOT LOCATE R.S.ID # ':R.S.ID; GOTO 1800
+               END
+               ITH.R.S<1,ITH.PTR> = R.S.ID
+               IF CATG.R.S.ID = 'Y' THEN
+                  IF IWLO.CURR.WT<1,FRLOC> + RECV.QTY <> 0 THEN
+                     IWLO.ORIG.WT<1,FRLOC> = IWLO.ORIG.WT<1,FRLOC> + RECV.QTY
+                     IWLO.CURR.WT<1,FRLOC> = IWLO.CURR.WT<1,FRLOC> + RECV.QTY
+                     IWLO.ORIG.SHEET<1,FRLOC> = IWLO.ORIG.SHEET<1,FRLOC> - TRAN.SHEET<1,P,L>
+                     IWLO.CURR.SHEET<1,FRLOC> = IWLO.CURR.SHEET<1,FRLOC> - TRAN.SHEET<1,P,L>
+                     IWLO.ORIG.DIAM<1,FRLOC> = IWLO.ORIG.DIAM<1,FRLOC> - TRAN.DIAM<1,P,L>
+                     IWLO.CURR.DIAM<1,FRLOC> = IWLO.CURR.DIAM<1,FRLOC> - TRAN.DIAM<1,P,L>
+                  END ELSE
+                     IWLO.R.S.ID = DELETE(IWLO.R.S.ID,1,FRLOC,0)
+                     IWLO.ORIG.WT = DELETE(IWLO.ORIG.WT,1,FRLOC,0)
+                     IWLO.CURR.WT = DELETE(IWLO.CURR.WT,1,FRLOC,0)
+                     IWLO.ORIG.SHEET = DELETE(IWLO.ORIG.SHEET,1,FRLOC,0)
+                     IWLO.CURR.SHEET = DELETE(IWLO.CURR.SHEET,1,FRLOC,0)
+                     IWLO.ORIG.DIAM = DELETE(IWLO.ORIG.DIAM,1,FRLOC,0)
+                     IWLO.CURR.DIAM = DELETE(IWLO.CURR.DIAM,1,FRLOC,0)
+                     IWLO.LA.USED = DELETE(IWLO.LA.USED,1,FRLOC,0)
+                     IWLO.LA.PO = DELETE(IWLO.LA.PO,1,FRLOC,0)
+                  END
+               END ELSE
+                  BEGIN CASE
+                     CASE IWLO.CURR.WT<1,FRLOC> <> TRAN.WHT<1,P,L>
+                        ERRMSG = 'ROLL/SKID QTY MISMATCH'; GOTO 1850
+                     CASE IWLO.CURR.SHEET<1,FRLOC> <> TRAN.SHEET<1,P,L>
+                        ERRMSG = 'ROLL/SKID SHEET MISMATCH'; GOTO 1850
+                     CASE IWLO.CURR.DIAM<1,FRLOC> <> TRAN.DIAM<1,P,L>
+                        ERRMSG = 'ROLL/SKID DIAM MISMATCH'; GOTO 1850
+                  END CASE
+                  ORIG.WT<1,L> = IWLO.ORIG.WT<1,FRLOC>
+                  ORIG.SHEET<1,L> = IWLO.ORIG.SHEET<1,FRLOC>
+                  ORIG.DIAM<1,L> = IWLO.ORIG.DIAM<1,FRLOC>
+                  IWLO.R.S.ID = DELETE(IWLO.R.S.ID,1,FRLOC,0)
+                  IWLO.ORIG.WT = DELETE(IWLO.ORIG.WT,1,FRLOC,0)
+                  IWLO.CURR.WT = DELETE(IWLO.CURR.WT,1,FRLOC,0)
+                  IWLO.ORIG.SHEET = DELETE(IWLO.ORIG.SHEET,1,FRLOC,0)
+                  IWLO.CURR.SHEET = DELETE(IWLO.CURR.SHEET,1,FRLOC,0)
+                  IWLO.ORIG.DIAM = DELETE(IWLO.ORIG.DIAM,1,FRLOC,0)
+                  IWLO.CURR.DIAM = DELETE(IWLO.CURR.DIAM,1,FRLOC,0)
+                  IWLO.LA.USED = DELETE(IWLO.LA.USED,1,FRLOC,0)
+                  IWLO.LA.PO = DELETE(IWLO.LA.PO,1,FRLOC,0)
+               END
+            END
+            IWLO.LOC.ON.HAND = IWLO.LOC.ON.HAND + RECV.QTY
+            IWH.ON.HAND = IWH.ON.HAND + RECV.QTY
+            IH.CNT = DCOUNT(IH.DATE,VM)
+            LOCATE IDATE IN IH.DATE<1> SETTING PP ELSE NULL
+            BEGIN CASE
+               CASE PP = IH.CNT
+                  IH.AMOUNT<1,PP> = IH.AMOUNT<1,PP> + RECV.QTY
+               CASE PP > IH.CNT
+                  IH.AMOUNT<1,PP> = IH.AMOUNT<1,PP> + RECV.QTY
+                  IH.DATE<1,PP> = IDATE
+               CASE 1
+                  IH.AMOUNT<1,PP> = IH.AMOUNT<1,PP> + RECV.QTY
+            END CASE
+            IWH.MTD.TRAN.OUT = IWH.MTD.TRAN.OUT - RECV.QTY
+            IWH.MTD.TRAN.OUT.AMT = IWH.MTD.TRAN.OUT.AMT - TOT.PRICE
+            IWH.YTD.TRAN.OUT = IWH.YTD.TRAN.OUT - RECV.QTY
+            IWH.YTD.TRAN.OUT.AMT = IWH.YTD.TRAN.OUT.AMT - TOT.PRICE
+*T21586  IF IWLO.LOC.ON.HAND = 0 AND IWLO.LOC.INPRCS+0 = 0 THEN
+*           IWH.LOC = DELETE(IWH.LOC,1,FLLOC,0)
+*        END
+* SLEEP.1 = ICONV(1,"U407A")
+            RQM
+            SAVE.TIME = TIME()
+            KEYS.FROM<1,L,1> = IWH.FROM.ID:"!":FROM.LOC:"|":SAVE.TIME
+            KEYS.FROM<1,L,2> = IWH.FROM.ID:"|":L:"|":SAVE.TIME
+            MATWRITE IWLO.REC ON CONTROL, KEYS.FROM<1,L,1>
+            MATWRITE IWH.REC ON CONTROL, KEYS.FROM<1,L,2>
+            ITH.TYPE<1,ITH.PTR> = 'O'
+            ITH.LOC<1,ITH.PTR> = FROM.LOC
+            ITH.TRAN<1,ITH.PTR> = PO.CODE
+            ITH.JOB<1,ITH.PTR> = PO.VEND.NO
+            ITH.COST<1,ITH.PTR> = TOT.PRICE
+            ITH.PTR = ITH.PTR + 1
+            KEYS.FROM<1,L,3> = ITH.FROM.ID:"|":L:"|":SAVE.TIME
+            MATWRITE ITH.REC ON CONTROL, KEYS.FROM<1,L,3>
+1800     NEXT L
+         IF ERRMSG # "" THEN
+            GOTO 1900
+         END
+         MATREADU IWH.REC FROM INV.WHSE, IWH.TO.ID ELSE
+            IF TO.WHSE # "INTR" THEN
+               ERRMSG = 'C.L.I.W # ':IWH.TO.ID; GOTO 1900
+            END ELSE
+               MAT IWH.REC = ""
+               IWH.STD.COST = SIWH.STD.COST
+               IWH.LIST.COST = SIWH.LIST.COST
+               IWH.AVG.COST = SIWH.AVG.COST
+               IWH.MARKUP = SIWH.MARKUP
+               IWH.FOH.PCT = SIWH.FOH.PCT
+               IWH.MIN.QTY = SIWH.MIN.QTY
+               IWH.MAX.QTY = SIWH.MAX.QTY
+            END
+         END
+         ITH.PTR = 0; ITH.TO.ID = IWH.TO.ID : '!' : TODAY
+         MATREADU ITH.REC FROM INV.TRAN.HIST, ITH.TO.ID ELSE
+            ITH.PTR = 1; MAT ITH.REC = ''
+         END
+         IF ITH.PTR = 0 THEN ITH.PTR = DCOUNT(ITH.TYPE,VM) + 1
+         FOR L = 1 TO LCNT WHILE ERRMSG = ''
+            TO.LOC = TRAN.TO.LOC<1,P,L>
+            TOTAL.PRICE = 0
+            QCNT = DCOUNT(TQTY<1,L>,SVM)
+            FOR QPTR = 1 TO QCNT
+               RECV.QTY = TQTY<1,L,QPTR>
+               RECV.PRICE = TAMT<1,L,QPTR>
+*COPY>ICSBP>FIFO.RECV.SUB
+               TOTAL.PRICE = TOTAL.PRICE + TOT.PRICE
+            NEXT QPTR
+            RECV.QTY = TRAN.WHT<1,P,L>
+            ITH.QTY<1,ITH.PTR> = RECV.QTY
+            LOCATE TO.LOC IN IWH.LOC<1>,1 SETTING TLLOC ELSE
+               IWH.LOC<1,TLLOC> = TO.LOC
+            END
+            LLT = 0
+            FOR LL = L-1 TO 1 STEP -1 UNTIL LLT
+               IF ("X":TO.LOC) = ("X":TRAN.TO.LOC<1,P,LL>) THEN
+                  LLT = LL
+               END
+            NEXT LL
+            IF LLT = 0 THEN
+               MATREADU IWLO.REC FROM INV.WHSE.LOC, IWH.TO.ID:"!":TO.LOC ELSE
+                  MAT IWLO.REC = ""
+                  IWLO.LOC.ON.HAND = 0
+                  IWLO.LOC.INPRCS = 0
+                  IWLO.LA.PO = ''
+                  IWLO.LA.USED = ''
+               END
+            END ELSE
+               MATREADU IWLO.REC FROM CONTROL, KEYS.TO<1,LLT,1> ELSE
+                  MAT IWLO.REC = ''
+                  IWLO.LOC.ON.HAND = 0
+                  IWLO.LOC.INPRCS = 0
+                  IWLO.LA.PO = 0
+                  IWLO.LA.USED = 0
+               END
+            END
+            R.S.ID = TRAN.RS.ID<1,P,L>
+            IF R.S.ID # '' THEN
+               IF CATG.R.S.ID = 'Y' THEN
+                  R.S.ID = TO.WHSE : '!' : TO.LOC
+                  ITH.R.S<1,ITH.PTR> = R.S.ID
+                  LOCATE R.S.ID IN IWLO.R.S.ID<1>,1 SETTING TRLOC ELSE
+                     IWLO.R.S.ID<1,TRLOC> = R.S.ID
+                     IWLO.LA.PO<1,TRLOC> = TODAY
+                     IWLO.LA.USED<1,TRLOC> = ''
+                  END
+                  IWLO.ORIG.WT<1,TRLOC> = IWLO.ORIG.WT<1,TRLOC> + RECV.QTY
+                  IWLO.CURR.WT<1,TRLOC> = IWLO.CURR.WT<1,TRLOC> + RECV.QTY
+                  IWLO.ORIG.SHEET<1,TRLOC> = IWLO.ORIG.SHEET<1,TRLOC> + TRAN.SHEET<1,P,L>
+                  IWLO.CURR.SHEET<1,TRLOC> = IWLO.CURR.SHEET<1,TRLOC> + TRAN.SHEET<1,P,L>
+                  IWLO.ORIG.DIAM<1,TRLOC> = IWLO.ORIG.DIAM<1,TRLOC> + TRAN.DIAM<1,P,L>
+                  IWLO.CURR.DIAM<1,TRLOC> = IWLO.CURR.DIAM<1,TRLOC> + TRAN.DIAM<1,P,L>
+               END ELSE
+                  LOCATE R.S.ID IN IWLO.R.S.ID<1>,1 SETTING TRLOC ELSE
+                     IWLO.R.S.ID<1,TRLOC> = R.S.ID
+                     IWLO.LA.PO<1,TRLOC> = TODAY
+                     IWLO.LA.USED<1,TRLOC> = ''
+                  END
+                  ITH.R.S<1,ITH.PTR> = R.S.ID
+                  IWLO.ORIG.WT<1,TRLOC> = ORIG.WT<1,L>
+                  IWLO.CURR.WT<1,TRLOC> = RECV.QTY
+                  IWLO.ORIG.SHEET<1,TRLOC> = ORIG.SHEET<1,L>
+                  IWLO.CURR.SHEET<1,TRLOC> = TRAN.SHEET<1,P,L>
+                  IWLO.ORIG.DIAM<1,TRLOC> = ORIG.DIAM<1,L>
+                  IWLO.CURR.DIAM<1,TRLOC> = TRAN.DIAM<1,P,L>
+               END
+            END ELSE
+               IWLO.LA.PO = TODAY
+            END
+            IWLO.LOC.ON.HAND = IWLO.LOC.ON.HAND + RECV.QTY
+            IWH.ON.HAND = IWH.ON.HAND + RECV.QTY
+            IH.CNT = DCOUNT(IH.DATE,VM)
+            LOCATE IDATE IN IH.DATE<1> SETTING PP ELSE NULL
+            BEGIN CASE
+               CASE PP = IH.CNT
+                  IH.AMOUNT<1,PP> = IH.AMOUNT<1,PP> + RECV.QTY
+               CASE PP > IH.CNT
+                  IH.AMOUNT<1,PP> = IH.AMOUNT<1,PP> + RECV.QTY
+                  IH.DATE<1,PP> = IDATE
+               CASE 1
+                  IH.AMOUNT<1,PP> = IH.AMOUNT<1,PP> + RECV.QTY
+            END CASE
+            IWH.MTD.TRAN.IN = IWH.MTD.TRAN.IN + RECV.QTY
+            IWH.MTD.TRAN.IN.AMT = IWH.MTD.TRAN.IN.AMT + TOTAL.PRICE
+            IWH.YTD.TRAN.IN = IWH.YTD.TRAN.IN + RECV.QTY
+            IWH.YTD.TRAN.IN.AMT = IWH.YTD.TRAN.IN.AMT + TOTAL.PRICE
+            ITH.TYPE<1,ITH.PTR> = 'I'
+            ITH.LOC<1,ITH.PTR> = TO.LOC
+            ITH.TRAN<1,ITH.PTR> = PO.CODE
+            ITH.JOB<1,ITH.PTR> = PO.VEND.NO
+            ITH.COST<1,ITH.PTR> = TOTAL.PRICE
+            ITH.PTR = ITH.PTR + 1
+* SLEEP.1 = ICONV(1,"U407A")
+            RQM
+            SAVE.TIME = TIME()
+            KEYS.TO<1,L,1> = IWH.TO.ID:"!":TO.LOC:"|":SAVE.TIME
+            KEYS.TO<1,L,2> = IWH.TO.ID:"|":L:"|":SAVE.TIME
+            MATWRITE IWLO.REC ON CONTROL, KEYS.TO<1,L,1>
+            MATWRITE IWH.REC ON CONTROL, KEYS.TO<1,L,2>
+            KEYS.TO<1,L,3> = ITH.TO.ID:"|":L:"|":SAVE.TIME
+            MATWRITE ITH.REC ON CONTROL, KEYS.TO<1,L,3>
+1850     NEXT L
+         IF ERRMSG = '' THEN
+            KS.CNT = DCOUNT(KEYS.FROM,VM)
+*T21586 v Reverse mod of 2/14/97 - chronology is IMportant!
+            FOR KS = 1 TO KS.CNT
+*        FOR KS = KS.CNT TO 1 STEP -1
+*T21586 ^
+               MATREAD IWLO.REC FROM CONTROL, KEYS.FROM<1,KS,1> ELSE
+                  ERRMSG = "CANNOT LOCATE (INV.WHSE.LOC, FROM) CONTROL, ":KEYS.FROM<1,KS,1>
+                  GOTO 1900
+               END
+               MATREAD IWH.REC FROM CONTROL, KEYS.FROM<1,KS,2> ELSE
+                  ERRMSG = "CANNOT LOCATE (INV.WHSE, FROM) CONTROL, ":KEYS.FROM<1,KS,2>
+                  GOTO 1900
+               END
+               MATREAD ITH.REC FROM CONTROL, KEYS.FROM<1,KS,3> ELSE
+                  ERRMSG = "CANNOT LOCATE (INV.TRAN.HIST, FROM) CONTROL, ":KEYS.FROM<1,KS,3>
+                  GOTO 1900
+               END                       
+               IWLO.ID = FIELD(KEYS.FROM<1,KS,1>,"|",1)
+               IWH.W.ID = FIELD(KEYS.FROM<1,KS,2>,"|",1)
+               ITH.W.ID = FIELD(KEYS.FROM<1,KS,3>,"|",1)
+               MATWRITE IWLO.REC ON INV.WHSE.LOC, IWLO.ID
+               MATWRITE IWH.REC ON INV.WHSE, IWH.W.ID
+               MATWRITE ITH.REC ON INV.TRAN.HIST, ITH.W.ID
+*
+*---- UPDATE GLA FOR FROM DIVISION
+*
+               IF ORIG = "WHSE" THEN
+                  MATREAD WHSE.REC FROM WAREHOUSE, CONO:FROM.WHSE ELSE
+                     WHS.DIV = "00"
+                  END
+                  GEN.DEPT = "00"; GEN.CCTR = "000"
+                  MAT GLA.REC = ""
+                  GLA.DATE = TODAY
+                  GLA.SRC = "IA"
+                  GLA.MON = FR.CURR.PER
+                  ACCOUNT = CATG.INV
+                  ODATE = " " : OCONV(FR.CURR.DATE,"D2/")
+                  READU COUNTER FROM CONTROL, CONO : "GLACOUNTER" ELSE COUNTER = 0
+                  IF EQV.FLG = 1 THEN
+                     READ ACCT FROM COA.EQUIV, ACCOUNT ELSE ACCT = ACCOUNT
+                  END ELSE
+                     ACCT = ACCOUNT
+                  END
+                  COA.ID = CONO: ACCT
+                  MATREAD COA.REC FROM COA, COA.ID ELSE COA.DESC = COA.ID
+                  GLA.DESC = COA.DESC "L#25" : ODATE
+                  COUNTER = COUNTER + 1
+                  IF COUNTER > 999998 THEN COUNTER = 1
+                  GLA.ID = CONO:WHS.DIV:GEN.DEPT:GEN.CCTR:ACCT : STR("0",6-LEN(COUNTER)) : COUNTER
+                  READ DUMMY FROM GLA, GLA.ID ELSE DUMMY = ""
+                  GLA.AMT = 0 - TOTAL.PRICE
+                  MATWRITE GLA.REC ON GLA, GLA.ID
+                  WRITE COUNTER ON CONTROL, CONO : "GLACOUNTER"
+               END
+*
+               DELETE CONTROL, KEYS.FROM<1,KS,1>
+               DELETE CONTROL, KEYS.FROM<1,KS,2>
+               DELETE CONTROL, KEYS.FROM<1,KS,3>
+               MATREAD IWLO.REC FROM CONTROL, KEYS.TO<1,KS,1> ELSE
+                  ERRMSG = "CANNOT LOCATE (INV.WHSE.LOC, TO) CONTROL, ":KEYS.TO<1,KS,1>
+                  GOTO 1900
+               END
+               MATREAD IWH.REC FROM CONTROL, KEYS.TO<1,KS,2> ELSE
+                  ERRMSG = "CANNOT LOCATE (INV.WHSE, TO) CONTROL, ":KEYS.TO<1,KS,2>
+                  GOTO 1900
+               END
+               MATREAD ITH.REC FROM CONTROL, KEYS.TO<1,KS,3> ELSE
+                  ERRMSG = "CANNOT LOCATE (INV.TRAN.HIST, TO) CONTROL, ":KEYS.TO<1,KS,3>
+                  GOTO 1900
+               END
+               IWLO.ID = FIELD(KEYS.TO<1,KS,1>,"|",1)
+               IWH.W.ID = FIELD(KEYS.TO<1,KS,2>,"|",1)
+               ITH.W.ID = FIELD(KEYS.TO<1,KS,3>,"|",1)
+               MATWRITE IWLO.REC ON INV.WHSE.LOC, IWLO.ID
+               MATWRITE IWH.REC ON INV.WHSE, IWH.W.ID
+               MATWRITE ITH.REC ON INV.TRAN.HIST, ITH.W.ID
+*
+*---- UPDATE GLA FOR TO DIVISION
+*
+               IF ORIG = "WHSE" THEN
+                  MATREAD WHSE.REC FROM WAREHOUSE, CONO:TO.WHSE ELSE
+                     WHS.DIV = "00"
+                  END
+                  GEN.DEPT = "00"; GEN.CCTR = "000"
+                  MAT GLA.REC = ""
+                  GLA.DATE = TODAY
+                  GLA.SRC = "IA"
+                  GLA.MON = FR.CURR.PER
+                  ACCOUNT = CATG.INV
+                  ODATE = " " : OCONV(FR.CURR.DATE,"D2/")
+                  READU COUNTER FROM CONTROL, CONO : "GLACOUNTER" ELSE COUNTER = 0
+                  IF EQV.FLG = 1 THEN
+                     READ ACCT FROM COA.EQUIV, ACCOUNT ELSE ACCT = ACCOUNT
+                  END ELSE
+                     ACCT = ACCOUNT
+                  END
+                  COA.ID = CONO : ACCT[1,IN.ACCT.LEN]
+                  MATREAD COA.REC FROM COA, COA.ID ELSE COA.DESC = UNKNOWN
+                  GLA.DESC = COA.DESC "L#25" : ODATE
+                  COUNTER = COUNTER + 1
+                  IF COUNTER > 999998 THEN COUNTER = 1
+                  GLA.ID = CONO:WHS.DIV:GEN.DEPT:GEN.CCTR:ACCT : STR("0",6-LEN(COUNTER)) : COUNTER
+                  READ DUMMY FROM GLA, GLA.ID ELSE DUMMY = ""
+                  GLA.AMT = TOTAL.PRICE
+                  MATWRITE GLA.REC ON GLA, GLA.ID
+                  WRITE COUNTER ON CONTROL, CONO : "GLACOUNTER"
+               END
+*
+               DELETE CONTROL, KEYS.TO<1,KS,1>
+               DELETE CONTROL, KEYS.TO<1,KS,2>
+               DELETE CONTROL, KEYS.TO<1,KS,3>
+               TRAN.LOC.DATE.PROSS<1,P,KS> = TODAY
+               IF TRAN.DATE.PROSS<1,P> = "" THEN TRAN.DATE.PROSS<1,P> = TODAY
+            NEXT KS
+            MATWRITE INV.REC ON INVENTORY, CONO: PROD
+         END
+      END
+      IF FNGD.MODE AND ERRMSG = "" THEN
+         FOR L = 1 TO LCNT
+            FNGD.CNT = DCOUNT(JSTAT.SHP.PROD,VM)
+            FNGD = 0
+            FOR FG = 1 TO FNGD.CNT UNTIL FNGD
+               BEGIN CASE
+                  CASE TRAN.PROD.NO<1,P> # JSTAT.SHP.PROD<1,FG>
+                  CASE TRAN.FROM.WHSE<1,P> # JSTAT.SHP.WHSE<1,FG>
+                  CASE TRAN.FROM.LOC<1,P,L> # JSTAT.SHP.LOC<1,FG>
+                  CASE TRAN.RS.ID<1,P,L> # JSTAT.SHP.R.S.ID<1,FG>
+                  CASE 1
+                     FNGD = FG
+               END CASE
+            NEXT FG
+            IF FNGD THEN
+               FND = 0
+               IF JSTAT.SHP.R.S.ID<1,FNGD> = "" THEN
+                  FOR FG = 1 TO FNGD.CNT UNTIL FND
+                     BEGIN CASE
+                        CASE TRAN.TO.WHSE<1,P> # JSTAT.SHP.WHSE<1,FG>
+                        CASE TRAN.TO.LOC<1,P,L> # JSTAT.SHP.LOC<1,FG>
+                        CASE 1
+                           JSTAT.SHP.QTY<1,FG> = JSTAT.SHP.QTY<1,FG> + TRAN.WHT<1,P,L>
+                           TR.CNT = DCOUNT(JSTAT.SHP.TRANS<1,FG>,SVM)
+                           JSTAT.SHP.TRANS<1,FG,TR.CNT+1> = "T":PO.CODE
+                           FND = 1
+                     END CASE
+                  NEXT FG
+               END
+               IF NOT(FND) THEN
+                  JSTAT.SHP.PROD<1,FNGD.CNT+1> = JSTAT.SHP.PROD<1,FNGD>
+                  JSTAT.SHP.WHSE<1,FNGD.CNT+1> = TO.WHSE
+                  JSTAT.SHP.LOC<1,FNGD.CNT+1> = TRAN.TO.LOC<1,P,L>
+                  JSTAT.SHP.R.S.ID<1,FNGD.CNT+1> = TRAN.RS.ID<1,P,L>
+                  JSTAT.SHP.QTY<1,FNGD.CNT+1> = TRAN.WHT<1,P,L>
+                  JSTAT.SHP.MLTP<1,FNGD.CNT+1> = JSTAT.SHP.MLTP<1,FNGD>
+                  JSTAT.SHP.PCS<1,FNGD.CNT+1> = JSTAT.SHP.PCS<1,FNGD>
+                  JSTAT.SHP.LOC.DESC<1,FNGD.CNT+1> = JSTAT.SHP.LOC.DESC<1,FNGD>
+                  JSTAT.SHP.TRANS<1,FNGD.CNT+1> = "T":PO.CODE
+               END
+               JSTAT.SHP.QTY<1,FNGD> = JSTAT.SHP.QTY<1,FNGD> - TRAN.WHT<1,P,L>
+               IF JSTAT.SHP.QTY<1,FNGD> = 0 THEN
+                  JSTAT.SHP.PROD = DELETE(JSTAT.SHP.PROD,1,FNGD,0)
+                  JSTAT.SHP.WHSE = DELETE(JSTAT.SHP.WHSE,1,FNGD,0)
+                  JSTAT.SHP.LOC = DELETE(JSTAT.SHP.LOC,1,FNGD,0)
+                  JSTAT.SHP.R.S.ID = DELETE(JSTAT.SHP.R.S.ID,1,FNGD,0)
+                  JSTAT.SHP.QTY = DELETE(JSTAT.SHP.QTY,1,FNGD,0)
+                  JSTAT.SHP.MLTP = DELETE(JSTAT.SHP.MLTP,1,FNGD,0)
+                  JSTAT.SHP.PCS = DELETE(JSTAT.SHP.PCS,1,FNGD,0)
+                  JSTAT.SHP.LOC.DESC = DELETE(JSTAT.SHP.LOC.DESC,1,FNGD,0)
+                  JSTAT.SHP.TRANS = DELETE(JSTAT.SHP.TRANS,1,FNGD,0)
+               END
+            END
+         NEXT L
+*CSF12760
+         MATWRITE IH.REC ON INV.HIST, CONO : PROD
+*
+         MATWRITE JSTAT.REC ON JOB.STATS, CONO : TRAN.JOB
+         MATREADU JSTAT.REC FROM JOB.STATS,CONO:TRAN.JOB ELSE MAT JSTAT.REC = ""
+      END
+1900  IF ERRMSG # '' THEN
+         RELEASE
+         GOSUB 2000
+         GOTO 99999
+      END
+   NEXT P
+   GOTO 99999
+*
+**** DELETE ALL CONTROL RECORD
+*
+2000 *
+   FK.CNT = DCOUNT(KEYS.FROM, VM)
+   TK.CNT = DCOUNT(KEYS.TO, VM)
+   FOR FK = FK.CNT TO 1 STEP -1
+      FOR FKX = 3 TO 1 STEP -1
+         DELETE CONTROL, KEYS.FROM<1,FK,FKX>
+      NEXT FKX
+   NEXT FK
+   FOR TK = TK.CNT TO 1 STEP -1
+      FOR TKX = 3 TO 1 STEP -1
+         DELETE CONTROL, KEYS.TO<1,TK,TKX>
+      NEXT TKX
+   NEXT TK
+   RETURN
+**** END OF PROGRAM
+99999 *
+   RETURN
+END

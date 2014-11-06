@@ -1,0 +1,150 @@
+*********************************************************************
+* REVISION    - [08.1B]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - POSBP
+* PROGRAM     - PURGE.REG.PO
+* AUTHOR      - JIHAD YAMOUT, CBA
+* DATE        - 08/22/84
+* REVISED     - 02/15/91 - (NA) - ADD BARCODE INVENTORY X-REF PURGE.
+* DESCRIPTION
+* THIS PROGRAM DELETES ALL P/O'S AND ASSOCIATED BARCODE ROLL/SKID
+* DATA FOR SELECTED P/O'S.
+*T28779 lross 02/09/2006 * This program never updated for REV12 file data.
+*********************************************************************
+*
+*---- INSERT FILES EQUATES
+*
+*COPY>CPYLIB>COM1
+*COPY>PMC.CPYLIB>PO
+*COPY>ICS.CPYLIB>PO.RSKI.XREF
+*COPY>ICS.CPYLIB>PO.MAN.XREF
+*COPY>ICS.CPYLIB>ROLL.SKID.INFO
+*COPY>ICS.CPYLIB>INV_SERIAL ;*T28779
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*
+*---- SETUP FOR SYSTEM ERRMSG
+*
+      SYS.TYPE = 1
+      CALL SYSCOM(MAT SYSCOM.REC)
+*
+*---- OPEN ALL FILES
+*
+      OPEN "","PO" TO PO ELSE
+         ERRMSG = "PO FILE IS MISSING"
+         GOTO 93000
+      END
+      OPEN "","PO.RSKI.XREF" TO PO.RSKI.XREF ELSE
+         ERRMSG = "PO.RSKI.XREF FILE IS MISSING"
+         GOTO 93000
+      END
+      OPEN "","PO.MAN.XREF" TO PO.MAN.XREF ELSE
+         ERRMSG = "PO.MAN.XREF FILE IS MISSING"
+         GOTO 93000
+      END
+      OPEN "","ROLL.SKID.INFO" TO ROLL.SKID.INFO ELSE
+         ERRMSG = "ROLL.SKID.INFO FILE IS MISSING"
+         GOTO 93000
+      END
+*T28779 v
+      OPEN "","INV_SERIAL" TO INV_SERIAL ELSE
+         ERRMSG = "INV_SERIAL FILE IS MISSING"
+         GOTO 93000
+      END
+*
+*---- GET CONO FROM PROC
+*
+      PROCREAD KEY ELSE
+         ERRMSG = "THIS PROCESS MUST RUN FROM A PROC"
+         GOTO 93000
+      END
+*
+*---- MAIN PROCESSING
+*
+      DATA = 0
+      LOOP
+         READNEXT ID ELSE DATA = 1
+      WHILE DATA = 0 DO
+         MATREADU PO.REC FROM PO, ID ELSE
+            RELEASE PO, ID
+            GOTO 111
+         END
+*
+*----------------- ADDED FOR BARCODE INVENTORY --------------------
+*
+         CONO = ID[1,3]
+         MATREADU RSXRF.REC FROM PO.RSKI.XREF, ID THEN
+            XCNT = DCOUNT(RSXRF.RS.NO,VM)
+            FOR XPTR = XCNT TO 1 STEP -1
+               RSID = RSXRF.RS.NO<1,XPTR>
+*T28779        MATREADU RSKI.REC FROM ROLL.SKID.INFO, CONO:RSID THEN
+               MATREADU ISTK.REC FROM INV_SERIAL, CONO:RSID THEN
+*T28779           IF RSKI.POST.DATE = "" THEN
+                  IF ISTK.POST.DATE = "" THEN
+*T28779              DELETE ROLL.SKID.INFO, CONO:RSID
+                     DELETE INV_SERIAL, CONO:RSID
+                     RSXRF.RS.NO = DELETE(RSXRF.RS.NO,1,XPTR,0)
+                  END ELSE
+*T28779              RELEASE ROLL.SKID.INFO, CONO:RSID
+                     RELEASE INV_SERIAL, CONO:RSID
+                  END
+               END ELSE
+*T28779           RELEASE ROLL.SKID.INFO, CONO:RSID
+                  RELEASE INV_SERIAL, CONO:RSID
+                  RSXRF.RS.NO = DELETE(RSXRF.RS.NO,1,XPTR,0)
+               END
+            NEXT XPTR
+            IF RSXRF.RS.NO = "" THEN
+               DELETE PO.RSKI.XREF, ID
+            END ELSE
+               MATWRITE RSXRF.REC ON PO.RSKI.XREF, ID
+            END
+         END ELSE
+            RELEASE PO.RSKI.XREF, ID
+         END
+*
+         MCNT = DCOUNT(PO.MAN,VM)
+         FOR MPTR = 1 TO MCNT
+            RSMAN.ID = CONO:ID:'!':PO.MAN<1,MPTR>
+            MATREADU RSMAN.REC FROM PO.MAN.XREF, RSMAN.ID THEN
+               XCNT = DCOUNT(RSMAN.RS.NO,VM)
+               FOR XPTR = XCNT TO 1 STEP -1
+                  RSID = RSMAN.RS.NO<1,XPTR>
+*T28779           MATREAD RSKI.REC FROM ROLL.SKID.INFO, CONO:RSID ELSE
+                  MATREAD ISTK.REC FROM INV_SERIAL, CONO:RSID ELSE
+                     RSMAN.RS.NO = DELETE(RSMAN.RS.NO,1,XPTR,0)
+                  END
+               NEXT XPTR
+               IF RSMAN.RS.NO = "" THEN
+                  DELETE PO.MAN.XREF, RSMAN.ID
+*                 PO.MAN = DELETE(PO.MAN,1,MPTR,0)
+               END ELSE
+                  MATWRITE RSMAN.REC ON PO.MAN.XREF, RSMAN.ID
+               END
+            END ELSE
+               RELEASE PO.MAN.XREF, RSMAN.ID
+*              PO.MAN = DELETE(PO.MAN,1,MPTR,0)
+            END
+         NEXT MPTR
+*
+         DELETE PO, ID
+*------------------------------------------------------------------
+*
+111 *
+      REPEAT
+      GOTO 99999
+*
+*---- PRINT ERRMSG
+*
+91000 ERR.TYPE = 1; CALL SYSCOM(MAT SYSCOM.REC)
+      RETURN
+*
+92000 ERR.TYPE = 2; CALL SYSCOM(MAT SYSCOM.REC)
+      RETURN
+*
+93000 ERR.TYPE = 3; CALL SYSCOM(MAT SYSCOM.REC)
+*
+99999 *
+      END

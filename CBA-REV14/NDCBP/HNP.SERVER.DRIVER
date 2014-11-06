@@ -1,0 +1,198 @@
+*********************************************************************
+*
+* PROGRAM  - HNP.SERVER.DRIVER
+*
+* AUTHOR   - Nick Amendola, NASTech, Inc.
+*
+* DATE     - 02/07/94
+*
+* DESCRIPTION
+*
+* This program is used to start the HNP.SERVER phantom.
+*
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>NDC.CPYLIB>DOWNLOAD
+*COPY>CPYLIB>CHAR
+*
+*---- PRE-INITIALIZATION
+*
+   PROCREAD PARAM ELSE PARAM = ""
+   ACTION = PARAM<1>[1,1]
+*
+*---- INITIALIZATION
+*
+   PROMPT ""
+   DASHES = STR("-",80)
+* MOD FOR REV11
+   CURRDIR = @PATH
+   X = COUNT(CURRDIR,'/')
+   X += 1
+   W = FIELD(CURRDIR,'/',X)
+*
+*
+   SLINE = @(-1)
+   SLINE = SLINE:@(0,0):"PRIMAC"
+   SLINE = SLINE:@(18,0):"N E T W O R K   C O M M U N I C A T I O N S"
+   SLINE = SLINE:@(72,0):OCONV(DATE(),"D2/")
+   SLINE = SLINE:@(0,1):DASHES
+   SLINE = SLINE:@(0,20):DASHES
+   SLINE = SLINE:@(0,22):DASHES
+   PRINT SLINE:
+*
+*---- OPEN ALL FILES
+*
+   OPEN "","CONTROL" TO CONTROL ELSE
+      ERRMSG = "CANNOT OPEN CONTROL FILE"
+      GOSUB 90000
+      GOTO 99999
+   END
+   OPEN "","DOWNLOAD" TO DOWNLOAD ELSE
+      ERRMSG = "CANNOT OPEN DOWNLOAD FILE"
+      GOSUB 90000
+      GOTO 99999
+   END
+*
+   LOOP
+      PRINT @(25,8):@(-4):"Port Number : ###":
+      PRINT @(39,8):
+      INPUT CPORT,3:_
+      BEGIN CASE
+         CASE CPORT = "END" OR CPORT = CHAR(27) OR CPORT = "^"
+            GOTO 99999
+         CASE 1
+            PORT.VALID = 0
+            FOR N = 1 TO 250 UNTIL PORT.VALID
+               MATREAD DLOAD.REC FROM DOWNLOAD, N THEN
+                  IF DLOAD.PORT = CPORT THEN PORT.VALID = 1
+               END
+            NEXT N
+      END CASE
+   UNTIL PORT.VALID DO
+      ERRMSG = "Invalid Port Number. Try again! "
+      GOSUB 90000
+   REPEAT
+   PRINT @(39,8):@(-4):CPORT:
+*
+   BEGIN CASE
+      CASE ACTION = "I"
+      CASE ACTION = "T"
+      CASE 1
+         READU TREC FROM CONTROL, "HNP.SERVER.LOCK.":CPORT LOCKED
+            PRINT @(15,10):"Network Communications process is ACTIVE! ":
+         END ELSE
+            PRINT @(15,10):"Network Communications process is INACTIVE! ":
+            RELEASE CONTROL, "HNP.SERVER.LOCK.":CPORT
+         END
+         LOOP
+            PRINT @(0,21):@(-4):"Enter (I)nitiate, (T)erminate, (E)xit: ":
+            INPUT ACTION,3:_
+            BEGIN CASE
+               CASE ACTION = "E" OR ACTION = "END" OR ACTION = CHAR(27) OR ACTION = "^"
+                  GOTO 99999
+               CASE ACTION = "I"
+               CASE ACTION = "T"
+               CASE 1
+                  ACTION = ""
+            END CASE
+         WHILE ACTION = "" DO
+         REPEAT
+         PRINT @(0,12):@(-4):
+   END CASE
+*
+*---- MAIN PROCESSING
+*
+   BEGIN CASE
+      CASE ACTION = "I"
+         READU TREC FROM CONTROL, "HNP.SERVER.LOCK.":CPORT LOCKED
+            PRINT @(15,10):"Network Communications phantom is already running! "
+         END ELSE
+            RELEASE CONTROL, "HNP.SERVER.LOCK.":CPORT
+            CMD = "chdev -l 'tty":CPORT:"' -a login='disable'"
+*           PCPERFORM CMD
+            DPORT = "/dev/tty":CPORT
+            CMD = 'cd ../':W:'-JCS':CHAR(10)
+            CMD=CMD:"udt < ":DPORT:" > ":DPORT:" &":CHAR(10)
+            OSWRITE CMD ON "ndcproc"
+            CMD = "at now < ndcproc"
+            CDATE = DATE()
+            CTIME = TIME()
+            IF CTIME < 10 THEN CDATE = DATE()
+            XREC = ""
+            XREC<1> = CDATE
+            XREC<2> = CTIME
+            XREC<3> = CPORT
+            XPORT = 'tty':CPORT
+            WRITE XREC ON CONTROL, "HNP.SERVER.CHECK.":XPORT
+            PCPERFORM CMD
+            PRINT @(0,21):@(-4):"Please Stand-by ":
+            SLEEP 5
+            DONE=0; CNT=0
+            LOOP
+               READU TREC FROM CONTROL, "HNP.SERVER.LOCK.":CPORT LOCKED
+                  DONE = 1
+               END ELSE
+                  RELEASE CONTROL, "HNP.SERVER.LOCK.":CPORT
+               END
+            UNTIL CNT = 15 OR DONE DO
+               SLEEP 1
+               CNT = CNT + 1
+               PRINT ".":
+            REPEAT
+            IF DONE THEN
+               PRINT @(15,10):"Network Communications phantom initiated successfully! "
+            END ELSE
+               PRINT @(15,10):"Network Communications phantom initiation failed! "
+            END
+         END
+      CASE ACTION = "T"
+         READU TREC FROM CONTROL, "HNP.SERVER.LOCK.":CPORT LOCKED
+            PRINT @(0,21):@(-4):"Please Stand-by ":
+            READU TREC FROM CONTROL, "HNP.SERVER.CNTL.":CPORT ELSE TREC = ""
+            TREC<1> = "STOP"
+            WRITE TREC ON CONTROL, "HNP.SERVER.CNTL.":CPORT
+            SLEEP 5
+            DONE=0; CNT=0
+            LOOP
+               READU TREC FROM CONTROL, "HNP.SERVER.LOCK.":CPORT LOCKED
+                  NULL
+               END ELSE
+                  DONE = 1
+               END
+            UNTIL CNT = 15 OR DONE DO
+               SLEEP 1
+               CNT = CNT + 1
+               PRINT ".":
+            REPEAT
+            IF DONE THEN
+               PRINT @(15,10):"Network Communications phantom terminated successfully! "
+               CMD = "chdev -l 'tty":CPORT:"' -a login='enable'"
+*              PCPERFORM CMD
+            END ELSE
+               PRINT @(15,10):"Network Communications phantom termination pending! "
+            END
+         END ELSE
+            PRINT @(15,10):"Network Communications phantom is not running! "
+         END
+   END CASE
+   RELEASE
+   PRINT @(0,21):@(-4):"Press <RETURN> to continue":
+   INPUT REPLY,1:
+   GOTO 99999
+*
+*---- ERROR ROUTINE
+*
+90000 *
+   PRINT @(0,23):ERRMSG:
+   PRINT @(0,23):@(-4):ERRMSG:
+   INPUT REPLY,1:_
+   PRINT @(0,23):@(-4):
+   RETURN
+*
+*---- END OF PROGRAM
+*
+99999 *
+   PRINT @(-1):
+END

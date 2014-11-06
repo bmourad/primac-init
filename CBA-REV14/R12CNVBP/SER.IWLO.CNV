@@ -1,0 +1,423 @@
+*
+* THIS PROGRAM WILL CONVERT INV.WHSE.LOC AND ROLL.SKID.INFO RECORD
+* AND WILL CREATE NEW INV_SERIAL RECORDS.
+* INV.WHSE.LOC, INV_RECEIPTS AND INV_RECP_WHSE FILE WILL BE UPDATED WITH ASSOCIATED
+* SERIAL NUMBERS AND INV_SERIAL WITH ASSOCITAED RECEIPT NUMBER FROM  
+* INV.WHSE RECORD.
+*
+* AT THE END OF THE PROGRAM ERRORS ENCOUNTERED WILL BE WRITTEN TO 
+* CONVERSION.ERRORS FILE AND ALL RECORDS IN ROLL.SKID.INFO.TEMP FILE
+* WILL BE THE ONES THAT WERE CREATED ON PO BUT  WERE NOT RECEIVED YET.
+* THEY WILL BE ALSO CONVERTED TO INV_SERIAL RECORDS.
+*
+* 
+*
+*COPY>ICS.CPYLIB>ROLL.SKID.INFO
+*COPY>ICS.CPYLIB>INV.WHSE.LOC.REV11
+*COPY>ICS.CPYLIB>INV.WHSE.LOC
+*COPY>ICS.CPYLIB>INV_SERIAL
+*COPY>ICS.CPYLIB>INV_RECEIPTS
+*COPY>ICS.CPYLIB>INV_RECP_WHSE
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>ICS.CPYLIB>INV.WHSE.REV11
+*COPY>ICS.CPYLIB>TRANSFER.REV11
+*COPY>PMC.CPYLIB>PO
+*COPY>ICS.CPYLIB>SLIT.TRANS
+*COPY>ICS.CPYLIB>INV.TRAN.HIST
+*COPY>JCS.CPYLIB>JOB.MATL
+*COPY>ICS.CPYLIB>CATEGORY.REV11
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>INV.CNV
+*
+*COPY>CPYLIB>CHAR
+*
+*
+DEFFUN CALC.STK.QTY(COST.QTY,MAT INV.CNV.REC,ROND,LN)
+*
+OPEN '','INV.WHSE.LOC' TO INV.WHSE.LOC ELSE STOP 201
+OPEN '','INV.WHSE.LOC.OLD' TO INV.WHSE.LOC.OLD ELSE STOP 201
+OPEN '','ROLL.SKID.INFO' TO ROLL.SKID.INFO ELSE STOP 201
+OPEN '','ROLL.SKID.INFO.TEMP' TO ROLL.SKID.INFO.TEMP ELSE STOP 201
+OPEN '','CONVERSION.ERRORS' TO CONVERSION.ERRORS ELSE STOP 201
+OPEN '','INV_SERIAL' TO INV_SERIAL ELSE STOP 201
+OPEN '','INV.WHSE' TO INV.WHSE ELSE STOP 201
+OPEN '','INV.WHSE.OLD' TO INV.WHSE.OLD ELSE STOP 201
+OPEN '','INV_RECEIPTS' TO INV_RECEIPTS ELSE STOP 201
+OPEN '','INV_RECP_WHSE' TO INV_RECP_WHSE ELSE STOP 201
+OPEN '','RS.PO.XREF' TO RS.PO.XREF ELSE STOP 201
+OPEN '','INV.TRAN.HIST' TO INV.TRAN.HIST ELSE STOP 201
+OPEN '','PO' TO PO ELSE STOP 201
+OPEN '','JOB.MATL' TO JOB.MATL ELSE STOP 201
+OPEN '','SLIT.TRANS' TO SLIT.TRANS ELSE STOP 201
+OPEN '','INVENTORY' TO INVENTORY ELSE STOP 201
+OPEN '','CATEGORY.OLD' TO CATEGORY.OLD ELSE STOP 201
+OPEN '','TRANSFER.OLD' TO TRANSFER.OLD ELSE STOP 201 TRANSFER.OLD
+*
+ERR=""
+FIRST.TIME=1
+;*
+;* convert from IWLO file
+;*
+PRINT @(-1)
+PRINT @(1,5):'SELECTING INV.WHSE.LOC.OLD':@(-4)
+CMD='SSELECT INV.WHSE.LOC.OLD WITH M.LINE # "FNGD" AND WITH TYPE#"REGULAR"'
+UDTEXECUTE CMD CAPTURING MSG
+PRINT @(1,5):'CONVERTING INV.WHSE.LOC RECORD':@(-4)
+DONE=0; ERR.CNT=0;ERR=''
+CNT=0
+LOOP
+  READNEXT IWLO.ID ELSE DONE=1
+  IWH.ID=OCONV(IWLO.ID,"G!2")
+  INV.ID=OCONV(IWLO.ID,"G!1")
+UNTIL (DONE) DO 
+  CNT+=1
+  IF REM(CNT,100)=0 THEN
+    PRINT @(45,5):CNT:@(-4)
+  END
+  ERRMSG=''
+  CONO=IWLO.ID[1,3]
+  MATREAD INV.REC FROM INVENTORY,INV.ID THEN
+*COPY>ICSBP>INV.UM.CNV
+    CATG.ID=CONO:INV.LINE
+    MATREAD R11.CATG.REC FROM CATEGORY.OLD,CATG.ID THEN
+      IF R11.CATG.R.S.ID='N' THEN
+        MATREAD R11.IWLO.REC FROM INV.WHSE.LOC.OLD,IWLO.ID THEN
+          SERIALS=R11.IWLO.R.S.ID
+          RS.CNT=DCOUNT(R11.IWLO.R.S.ID,VM)
+          FOR RS=1 TO RS.CNT
+            RSNO=R11.IWLO.R.S.ID<1,RS>
+            RS.ID=CONO:RSNO
+            MAT RSKI.REC=""
+            MATREAD RSKI.REC FROM ROLL.SKID.INFO,RS.ID THEN
+              GOSUB UPDATE
+            END ELSE
+              ;*
+              ;* this roll/skid was not barcoded so no RSKI.REC was created.
+              ;* or it was barcoded  but RSKI.REC got deleted in the
+              ;* last ICS.EOM.CLOSE
+              ;* we have to read RS.PO.XREF to get the PO number
+              ;* needed for determining the fifo pos in INV.WHSE (RECP.NO)
+              ;* we will also create temporary RSKI.REC so UPDATE sub
+              ;* can be called from here
+              ;*
+              READ REC FROM RS.PO.XREF,CONO:"!":RSNO THEN
+                RSKI.INV.NO=OCONV(IWLO.ID,"G!1")[4,99]
+                RSKI.WHSE=OCONV(IWLO.ID,"G1!1")
+                RSKI.LOC=OCONV(IWLO.ID,"G2!1") 
+                RSKI.UNIT=REC<2>
+                RSKI.PO.NO=REC<1>
+                ;* this barcode might have been received without 
+                ;* having a true PO through regular receipts entry
+                ;* and in that case po line number will be 1.
+                ;* or it could have been on a real po in which case
+                ;* we need to find out what is the po line number.
+                PO.ID=CONO:RSKI.PO.NO
+                GOSUB FIND.PO.LINE
+                GOSUB UPDATE
+              END ELSE
+                ;* these are the roll/skid items for which
+                ;* there is a reference in INV.WHSE.LOC file
+                ;* but no supporting info can be found.
+                IWH.ID=OCONV(IWLO.ID,"G!2")
+                FIND IWH.ID IN ERR SETTING FLD THEN
+                  ERR=INSERT(ERR,FLD,2,0,RSNO:" ROLL INFO MISSING IWLO.ID=":IWLO.ID)
+                END ELSE
+                  ERR.CNT+=1
+                  ERR<ERR.CNT>=IWH.ID:@VM:RSNO:"   ROLL INFO MISSING IWLO.ID=":IWLO.ID
+                END
+                LOCATE RSNO IN SERIALS<1> SETTING POS THEN
+                  DEL SERIALS<1,POS>
+                END
+              END
+            END
+          NEXT RS
+          MAT IWLO.REC=""             
+          IWLO.LOC.ON.HAND=R11.IWLO.LOC.ON.HAND
+          IWLO.LOC.INPRCS=R11.IWLO.LOC.INPRCS
+          IWLO.SERIAL=SERIALS         
+          MATWRITE IWLO.REC ON INV.WHSE.LOC,IWLO.ID
+        END
+      END
+    END
+  END
+  IF FIRST.TIME THEN
+    FIRST.TIME=0
+  END
+  IF ERRMSG THEN
+    IWH.ID=OCONV(IWLO.ID,"G!2")
+    FIND IWH.ID IN ERR SETTING FLD THEN
+      CONVERT @AM TO @VM IN ERRMSG
+      ERR<FLD>=ERR<FLD>:@VM:ERRMSG
+    END ELSE
+      ERR.CNT+=1                             
+      ERR<ERR.CNT>=ERRMSG                    
+      ERR=INSERT(ERR,ERR.CNT,1,0,IWH.ID) 
+    END
+  END
+REPEAT
+WRITE ERR ON CONVERSION.ERRORS,"SER.IWLO.CNV"
+CALL CONV.RPT("SER.IWLO.CNV")
+;*
+;*                                                       
+;* now convert RSKI.REC that don't have reference in INV.WHSE.LOC record.       
+PRINT @(1,5):'SELECTING ROLL.SKID.INFO.TEMP':@(-4)
+CMD='SSELECT ROLL.SKID.INFO.TEMP'                      
+UDTEXECUTE CMD CAPTURING MSG                             
+PRINT @(1,5):'CONVERTING ROLL.SKID.INFO RECORD':@(-4)
+DONE=0 ; CNT=0
+LOOP                                                     
+  READNEXT RS.ID ELSE DONE=1                             
+  CONO=RS.ID[1,3]                                      
+UNTIL (DONE) DO                                          
+  CNT+=1
+  IF REM(CNT,100)=0 THEN
+    PRINT @(45,5):CNT:@(-4)
+  END
+  MATREAD RSKI.REC FROM ROLL.SKID.INFO.TEMP,RS.ID THEN   
+    ;*check if PO for this roll exist. If not then serial
+    ;*record does not need to be created.                
+    ;* exclude the ones that have a location 
+    ;* because these are the ones that could not be
+    ;* found on any of the IWLO records. Since we run a
+    ;* data verification before conversion all qty.'s should 
+    ;* match by now and these roll/skid items will be left
+    ;* in ROLL.SKID.TEMP if we need to do some manual data fixing.
+    IF RSKI.LOC="" THEN
+      PO.ID=CONO:RSKI.PO.NO                              
+      MATREAD PO.REC FROM PO,PO.ID THEN                    
+        ;*                                                 
+        ;* from RSKI.REC                                   
+        ;*                                                 
+        ;*                                   
+        MAT ISTK.REC=""                    
+        ISTK.PROD=RSKI.INV.NO              
+        ISTK.WHSE=RSKI.WHSE                
+        ISTK.PO.NO=RSKI.PO.NO              
+        ISTK.PLACE='C'
+        ISTK.PO.LINE=RSKI.PO.LINE          
+        ISTK.UOM=RSKI.UNIT
+        ISTK.EDIT.DATE=''
+        MATWRITE ISTK.REC ON INV_SERIAL,RS.ID
+      END
+    END                                    
+  END                                      
+REPEAT                                     
+;*
+GOTO 99999
+*
+**************************************************************************
+**** S U B R O U T I N E S ***********************************************
+**************************************************************************
+*
+****************
+UPDATE: 
+****************
+*
+;*
+;* from RSKI.REC
+;*
+MAT ISTK.REC=""
+ISTK.PROD=RSKI.INV.NO
+ISTK.PLACE='C'
+ISTK.WHSE=RSKI.WHSE
+ISTK.LOC=RSKI.LOC
+ISTK.PO.NO=RSKI.PO.NO
+ISTK.PO.LINE=RSKI.PO.LINE
+ISTK.UOM=RSKI.UNIT
+ISTK.MILL.ID=RSKI.MILL.ROLL.ID
+ISTK.ENTRY.DATE=RSKI.ENTRY.DATE
+ISTK.EDIT.DATE=RSKI.PRINT.DATE
+ISTK.PRINT.DATE=RSKI.PRINT.DATE
+ISTK.POST.DATE=RSKI.POST.DATE
+ISTK.SLIT.NO=RSKI.SLIT.NO
+ISTK.MANIFEST.NO=RSKI.MANIFEST.NO
+ISTK.STATUS=RSKI.STATUS
+ISTK.QTY.ENTERED=RSKI.LBS.ENTERED
+;*
+;* from IWLO.REC
+;*
+ISTK.UNIT.COST=R11.IWLO.UN.COST<1,RS>
+ISTK.LA.USED=R11.IWLO.LA.USED<1,RS>
+ISTK.ORG.QTY=R11.IWLO.ORIG.WT<1,RS>
+ISTK.CUR.QTY=R11.IWLO.CURR.WT<1,RS>
+ISTK.ORG.DIAM=R11.IWLO.ORIG.DIAM<1,RS>
+ISTK.CUR.DIAM=R11.IWLO.CURR.DIAM<1,RS>
+ISTK.ORG.STK.QTY=CALC.STK.QTY(ISTK.ORG.QTY,MAT INV.CNV.REC,'','')
+ISTK.CUR.STK.QTY=CALC.STK.QTY(ISTK.CUR.QTY,MAT INV.CNV.REC,'','')
+*ISTK.ORG.STK.QTY=R11.IWLO.ORIG.SHEET<1,RS>
+*ISTK.CUR.STK.QTY=R11.IWLO.CURR.SHEET<1,RS>
+IF R11.CATG.COST.TYPE='AC' THEN
+  ISTK.RSVB.QTY=R11.IWLO.RSV.QTY<1,RS>
+END ELSE
+  ISTK.RSVB.QTY=ISTK.CUR.QTY
+END
+* FNGDS ONLY ISTK.ORDER=R11.IWLO.ORDER<1,RS>
+* FNGDS ONLY ISTK.RELNO=R11.IWLO.RELNO<1,RS>
+;*
+;* find correct fifo pos in INV.WHSE.OLD and INV.WHSE to get receipt no
+;* if roll was used then will use po/tran number from PO.RS.XREF file
+;* to get last fifo bucket from which roll was used.
+;*
+FOUND=0
+IWH.ID=OCONV(IWLO.ID,'G!2')
+MATREAD R11.IWH.REC FROM INV.WHSE.OLD,IWH.ID THEN
+  UNIT.COST=R11.IWLO.UN.COST<1,RS>
+  RSPO=RSKI.PO.NO
+  READV RSKI.PO FROM RS.PO.XREF,CONO:"!":RSNO,1 THEN
+    IF RSKI.PO.NO#RSKI.PO THEN
+      RSPO=RSKI.PO
+    END
+  END
+*lross 06/19/2003 v must get correct pointer based on date rec'vd.
+  PTR = 1
+  LOOP
+* LOCATE RSPO IN R11.IWH.PO.NO.FI<1> SETTING R.POS THEN
+    LOCATE RSPO IN R11.IWH.PO.NO.FI<1>,PTR SETTING R.POS ELSE R.POS = 0
+    BEGIN CASE
+    CASE R.POS = 0
+      PTR = 0
+    CASE R11.IWH.RECV.FI<1,R.POS> # ISTK.POST.DATE
+      PTR = R.POS+1
+    CASE 1
+      PTR = 0
+    END CASE
+  WHILE PTR DO REPEAT
+  IF R.POS # 0 THEN
+*lross 06/19/2003 ^
+    FOUND=1
+    GOSUB 1000
+  END ELSE
+    TCNT=DCOUNT(R11.IWH.VDR.FI,@VM)
+    FOR T=1 TO TCNT
+      IF R11.IWH.VDR.FI<1,T>[1,1]='T' THEN
+        MATREAD R11.TRAN.REC FROM TRANSFER.OLD,CONO:R11.IWH.PO.NO.FI<1,T> THEN
+          LOCATE RSNO IN R11.TRAN.RS.ID SETTING JUNK THEN
+            R.POS=T
+            FOUND=1
+            GOSUB 1000
+          END
+        END
+      END
+    NEXT T
+  END
+  IF NOT(FOUND) THEN
+    EOP=0
+    BEG=1
+    LOOP
+*lross  LOCATE UNIT.COST IN R11.IWH.RECV.FI<1>,BEG SETTING R.POS THEN
+      LOCATE UNIT.COST IN R11.IWH.COST.FI<1>,BEG SETTING R.POS THEN
+        IF R11.IWH.RECV.FI<1,R.POS> >=RSKI.POST.DATE THEN
+          FOUND=1
+          EOP=1
+          GOSUB 1000
+        END ELSE
+*lross    BEG +=1
+          BEG = R.POS+1
+        END
+      END ELSE
+        EOP=1
+      END
+    UNTIL (EOP) DO REPEAT
+  END
+  IF NOT(FOUND) THEN
+    EOP=0
+    BEG=1
+    LOOP
+      LOCATE RSKI.POST.DATE IN R11.IWH.RECV.FI<1>,BEG SETTING R.POS THEN
+        IF UNIT.COST=R11.IWH.COST.FI<1,R.POS> THEN
+          FOUND=1
+          EOP=1
+          GOSUB 1000
+        END ELSE
+*lross    BEG +=1
+          BEG = R.POS+1
+        END
+      END ELSE
+        EOP=1
+      END
+    UNTIL (EOP) DO REPEAT
+  END
+  IF NOT(FOUND) THEN
+    ERRMSG<-1>='Could locate neither PO nor post date for ':RSNO:' for IWLO ':IWLO.ID
+  END
+END
+RETURN
+*
+*****************
+FIND.PO.LINE: 
+*****************
+*
+FOUND=0
+BEG=1
+MATREAD PO.REC FROM PO,PO.ID THEN
+  LOOP
+    LOCATE RSKI.INV.NO IN PO.PROD.NUM<1>,BEG SETTING POS THEN
+      IF PO.WHSE=RSKI.WHSE THEN
+        RSKI.PO.LINE=POS
+        FOUND=1
+      END ELSE
+*lross  BEG +=1
+        BEG = POS+1
+      END
+    END ELSE
+      RSKI.PO.LINE=1
+      FOUND=1
+    END
+  UNTIL (FOUND) DO REPEAT
+END ELSE
+  MATREAD SLT.REC FROM SLIT.TRANS,PO.ID THEN
+    FOUND=0                                                  
+    BEG=1                                                      
+    LOOP                                                       
+      LOCATE RSKI.INV.NO IN PO.PROD.NUM<1>,BEG SETTING POS THEN
+        IF PO.WHSE=RSKI.WHSE THEN                            
+          RSKI.PO.LINE=POS                                   
+          FOUND=1                                            
+        END ELSE                                               
+*lross    BEG +=1                                              
+          BEG = POS+1                                              
+        END                                                    
+      END ELSE                                                 
+        RSKI.PO.LINE=1                                       
+        FOUND=1                                              
+      END                                                      
+    UNTIL (FOUND) DO REPEAT                                    
+  END
+END
+IF NOT(FOUND) THEN RSKI.PO.LINE=1
+RETURN
+*
+1000: 
+*
+MATREAD IWH.REC FROM INV.WHSE,IWH.ID THEN
+  ISTK.RECP=IWH.RECP.NO<1,R.POS>
+  ISTK.RECP.PERIOD=IWH.RECP.PERIOD<1,R.POS>
+  IF ISTK.UNIT.COST="" THEN ISTK.UNIT.COST=IWH.COST.FI<1,R.POS>
+  ;*follwing  should normaly only apply to
+  ;*not barcoded roll/skids.
+  ;* V
+  IF ISTK.ENTRY.DATE="" THEN ISTK.ENTRY.DATE=IWH.RECV.FI<1,R.POS>
+  IF ISTK.EDIT.DATE="" THEN ISTK.EDIT.DATE=IWH.RECV.FI<1,R.POS>
+  IF ISTK.POST.DATE="" THEN ISTK.POST.DATE=IWH.RECV.FI<1,R.POS>
+  RECP.ID=CONO:IWH.RECP.NO<1,R.POS>
+  MATREAD INVR.REC FROM INV_RECEIPTS,RECP.ID THEN
+    INVR.SERIAL.NO<1,-1>=RSNO 
+    IRW.ID=CONO:ISTK.RECP:"!":ISTK.WHSE
+    MATREAD IRW.REC FROM INV_RECP_WHSE,IRW.ID THEN
+      IRW.SERIAL.NO<1,-1>=RSNO
+      MATWRITE ISTK.REC ON INV_SERIAL,RS.ID
+      MATWRITE INVR.REC ON INV_RECEIPTS,RECP.ID
+      MATWRITE IRW.REC ON INV_RECP_WHSE,IRW.ID
+      ;* delete Roll.Skid.Info.Temp record
+      ;* after all of the records in Iwlo file are processed
+      ;* only one left should be the ones that don't have location yet.
+      DELETE ROLL.SKID.INFO.TEMP,RS.ID
+    END
+  END ELSE
+    ERRMSG<-1>='Could not read INVR.REC ':RECP.ID:' for IWLO.ID ':IWLO.ID
+  END
+END
+RETURN
+*
+99999 
+END

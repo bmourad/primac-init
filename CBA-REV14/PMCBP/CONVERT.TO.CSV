@@ -1,0 +1,192 @@
+  SUBROUTINE CONVERT.TO.CSV(TEXT.FILE.NAME,TEXT.REC.NAME,FORMATSTR)
+*********************************************************************
+* REVISION     - [12.0]
+* Copyright 2001 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM       - PRIMAC
+* SOURCE       - PMCBP
+* PROGRAM      - CONVERT.TO.CSV
+* BY           - ABDULLAH JIBALY, COMPUTER BUSINESS ASSOCIATES
+* DATE         - 10/07/2002
+* DESCRIPTION  - This subroutine converts a report to
+*                CSV (comma-sperated-values) Excel compatible format
+*              - SEE TASK 26206
+*
+* ARGUMENTS    - TEXT.FILE.NAME: Directory that contains file to be converted
+*                TEXT.REC.NAME : The record name of the file to be converted
+*                FORMATSTR     : Not currently used
+*
+*ENDDOC
+*********************************************************************
+*
+**************************
+* DIMENSIONS AND EQUATES *
+**************************
+*COPY>CPYLIB>SYSCOM
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>SECURITY
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*
+*---- Setup system error messages
+*
+  SYS.TYPE = 1
+  CALL SYSCOM(MAT SYSCOM.REC)
+*
+**************
+* OPEN FILES *
+**************
+  ERRMSG = ''
+  OPEN 'VOC' TO VOC.FILE ELSE
+    ERRMSG = 'CANNOT LOCATE THE VOC FILE!'
+  END
+  OPEN TEXT.FILE.NAME TO TEXT.FILE ELSE
+    ERRMSG = 'CANNOT OPEN THE ' : TEXT.FILE.NAME : ' FILE!'
+  END
+  IF ERRMSG THEN
+    GOSUB 91000
+    RETURN
+  END
+**************
+* INITIALIZE *
+**************
+  PAGE.FEED = CHAR(12)
+  LINE.FEED = CHAR(13)
+  ;*
+  ;* Read the text file to convert
+  ;*
+  READ TEXT.REC FROM TEXT.FILE, TEXT.REC.NAME ELSE
+    ERRMSG = "ITEM " : TEXT.REC.NAME : " DOES NOT EXIST IN " : TEXT.FILE.NAME
+    GOSUB 91000
+    RETURN
+  END
+  ;*
+  ;* Set default values (none are used now)
+  ;*
+  VALUE = "DEFAULT"
+  LOCATE "PROPERTY" IN FORMATSTR<1> SETTING PTR THEN
+    VALUE = FORMATSTR<2,PTR>
+  END
+  ;*
+  ;* Find the header for each page
+  ;*
+  CSV.HEADER = ''
+  IF TEXT.REC<1>[1,10] = "RUN D - T:" THEN
+    CSV.HEADER<1> = QUOTE(TRIM(TEXT.REC<1>[1,30])) : ","
+    CSV.HEADER<1>:= QUOTE(TRIM(TEXT.REC<1>[31,90]))
+    CSV.HEADER<2> = QUOTE(TRIM(TEXT.REC<2>[1,30])) : ","
+    CSV.HEADER<2>:= QUOTE(TRIM(TEXT.REC<2>[31,90]))
+  END
+  ;*
+  ;* Find the number of lines in the header
+  ;*
+  CSV.HEADER.LINES = DCOUNT(CSV.HEADER,@AM)
+  LINES = DCOUNT(TEXT.REC,@AM)
+  CSV.HEADER.CNT = 0
+  FOR IDX = CSV.HEADER.LINES+1 TO LINES
+    IF INDEX(TEXT.REC<IDX>,"---",1) THEN
+      CSV.HEADER.CNT = IDX
+      EXIT
+    END
+  NEXT IDX
+  ;*
+  ;* Find the column locations
+  ;*
+  COL.LIST = ''
+  IF CSV.HEADER.CNT THEN
+    DASHES.LINE = " " : TEXT.REC<CSV.HEADER.CNT> : " "
+    DASHES.LINE = TRIM(DASHES.LINE,'-')
+    DASHES.CNT  = COUNT(DASHES.LINE,'-')
+    DASHES.LINE = TEXT.REC<CSV.HEADER.CNT>
+    FOR DASHES.IDX = 1 TO DASHES.CNT
+      COL.START = INDEX(DASHES.LINE,'-',1)
+      DASHES.LINE[1,COL.START-1] = ''
+      COL.LEN   = INDEX(DASHES.LINE,' ',1)-1
+      IF COL.LEN < 1 THEN COL.LEN = LEN(DASHES.LINE)
+      COL.LIST<DASHES.IDX,1> = COL.START
+      COL.LIST<DASHES.IDX,2> = COL.LEN
+      DASHES.LINE[1,COL.LEN] = ''
+    NEXT DASHES.IDX
+  END
+  ;*
+  ;* Accumulate column start positions
+  ;*
+  COL.CNT = DCOUNT(COL.LIST,@AM)
+  FOR COL.IDX = 2 TO COL.CNT
+    COL.LIST<COL.IDX,1> += COL.LIST<COL.IDX-1,1> + COL.LIST<COL.IDX-1,2> - 1
+  NEXT COL.IDX
+  ;*
+  ;* Extract the column titles
+  ;*
+  COL.CNT = DCOUNT(COL.LIST,@AM)
+  FOR COL.IDX = 1 TO COL.CNT
+    COL.START = COL.LIST<COL.IDX,1>
+    COL.LEN   = COL.LIST<COL.IDX,2>
+    FOR HDR.IDX = CSV.HEADER.LINES+1 TO CSV.HEADER.CNT
+      COL.LIST.HDR = TRIM(TEXT.REC<HDR.IDX>[COL.START,COL.LEN])
+      SWAP '"' WITH '""' IN COL.LIST.HDR
+      COL.LIST<COL.IDX,3,-1> = QUOTE(COL.LIST.HDR)
+    NEXT HDR.IDX
+  NEXT COL.IDX
+  ;*
+  ;* Complete the header with the column names
+  ;*
+  FOR HDR.IDX = CSV.HEADER.LINES+1 TO CSV.HEADER.CNT
+    CSV.HEADER.ROW = ''
+    FOR COL.IDX = 1 TO COL.CNT
+      CSV.HEADER.ROW.ITEM = COL.LIST<COL.IDX,3,HDR.IDX-CSV.HEADER.LINES>
+      CSV.HEADER.ROW := ',' : CSV.HEADER.ROW.ITEM
+    NEXT COL.IDX
+    ;*
+    ;* Get rid of first comma, insert row into header
+    ;*
+    CSV.HEADER.ROW[1,1] = ''
+    CSV.HEADER<-1> = CSV.HEADER.ROW
+  NEXT HDR.IDX
+  ;*
+  ;* Begin conversion
+  ;*
+  CSV.REC = ''
+  LINES = DCOUNT(TEXT.REC,@AM)
+  FOR IDX = CSV.HEADER.CNT+1 TO LINES
+    ;*
+    ;* Check for a pagefeed, otherwise insert the next row of data
+    ;*
+    FINDSTR PAGE.FEED IN TEXT.REC<IDX> SETTING NEW.PAGE.MARKER THEN
+      IDX = IDX + CSV.HEADER.CNT
+      CONTINUE
+    END
+    CSV.REC.ROW = ''
+    FOR COL.IDX = 1 TO COL.CNT
+      COL.START = COL.LIST<COL.IDX,1>
+      COL.LEN   = COL.LIST<COL.IDX,2>
+      CSV.REC.ROW.ITEM = TRIM(TEXT.REC<IDX>[COL.START,COL.LEN])
+      CSV.REC.ROW := ','
+      IF CSV.REC.ROW.ITEM # '' THEN
+        CSV.REC.ROW := QUOTE(CHANGE(CSV.REC.ROW.ITEM,'"','""'))
+      END
+    NEXT COL.IDX
+    ;*
+    ;* Get rid of first comma, and insert row into record
+    ;*
+    CSV.REC.ROW[1,1] = ''
+    CSV.REC<-1> = CSV.REC.ROW
+  NEXT IDX
+  ;*
+  ;* Write CSV record
+  ;*
+  CSV.REC = CSV.HEADER : @AM : CSV.REC
+  CSV.REC.PATH = "./":TEXT.FILE.NAME:"/":TEXT.REC.NAME:".csv"
+  SWAP @AM WITH LINE.FEED IN CSV.REC
+  OSWRITE CSV.REC ON CSV.REC.PATH
+  RETURN
+*
+********************
+* CALLS FOR SYSCOM *
+********************
+91000*
+  ERR.TYPE = 1 ; CALL SYSCOM(MAT SYSCOM.REC)
+  RETURN
+*
+99999 *
+  RETURN
+END

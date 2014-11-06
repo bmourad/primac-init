@@ -1,0 +1,171 @@
+$BASICTYPE "U"
+SUBROUTINE DSHELPER(Arg1,Arg2,Arg3,Arg4)
+COMMON /DSTAGE/ FNAME(10),FLIST(10),FVAR(10),DICT.RECORD(2048),MYCOUNT
+EQUATE ErrMsg TO Arg1
+Action = Arg1
+ErrMsg = ''
+Delim = 0
+BEGIN CASE
+CASE Action EQ 0	;* Get DSHELPER Version
+   Arg1 = 'Version 7'
+   MYCOUNT = 0
+CASE Action EQ 1	;* Open for readnext
+   FILENAME = Arg2
+   HANDLE = 1
+   LOOP
+   WHILE FNAME(HANDLE) NE 0 AND HANDLE LT 32 DO
+      HANDLE += 1
+   REPEAT
+   OPEN '',FILENAME TO FVAR(HANDLE) ELSE
+      ErrMsg =  'Failed to open ':FILENAME:' STATUS() = ':STATUS()
+      RETURN
+   END
+   OPEN 'DICT',FILENAME TO DICT.FVAR ELSE
+      ErrMsg = 'Failed to open DICT ':FILENAME:' STATUS() = ':STATUS()
+      CLOSE FVAR(HANDLE)      
+      RETURN
+   END
+   SELECT.CMD = Arg4
+   IF SELECT.CMD = '' THEN
+      SELECT FVAR(HANDLE) TO HANDLE
+   END
+   ELSE
+      EXECUTE SELECT.CMD:' TO ':HANDLE CAPTURING OUTPUT RETURNING RESULTCODE
+      IF RESULTCODE LT 0 THEN
+         CLOSE FVAR(HANDLE)
+         ErrMsg = 'Failed to execute SELECT command(':SELECT.CMD:')':@VM:OUTPUT
+         RETURN
+      END
+   END
+   FIELDLIST = ''
+   LOOP
+      ENTRY = REMOVE(Arg3,Delim)
+      IF NOT(NUM(ENTRY)) THEN
+         READ RECORD FROM DICT.FVAR,ENTRY THEN
+            BEGIN CASE
+            CASE RECORD<1>[1,1] EQ 'I' OR RECORD<1>[1,1] EQ 'V'
+               IF DCOUNT(RECORD,@FM) LT 9 THEN
+                  ErrMsg = 'I-type ':ENTRY:' must be compiled.'
+                  CLOSE FVAR(HANDLE)
+                  RETURN
+               END
+               FOR POS = 1 TO 2048
+               UNTIL DICT.RECORD(POS) EQ 0
+                  NULL
+               NEXT POS
+               DICT.RECORD(POS) = RECORD
+               FIELDLIST<-1> = -POS
+            CASE RECORD<1>[1,1] EQ 'D'
+               FIELDLIST<-1> = RECORD<2>
+            CASE @TRUE
+               CLOSE FVAR(HANDLE)
+               ErrMsg = 'Invalid field name ':ENTRY
+               RETURN
+            END CASE
+         END
+         ELSE
+            CLOSE FVAR(HANDLE)
+            ErrMsg = 'Invalid field name ':ENTRY
+            RETURN
+         END
+      END
+      ELSE
+         FIELDLIST<-1> = ENTRY
+      END
+   WHILE Delim
+   REPEAT
+   FNAME(HANDLE) = FILENAME
+   FLIST(HANDLE) = FIELDLIST
+   Arg2 = '0':HANDLE
+CASE Action EQ 2	;* Close
+   HANDLE = Arg2
+   Arg2 = ''
+   CLOSE FVAR(HANDLE)
+   FIELDLIST = FLIST(HANDLE)
+   LOOP
+      ENTRY = REMOVE(FIELDLIST,Delim)
+      IF ENTRY LT 0 THEN
+         DICT.RECORD(-ENTRY) = 0
+      END
+   WHILE Delim
+   REPEAT
+   FLIST(HANDLE) = 0
+   FNAME(HANDLE) = 0
+CASE Action EQ 3	;* Readnext chunk of records
+   DIM TARR(1000),srcARR(2048)
+   HANDLE = Arg2
+   FLDCOUNT = DCOUNT(FLIST(HANDLE),@AM)
+   DIM FARR(FLDCOUNT),destARR(FLDCOUNT)
+   MATPARSE FARR FROM FLIST(HANDLE),@AM
+   PACKET = ''
+   FOR I = 1 TO 1000 
+      READNEXT @ID FROM HANDLE ELSE
+         I -= 1
+         ErrMsg = '-1'
+         EXIT
+      END
+      READ @RECORD FROM FVAR(HANDLE),@ID THEN
+         MATPARSE srcARR FROM @RECORD,@AM
+         FOR J = 1 TO FLDCOUNT
+            ENTRY = FARR(J)
+            BEGIN CASE
+            CASE ENTRY EQ 0
+               destARR(J) = @ID
+            CASE ENTRY GT 0
+               destARR(J) = srcARR(ENTRY)
+            CASE ENTRY LT 0
+               destARR(J) = ITYPE(DICT.RECORD(-ENTRY))
+            END CASE
+         NEXT J
+      END
+      ELSE
+         ErrMsg = 'Record ':@ID:' not found.'
+         EXIT
+      END
+      MATBUILD TARR(I) FROM destARR,1,FLDCOUNT USING @AM
+   NEXT I
+   MATBUILD PACKET FROM TARR,1,I USING @RM
+   Arg2 = PACKET  
+CASE Action EQ 4	;* Open for Write
+   FILENAME = Arg2
+   HANDLE = 1
+   LOOP
+   WHILE FNAME(HANDLE) NE 0 AND HANDLE LT 32 DO
+      HANDLE += 1
+   REPEAT
+   OPEN '',FILENAME TO FVAR(HANDLE) ELSE
+      ErrMsg =  'Failed to open ':FILENAME:' STATUS() = ':STATUS()
+      RETURN
+   END
+   FNAME(HANDLE) = FILENAME
+   FLIST(HANDLE) = ''
+   Arg2 = '0':HANDLE
+CASE Action EQ 5	;* Write Packet
+   HANDLE = Arg2
+   RECCOUNT = DCOUNT(Arg3,@RM)
+   DIM TARR(RECCOUNT)
+   MATPARSE TARR FROM Arg3,@RM
+   FOR I = 1 TO RECCOUNT
+      @ID = FIELD(TARR(I),@FM,1)
+      FMCOUNT = DCOUNT(TARR(I),@FM)
+      @RECORD = FIELD(TARR(I),@FM,2)
+      FOR J = 3 TO FMCOUNT
+         @RECORD := @FM:FIELD(TARR(I),@FM,J)
+      NEXT J
+      WRITE @RECORD TO FVAR(HANDLE),@ID ON ERROR
+         ErrMsg = 'Record ':@ID:' not written.'
+         EXIT
+      END
+   NEXT I
+CASE @TRUE
+   ErrMsg = 'Invalid action ':Action
+END CASE
+IF MYCOUNT = 100 THEN
+   MYCOUNT = 0
+   GARBAGECOLLECT
+END
+ELSE
+   MYCOUNT = MYCOUNT + 1
+END
+   RETURN
+END

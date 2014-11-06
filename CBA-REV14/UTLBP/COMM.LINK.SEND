@@ -1,0 +1,233 @@
+      SUBROUTINE COMM.LINK.SEND (ACTION, RACCT, RDICT, RFILE, RITEM, REC, STATUS, ERRCNT)
+*********************************************************************
+*
+* PROGRAM  - COMM.LINK.SEND
+*
+* AUTHOR   - NICK AMENDOLA, COMPUTER BUSINESS ASSOCIATES
+*
+* DATE     - 04/24/92
+*
+* DESCRIPTION
+*
+* This subroutine is used to transmit defined data to remote
+* computer.
+*
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>CPYLIB>CHAR
+*
+*---- INITIALIZATION
+*
+      PROMPT ""
+      ECHO OFF
+      ERRMSG = ""
+      ERRCNT = 0
+      STATUS = ""
+      E1.RETRY.INIT = 100
+      E2.RETRY.INIT = 5
+      TO.RETRY.INIT = 20
+      E1.RETRY = E1.RETRY.INIT
+      E2.RETRY = E2.RETRY.INIT
+      TO.RETRY = TO.RETRY.INIT
+      PREV.DIR = "ZXZXZX"
+      LINE.ACTIVE = 0
+*
+*---- MAIN PROCESSING
+*
+100 *
+      DIR = "FD"
+      MSG = "\":DIR:"\":RACCT:",":RDICT:",":RFILE:",":RITEM
+      E1.RETRY = 0
+      GOSUB 5000
+      GOSUB 6000
+      BEGIN CASE
+      CASE ERRMSG = "E1" AND ERRCNT < 10
+         GOTO 100
+      CASE ERRMSG # ""
+         ERRCNT = 0
+         STATUS = ERRMSG
+         GOTO 99999
+      END CASE
+      ERRCNT = 0
+      LC = DCOUNT(REC,AM)
+*
+      FOR LN = 1 TO LC
+         RLINE = REC<LN>
+         GOSUB 3000
+         GOSUB 4000
+         IF ERRMSG # "" THEN
+            STATUS = ERRMSG
+            GOTO 99999
+         END
+      NEXT LN
+      GOSUB 6000
+      IF ERRMSG # "" THEN
+         STATUS = ERRMSG
+         GOTO 99999
+      END
+*
+      DIR = "ID"
+      MSG = "\":DIR:"\":RITEM
+      GOSUB 5000
+      GOSUB 6000
+      IF ERRMSG # "" THEN
+         STATUS = ERRMSG
+         GOTO 99999
+      END
+*
+      GOTO 99999
+*
+*---- COMPRESS DATA FOR TRANSMISSION
+*
+3000 *
+      RLEN = LEN(RLINE)
+      TEXT = ""
+      MODE = ""
+      FOR CP = 1 TO RLEN
+         CHR = RLINE[CP,1]
+         CHD = SEQ(CHR)
+         BEGIN CASE
+         CASE CHD < 32
+            C1 = "a"
+            C2 = CHAR(CHD+32)
+            MODE = "C"
+         CASE CHD < 96
+            C1 = ""
+            C2 = CHR
+         CASE CHD < 128
+            C1 = "b"
+            C2 = CHAR(CHD-64)
+            MODE = "C"
+         CASE CHD < 192
+            C1 = "c"
+            C2 = CHAR(CHD-96)
+            MODE = "C"
+         CASE CHD < 256
+            C1 = "d"
+            C2 = CHAR(CHD-160)
+            MODE = "C"
+         END CASE
+         IF C1 # "" AND MOD(LEN(TEXT),120) = 119 THEN
+            TEXT = TEXT : "e" : C1 : C2
+         END ELSE
+            TEXT = TEXT : C1 : C2
+         END
+      NEXT CP
+      RETURN
+*
+*---- TRANSMIT ITEM LINE
+*
+4000 *
+      SG = 0
+      TLEN = LEN(TEXT)
+      FOR TP = 1 TO TLEN STEP 120
+         IF LINE.ACTIVE THEN GOSUB 6000
+         IF ERRMSG # "" THEN
+            STATUS = ERRMSG
+            GOTO 4090
+         END
+         SG = SG + 1
+         BEGIN CASE
+         CASE MODE = ""
+            DIR = LN:",":SG
+         CASE 1
+            DIR = LN:",":SG:",":MODE
+         END CASE
+         MSG = "\":DIR:"\":TEXT[TP,120]
+         GOSUB 5000
+      NEXT TP
+4090 *
+      RETURN
+*
+*---- TRANSMIT DATA SEGMENT WITH CHECKSUM
+*
+5000 *
+      CSUM = CHECKSUM(MSG)
+      PRINT CSUM:MSG
+      LINE.ACTIVE = 1
+      RETURN
+*
+*---- WAIT FOR ACKNOWLEDGEMENT
+*
+6000 *
+      E1CNT = 0
+      E2CNT = 0
+      TOCNT = 0
+      ERRMSG = ""
+6010 *
+      IF RACCT = "TEST" THEN
+         REPLY = DIR
+      END ELSE
+         REPLY = ""
+         DTIME = 5                            ;* TIMEOUT AFTER 5 SECONDS
+         LOOP
+            GOSUB 50000
+            IF NOT(TIMEOUT) THEN
+               INPUT C,1:
+               REPLY = REPLY : C
+            END ELSE
+               TOCNT = TOCNT + 1
+               REPLY = "!@#$%"
+            END
+         UNTIL TIMEOUT OR C = "" DO
+         REPEAT
+      END
+      LOOP
+      WHILE REPLY # "" AND SEQ(REPLY[1,1]) = 0 DO
+         REPLY = REPLY[2,999]
+      REPEAT
+      IF REPLY = "" THEN GOTO 6010
+      IF REPLY = PREV.DIR THEN GOTO 6000
+      IF REPLY # DIR THEN
+         BEGIN CASE
+         CASE REPLY = "E1"
+            ERRCNT = ERRCNT + 1
+            E1CNT = E1CNT + 1
+            IF E1CNT > E1.RETRY THEN
+               ERRMSG = "E1"
+               GOTO 6090
+            END
+         CASE REPLY = "E2"
+            E2CNT = E2CNT + 1
+            IF E2CNT > E2.RETRY THEN
+               ERRMSG = "E2"
+               GOTO 6090
+            END
+         CASE TOCNT > TO.RETRY
+            ERRMSG = "TIMEOUT"
+            GOTO 6090
+         END CASE
+         PRINT CSUM:MSG
+         GOTO 6010
+      END
+      PREV.DIR = DIR
+6090  LINE.ACTIVE = 0
+      E1.RETRY = E1.RETRY.INIT
+      E2.RETRY = E2.RETRY.INIT
+      TO.RETRY = TO.RETRY.INIT
+      RETURN
+*
+*---- CHECK INPUT PRESENT
+*
+50000 *
+*
+* DTIME = NUMBER OF SECONDS TO WAIT
+*
+      STIME = TIME()
+      LOOP
+         INPUT DATA.PRESENT,-1
+         ETIME = TIME() - STIME
+         IF ETIME < 0 THEN ETIME = ETIME + 86400
+      UNTIL DATA.PRESENT OR ETIME > DTIME DO
+      REPEAT
+      TIMEOUT = NOT(DATA.PRESENT)
+      RETURN
+*
+*---- END OF PROGRAM
+*
+99999 *
+      ECHO ON
+      RETURN
+      END

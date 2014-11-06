@@ -1,0 +1,521 @@
+  SUBROUTINE BOL.LASER.PRINT.SUB(CONO,BOLNUM,MODE)
+*COPY>CPYLIB>COM1
+*COPY>JCS.CPYLIB>COM.JCS.LINK  
+*COPY>ICS.CPYLIB>COM.INV.MAIN  
+*COPY>ICS.CPYLIB>COM.INV.SERIAL
+*COPY>JCS.CPYLIB>COM.INV.STATS 
+*COPY>PMC.CPYLIB>COM.CUST
+*COPY>OPS.CPYLIB>COM.ORDER
+*COPY>PMC.CPYLIB>COM.SHIP.TO
+*COPY>OPS.CPYLIB>COM.BOL
+*************************************************************
+* REVISION      - [10.2]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* PROGRAM       - BOL.LASER.PRINT.SUB
+* SYSTEM        - OPSBP
+* BY            - RENEE YANEZ, VERCOM Software, Inc
+* DATE          - 09/24/97
+* DESCRIPTION   - This program allows BOLs to print on a laser printer.
+*                 This was copied from BOL.PRINT.SUB in OPSBP.
+*T22226 renee 09/24/1997 * Created this new program to add ability to
+*                          print to a laser printer.
+*T24342 randy 08/31/1999 * NEED TO REMOVE FORM FEED CHARACTER PRINT FROM
+*                          LASER PRINTER PRINT ROUTINE.
+*T24647 alex 12/23/1999 * PRINT OUT IS PRINTING THE WRONG QTY FOR KITS
+*                         THAT SHARE THE SAME COMPONENTS.
+*T24732 alex 01/19/2000 * SKIDS, CARTONS, & WEIGHT ARE PRINTING WITH A
+*                         ZERO VALUE WHEN PROCESSING A PRODUCTS RECIEVED
+*                         BY MULTIPLE LOCATION, BUT ONE RECEIPT BUCKET.
+*T24801 aron 02/03/2000 * FIX PAGE COUNT TO USE 12 ITEMS PER PAGE
+*T24896 alex 03/03/2000 * Fix to print the 'Shp Term' from the Order
+*                         Line Maintenance screen if not equal to null.
+*T25159 alex 05/11/2000 * Add PMC.CPYLIB>COUNTRY.CODE, since the
+*                         COUNTRY.CODE file can hold multiple attributes
+*                         of data.
+*T25740 epitka 02/05/2002 * REV12
+*ENDDOC
+*************************************************************
+*---- FILE EQUATES
+*
+*COPY>ICS.CPYLIB>FNGD.BOM
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>PMC.CPYLIB>SHIP.TO
+*COPY>PMC.CPYLIB>SHIP.VIA
+*COPY>PMC.CPYLIB>FOB
+*COPY>OPS.CPYLIB>BOL
+*COPY>OPS.CPYLIB>ORDER
+*COPY>OPS.CPYLIB>ORDER.DETAIL
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>INV.FNGD
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>ICS.CPYLIB>WAREHOUSE
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>JCS.CPYLIB>JOB
+*COPY>PMC.CPYLIB>COMP.OPS
+*COPY>PMC.CPYLIB>COUNTRY.CODE          ;*T25159
+*
+*---- SETUP UM CONVERSION AND DISPLAY
+  ICR.CNV = "MD0"; ICR.CNV1 = "MD0,"
+  ICR.DV1 = 1; ICR.MT1 = 1; ICR.DV2 = 1000
+  ICR.TYPE = 3; ICR.SCAL = 0
+*
+*---- INITIALIZATION
+  MATREAD OPCO.REC FROM CONTROL, CONO:"OPS" ELSE MAT OPCO.REC = ""
+  IF OPCO.CNTY = "" THEN
+    OP.COUNTRY = ""
+  END ELSE
+    MATREAD CTY.REC FROM COUNTRY.CODE, CONO:OPCO.CNTY THEN
+      OP.COUNTRY = CTY.DESC
+    END ELSE
+      OP.COUNTRY = OPCO.CNTY
+    END
+  END
+*
+  LINE.CNT = 0
+  SP1 = SPACE(1)
+  SP2 = SPACE(2)
+  SP3 = SPACE(3)
+  SP4 = SPACE(4)
+  SP58=STR(" ",58)
+  FIRSTREC = 1
+  UNKNOWN=STR("?",30)
+  ERRMSG = ""
+  DESC = ""
+*
+  MATREAD COMP.REC FROM COMPANY,CONO ELSE MAT COMP.REC = ""
+  BILL.TO.NAME = CUST.NAME
+  BILL.TO.ADDR1 = CUST.ADDR1
+  BILL.TO.ADDR2 = CUST.ADDR2
+  BILL.TO.ADDR4 = CUST.ADDR4
+  BILL.TO.ZIP = CUST.ZIP
+  BILL.TO.CNTY = CUST.ADDL.OPS<1,4>
+  SHIP.TO.CNTY = SPT.CNTY
+  IF BILL.TO.CNTY # "" THEN
+    MATREAD CTY.REC FROM COUNTRY.CODE, CONO:BILL.TO.CNTY THEN
+      BILL.TO.CNTY = CTY.DESC
+    END
+  END
+  IF SHIP.TO.CNTY # "" THEN
+    MATREAD CTY.REC FROM COUNTRY.CODE, CONO:SHIP.TO.CNTY THEN
+      SHIP.TO.CNTY = CTY.DESC
+    END
+  END
+  MATREAD SHIP.VIA.REC FROM SHIP.VIA, CONO:BOL.SHIP.VIA ELSE
+    MAT SHIP.VIA.REC = ""
+    SHPV.DESC = BOL.SHIP.VIA
+  END
+  IF BOL.FOB = "" THEN
+    MAT FOB.REC = ""
+  END ELSE
+    MATREAD FOB.REC FROM FOB, CONO:BOL.FOB ELSE
+      MAT FOB.REC = ""
+      FOB.DESC = BOL.FOB
+    END
+  END
+  MATREAD ORD.DET.REC FROM ORDER.DETAIL, CONO:BOL.ORDER<1,1>:"!":BOL.SHIP.TO ELSE
+    MAT ORD.DET.REC = ""
+  END
+*
+*---- PRINT BILL OF LADING
+100*
+*
+  PCNT = DCOUNT(BOL.ORDER,VM)
+  PGPTR = 1; PGCNT = 1
+  SAVE.PROD = ""
+  SAVE.SID  = ""
+  SAVE.SQTY = ""
+  SAVE.GWGT = ""
+  SAVE.SKDS = ""
+  SAVE.CTNS = ""
+  SAVE.PPTR = ""
+  FOR PPTR = 1 TO PCNT
+    PROD = BOL.PROD<1,PPTR>
+    TYPE.KIT = BOL.KIT<1,PPTR>
+    PROD.SEQ = BOL.SEQ<1,PPTR>
+    WHSE     = BOL.WHSE<1,PPTR>
+    BEGIN CASE
+      CASE TYPE.KIT = "N"
+        LOCATE PROD IN SAVE.PROD,1 BY "AL" SETTING PP ELSE
+          SAVE.PROD = INSERT(SAVE.PROD,PP,0,0,PROD)
+          SAVE.PPTR = INSERT(SAVE.PPTR,PP,0,0,PPTR)
+          SAVE.SID = INSERT(SAVE.SID,PP,0,0,"")
+          SAVE.SQTY = INSERT(SAVE.SQTY,PP,0,0,"")
+          SAVE.GWGT = INSERT(SAVE.GWGT,PP,0,0,"")
+          SAVE.SKDS = INSERT(SAVE.SKDS,PP,0,0,"")
+          SAVE.CTNS = INSERT(SAVE.CTNS,PP,0,0,"")
+        END
+        SCNT = DCOUNT(BOL.QTY<1,PPTR>,SVM)
+        FOR SPTR = 1 TO SCNT
+          SQTY = BOL.QTY<1,PPTR,SPTR>
+          IF SQTY+0 > 0 THEN
+            SID = BOL.RECP.NO<1,PPTR,SPTR>:"!":BOL.ORDER<1,PPTR>
+            LOCATE SID IN SAVE.SID<PP>,1 BY "AL" SETTING SP ELSE
+              SAVE.SID  = INSERT(SAVE.SID,PP,SP,0,SID)
+              SAVE.SQTY = INSERT(SAVE.SQTY,PP,SP,0,"")
+            END
+            SAVE.SQTY<PP,SP> = SAVE.SQTY<PP,SP> + SQTY
+          END
+        NEXT SPTR
+        SAVE.GWGT<PP> += BOL.SHP.WT<1,PPTR>
+        SAVE.SKDS<PP> += BOL.SKD.CNT<1,PPTR>
+        SAVE.CTNS<PP> += BOL.CRTN.CNT<1,PPTR> 
+        IF SUM(SAVE.SQTY<PP>) = 0 THEN
+          SAVE.PROD = DELETE(SAVE.PROD,PP,0,0)
+          SAVE.PPTR = DELETE(SAVE.PPTR,PP,0,0)
+          SAVE.SID  = DELETE(SAVE.SID,PP,0,0)
+          SAVE.SQTY = DELETE(SAVE.SQTY,PP,0,0)
+          SAVE.GWGT = DELETE(SAVE.GWGT,PP,0,0)    ;*T24732
+          SAVE.SKDS = DELETE(SAVE.SKDS,PP,0,0)    ;*T24732
+          SAVE.CTNS = DELETE(SAVE.CTNS,PP,0,0)   ;*T24732
+        END
+      CASE TYPE.KIT = "K"
+        PTR = PPTR
+        NUM.PRODUCTS = DCOUNT(BOL.PROD,VM)
+        KIT.ERROR = 0
+        ACTUAL.SHIP = 0
+        PROD.STR = ""
+        SHIP.AMT = ""
+        RATIO.AMT = ""
+        BILL.NUM = BOL.BOM.NUM<1,PPTR>
+        KITS.SHIP = BOL.QTY<1,PPTR>
+        GWGT      = BOL.SHP.WT<1,PPTR>
+        SKDS = BOL.SKD.CNT<1,PPTR>
+        CTNS = BOL.CRTN.CNT<1,PPTR>
+        MATREAD BOM.REC FROM FNGD.BOM, CONO:BILL.NUM ELSE
+          MAT BOM.REC = ""
+        END
+        FOR P2 = PPTR+1 TO NUM.PRODUCTS
+          IF BOL.BOM.NUM<1,P2> = BILL.NUM AND BOL.KIT<1,P2> # 'K' THEN   ;* T24647
+            TMP.RATIO = 1
+            IF BOL.KIT<1,P2> = "M" THEN
+              LOCATE BOL.PROD<1,P2> IN BOM.PROD<1>,1 SETTING BOM.FND THEN
+                TMP.RATIO = BOM.Q.RATIO<1,BOM.FND> / 10000
+              END ELSE
+                TMP.RATIO = 1
+              END
+              LOCATE BOL.PROD<1,P2> IN PROD.STR<1>,1 SETTING INDX THEN
+                SHIP.AMT<1,INDX> = SHIP.AMT<1,INDX> + BOL.QTY<1,P2>
+                GWGT = GWGT + BOL.SHP.WT<1,P2>
+                SKDS = SKDS + BOL.SKD.CNT<1,P2>
+                CTNS = CTNS + BOL.CRTN.CNT<1,P2>
+              END ELSE
+                PROD.STR = INSERT(PROD.STR,1,INDX,0,BOL.PROD<1,P2>)
+                RATIO.AMT = INSERT(RATIO.AMT,1,INDX,0,TMP.RATIO)
+                SHIP.AMT = INSERT(SHIP.AMT,1,INDX,0,BOL.QTY<1,P2>)
+                GWGT = GWGT + BOL.SHP.WT<1,P2>
+                SKDS = SKDS + BOL.SKD.CNT<1,P2>
+                CTNS = CTNS + BOL.CRTN.CNT<1,P2>
+              END
+            END ELSE
+              KITS.SHIP = BOL.QTY<1,P2> + KITS.SHIP
+              PPTR = PPTR + 1
+            END
+          END ELSE              ;*T24647
+            P2 = NUM.PRODUCTS   ;*T24647
+          END
+        NEXT P2
+        NUM.KIT = DCOUNT(PROD.STR,VM)
+        COMPONENT.SHIP = 0
+        ACTUAL.SHIP = 0
+        FOR K = 1 TO NUM.KIT
+          COMPONENT.SHIP = SHIP.AMT<1,K> / RATIO.AMT<1,K>
+          IF ACTUAL.SHIP = 0 THEN
+            ACTUAL.SHIP = COMPONENT.SHIP
+          END
+        NEXT K
+        SHP.AMT = ACTUAL.SHIP + KITS.SHIP
+        SID = "KIT!":BOL.ORDER<1,PPTR>
+        SAVE.PROD = INSERT(SAVE.PROD,-1,0,0,PROD)
+        SAVE.PPTR = INSERT(SAVE.PPTR,-1,0,0,PPTR)
+        SAVE.SID  = INSERT(SAVE.SID,-1,0,0,SID)
+        SAVE.SQTY = INSERT(SAVE.SQTY,-1,0,0,SHP.AMT)
+        SAVE.GWGT = INSERT(SAVE.GWGT,-1,0,0,GWGT)
+        SAVE.SKDS = INSERT(SAVE.SKDS,-1,0,0,SKDS)
+        SAVE.CTNS = INSERT(SAVE.CTNS,-1,0,0,CTNS)
+    END CASE
+  NEXT PPTR
+  PCNT = DCOUNT(SAVE.PROD,AM)
+*T24801 v
+* PGCNT = INT((PCNT/5)+.9)
+  PGCNT = INT((PCNT-1)/12) + 1
+*T24801 ^
+  PRINTER ON
+  GOSUB 200
+  PP = 1
+  CURR.PROD = SAVE.PROD<PP>
+  PPTR = SAVE.PPTR<PP>
+  SKDS = SAVE.SKDS<PP>
+  CTNS = SAVE.CTNS<PP>
+  GWGT = SAVE.GWGT<PP>
+  GOSUB 2100
+  GOSUB 1100
+  FOR PP = 2 TO PCNT
+    CURR.PROD = SAVE.PROD<PP>
+    PPTR = SAVE.PPTR<PP>
+    SKDS = SAVE.SKDS<PP>
+    CTNS = SAVE.CTNS<PP>
+    GWGT = SAVE.GWGT<PP>
+    GOSUB 1100
+  NEXT PP
+  FOR R = LINE.CNT + 1 TO 25
+    PRINT
+  NEXT R
+  TSKDS = SUM(SUM(SAVE.SKDS))
+  TCTNS = SUM(SUM(SAVE.CTNS))
+  TGWGT = SUM(SUM(SAVE.GWGT))
+  IF TSKDS+TCTNS+TGWGT>0 THEN
+    TLINE = SPACE(20):"TOTAL":SP4
+    TLINE=TLINE:"SKIDS : ":TSKDS "L#7"
+    TLINE = TLINE:"CARTONS : ":TCTNS "L#7"
+    TLINE = TLINE:"WGT : ":TGWGT "L#12"
+    PRINT TLINE
+  END ELSE
+    PRINT
+  END
+  FOR R = 1 TO 7
+    PRINT
+  NEXT R
+  IF BOL.FRT.PAY = "O" THEN
+    R1 = 1; R2 = 1; R4 = 1; R5 = 1
+    PRINT SPACE(50):CO.NAME
+    FOR N = 1 TO 4
+      PRT.LN = SPACE(3)
+      BEGIN CASE
+        CASE CO.ADDRESS # "" AND R1
+          PRT.LN = SPACE(50):CO.ADDRESS
+          R1 = 0
+        CASE CO.CITY # "" AND R2
+          PRT.LN = SPACE(50):CO.CITY
+          R2 = 0
+        CASE CO.STATE # "" AND R4
+          PRT.LN = SPACE(50):CO.STATE
+          R4 = 0
+        CASE CO.ZIP # "" AND R5
+          PRT.LN = SPACE(50):CO.ZIP:SP2:OP.COUNTRY
+          R5 = 0
+      END CASE
+      PRINT PRT.LN
+    NEXT N
+    PRINT
+  END
+  IF BOL.FRT.PAY = "C" THEN
+    R1 = 1; R2 = 1; R4 = 1; R5 = 1
+    PRINT SPACE(50):CUST.NAME
+    FOR N = 1 TO 4
+      PRT.LN = SPACE(3)
+      BEGIN CASE
+        CASE CUST.ADDR1 # "" AND R1
+          PRT.LN = SPACE(50):CUST.ADDR1
+          R1 = 0
+        CASE CUST.ADDR2 # "" AND R2
+          PRT.LN = SPACE(50):CUST.ADDR2
+          R2 = 0
+        CASE CUST.ADDR4 # "" AND R4
+          PRT.LN = SPACE(50):CUST.ADDR4
+          R4 = 0
+        CASE CUST.ZIP # "" AND R5
+          IF CUST.ADDL.OPS<1,4> = "" THEN 
+            PRT.CNTY = ""
+          END ELSE
+            PRT.CNTY = CUST.ADDL.OPS<1,4>
+          END
+          PRT.LN = SPACE(50):CUST.ZIP:SP2:PRT.CNTY
+          R5 = 0
+      END CASE
+      PRINT PRT.LN
+    NEXT N
+    PRINT
+  END
+  IF BOL.FRT.PAY = "S" THEN
+    PRINT SPACE(50):SPT.NAME
+    R1 = 1; R2 = 1; R4 = 1; R5 = 1
+    FOR N = 1 TO 4
+      PRT.LN = SPACE(50)
+      BEGIN CASE
+        CASE SPT.ADDR1 # "" AND R1
+          PRT.LN = SPACE(50):SPT.ADDR1
+          R1 = 0
+        CASE SPT.ADDR2 # "" AND R2
+          PRT.LN = SPACE(50):SPT.ADDR2
+          R2 = 0
+        CASE SPT.CITY # "" AND R4
+          PRT.LN = SPACE(50):SPT.CITY:", ":SPT.STATE "L#3"
+          R4 = 0
+        CASE SPT.ZIP # "" AND R5
+          PRT.LN = SPACE(50):SPT.ZIP:SP2:SHIP.TO.CNTY
+          R5 = 0
+      END CASE
+      PRINT PRT.LN
+    NEXT N
+  END
+  PRINTER OFF
+  PRINTER CLOSE
+  GOTO 99999
+*
+*---- PRINT TOP OF FORM
+*
+200*
+*T24342     PRINT CHAR(12)     ; * T22226   Print formsfeed
+  LINE.CNT = 0
+  IF MODE = "P" THEN  TAG = "REPRINT" ELSE TAG = ""
+  MATREAD WHSE.REC FROM WAREHOUSE,CONO:BOL.WHSE<1,1> ELSE MAT WHSE.REC = ""
+  PRINT (OCONV(DATE(),"D2/"):SP3:OCONV(TIME(),"MT"))'L#27':
+  PRINT WHS.DESC"L#30"
+  SHIP.NUM = ""
+*      PRINT SPACE(15):SHPV.DESC "L#30":SPACE(5):BOLNUM "R#7":SPACE(4):SHIP.NUM "R#14":SPACE(1):PGPTR "R#2":"/":PGCNT "R#2"
+  PRINT SPACE(14):SHPV.DESC "L#30":SPACE(6):BOLNUM "R#7":SPACE(2):OCONV(BOL.SHP.DATE,"D2/") "R#8":SPACE(2):SHIP.NUM "R#5":SPACE(1):PGPTR "R#2":"/":PGCNT "L#2"
+  R1 = 1; R2 = 1; R4 = 1; R5 = 1
+  PRINT SP3:CO.NAME'L#27':SPACE(7):"ORDER # :":BOL.ORDER<1,1> "L#7"
+  FOR N = 1 TO 4
+    PRT.LN = SPACE(3)
+    BEGIN CASE
+      CASE CO.ADDRESS # "" AND R1
+        PRT.LN = SP3:CO.ADDRESS'L#27'
+        R1 = 0
+      CASE CO.CITY # "" AND R2
+        PRT.LN = SP3:CO.CITY'L#27'
+        R2 = 0
+      CASE CO.STATE # "" AND R4
+        PRT.LN = SP3:CO.STATE'L#27'
+        R4 = 0
+      CASE CO.ZIP # "" AND R5
+        PRT.LN = SP3:(CO.ZIP:SP2:OP.COUNTRY)'L#27'
+        R5 = 0
+    END CASE
+    BEGIN CASE
+      CASE N = 1
+        PRINT PRT.LN:SPACE(7):"ORDER DATE :":OCONV(ORD.DATE,"D2/")
+      CASE N = 3
+        PRINT PRT.LN:SPACE(12):TAG
+      CASE 1
+        PRINT PRT.LN
+    END CASE
+  NEXT N
+  PRINT
+  PRINT SP4:SPT.NAME"L#32":SP1:ORD.CUST"L#10"
+  R1 = 1; R2 = 1; R3 = 1; R4 = 1
+  FOR N = 1 TO 4
+    PRT.LN = SPACE(35)
+    BEGIN CASE
+      CASE SPT.ADDR1 # "" AND R1
+        PRT.LN = SP4:SPT.ADDR1"L#30":SP3:BOL.SHIP.TO "L#3"
+        R1 = 0
+      CASE SPT.ADDR2 # "" AND R2
+        PRT.LN = SP4:SPT.ADDR2
+        R2 = 0
+      CASE SPT.CITY # "" AND R3
+        PRT.LN = SP4:SPT.CITY:" , ":SPT.STATE"L#3"
+        R3 = 0
+      CASE SPT.ZIP # "" AND R4
+        PRT.LN = SP4:SPT.ZIP"L#10":SP2:SHIP.TO.CNTY
+        R4 = 0
+    END CASE
+    BEGIN CASE
+      CASE N = 3
+        PRT.LN = PRT.LN "L#31":"ATTN: ":SPT.ATTN
+    END CASE
+    PRINT PRT.LN
+  NEXT N
+  PRT.COMM = ""
+*CRT "YOU ARE HERE "
+*INPUT XXXX
+  Z = 0
+  CMT.CNT = DCOUNT(BOL.INST,VM)
+  FOR C = 1 TO CMT.CNT
+    Z = Z + 1
+    PRT.COMM = INSERT(PRT.COMM,1,Z,0,BOL.INST<1,C>[1,45])
+  NEXT C
+  FOR M = 1 TO 3
+    IF M = 1 THEN 
+      PRT.LN = SP3:"COMMENT : "
+    END ELSE
+      PRT.LN = SPACE(13)
+    END
+    PRT.LN = PRT.LN:PRT.COMM<1,M>
+    PRINT PRT.LN
+  NEXT M
+*     IF Z # 0 THEN
+*        FOR MM = Z+1 TO 3
+*            PRINT
+*         NEXT MM
+*     END
+  PRINT
+  PRT.LN = ""
+  BEGIN CASE
+    *T24896 v                                                 
+    CASE OSD.SHP.TERMS # ''                                   
+      BEGIN CASE                                              
+        CASE OSD.SHP.TERMS = "COD" OR OSD.SHP.TERMS = "COL"   
+          PRT.LN = SPACE(60):"X":SPACE(10):"COL"              
+        CASE OSD.SHP.TERMS = "PPA"                            
+          PRT.LN = SPACE(51):"X":SPACE(20):OSD.SHP.TERMS      
+        CASE OSD.SHP.TERMS = "PPD"                            
+          PRT.LN = SPACE(42):"X":SPACE(30):OSD.SHP.TERMS      
+      END CASE                                                
+    *T24896 ^                                                 
+    CASE SPT.SHP.TERMS = "COD" OR SPT.SHP.TERMS = "COL"
+      PRT.LN = SPACE(60):"X":SPACE(10):"COL"
+    CASE SPT.SHP.TERMS = "PPA"
+      PRT.LN = SPACE(51):"X":SPACE(20):SPT.SHP.TERMS
+    CASE SPT.SHP.TERMS = "PPD"
+      PRT.LN = SPACE(42):"X":SPACE(30):SPT.SHP.TERMS
+  END CASE
+  PRINT PRT.LN
+  PRINT;PRINT
+  RETURN
+*
+*---- PRINT SHIPMENT DETAIL
+*
+1100*
+  IF PREV.PROD # CURR.PROD THEN
+    IF LINE.CNT + 1 > 24 THEN
+      PGPTR = PGPTR + 1
+      PRINT SP58:"(CONTINUED)"
+      D = 42 - LINE.CNT
+      FOR L = 1 TO D
+        PRINT
+      NEXT L
+      GOSUB 200
+    END
+    GOSUB 2100
+  END
+*     LINE2 = SPACE(20)
+  LINE2 = SPACE(18)
+*     LINE2 = LINE2:OCONV(PQTY,ICR.CNV1)"R#8":SP1
+  LINE2 = LINE2:OCONV(PQTY,ICR.CNV1)"R#10":SP1
+  IF SKDS+CTNS+GWGT>0 THEN
+    LINE2=LINE2:"SKIDS : ":SUM(SKDS) "L#7"
+    LINE2 = LINE2:"CARTONS : ":SUM(CTNS) "L#7"
+    LINE2 = LINE2:"WGT : ":SUM(GWGT) "L#12"
+  END
+  PRINT LINE2
+  LINE.CNT = LINE.CNT + 1
+  RETURN
+*
+*---- GET PRODUCT RELATED DATA
+*
+2100*
+  PREV.PROD = CURR.PROD
+  MATREAD INV.REC FROM INVENTORY, CONO:CURR.PROD ELSE
+    MAT INV.REC = ""
+    INV.FULL.DESC = UNKNOWN
+  END
+  MATREAD IOF.REC FROM INV.FNGD, CONO:CURR.PROD ELSE
+    MAT IOF.REC = ""
+  END
+  LINE1 = " "
+  LINE1 = LINE1:CURR.PROD"L#15"
+  PQTY = INT(((SUM(SAVE.SQTY<PP>) / ICR.DV1 ) * ICR.MT1 ) / ICR.DV2 + .5)
+  LINE1 = LINE1:SP58[1,13]
+  LINE1 = LINE1:INV.DESC "L#30":SP4
+  LINE1 = LINE1:ORD.PO "L#15"
+  PRINT LINE1
+  LINE.CNT = LINE.CNT + 1
+  RETURN
+*
+*---- END OF PROGRAM
+*
+99999*
+  RETURN
+END

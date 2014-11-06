@@ -1,0 +1,1318 @@
+*COPY>CPYLIB>COM1
+*COPY>ICS.CPYLIB>COM.INV.MAIN  
+*COPY>ICS.CPYLIB>COM.INV.SERIAL
+*COPY>ICS.CPYLIB>COM.INV.LINK  
+*********************************************************************
+* REVISION    - [12.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - ICSBP
+* PROGRAM     - RECP.COST.ADJ
+* BY          - EDVARD PITKA
+* DATE        - 10.16.01
+* DESCRIPTION - This program used to adjust receipts cost.
+*TXXXXX   edvard    REV12
+*T25978 adelgado 02/18/2002 * Add the use of prompts (S,SR,SB,ST).
+*T26126 adelgado 03/01/2002 * Implement the LOCKED clause for READU.
+*T25740 epitka 03/15/2002 * REV12
+*T26767 epitka 07/24/2002 * CHANGE OF ARGUMENTS FOR INV.AVG.COST.MAINT
+*T26685 cmykleb 08/20/2002 * Division Security
+*C40673 cmykleb 09/05/2002 * Correct line # problem.
+*T27470 lross 04/24/2003 * Error in calc orig cost.
+*T27990 lross 03/10/2004 * Mods for ICS.IWH.SUB (ERRMSG)
+*T28576 lross 06/06/2005 * Disallow if qty exists in INTER-DIV WHSE.
+*T28779 lross 02/09/2006 * Retain identity of multiple same Prod/Whse
+*                          lines.
+*********************************************************************
+*
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>WAREHOUSE
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>ICS.CPYLIB>INV.STATS
+*COPY>ICS.CPYLIB>INV.JOB.STATS
+*COPY>ICS.CPYLIB>INV.COST.ADJ
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>ICS.CPYLIB>CATEGORY
+*COPY>JCS.CPYLIB>JOB
+*COPY>JCS.CPYLIB>JOB.MATL
+*COPY>JCS.CPYLIB>COST.CNTR.WIP
+*COPY>JCS.CPYLIB>WIP.LEVEL
+*COPY>JCS.CPYLIB>PROD.STATS
+*COPY>JCS.CPYLIB>SPOIL.STATS
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>FISCAL
+*COPY>PMC.CPYLIB>PO ;*T28779
+*COPY>APS.CPYLIB>VEND.STATS
+*COPY>APS.CPYLIB>VEND.PO.STATS
+*COPY>APS.CPYLIB>VEND.PROD.STATS
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>GEN.XREF
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>CHAR
+*COPY>POS.CPYLIB>ACCRUED.LIAB.HIST
+*COPY>ICS.CPYLIB>INV_AUDIT_HIST
+*COPY>ICS.CPYLIB>INV_RECEIPTS
+*COPY>ICS.CPYLIB>INV_SERIAL
+*
+*COPY>ICS.CPYLIB>INV_RECP_WHSE
+*
+DEFFUN DIVISION.POSITION(COMP.NO,CONTROL.FILE,DIVISION.CODE)
+DEFFUN CURRENT.PERIOD(COMP.NO,CONTROL.FILE,DIV.POS,FISCAL.FLAG)
+DEFFUN CALC.STK.QTY(COST.QTY,MAT INV.CNV.REC,ROND,LN)
+DEFFUN CALC.EXT.COST(COST.QTY,UNIT.COST,COST.WT,ROND)
+DEFFUN GET.INAH.SEQ(CONO,CONTROL.FILE,INV_AUDIT_HIST.FILE)
+OPEN.FLAG=1
+*
+SYS.TYPE=1
+CALL SYSCOM(MAT SYSCOM.REC)
+*
+*--- OPEN FILES
+*
+OPEN '','INVENTORY' TO INVENTORY ELSE
+  ERRMSG='INVENTORY FILE IS MISSING' ; GOTO 93000
+END
+OPEN '','WAREHOUSE' TO WAREHOUSE ELSE
+  ERRMSG='WAREHOUSE FILE IS MISSING' ; GOTO 93000
+END
+OPEN '','CATEGORY' TO CATEGORY ELSE
+  ERRMSG='CATEGORY FILE IS MISSING' ; GOTO 93000
+END
+*T28779 v
+  OPEN '','PO' TO PO ELSE
+    ERRMSG='PO FILE IS MISSING' ; GOTO 93000
+  END
+BB 6.20.2007 MAT PO.REC = ''
+*T28779 ^
+OPEN '','SECURITY' TO SECURITY ELSE
+  ERRMSG='SECURITY FILE IS MISSING' ; GOTO 93000
+END
+OPEN '','INV.WHSE' TO INV.WHSE ELSE
+  ERRMSG='INV.WHSE FILE IS MISSING' ; GOTO 93000
+END
+OPEN '','INV_AUDIT_HIST' TO INV_AUDIT_HIST ELSE
+  ERRMSG='INV_AUDIT_HIST FILE IS MISSING' ; GOTO 93000
+END
+OPEN '','INV_AUDIT_TAG' TO INV_AUDIT_TAG ELSE
+  ERRMSG='INV_AUDIT_TAG FILE IS MISSING' ; GOTO 93000
+END
+OPEN '','INV.STATS' TO INV.STATS ELSE
+  ERRMSG='INV.STATS FILE IS MISSING' ; GOTO 93000
+END
+OPEN '','INV.JOB.STATS' TO INV.JOB.STATS ELSE
+  ERRMSG='INV.JOB.STATS FILE IS MISSING' ; GOTO 93000
+END
+OPEN '','JOB' TO JOB ELSE
+  ERRMSG='JOB FILE IS MISSING' ; GOTO 93000
+END
+OPEN '','JOB.MATL' TO JOB.MATL ELSE
+  ERRMSG='JOB.MATL FILE IS MISSING'; GOTO 93000
+END
+OPEN '','COST.CNTR.WIP' TO COST.CNTR.WIP ELSE
+  ERRMSG='COST.CNTR.WIP FILE IS MISSING'; GOTO 93000
+END
+OPEN '','PROD.STATS' TO PROD.STATS ELSE
+  ERRMSG='PROD.STATS FILE IS MISSING'; GOTO 93000
+END
+OPEN '','SPOIL.STATS' TO SPOIL.STATS ELSE
+  ERRMSG='SPOIL.STATS FILE IS MISSING'; GOTO 93000
+END
+OPEN '','PREFIX' TO PREFIX ELSE
+  ERRMSG='PREFIX FILE IS MISSING' ; GOTO 93000
+END
+OPEN '','COMPANY' TO COMPANY ELSE
+  ERRMSG='COMPANY FILE IS MISSING' ; GOTO 93000
+END
+OPEN '','CONTROL' TO CONTROL ELSE
+  ERRMSG='CONTROL FILE IS MISSING' ; GOTO 93000
+END
+OPEN '','ICS.SCREENS' TO M.SCREENS ELSE
+  ERRMSG='M.SCREENS FILE IS MISSING' ; GOTO 93000
+END
+OPEN '','INVENTORY.XREF' TO INVENTORY.XREF ELSE
+  ERRMSG='INVENTORY.XREF FILE IS MISSING' ; GOTO 93000
+END
+OPEN '','INV.COST.ADJ' TO INV.COST.ADJ ELSE
+  ERRMSG='INV.COST.ADJ FILE IS MISSING'; GOTO 93000
+END
+OPEN '','ACCRUED.LIAB.HIST' TO ACCRUED.LIAB.HIST ELSE
+  ERRMSG='ACCRUED.LIAB.HIST FILE IS MISSING'; GOTO 93000
+END
+OPEN '','INV_SERIAL' TO INV_SERIAL ELSE
+  ERRMSG='INV_SERIAL FILE IS MISSING' ; GOTO 93000
+END
+OPEN '','INV_SERIAL_TEMP' TO INV_SERIAL_TEMP ELSE
+  ERRMSG='INV_SERIAL_TEMP FILE IS MISSING' ; GOTO 93000
+END
+OPEN '','INV_RECEIPTS' TO INV_RECEIPTS ELSE
+  ERRMSG='INV_RECEIPTS FILE IS MISSING' ; GOTO 93000
+END
+OPEN '','INV_RECP_WHSE' TO INV_RECP_WHSE ELSE
+  ERRMSG='INV_RECP_WHSE FILE IS MISSING' ; GOTO 93000
+END
+*
+*--- GET COMPANY NUMBER
+*
+MAT COMP.REC=''
+CONO=''
+CALL GET.CONO(CONO,MAT COMP.REC)
+IF CONO='END' THEN GOTO 99999
+IF CO.APS.R.INTRF > 1 THEN
+  OPEN '','VEND.STATS' TO VEND.STATS ELSE
+    ERRMSG='VEND.STATS FILE IS MISSING'; GOTO 93000
+  END
+  OPEN '','VEND.PO.STATS' TO VEND.PO.STATS ELSE
+    ERRMSG='VEND.PO.STATS FILE IS MISSING'; GOTO 93000
+  END
+  OPEN '','VEND.PROD.STATS' TO VEND.PROD.STATS ELSE
+    ERRMSG='VEND.PROD.STATS FILE IS MISSING'; GOTO 93000
+  END
+END
+READV IC.MON FROM CONTROL, CONO:"ICFISCAL",1 ELSE
+  ERRMSG="CONTROL 'ICFISCAL' RECORD IS MISSING"
+  GOTO 93000
+END
+MATREAD FISCAL.REC FROM CONTROL, CONO:"JCFISCAL" ELSE
+  ERRMSG="CANNOT LOCATE CONTROL JCFISCAL"; GOTO 93000
+END
+READ DIVISION.REC FROM CONTROL, CONO:"DIVISIONS" ELSE
+  ERRMSG="CANNOT LOCATE CONTROL DIVISIONS"; GOTO 93000
+END
+READ SECURITY.REC FROM CONTROL, CONO:"DIV.SECURITY" ELSE
+  ERRMSG="CANNOT LOCATE CONTROL DIV.SECURITY"; GOTO 93000
+END
+MATREAD WIP.LEVEL.REC FROM CONTROL, CONO : "WIP.LEVEL" ELSE
+  MAT WIP.LEVEL.REC=""
+  WLR.MT.COST=2; WLR.MT.WIP=2
+END
+;*
+MAT EDIT.COM.DRIVER=''
+DIM HOLD.IRW.REC(IRW.REC.SIZE) ; MAT HOLD.IRW.REC=''
+DIM HOLD.INVR.REC(INVR.REC.SIZE) ; MAT HOLD.INVR.REC=''
+OPTION=''
+PAGE.SIZE=6 ; START= 1
+EQU ESN TO ECD.SCRN.NO
+MAT ORG.IWH.REC=''
+TODAY=DATE()
+GEN.DIV = "00";GEN.DEPT = "00";GEN.CCTR = "000"
+USD.QTY = 0;USED = 0  
+TOT.OLD.COST=0; TOT.NEW.COST=0
+ECD.SCRN.CNT=1
+ECD.SCRN.NAME<1>='RECP.COST.ADJ'
+ECD.ACTION=1;CALL SCRN.EDIT
+ECD.SCRN.NO=1
+MAT SCV.REC=""
+ECD.ACTION=2;CALL SCRN.EDIT
+;*
+;* Main Loop
+;*
+DONE=0
+LOOP
+  RELEASE
+  RCNT=0
+  ADJ.COST='' ; ADJ.PERIOD=''
+  GOSUB ENT.PROD
+  IF ERRMSG THEN CONTINUE ;*T28576
+  IF INV.WHSE.CODE='' THEN
+    ERRMSG='Product ':PROD:' is not setup in any warehouse'
+    GOSUB 91000
+  END ELSE
+    MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE THEN
+      EM=''
+      IF CATG.INV='' THEN EM='INVENTORY A/C'
+      IF CATG.ACCRU.LIAB='' THEN
+        IF EM # '' THEN EM=EM:' AND'
+        EM=EM:' ACCRUED LIABILITY A/C'
+      END
+      IF EM # '' THEN
+        ERRMSG=EM:' NOT SET UP FOR PRODUCT LINE'
+        GOTO 93000
+      END
+      GOSUB ENT.WHSE
+      IF NOT(ERR) THEN
+        IF SECURITY.REC<1>="Y" AND SECURITY.REC<2>="Y" THEN
+          LOCATE DIV.CODE IN DIVISION.REC<1>,1 SETTING DIV.POS ELSE
+            ERRMSG="Division ":DIV.CODE:" not found in Control File DIVISIONS record."
+            GOTO 93000
+          END
+        END ELSE
+          DIV.POS=1
+        END
+        IF IWH.RECP.NO='' THEN
+          ERRMSG ='Product ':PROD:' and warehouse '
+          ERRMSG:=WHSE:' have no receipts'
+          GOSUB 91000
+        END ELSE
+          MAT INAH.REC=''
+          INAH.PROD=PROD
+          INAH.WHSE=WHSE
+          ACTION=1;*build INV.WHSE fifo buckets
+          TMP.CNT='' ; LAST='' ; TMP.ARR=''
+          PERIOD='' ; *include future posted receipts too. 
+          MAT ORG.IWH.REC = MAT IWH.REC
+*T27990   CALL ICS.IWH.SUB (CONO,PERIOD,TMP.ARR,TMP.CNT,LAST,ACTION,OPEN.FLAG)
+          CALL ICS.IWH.SUB (CONO,PERIOD,TMP.ARR,TMP.CNT,LAST,ACTION,OPEN.FLAG,ERRMSG)
+*COPY>ICSBP>INV.UM.CNV
+          RCNT=DCOUNT(IWH.RECP.NO,VM)
+          GOSUB BUILD.SCREEN
+          ECD.ACTION=3 ; CALL SCRN.EDIT
+          GOSUB MAIN.PROMPT
+        END
+      END
+    END ELSE
+      ERRMSG='CANNOT LOCATE PRODUCT LINE - ':INV.LINE
+      GOSUB 91000
+    END
+  END
+  MAT SCV.REC=""
+  ECD.ACTION=6;CALL SCRN.EDIT
+UNTIL (DONE) DO REPEAT
+*
+*************************************************************************
+****** S U B R O U T I N E S ********************************************
+*************************************************************************
+*
+***************
+MAIN.PROMPT: 
+***************
+*
+EOP=0
+LOOP
+  ECD.NUM=5;ECD.ACTION=4
+  ECD.MAXV=START+PAGE.SIZE ; ECD.MINV=START
+  IF ECD.MAXV GT RCNT THEN ECD.MAXV = RCNT ; * C40673
+  SCV.REC(ECD.NUM)<1>='';CALL SCRN.EDIT
+  OPTION=ECD.RET.VALUE
+  BEGIN CASE
+    CASE OPTION='E' OR OPTION='END'
+      EOP=1
+    CASE NUM(OPTION)
+      LN=OPTION
+      GOSUB ENT.ADJ.PERIOD
+      IF NOT(ERR) THEN
+        GOSUB ENT.ADJ.COST
+        IF (ERR) THEN
+        END
+      END
+    CASE OPTION='S'
+      START+=PAGE.SIZE
+      IF START>RCNT THEN START=1
+      GOSUB DISP.LINES
+      * T25978 v
+    CASE OPTION = 'SR'
+      START -= PAGE.SIZE
+      IF START < 1 THEN START = 1
+      GOSUB DISP.LINES
+    CASE OPTION = 'ST'
+      START = 1
+      GOSUB DISP.LINES
+    CASE OPTION = 'SB'
+      START = RCNT
+      GOSUB DISP.LINES
+      * T25978 ^
+    CASE OPTION='F'
+      GOSUB UPDATE.SUB
+      EOP=1
+  END CASE
+UNTIL EOP DO REPEAT
+RETURN
+*
+**************
+UPDATE.SUB: 
+**************
+*
+READU ICA.SEQ FROM CONTROL, CONO : 'INV.COST.ADJ' ELSE ICA.SEQ='10001'
+RECP.ARR=IWH.RECP.NO
+FOR R=1 TO RCNT
+  ERRMSG="" ; INAH.SEQ.ARR=''
+  RECP.NO=RECP.ARR<1,R>
+  INVR.ID=CONO:RECP.NO
+  IF ADJ.COST<1,R> # '' THEN 
+    MATREADU INVR.REC FROM INV_RECEIPTS,INVR.ID THEN
+      ;* receipts could have been transfered to multiple warehouses
+      ;* that is why ICS.IWH.SUB is called multiple times
+      ;* for every prod/whse combination
+      ;* receipt has to be adjusted in all warehouses
+      PO.FOUND=1 ;*T28779
+      IF CO.POS = 'Y' THEN
+        MATREAD PO.REC FROM PO,CONO:INVR.PO ELSE MAT PO.REC = ''; PO.FOUND=0 ;*T28779
+      END ELSE PO.FOUND=0
+      WHSE.CNT=DCOUNT(INV.WHSE.CODE,VM)                  
+      FOR W=1 TO WHSE.CNT                                
+        WHSE = INV.WHSE.CODE<1,W>
+        IRW.ID=CONO:RECP.NO:"!":WHSE
+        MATREADU IRW.REC FROM INV_RECP_WHSE,IRW.ID THEN
+          IWH.ID=CONO:PROD:"!":WHSE
+          MATREADU IWH.REC FROM INV.WHSE,IWH.ID THEN
+            LOCATE RECP.NO IN IWH.RECP.NO<1> SETTING RIDX THEN
+              MAT INAH.REC=''
+              INAH.PROD=PROD
+              INAH.WHSE=WHSE
+              MAT HOLD.IRW.REC=MAT IRW.REC
+              MAT HOLD.INVR.REC=MAT INVR.REC
+              ACTION=1;*build INV.WHSE fifo buckets
+              TMP.CNT='' ; LAST='' ; TMP.ARR=''
+              PERIOD='' ; *include future posted receipts too. 
+*T27990       CALL ICS.IWH.SUB (CONO,PERIOD,TMP.ARR,TMP.CNT,LAST,ACTION,OPEN.FLAG)
+              CALL ICS.IWH.SUB (CONO,PERIOD,TMP.ARR,TMP.CNT,LAST,ACTION,OPEN.FLAG,ERRMSG)
+              MAT IRW.REC= MAT HOLD.IRW.REC
+              MAT INVR.REC=MAT HOLD.INVR.REC
+              JLOC=0
+              ORIG=IWH.ORG.FI<1,RIDX>
+              AVAIL= IWH.QTY.FI<1,RIDX>
+              USED=ORIG - IWH.QTY.FI<1,RIDX>
+              RESV=IWH.QTY.FI<1,RIDX>-IWH.RSV.FI<1,RIDX>
+              OLD.DCOST=0;NEW.DCOST=0
+              ISTAT.ID=CONO:PROD:"!":WHSE
+              MATREADU INV.STAT.REC FROM INV.STATS,ISTAT.ID ELSE MAT INV.STAT.REC=''
+              EOL=0
+              LOOP
+                MATREADU ICA.REC FROM INV.COST.ADJ,CONO:ICA.SEQ THEN
+                  RELEASE INV.COST.ADJ,CONO:ICA.SEQ
+                  ICA.SEQ+=1
+                END ELSE
+                  MAT ICA.REC='' ; EOL=1
+                END
+              UNTIL (EOL) DO REPEAT
+              IF RESV#0 OR USED#0 THEN 
+                JOB.CNT=DCOUNT(ISTAT.JOB,VM)
+                IF JOB.CNT>0 THEN 
+                  UPD=0
+                  FOR J=1 TO JOB.CNT UNTIL ERRMSG # ""
+                    JOB.NO=ISTAT.JOB<1,J>
+                    IJS.ID=CONO:PROD:"!":WHSE:"!":JOB.NO
+                    MATREADU INV.JS.REC FROM INV.JOB.STATS,IJS.ID ELSE
+                      MAT INV.JS.REC=""
+                    END
+                    MATREADU JOB.REC FROM JOB, CONO:JOB.NO THEN
+                      P=1
+                      LOOP
+                        LOCATE PROD IN JOB.RESV.MATL<1>,P SETTING PFND ELSE PFND=0
+                        BEGIN CASE
+                          CASE PFND=0
+                          CASE JOB.RESV.WHSE<1,PFND> # WHSE
+                            P=PFND+1
+                          CASE 1
+                            P=0
+                        END CASE
+                      WHILE P AND PFND DO REPEAT
+                      IF PFND=0 THEN
+                        ERRMSG='CANNOT LOCATE PRODUCT IN JOB # ':JOB.NO
+                        GOSUB 91000
+                      END ELSE
+                        GOSUB CHECK.QTYS
+                        IF ERRMSG='' THEN
+                          JLOC=JLOC+1
+                          ILOC=0
+                          ICA.JOB<1,JLOC>=JOB.NO
+                          ICA.RSV.QTY<1,JLOC>=0
+                          ICA.ORSV.COST<1,JLOC>=0
+                          ICA.NRSV.COST<1,JLOC>=0
+                          ICA.USD.QTY<1,JLOC>=0
+                          ICA.TRAN<1,JLOC>=""
+                          ICA.TRAN.QTY<1,JLOC>=""
+                          ICA.OLD.COST<1,JLOC>=""
+                          ICA.NEW.COST<1,JLOC>=""
+                          UPD=1
+                          IF USD.QTY <> 0 THEN GOSUB 11000 ELSE GOSUB 12000
+                        END
+                      END
+                    END ELSE
+                      ERRMSG='CANNOT LOCATE JOB # ':JOB.NO
+                      GOSUB 91000
+                    END
+                    IF ERRMSG # "" AND UPD=0 THEN
+                      RELEASE INV.JOB.STATS , CONO:PROD:'!':WHSE:'!':JOB.NO
+                      RELEASE JOB, CONO:JOB.NO
+                      RELEASE INV_AUDIT_HIST,INAH.ID
+                    END ELSE
+                      MATWRITE JOB.REC ON JOB, CONO:JOB.NO
+                      MATWRITE INV.JS.REC ON INV.JOB.STATS,IJS.ID
+                    END
+                  NEXT J
+                END
+              END
+              IF ERRMSG#'' AND UPD=0 THEN
+                NULL
+              END ELSE
+                ICA.PROD=PROD
+                ICA.WHSE=WHSE
+                ICA.PO=INVR.PO
+                ICA.VEND=INVR.VEND
+                ICA.QTY=AVAIL
+                ICA.REC.DATE=INVR.ENT.DATE
+                ICA.ADJ.DATE=TODAY
+                ICA.REC.COST=INVR.UNIT.COST
+                ICA.ADJ.COST=ADJ.COST<1,R>
+                ICA.RECP.NO=RECP.ARR<1,R>
+                ICA.PERIOD=ADJ.PERIOD<1,R>
+*                OLD.COST=CALC.EXT.COST(ORIG,INVR.UNIT.COST,INV.COST.WT,.5)
+*                NEW.COST=CALC.EXT.COST(ORIG,ADJ.COST<1,R>,INV.COST.WT,.5)
+                OLD.COST=CALC.EXT.COST(AVAIL,INVR.UNIT.COST,INV.COST.WT,.5)
+                NEW.COST=CALC.EXT.COST(AVAIL,ADJ.COST<1,R>,INV.COST.WT,.5)
+                DIFF.COST=NEW.COST - OLD.COST
+                IWH.INPRCS.AMT=IWH.INPRCS.AMT - OLD.DCOST+NEW.DCOST
+                ;*
+                ;*
+                MAT INAH.REC=''
+                INAH.SEQ=GET.INAH.SEQ(CONO,CONTROL,INV_AUDIT_HIST)
+                INAH.ID=CONO:INAH.SEQ
+                INAH.SEQ.ARR<1,-1>=INAH.SEQ
+                INAH.PROD=PROD
+                INAH.WHSE=WHSE
+                INAH.TYPE='A'
+                INAH.PROD=PROD
+                INAH.WHSE=WHSE
+                INAH.DATE=TODAY
+                INAH.PERIOD=ADJ.PERIOD<1,R>
+                INAH.RECP.NO=RECP.ARR<1,R>
+                INAH.QTY=0
+                INAH.UNIT.COST=ADJ.COST<1,R>
+                INAH.EXT.COST=(NEW.COST-OLD.COST)+(TOT.NEW.COST-TOT.OLD.COST)
+                INAH.ACCT=CATG.INV
+                IF WHS.DIV='' THEN WHS.DIV=GEN.DIV
+                INAH.DV.DP.CC=WHS.DIV:GEN.DEPT:GEN.CCTR
+                INAH.SRC='IC'
+                INAH.SYS.DATE=TODAY;INAH.SYS.TIME=TIME()
+                INAH.OPER.ID=@LOGNAME
+                INAH.TRAN=ICA.SEQ
+                ;*
+                IF INVR.PO.ACCR='Y' THEN
+                  GOSUB UPD.ACCRUE
+                END ELSE
+                  INAH.ADJ.ACCT=CATG.ADJ
+                END
+                INAH.TRAN=ICA.SEQ 
+                MATWRITE INAH.REC ON INV_AUDIT_HIST,INAH.ID
+                WRITE '' ON INV_AUDIT_TAG,INAH.ID
+                ;*
+                ;* update receipt with INAH.SEQ
+                ;*
+                INVR.AUDIT.NO<1>=INVR.AUDIT.NO<1>:VM:INAH.SEQ.ARR
+                ;*
+                ;*update serials with INAH.SEQ
+                ;*
+                SCNT=DCOUNT(IRW.SERIAL.NO,VM)
+                FOR S=1 TO SCNT
+                  ISTK.ID=CONO:IRW.SERIAL.NO<1,S>
+                  IF RECORDLOCKED(INV_SERIAL_TEMP,ISTK.ID)=0 THEN
+                    DELETE INV_SERIAL_TEMP,ISTK.ID
+                  END
+                  MATREADU ISTK.REC FROM INV_SERIAL_TEMP,ISTK.ID ELSE
+                    MATREADU ISTK.REC FROM INV_SERIAL,ISTK.ID THEN
+                      ISTK.AUDIT.NO<1>=ISTK.AUDIT.NO:VM:INAH.SEQ.ARR
+                      ISTK.UNIT.COST=ADJ.COST<1,R>
+                      MATWRITE ISTK.REC ON INV_SERIAL,ISTK.ID
+                    END
+                  END
+                NEXT S
+                ;*                                              
+                ;* Update INV_RECP_WHSE with unit cost          
+                ;* unit cost has to be updated in all warehouses
+                ;* in which this receipt exists (transfers)     
+                IRW.UNIT.COST = ADJ.COST<1,R>
+                MATWRITE IRW.REC ON INV_RECP_WHSE,IRW.ID
+                ;*
+                ;* Update VEND.STATS
+                ;*
+                IF CO.APS.R.INTRF >= 2 THEN
+                  GOSUB UPD.VEND.STATS
+                END
+                MATWRITE ICA.REC ON INV.COST.ADJ, CONO : ICA.SEQ
+                WRITE ICA.SEQ ON CONTROL, CONO : 'INV.COST.ADJ'
+                RELEASE INV.STATS, CONO:PROD:'!':WHSE
+                ICA.SEQ=ICA.SEQ+1
+                IWH.COST.FI<1,RIDX>=ADJ.COST<1,R>
+                IF INAH.PERIOD=CUR.PERIOD THEN
+                  CALL INV.AVG.COST.MAINT(MAT IWH.REC,INV.COST.WT,CUR.PERIOD)
+                END
+                GOSUB CLEAR.FI.BUCKETS
+                MATWRITEU IWH.REC ON INV.WHSE,IWH.ID
+              END
+            END
+          END
+        END
+      NEXT W                                             
+      INVR.UNIT.COST=ADJ.COST<1,R>
+      MATWRITE INVR.REC ON INV_RECEIPTS,INVR.ID
+    END ELSE
+      ERRMSG='Receipt # ':RECP.NO:' is not on file.'
+      GOSUB 91000
+    END
+  END
+NEXT R
+RETURN
+*
+*************
+CHECK.QTYS: 
+*************
+*
+DCNT=DCOUNT(JOB.MT.DEPT,VM)
+RSV.QTY=0
+USD.QTY=0
+FI.CNT=DCOUNT(IJS.RECP.NO,VM)
+FOR K=1 TO FI.CNT UNTIL ERRMSG # ""
+  IF IJS.RECP.NO<1,K>=RECP.NO THEN
+    RSV.QTY=RSV.QTY+IJS.FI.QTY<1,K>
+    QTY=IJS.FI.ORG<1,K> - IJS.FI.QTY<1,K>
+    TCNT=DCOUNT(IJS.JMT.QTY<1,K>,SVM)
+    MATCH.QTY=0
+    FOR T=1 TO TCNT UNTIL ERRMSG # ""
+      SEQ.NO=IJS.JMT.SEQ<1,K,T>
+      DPNO=FIELD(SEQ.NO,"!",1)
+      CCNO=FIELD(SEQ.NO,"!",2)
+      SEQ.NO=FIELD(SEQ.NO,"!",3)
+      JMT.ID=CONO:JOB.NO:"!":DPNO:"!":CCNO:"!"
+      JMT.ID=JMT.ID:PROD:"!":WHSE:"!":SEQ.NO
+      READ DUMMY FROM JOB.MATL, JMT.ID THEN
+        PTR=1
+        LOOP
+          LOCATE DPNO IN JOB.MT.DEPT<1>,PTR SETTING DFND ELSE DFND=0
+          BEGIN CASE
+            CASE DFND=0
+              PTR=0
+            CASE CCNO # JOB.MT.CCTR<1,DFND>
+              PTR=DFND+1
+            CASE PROD # JOB.MT.PROD<1,DFND>
+              PTR=DFND+1
+            CASE WHSE # JOB.MT.WHSE<1,DFND>
+              PTR=DFND+1
+            CASE JOB.MT.SEQ<1,DFND> < SEQ.NO
+              PTR=0; DFND=0
+            CASE 1
+              PTR=0
+          END CASE
+        WHILE PTR DO REPEAT
+        IF DFND=0 THEN
+          ERRMSG='CANNOT LOCATE JOB.MATL ':SEQ.NO:' IN JOB ':JOB.NO
+        END ELSE
+          MATCH.QTY+=IJS.JMT.QTY<1,K,T>
+        END
+      END ELSE
+        ERRMSG='CANNOT LOCATE JOB.MATL # ':SEQ.NO
+      END
+    NEXT T
+    IF ERRMSG='' THEN
+      IF MATCH.QTY <> QTY THEN
+        ERRMSG='MISMATCH FOR USED QTY '
+        TMP=CALC.STK.QTY(QTY,MAT INV.CNV.REC,'','')
+        TMP=OCONV(TMP,ICR.CNV)
+        ERRMSG:=TMP
+        ERRMSG:= ' AND '
+        TMP=CALC.STK.QTY(MATCH.QTY,MAT INV.CNV.REC,'','')
+        TMP=OCONV(TMP,ICR.CNV)
+        ERRMSG:=TMP
+      END ELSE
+        USD.QTY=USD.QTY+QTY
+      END
+    END
+  END
+NEXT K
+IF ERRMSG='' THEN
+  BEGIN CASE
+    CASE RSV.QTY > RESV
+      ERRMSG='RESERVE QTY MISMATCH, '
+      TMP=CALC.STK.QTY(RSV.QTY,MAT INV.CNV.REC,'','')
+      TMP=OCONV(TMP,ICR.CNV)
+      ERRMSG:=TMP
+      ERRMSG:= ' AND '
+      TMP=CALC.STK.QTY(RESV,MAT INV.CNV.REC,'','')
+      TMP=OCONV(TMP,ICR.CNV)
+      ERRMSG:=TMP
+    CASE USD.QTY > USED
+      ERRMSG='USED QTY MISMATCH, '
+      TMP=CALC.STK.QTY(USD.QTY,MAT INV.CNV.REC,'','')
+      TMP=OCONV(TMP,ICR.CNV)
+      ERRMSG:=TMP
+      ERRMSG:= ' AND '
+      TMP=CALC.STK.QTY(USED,MAT INV.CNV.REC,'','')
+      TMP=OCONV(TMP,ICR.CNV)
+      ERRMSG:=TMP
+  END CASE
+END
+RETURN
+*
+*******************
+UPD.ACCRUE: 
+********************
+*
+* Upate Accrued Liability History
+*
+INAH.ACCR.ACCT=CATG.ACCRU.LIAB
+READU ALH.CT FROM CONTROL,CONO:"ALHCOUNTER" ELSE ALH.CT=0
+ALH.CT=ALH.CT+1
+IF ALH.CT > 999999 THEN ALH.CT=1
+WRITE ALH.CT ON CONTROL,CONO:"ALHCOUNTER"
+MAT ALH.REC=""
+ALH.ID=CONO:STR("0",6-LEN(ALH.CT)):ALH.CT
+ALH.DATE=INAH.DATE
+ALH.REF='R*':INVR.PO:"*":INVR.PROD
+ALH.SRC=INAH.SRC
+ALH.MON=INAH.PERIOD
+ALH.AMT=0-INAH.EXT.COST
+*lross 10-24-02 ALH.ACCT=INAH.ACCT
+ALH.ACCT=INAH.ACCR.ACCT
+ALH.DV.DP.CC=INAH.DV.DP.CC
+MATWRITE ALH.REC ON ACCRUED.LIAB.HIST,ALH.ID
+RETURN
+*
+********************
+UPD.VEND.STATS: 
+********************
+*
+OLD.UN.COST=IWH.COST.FI<1,R>
+NEW.UN.COST=ADJ.COST<1,R>
+*COPY>ICSBP>RECP.COST.ADJ.STATS
+IF ERRMSG THEN GOSUB 91000
+RETURN
+*
+*******
+11000: 
+*******
+*
+USD.QTY=0
+TOT.OLD.COST=0 ; TOT.NEW.COST=0
+FOR K=1 TO FI.CNT
+  IF IJS.RECP.NO<1,K>=RECP.NO THEN
+    NO.IJS=K
+*T27470 v Move to below next 'IF'; premature setting of IJS.FI.AMT
+*   IF CATG.COST.TYPE='FI' OR CATG.COST.TYPE='AC' AND IJS.FI.AMT<1,K>=INVR.UNIT.COST THEN
+*     IJS.FI.AMT<1,K>=ADJ.COST<1,R>
+*   END
+    IF IJS.FI.QTY<1,K>+0#0 THEN
+      ;*
+      ;* Update reserved quantity and amount
+      ;*
+      IF CATG.COST.TYPE='FI'AND IJS.FI.AMT<1,K>=INVR.UNIT.COST THEN
+        TMP=CALC.EXT.COST(IJS.FI.QTY<1,K>,IJS.FI.AMT<1,K>,INV.COST.WT,.5)
+        ICA.ORSV.COST<1,JLOC>+=TMP
+        TMP=CALC.EXT.COST(IJS.FI.QTY<1,K>,ADJ.COST<1,R>,INV.COST.WT,.5)
+        ICA.NRSV.COST<1,JLOC>+=TMP
+        IJS.FI.AMT<1,K>=ADJ.COST<1,R>
+      END ELSE 
+        TMP=CALC.EXT.COST(IJS.FI.QTY<1,K>,IJS.FI.AMT<1,K>,INV.COST.WT,.5)
+        ICA.ORSV.COST<1,JLOC>+=TMP
+*T27470 v Left off MV pointer and no need to recalculate.
+*       TMP=CALC.EXT.COST(IJS.FI.QTY<1,K>,IJS.FI.AMT<1,K>,INV.COST.WT,.5)
+*       ICA.NRSV.COST+=TMP
+*      I added the line below otherwise ICA.NRSV.COST would = ICA.ORSV.COST
+        TMP=CALC.EXT.COST(IJS.FI.QTY<1,K>,ADJ.COST<1,R>,INV.COST.WT,.5)
+        ICA.NRSV.COST<1,JLOC>+=TMP
+      END
+    END
+    IF CATG.COST.TYPE='FI' OR CATG.COST.TYPE='AC' AND IJS.FI.AMT<1,K>=INVR.UNIT.COST THEN
+      IJS.FI.AMT<1,K>=ADJ.COST<1,R>
+    END
+*T27470 ^
+    ;*
+    ;* Update used qty amd amt.
+    ;*
+    IF NO.IJS>0 THEN
+      TCNT=DCOUNT(IJS.JMT.QTY<1,K>,SVM)
+      TRAN.QTY=0
+      FOR T=TCNT TO 1 STEP - 1
+        SEQ.NO=IJS.JMT.SEQ<1,K,T>
+        DPNO=FIELD(SEQ.NO,"!",1)
+        CCNO=FIELD(SEQ.NO,"!",2)
+        SEQ.NO=FIELD(SEQ.NO,"!",3)
+        JMT.ID=CONO:JOB.NO:"!":DPNO:"!":CCNO:"!":PROD
+        JMT.ID=JMT.ID:"!":WHSE:"!":SEQ.NO
+        MATREADU JMT.REC FROM JOB.MATL,JMT.ID THEN
+          PTR=1
+          LOOP
+            LOCATE DPNO IN JOB.MT.DEPT<1>,PTR SETTING DFND ELSE DFND=0
+            BEGIN CASE
+              CASE DFND=0
+                PTR=0
+              CASE CCNO # JOB.MT.CCTR<1,DFND>
+                PTR=DFND+1
+              CASE PROD # JOB.MT.PROD<1,DFND>
+                PTR=DFND+1
+              CASE WHSE # JOB.MT.WHSE<1,DFND>
+                PTR=DFND+1
+              CASE JOB.MT.SEQ<1,DFND> < SEQ.NO
+                PTR=0; DFND=0
+              CASE 1
+                PTR=0
+            END CASE
+          WHILE PTR DO REPEAT
+          IF DFND>0 AND DCOUNT(JMT.MON,VM)<=1 AND JMT.MON>= FR.CURR.PER<1,DIV.POS> AND JMT.RC.QTY <=0 THEN
+            LOCATE RECP.NO IN JMT.PTR<1,1>,1 SETTING FLOC THEN
+              IF IJS.JMT.QTY<1,K,T> <> JMT.PTR<1,2,FLOC> OR JMT.PTR<1,3,FLOC> <> INVR.UNIT.COST  THEN
+                NULL
+              END ELSE
+                PCNT=DCOUNT(JMT.PTR<1,1>,SVM)
+                PQTY=JMT.PTR<1,2,1>
+                FOR P=2 TO PCNT
+                  PQTY=PQTY+JMT.PTR<1,2,P>
+                NEXT P
+                IF PQTY=JMT.QTY THEN
+                  TEMP.QTY=JMT.PTR<1,2,FLOC>
+                  TRAN.QTY=TRAN.QTY+TEMP.QTY
+                  ILOC=ILOC+1
+                  ICA.TRAN<1,JLOC,ILOC>=JMT.SEQ
+                  ICA.TRAN.QTY<1,JLOC,ILOC>=TEMP.QTY
+                  ICA.OLD.COST<1,JLOC,ILOC>=CALC.EXT.COST(TEMP.QTY,INVR.UNIT.COST,INV.COST.WT,.5)
+                  TOT.OLD.COST+=ICA.OLD.COST<1,JLOC,ILOC>
+                  OLD.DCOST=OLD.DCOST+ICA.OLD.COST<1,JLOC,ILOC>
+                  ;*
+                  ;* Update JOB.MATL and JOB for used qty. and amt.
+                  ;*
+                  IF JMT.COST=0 THEN
+                    MARKUP=0
+                  END ELSE
+                    MARKUP=((JMT.SALE*100) - (JMT.COST*100))/JMT.COST
+                  END
+                  O.STD.PRICE=JMT.DCOST<1,1>+JMT.DCOST<1,2>
+                  IF O.STD.PRICE=0 OR JMT.DCOST<1,3>+0=0 THEN
+                    OH.PCT=0
+                  END ELSE
+                    OH.PCT=JMT.DCOST<1,3>/O.STD.PRICE
+                  END
+                  O.JMT.WIP=JMT.WIP; O.JMT.DCOST=JMT.DCOST
+                  O.JMT.COST=JMT.COST; O.JMT.SALE=JMT.SALE
+                  JMT.PTR<1,3,FLOC>=ADJ.COST<1,R>
+                  JMT.PTR<1,4,FLOC>=IJS.FI.AMT<1,NO.IJS>
+                  ICA.NEW.COST<1,JLOC,ILOC>=CALC.EXT.COST(TEMP.QTY,JMT.PTR<1,3,FLOC>,INV.COST.WT,.5)
+                  TOT.NEW.COST+=ICA.NEW.COST<1,JLOC,ILOC>
+                  NEW.DCOST=NEW.DCOST+ICA.NEW.COST<1,JLOC,ILOC>
+                  JMT.DCOST=0; STD.PRICE=0
+                  FOR P=1 TO PCNT
+                    TMP=CALC.EXT.COST(JMT.PTR<1,2,P>,JMT.PTR<1,3,P>,INV.COST.WT,.5)
+                    JMT.DCOST+=TMP
+                    TMP=CALC.EXT.COST(JMT.PTR<1,2,P>,JMT.PTR<1,4,P>,INV.COST.WT,.5)
+                    STD.PRICE+=TMP
+                  NEXT P
+                  IF WLR.MT.COST < 2 THEN
+                    JMT.COST=STD.PRICE
+                  END ELSE
+                    JMT.COST=INT(STD.PRICE*(1+OH.PCT)+.5)
+                  END
+                  BEGIN CASE
+                    CASE STD.PRICE <> JMT.DCOST
+                      DPTR=2; WPTR=3
+                      JMT.DCOST<1,2>=STD.PRICE - JMT.DCOST
+                      IF JMT.COST <> STD.PRICE THEN
+                        DPTR=3
+                        JMT.DCOST<1,3>=JMT.COST - STD.PRICE
+                      END
+                    CASE JMT.COST <> STD.PRICE
+                      DPTR=3; WPTR=2
+                      JMT.DCOST<1,2>=0
+                      JMT.DCOST<1,3>=JMT.COST - STD.PRICE
+                    CASE 1
+                      DPTR=1; WPTR=1
+                  END CASE
+                  O.DPTR=DCOUNT(O.JMT.DCOST,VM)
+                  IF DPTR < O.DPTR THEN DPTR=O.DPTR
+                  FOR D=1 TO O.DPTR
+                    JOB.MT.DCOST<1,DFND,D>=JOB.MT.DCOST<1,DFND,D> - O.JMT.DCOST<1,D>+JMT.DCOST<1,D>
+                  NEXT D
+                  JOB.TOT.DCOST=JOB.TOT.DCOST - O.STD.PRICE+STD.PRICE
+                  JOB.MT.COST<1,DFND>=JOB.MT.COST<1,DFND> - O.JMT.COST+JMT.COST
+                  WIP.UPD=0
+                  BEGIN CASE
+                    CASE WLR.SPL="N" AND JMT.TYPE="S"
+                    CASE WLR.NON.CHG="N" AND JMT.TYPE="N"
+                    CASE WLR.MT.WIP > 1
+                      JMT.WIP=JMT.DCOST<1,1>; WIP.UPD=JMT.WIP
+                      BEGIN CASE
+                        CASE WPTR > 2
+                          JMT.WIP<1,1,2>=JMT.DCOST<1,3>
+                          JMT.WIP<1,1,3>=JMT.DCOST<1,2>
+                          WIP.UPD=WIP.UPD+JMT.DCOST<1,2>+JMT.DCOST<1,3>
+                        CASE WPTR > 1
+                          JMT.WIP<1,1,2>=JMT.DCOST<1,3>
+                          WIP.UPD=WIP.UPD+JMT.DCOST<1,3>
+                      END CASE
+                    CASE WLR.MT.WIP > 0
+                      JMT.WIP=JMT.DCOST<1,1>; WIP.UPD=JMT.WIP
+                      IF WPTR > 2 THEN
+                        JMT.WIP<1,1,2>=0
+                        JMT.WIP<1,1,3>=JMT.DCOST<1,2>
+                        WIP.UPD=WIP.UPD+JMT.DCOST<1,2>
+                      END
+                  END CASE
+                  IF WIP.UPD=0 THEN JMT.WIP=""
+                  CCW.ID=CONO:JMT.DIV:DPNO:"!":CCNO:JMT.MON<1,1>
+                  MATREADU CCW.REC FROM COST.CNTR.WIP, CCW.ID ELSE MAT CCW.REC=""
+                  O.WPTR=COUNT(O.JMT.WIP<1,1>,SVM)+(O.JMT.WIP<1,1> # "")
+                  IF WPTR < O.WPTR THEN WPTR=O.WPTR
+                  FOR W=1 TO WPTR
+                    JOB.WIP<1,2,W>=JOB.WIP<1,2,W> - O.JMT.WIP<1,1,W>+JMT.WIP<1,1,W>
+                    JOB.MT.WIP<1,2,W>=JOB.MT.WIP<1,2,W> - O.JMT.WIP<1,1,W>+JMT.WIP<1,1,W>
+                    CCW.MT.I<1,W>=CCW.MT.I<1,W> - O.JMT.WIP<1,1,W>+JMT.WIP<1,1,W>
+                  NEXT W
+                  MATWRITE CCW.REC ON COST.CNTR.WIP, CCW.ID
+                  JOB.TOT.COST=JOB.TOT.COST - O.JMT.COST+JMT.COST
+                  IF JMT.TYPE='N' OR JMT.TYPE='S' THEN
+                    JMT.SALE=0
+                  END ELSE
+                    JMT.SALE=INT(JMT.COST+((JMT.COST*MARKUP)/100)+.5)
+                  END
+                  JOB.MT.SALE<1,DFND>=JOB.MT.SALE<1,DFND> - O.JMT.SALE+JMT.SALE
+                  JOB.TOT.SALE=JOB.TOT.SALE - O.JMT.SALE+JMT.SALE
+                  PRDS.ID=CONO:"*":JMT.DIV:"*":DPNO:"*":CCNO:"*":JMT.MON<1,1>:"*1*A"
+                  MATREADU PRDS.REC FROM PROD.STATS, PRDS.ID ELSE MAT PRDS.REC=""
+                  BEGIN CASE
+                    CASE JMT.TYPE='N'
+                      TPTR=2
+                      PRDS.MAT.NC.DCOST=PRDS.MAT.NC.DCOST - O.STD.PRICE+STD.PRICE
+                      PRDS.MAT.NC.COST=PRDS.MAT.NC.COST - O.JMT.COST+JMT.COST
+                    CASE JMT.TYPE='C'
+                      TPTR=3
+                      PRDS.MAT.DCOST=PRDS.MAT.DCOST - O.STD.PRICE+STD.PRICE
+                      PRDS.MAT.COST=PRDS.MAT.COST - O.JMT.COST+JMT.COST
+                    CASE JMT.TYPE='S'
+                      TPTR=4
+                      PRDS.MAT.SP.DCOST=PRDS.MAT.SP.DCOST - O.STD.PRICE+STD.PRICE
+                      PRDS.MAT.SP.COST=PRDS.MAT.SP.COST - O.JMT.COST+JMT.COST
+                      IF JMT.SPOIL.CODE # "" THEN
+                        SSR.ID=CONO:JMT.DIV:DPNO:"!":CCNO:JMT.MON<1,1>:JMT.SPOIL.CODE
+                        MATREADU SSR.REC FROM SPOIL.STATS, SSR.ID ELSE MAT SSR.REC=""
+                        FOR D=1 TO DPTR
+                          SSR.MT<1,D>=SSR.MT<1,D> - O.JMT.DCOST<1,D>+JMT.DCOST<1,D>
+                        NEXT I
+                      END
+                    CASE 1
+                      TPTR=1
+                      PRDS.MAT.DCOST=PRDS.MAT.DCOST - O.STD.PRICE+STD.PRICE
+                      PRDS.MAT.COST=PRDS.MAT.COST - O.JMT.COST+JMT.COST
+                  END CASE
+                  JOB.MT.TCOST<1,DFND,TPTR>=JOB.MT.TCOST<1,DFND,TPTR> - O.JMT.COST+JMT.COST
+                  MATWRITE PRDS.REC ON PROD.STATS, PRDS.ID
+                  SPTR=DCOUNT(IJS.JMT.QTY<1,NO.IJS>,SVM)+1
+                  IJS.JMT.QTY<1,NO.IJS,SPTR>=TEMP.QTY
+                  IJS.JMT.SEQ<1,NO.IJS,SPTR>=DPNO:"!":CCNO:"!":SEQ.NO
+                  IJS.JMT.SEQ=DELETE(IJS.JMT.SEQ,1,K,T)
+                  IJS.JMT.QTY=DELETE(IJS.JMT.QTY,1,K,T)
+                  MATWRITE JMT.REC ON JOB.MATL, JMT.ID
+                  ;*correct the price and ext cost
+                  ;* on INAH records for this usage
+                  INAH.ID=CONO:JMT.AUDIT.NO<1,FLOC>
+                  MATREADU INAH.REC FROM INV_AUDIT_HIST,INAH.ID THEN
+                    LOCATE RECP.NO IN INAH.DEPL.RECP<1> SETTING DIDX THEN
+                      INAH.EXT.COST=0
+                      INAH.DEPL.COST<1,DIDX>= ADJ.COST<1,R>
+                      DRCNT=DCOUNT(INAH.DEPL.RECP,VM)
+                      FOR DR=1 TO DRCNT
+                        INAH.EXT.COST+=CALC.EXT.COST(INAH.DEPL.QTY<1,DR>,INAH.DEPL.COST<1,DR>,INV.COST.WT,.5)
+                      NEXT DR
+                      INAH.EXT.COST=INT(INAH.EXT.COST-.5)
+                      INAH.UNIT.COST=(ABS(INAH.EXT.COST)*1000*INV.COST.WT)/ABS(INAH.QTY)
+                      MATWRITE INAH.REC ON INV_AUDIT_HIST,INAH.ID
+                    END
+                  END
+                END
+              END
+            END
+          END
+        END
+      NEXT T
+      USD.QTY=USD.QTY+TRAN.QTY
+      TMP=CALC.EXT.COST(TRAN.QTY,IJS.FI.AMT<1,K>,INV.COST.WT,.5)
+      JOB.USED.AMT<1,PFND>-=TMP
+      TMP=CALC.EXT.COST(TRAN.QTY,IJS.FI.AMT<1,NO.IJS>,INV.COST.WT,.5)
+      JOB.USED.AMT<1,PFND>+=TMP
+      IJS.FI.ORG<1,NO.IJS>=IJS.FI.ORG<1,NO.IJS>+TRAN.QTY
+      IJS.FI.ORG<1,K>=IJS.FI.ORG<1,K> - TRAN.QTY
+    END
+  END
+NEXT K
+;*
+;* Delete zero buckets
+;*
+FI.CNT=DCOUNT(IJS.RECP.NO,VM)
+FOR K=FI.CNT TO 1 STEP - 1
+  IF IJS.JMT.SEQ<1,K>="" AND IJS.FI.QTY<1,K>+0=0 THEN
+    IJS.RECP.NO=DELETE(IJS.RECP.NO,1,K,0)
+    IJS.FI.ORG=DELETE(IJS.FI.ORG,1,K,0)
+    IJS.FI.QTY=DELETE(IJS.FI.QTY,1,K,0)
+    IJS.FI.AMT=DELETE(IJS.FI.AMT,1,K,0)
+    IJS.JMT.SEQ=DELETE(IJS.JMT.SEQ,1,K,0)
+    IJS.JMT.QTY=DELETE(IJS.JMT.QTY,1,K,0)
+  END
+NEXT K
+ICA.RSV.QTY<1,JLOC>=RSV.QTY
+JOB.RESV.AMT<1,PFND>=JOB.RESV.AMT<1,PFND> - ICA.ORSV.COST<1,JLOC>+ICA.NRSV.COST<1,JLOC>
+ICA.USD.QTY<1,JLOC>=ICA.USD.QTY<1,JLOC>+USD.QTY
+RETURN
+*
+************
+12000: 
+************
+*
+*--- UPDATE RESERVED QUANTITIES ONLY
+*
+FOR K=1 TO FI.CNT
+  IF IJS.RECP.NO<1,K>=RECP.NO THEN
+    IF CATG.COST.TYPE='FI' OR CATG.COST.TYPE='AC' AND IJS.FI.AMT<1,K>=INVR.UNIT.COST THEN
+      TMP=CALC.EXT.COST(IJS.FI.QTY<1,K>,IJS.FI.AMT<1,K>,INV.COST.WT,.5)
+      ICA.ORSV.COST<1,JLOC>+=TMP
+      TMP=CALC.EXT.COST(IJS.FI.QTY<1,K>,ADJ.COST<1,R>,INV.COST.WT,.5)
+      ICA.NRSV.COST<1,JLOC>+=TMP
+      IJS.FI.AMT<1,K>=ADJ.COST<1,R>
+    END ELSE
+      TMP=CALC.EXT.COST(IJS.FI.QTY<1,K>,IJS.FI.AMT<1,K>,INV.COST.WT,.5)
+*T27470 v Left off MV pointer and no need to recalculate.
+*     ICA.ORSV.COST+=TMP
+      ICA.ORSV.COST<1,JLOC>+=TMP
+*     TMP=CALC.EXT.COST(IJS.FI.QTY<1,K>,IJS.FI.AMT<1,K>,INV.COST.WT,.5)
+*     I added the line below otherwise ICA.NRSV.COST would = ICA.ORSV.COST
+      TMP=CALC.EXT.COST(IJS.FI.QTY<1,K>,ADJ.COST<1,R>,INV.COST.WT,.5)
+      ICA.NRSV.COST<1,JLOC>+=TMP
+    END
+  END
+NEXT K
+ICA.RSV.QTY<1,JLOC>=RSV.QTY
+JOB.RESV.AMT<1,PFND>=JOB.RESV.AMT<1,PFND> - ICA.ORSV.COST<1,JLOC>+ICA.NRSV.COST<1,JLOC>
+RETURN
+*
+*********
+ENT.PROD: 
+*********
+*
+EOI=0
+LOOP
+  ECD.NUM=1; ECD.VALDAT.CODE=2
+  ECD.VALDAT.FILE=INVENTORY; ECD.PREFIX.ID=CONO
+  ECD.ACTION=4;CALL SCRN.EDIT
+  BEGIN CASE
+    CASE ECD.RET.VALUE='END'
+      GOTO 99999
+    CASE ECD.RET.VALUE # '' AND ECD.VALDAT.ITEM # ''
+      PROD=ECD.RET.VALUE
+      FOR I=1 TO INV.REC.SIZE
+        INV.REC(I)=ECD.VALDAT.ITEM<I>
+      NEXT I
+      IF INV.M.LINE='FNGD' THEN 
+        ERRMSG='Cannot adjust receipt cost for FNGD item.'
+        GOSUB 91000
+      END ELSE
+        EOI=1
+        ECD.NUM=2;SCV.REC(ECD.NUM)<1>=INV.FULL.DESC
+        ECD.ACTION=5;CALL SCRN.EDIT
+      END
+    CASE 1
+      ECD.NUM=2;SCV.REC(ECD.NUM)<1>='';CALL SCRN.EDIT
+      IF ECD.RET.VALUE # '' OR ECD.RET.VALUE # 'END' THEN 
+        SCV.REC(ECD.NUM)<1>=''
+        MAT GEN.XREF.REC=''
+        GXR.CO=CONO
+        GXR.TOP.LINE='INVENTORY XREF SEARCH'
+        GXR.HEADING<1,1>='PRODUCT NUMBER'
+        GXR.HEADING<1,2>='FULL DESCRIPTION'
+        GXR.ATT<1,1>=0
+        GXR.ATT<1,2>=2
+        GXR.LEN<1,1>=15
+        GXR.LEN<1,2>=45
+        GXR.LOC=1
+        GXR.FILE=INVENTORY
+        GXR.XREF=INVENTORY.XREF
+        GXR.ID='';GXR.SRCH.ID=ECD.RET.VALUE
+        CALL GEN.XREF(MAT GEN.XREF.REC,PREFIX)
+        ECD.ACTION=2; CALL SCRN.EDIT
+        ECD.ACTION=3; CALL SCRN.EDIT
+        IF GXR.ID # '' THEN 
+          MATREAD INV.REC FROM INVENTORY, CONO:GXR.ID THEN
+            IF INV.M.LINE='FNGD' THEN                           
+              ERRMSG='Cannot adjust receipt cost for FNGD item.'
+              GOSUB 91000                                       
+            END ELSE                                            
+              PROD=GXR.ID ; EOI=1
+              ECD.NUM=1;SCV.REC(ECD.NUM)<1>=PROD
+              ECD.ACTION=5;CALL SCRN.EDIT
+              ECD.NUM=2;SCV.REC(ECD.NUM)<1>=INV.FULL.DESC
+              ECD.ACTION=5;CALL SCRN.EDIT
+            END
+          END ELSE
+            ERRMSG='CANNOT LOCATE PRODUCT - ':GXR.ID
+            GOSUB 91000
+          END
+        END
+      END
+  END CASE
+UNTIL (EOI) REPEAT
+*T28576 v
+IF CO.INTR.WHSE # "" THEN
+  LOCATE CO.INTR.WHSE IN INV.WHSE.CODE<1>,1 SETTING IFND THEN
+    MATREAD IWH.REC FROM INV.WHSE,CONO:PROD:"!":CO.INTR.WHSE THEN
+      IF IWH.ON.HAND+0 # 0 THEN
+        ERRMSG='Outstanding Inter-Div transfer exists - MUST Clear first!'
+        GOSUB 91000
+        SCV.REC(1)=''; SCV.REC(2)=''
+        ECD.NUM=1; ECD.ACTION=5; CALL SCRN.EDIT
+        ECD.NUM=2; ECD.ACTION=5; CALL SCRN.EDIT
+      END
+    END
+  END
+END
+*T28576 ^
+RETURN
+*
+**********
+ENT.WHSE: 
+**********
+*
+WHSE.CNT=DCOUNT(INV.WHSE.CODE,VM)
+ECD.HMSG='WAREHOUSE - ' : INV.WHSE.CODE<1,1>    
+IF WHSE.CNT > 1 THEN
+  FOR I=2 TO WHSE.CNT                             
+    IF LEN(ECD.HMSG) > 75 THEN                      
+      ECD.HMSG='WAREHOUSE - ':INV.WHSE.CODE<1,I>  
+    END ELSE                                        
+      ECD.HMSG=ECD.HMSG:' , ':INV.WHSE.CODE<1,I>  
+    END                                             
+  NEXT I                                            
+END
+EOI=0
+LOOP
+  ERR=0
+  ECD.NUM=3
+  IF WHSE.CNT=1 THEN
+    IWH.ID=CONO:PROD:'!':INV.WHSE.CODE<1,1>
+      * T26126 v
+    MATREADU IWH.REC FROM INV.WHSE,IWH.ID LOCKED
+      ERRMSG = 'Record is locked by user - ':GETUSERNAME(STATUS())
+      GOSUB 91000;ERR=1 
+    END THEN
+      * T26126 ^
+      DIV.POS=DIVISION.POSITION(CONO,CONTROL,WHS.DIV)
+      BEGIN CASE                                     
+        CASE DIV.POS<1,1>=''                         
+          DIV.POS=DIV.POS<1,2>                       
+        CASE DIV.POS<1,1>='-2'                       
+          ERRMSG=DIV.POS<1,2>                        
+          GOTO 93000                                
+      END CASE                                       
+      WHSE=INV.WHSE.CODE<1,1> ; EOI=1
+      SCV.REC(ECD.NUM)<1>=WHSE;ECD.ACTION=5;CALL SCRN.EDIT
+    END ELSE
+      ERRMSG='Cannot locate warehouse ':INV.WHSE.CODE
+      ERRMSG :=' for product ':PROD
+      ERR=1
+      GOSUB 91000
+    END
+  END ELSE
+    ECD.ACTION=4;CALL SCRN.EDIT
+    IF ECD.RET.VALUE='END' THEN
+      EOI=1 ; ERR=1
+    END ELSE
+      WHSE=ECD.RET.VALUE
+      IWH.ID=CONO:PROD:"!":WHSE
+        * T26126 v
+      MATREADU IWH.REC FROM INV.WHSE,IWH.ID LOCKED
+        ERRMSG = 'Record is locked by user - ':GETUSERNAME(STATUS())
+        GOSUB 91000;ERR=1 
+      END THEN
+        * T26126 ^
+        IF IWH.RECP.NO='' THEN                      
+          ERRMSG ='Product ':PROD:' and warehouse ' 
+          ERRMSG:=WHSE:' have no receipts'          
+          GOSUB 91000 ; ERR=1
+        END ELSE
+          EOI=1
+        END
+      END ELSE
+        ERRMSG=PROD:'!':WHSE:" IS NOT ON FILE TRY AGAIN !"
+        GOSUB 91000 ; ERR=1
+      END
+    END
+  END
+  IF NOT(ERR) THEN
+    WID=CONO:WHSE
+    MATREAD WHSE.REC FROM WAREHOUSE,WID ELSE MAT WHSE.REC=''
+    DIV.CODE=WHS.DIV; USER.ID=UPCASE(@LOGNAME); ERRMSG=''
+    CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+    IF ERRMSG # '' THEN
+      GOSUB 91000
+      GOTO ENT.WHSE ; * T26685
+      IF WHSE.CNT=1 THEN
+        EOI=1 ; ERR=1
+      END ELSE
+        SCV.REC(ECD.NUM)<1>=''
+      END
+    END ELSE
+      EOI=1
+    END
+  END
+UNTIL (EOI) DO REPEAT
+RETURN
+*
+***************
+ENT.ADJ.PERIOD: 
+***************
+*
+CUR.PERIOD=CURRENT.PERIOD(CONO,CONTROL,DIV.POS,"IC")
+BEGIN CASE                    
+  CASE CUR.PERIOD<1,1>=''     
+    CUR.PERIOD=CUR.PERIOD<1,2>
+  CASE CUR.PERIOD<1,1>='-2'   
+    ERRMSG=CUR.PERIOD<1,2>    
+    GOSUB 93000               
+END CASE                      
+EOI=0
+LOOP
+  ERR=0
+  ECD.NUM=22;ECD.SUB.NUM=LN
+  IF ADJ.PERIOD<1,LN>#'' THEN
+    ECD.DEFAULT=ADJ.PERIOD<1,LN>
+  END ELSE
+    IF CUR.PERIOD<IWH.RECP.PERIOD<1,LN> THEN
+      ECD.DEFAULT=IWH.RECP.PERIOD<1,LN>
+    END ELSE
+      IF IWH.RECP.PERIOD<1,LN><CUR.PERIOD THEN
+        ECD.DEFAULT=CUR.PERIOD
+      END ELSE
+        ECD.DEFAULT=IWH.RECP.PERIOD<1,LN>
+      END
+    END
+  END
+  ECD.MINV=ECD.DEFAULT ; ECD.MAXV=999999
+  ECD.ACTION=4;CALL SCRN.EDIT
+  BEGIN CASE
+    CASE ECD.RET.VALUE='END' OR ECD.RET.VALUE='E'
+      EOI=1; ERR=1
+      SCV.REC(22)<ESN,LN>=ADJ.PERIOD<1,LN>
+      ECD.NUM=22;ECD.SUB.NUM=LN
+      ECD.ACTION=5;CALL SCRN.EDIT
+    CASE ECD.RET.VALUE=''
+      EOI=1;ERR=1
+      ADJ.PERIOD<1,LN>=''
+      SCV.REC(22)<ESN,LN>=ADJ.PERIOD<1,LN>  
+      ECD.NUM=22;ECD.SUB.NUM=LN             
+      ECD.ACTION=5;CALL SCRN.EDIT           
+      ADJ.COST<1,LN>=''
+      SCV.REC(18)<ESN,LN>=ADJ.COST<1,LN>   
+      ECD.NUM=18;ECD.SUB.NUM=LN            
+      ECD.ACTION=5;CALL SCRN.EDIT          
+    CASE 1
+      ERR.FLG = "";ERRMSG = "" 
+      CALL CHECK.PERIOD.DATE(CONO,'',ECD.RET.VALUE,WHS.DIV,ERR.FLG,ERRMSG,COMPANY,CONTROL) 
+      BEGIN CASE 
+        CASE ERRMSG = "" 
+          EOI=1
+          ADJ.PERIOD<1,LN>=ECD.RET.VALUE
+        CASE ERR.FLG = 0 
+          EOI=1
+          ADJ.PERIOD<1,LN>=ECD.RET.VALUE
+          GOSUB 91000
+        CASE ERR.FLG = 1 
+          GOSUB 91000
+        CASE ERR.FLG = 2 
+          GOSUB 93000
+      END CASE 
+  END CASE
+UNTIL (EOI) DO REPEAT
+RETURN
+*
+*************
+ENT.ADJ.COST: 
+*************
+*
+ERR=0
+ECD.DEFAULT=ADJ.COST<1,LN>
+SCV.REC(18)<ESN,LN>=ECD.DEFAULT
+ECD.NUM=18;ECD.SUB.NUM=LN
+ECD.ACTION=4;CALL SCRN.EDIT
+BEGIN CASE
+  CASE ECD.RET.VALUE='END' OR ECD.RET.VALUE='E'
+    ERR=1
+    IF ADJ.COST<1,LN> ='' THEN
+      ADJ.PERIOD<1,LN>=''
+    END
+    SCV.REC(22)<ESN,LN>=ADJ.PERIOD<1,LN>
+    ECD.NUM=22;ECD.SUB.NUM=LN
+    ECD.ACTION=5 ; CALL SCRN.EDIT
+    SCV.REC(18)<ESN,LN>=ADJ.COST<1,LN>
+    ECD.NUM=18;ECD.SUB.NUM=LN
+    ECD.ACTION=5;CALL SCRN.EDIT
+  CASE ECD.RET.VALUE=''
+    ADJ.PERIOD<1,LN>=''                 
+    SCV.REC(22)<ESN,LN>=ADJ.PERIOD<1,LN>
+    ECD.NUM=22;ECD.SUB.NUM=LN           
+    ECD.ACTION=5;CALL SCRN.EDIT         
+    ADJ.COST<1,LN>=''                   
+    SCV.REC(18)<ESN,LN>=ADJ.COST<1,LN>  
+    ECD.NUM=18;ECD.SUB.NUM=LN           
+    ECD.ACTION=5;CALL SCRN.EDIT         
+  CASE 1
+    ADJ.COST<1,LN>=ECD.RET.VALUE
+END CASE
+RETURN
+*
+****************
+BUILD.SCREEN: 
+****************
+*
+RCNT=DCOUNT(IWH.RECP.NO,VM)
+FOR R=1 TO RCNT
+  S.ORIG=IWH.ORG.FI<1,R>
+  S.USED=S.ORIG-IWH.QTY.FI<1,R>
+  S.RESV=IWH.QTY.FI<1,R>-IWH.RSV.FI<1,R>
+  SCV.REC(11)<ESN,R>=R
+  SCV.REC(12)<ESN,R>=OCONV(IWH.RECV.FI<1,R>,"D2/") 
+  SCV.REC(13)<ESN,R>=IWH.PO.NO.FI<1,R>
+  TMP=CALC.STK.QTY(S.ORIG,MAT INV.CNV.REC,'','')
+  TMP=OCONV(TMP,ICR.CNV)
+  SCV.REC(14)<ESN,R>=TMP
+  TMP=CALC.STK.QTY(S.RESV,MAT INV.CNV.REC,'','')
+  TMP=OCONV(TMP,ICR.CNV)                        
+  SCV.REC(15)<ESN,R>=TMP
+  TMP=CALC.STK.QTY(S.USED,MAT INV.CNV.REC,'','')
+  TMP=OCONV(TMP,ICR.CNV)                        
+  SCV.REC(16)<ESN,R>=TMP
+  SCV.REC(17)<ESN,R>=OCONV(IWH.COST.FI<1,R>,"MD4")
+  SCV.REC(18)<ESN,R>=OCONV(ADJ.COST<1,R>,"MD4")
+  SCV.REC(19)<ESN,R>=IWH.VDR.FI<1,R>
+  SCV.REC(20)<ESN,R>=IWH.RECP.NO<1,R>
+  SCV.REC(21)<ESN,R>=IWH.RECP.PERIOD<1,R>
+  SCV.REC(22)<ESN,R>=ADJ.PERIOD<1,R>
+NEXT R
+RETURN
+*
+****************
+DISP.LINES: 
+****************
+*
+START = 1 + INT((START-1)/PAGE.SIZE) * PAGE.SIZE      ;* T25978
+ECD.NUM=11;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+ECD.NUM=12;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+ECD.NUM=13;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+ECD.NUM=21;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+ECD.NUM=14;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+ECD.NUM=15;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+ECD.NUM=16;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+ECD.NUM=17;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+ECD.NUM=18;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+ECD.NUM=20;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+ECD.NUM=19;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+ECD.NUM=22;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+RETURN
+*
+*****************
+CLEAR.FI.BUCKETS: 
+*****************
+;*                           
+;*remove FIFO from INV.WHSE  
+;*                           
+IWH.VDR.FI = ""              
+IWH.PO.NO.FI = ""            
+IWH.PO.LN.FI = ""            
+IWH.ORG.FI = ""              
+IWH.RSV.FI = ""              
+IWH.QTY.FI = ""              
+IWH.COST.FI = ""             
+IWH.ACT.COST = ""            
+IWH.SALE.FI = ""             
+RETURN
+*
+*
+*--- ERROR ROUTINE
+*
+91000 ERR.TYPE=1 ; CALL SYSCOM(MAT SYSCOM.REC) ; RETURN
+92000 ERR.TYPE=2 ; CALL SYSCOM(MAT SYSCOM.REC) ; RETURN
+93000 ERR.TYPE=3 ; CALL SYSCOM(MAT SYSCOM.REC)
+99999 ECD.ACTION=99 ; CALL SCRN.EDIT
+END

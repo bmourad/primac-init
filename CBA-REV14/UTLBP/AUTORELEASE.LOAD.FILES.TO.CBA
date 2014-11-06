@@ -1,0 +1,193 @@
+*
+*T21762 diane 03/27/1997 * REV11 UPGRADE
+*
+*This pgm will copy all F and D ptrs from all of the modules back into
+* the CBA acct ... if a file is created later in the POS module then
+* when this pgm is run it will make a ptr reference in the CBA-... 
+* account to the file in the POS module.
+*
+* SET UP VARIABLES
+*
+OPEN "VOC" TO VOC ELSE PRINT "Unable to open VOC file" ; STOP
+OPEN "AUTORELEASE" TO AUTORELEASE ELSE
+  PRINT 'Unable to open AUTORELEASE file '
+  STOP
+END
+*
+*
+TRUE=1 ; FALSE=0
+EQU VM TO CHAR(253)
+EQU AM TO CHAR(254)
+ERRARRAY=''
+CBAHOMEPATH=@PATH
+OS = "OS"
+CALL SYSVARS.SUB(OS)
+IF OS[1,7] = 'Windows' THEN SLSH = "\" ELSE SLSH = '/'
+*
+DONE=FALSE
+* the line below will need to be updated with mv list of release numbers
+* as they become available
+VALID.RELEASE="REV10A":@VM:"REV10B":@VM:"REV11":@VM:"REV12":@VM:"REV12A":@VM:"REV14"
+LOOP
+UNTIL DONE DO
+  PRINT 'Enter Version number of RELEASE (eg REV10A) or "X"'
+  INPUT VERSION
+  IF VERSION = 'X' THEN
+    DONE=1
+  END ELSE
+    LOCATE VERSION IN VALID.RELEASE SETTING POS THEN
+      DONE=TRUE
+    END ELSE
+      PRINT "Invalid response"
+    END
+  END
+REPEAT
+IF VERSION = 'X' THEN STOP
+DONE=FALSE
+LOOP
+UNTIL DONE DO
+  PRINT 'Enter the path of the home account (eg /usr/ud/primac/rev10/basea/REV10A)'
+  INPUT HOMEPATH
+  PRINT "Is this correct :":HOMEPATH:" (Y/N/X) ":
+  INPUT RESP
+  IF RESP = 'Y' OR RESP = 'X' THEN
+    DONE=TRUE
+  END
+REPEAT
+IF RESP = 'X' THEN STOP
+*
+LOCPTR=FALSE
+PRINTRPT=FALSE
+DONE=FALSE
+LOOP
+UNTIL DONE DO
+  PRINT 'Do P-Printout or B-Build Ptrs (P/B/X)'
+  INPUT RESP
+  IF RESP = 'B' OR RESP = 'X' THEN
+    PRINTRPT=FALSE
+    DONE=TRUE
+  END ELSE
+    IF RESP='P' THEN
+      DONE=TRUE
+      PRINTRPT=TRUE
+    END
+  END
+REPEAT
+IF RESP = 'X' THEN STOP
+*
+*
+*
+* set up list of accounts
+*
+*ACCTLIST = "":VM:"APS":VM:"ARS":VM:"FAS":VM:"GLS":VM:"ICS":VM:"JCS":VM:"JES"
+*REMOVE THE GLS REFERENCE FOR THE BUILD RUN
+ACCTLIST = "":VM:"APS":VM:"ARS":VM:"FAS":VM:"ICS":VM:"JCS":VM:"JES"
+ACCTLIST = ACCTLIST:VM:"OPS":VM:"POS":VM:"PRS":VM:"PSS":VM:"SAS"
+*
+PASSTYPES="BEFORE":VM:"":VM:"AFTER"
+*
+NUMPASSTYPES=DCOUNT(PASSTYPES,VM)
+*
+NUM.SLASH=DCOUNT(HOMEPATH,SLSH)
+BASEHOMEPATH=''
+BASEHOMENAME=FIELD(HOMEPATH,SLSH,NUM.SLASH)
+FOR I = 1 TO NUM.SLASH-1
+  BASEHOMEPATH=BASEHOMEPATH:FIELD(HOMEPATH,SLSH,I):SLSH
+NEXT I
+BASECBAPATH = BASEHOMEPATH:"CBA-":BASEHOMENAME
+*
+  RPT="Print out for Files in other accounts for load into CBA acct"
+NUM.ACCT = DCOUNT(ACCTLIST,VM)
+FOR APTR = 1 TO NUM.ACCT
+  BCURRACCT = ACCTLIST<1,APTR>
+  IF BCURRACCT #'' THEN
+    CURRACCT="-":BCURRACCT
+  END ELSE
+    CURRACCT = BCURRACCT
+  END
+  XXXX= "Processing    ":CURRACCT
+  PRINT XXXX
+  RPT<-1>=XXXX
+  DELETE VOC, "SOURCEQPTR"
+  VERBA = "SETFILE ":HOMEPATH:CURRACCT:"/VOC SOURCEQPTR OVERWRITING"
+  UDTEXECUTE VERBA CAPTURING JUNK
+  OPEN "SOURCEQPTR" TO SOURCEVOC THEN
+      * have both vocs open  process the list
+      *
+      GOSUB 500
+  END
+NEXT APTR
+PRINTER OFF
+*
+IF ERRARRAY # "" THEN
+  WRITE ERRARRAY ON AUTORELEASE,VERSION:".ERRLIST"
+  PRINT "THERE ARE ERRORS SEE AUTORELEASE :":VERSION:".ERRLIST"
+  INPUT RESP
+END
+*
+NUMLINES = DCOUNT(RPT,AM)
+IF PRINTRPT THEN
+  PRINTER ON
+  FOR II = 1 TO NUMLINES
+    IF II = 1 OR REM(II,55)=0 THEN
+      IF II=1 THEN
+        PRINT RPT<II>
+      END ELSE
+        PRINT RPT<1>
+      END
+      PRINT
+      PRINT
+    END ELSE
+      PRINT RPT<II>
+    END
+  NEXT II
+  PRINTER OFF
+END
+*
+STOP
+*
+500 * Process the lists
+*
+  PASS = 4
+  XXXX="        Processing List 4"
+  PRINT XXXX
+  RPT<-1> = XXXX
+  GOSUB 4000
+*
+RETURN
+*
+*
+4000 * process create new files
+*
+SELECT SOURCEVOC
+TDONE=FALSE
+CHG=FALSE
+LOOP
+  READNEXT TID ELSE TDONE=TRUE
+UNTIL TDONE DO
+  READ MDITEM FROM SOURCEVOC,TID THEN
+    IF (MDITEM<1>[1,1]='F' OR MDITEM<1>[1,1]='D') AND NOT(INDEX(MDITEM<2>,SLSH,1))  AND MDITEM<2> = TID THEN
+      * this is an F or D item and attr 2 forms a local ptr 
+        DOLOCADD=FALSE
+          READ TTT FROM VOC,TID ELSE
+            DOLOCADD=TRUE
+          END
+        IF DOLOCADD THEN
+          *  this md item is a local file in the other acct and is not
+          *  present in this account 
+          NEWMDITEM=MDITEM<1>[1,1]
+          NEWMDITEM<2>=HOMEPATH:CURRACCT:SLSH:TID
+          NEWMDITEM<3>=HOMEPATH:CURRACCT:"/D_":TID
+          IF NOT(PRINTRPT) THEN
+            WRITE NEWMDITEM ON VOC,TID
+          END
+          XXXX= "            Adding ptr to CBA ":TID:"  ":NEWMDITEM<2>
+          RPT<-1>=XXXX
+        END
+    END
+  END
+REPEAT
+*
+RETURN
+*
+

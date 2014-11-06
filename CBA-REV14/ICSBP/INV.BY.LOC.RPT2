@@ -1,0 +1,574 @@
+*********************************************************************
+* REVISION    - [12.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - ICSBP
+* PROGRAM     - INV.BY.LOC.RPT
+* DATE        - 01/11/84
+* BY          - WALID YAMOUT , CBA
+* DESCRIPTION - This program list inventory whse and location
+*                 information.
+*T21638 doug 02/26/1997 * Add quantity conversion for FNGD
+*T24869 aron 02/29/2000 * Change FNGD to use FNGD.STATS for ON-ORDER
+*                         qty.
+*T25243 alex 06/16/2000 * Fix to not print on-hand qty in the Roll/Skid
+*                         Information column if the product is not a
+*                         roll skid product.
+*T26493 cmykleb 03/22/2002 * Change report to use rpt # from proc.
+*T26556 cmykleb 04/22/2002 * Report needs more changes to work with rev12.
+*T27705 lross 09/12/2003 * Expand Serial # to 15 chars.
+*T28247 cmykleb 09/10/2004 * Add a prompt to allow the user to suppress
+*                            zero quantity product/location.
+*T28102 cmykleb 05/12/2004 * (1) Replace the on-hand column with the po
+*                            #. (2) Replace the inprocess column with
+*                 ?           the received date.
+*********************************************************************
+*ENDDOC
+*** INSERT EQUATE FROM CPYLIB
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>ICS.CPYLIB>INV.WHSE.LOC
+*COPY>CPYLIB>SYSCOM
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>CPYLIB>CHAR
+*COPY>ICS.CPYLIB>FNGD.STATS
+*COPY>ICS.CPYLIB>INV_SERIAL
+*COPY>ICS.CPYLIB>INV_RECEIPTS ; * T28102
+*** INITIALIZATION
+   PRINT.FLAG = ""
+   LINE.COUNT = 99 ; PAGE.NO = 0 ; SP1 = " "
+   PREV.M.P.LINE = "" ; PREV.WHSE = "" ; PREV.BAS = ""; PREV.PROD = ""
+   TOT.P.ON.HAND = 0;TOT.P.INPRCS = 0;TOT.P.ON.ORD = 0
+   TOT.B.ON.HAND = 0 ; TOT.B.INPRCS = 0 ; TOT.B.ON.ORD = 0
+*   TOT.ON.HAND = 0 ; TOT.INPRCS = 0 ; TOT.ON.ORD = 0
+   TOT.PL.ON.HAND = 0;TOT.PL.INPRCS = 0;TOT.PL.ON.ORD = 0
+TOT.W.ON.HAND = 0;TOT.W.INPRCS = 0;TOT.W.ON.ORD = 0
+TOT.B.RS.ON.HAND = 0;TOT.B.RS.CNT = 0
+TOT.P.RS.ON.HAND = 0;TOT.P.RS.CNT = 0
+TOT.PL.RS.ON.HAND = 0;TOT.PL.RS.CNT = 0
+TOT.W.RS.ON.HAND = 0;TOT.W.RS.CNT = 0
+   TOT.FLAG = ""
+   GRAND.FLAG = 0
+*T28247 v
+   ERR.FLAG = ""
+   ERRMSG = ""
+   OPEN.FLAG = 1
+*T28247 ^
+*** SET UP THE ERRMSG ROUTINE FOR SYSCOM
+   SYS.TYPE = 1
+   CALL SYSCOM(MAT SYSCOM.REC)
+*** OPEN THE FILE
+   OPEN '','INV.WHSE' TO INV.WHSE ELSE
+      ERRMSG = 'INV.WHSE FILE IS MISSING'
+      GOTO 93000
+   END
+   OPEN '','INV.WHSE.LOC' TO INV.WHSE.LOC ELSE
+      ERRMSG = 'INV.WHSE.LOC FILE IS MISSING'
+      GOTO 93000
+   END
+   OPEN '','INVENTORY' TO INVENTORY ELSE
+      ERRMSG = 'INVENTORY FILE IS MISSING'
+      GOTO 93000
+   END
+*T24869 v
+   OPEN '','FNGD.STATS' TO FNGD.STATS ELSE
+      ERRMSG = 'FNGD.STATS FILE IS MISSING'
+      GOTO 93000
+   END
+*T24869 ^
+   OPEN '','INV_SERIAL' TO INV_SERIAL ELSE
+      ERRMSG = 'INV_SERIAL FILE IS MISSING'
+      GOTO 93000
+   END
+*T28102 v
+   OPEN '','INV_RECEIPTS' TO INV_RECEIPTS ELSE
+      ERRMSG = 'INV_RECEIPTS FILE IS MISSING'
+      GOTO 93000
+   END
+*T28102 ^
+*** READ COMPANY NAME
+   PROCREAD ID ELSE
+      ERRMSG = ' CANNOT PERFORM PROCREAD'
+      GOTO 93000
+   END
+   CONO = ID<1>
+*T26493 v
+*  CONO.NAME = ID<2>
+*  REPORT.NAME = "INVENTORY.BY.LOCATION.REPORT"
+  *  REPORT.NUMBER = "XXXX"
+   REPORT.NUMBER = ID<2>
+   CONO.NAME = ""
+   REPORT.NAME = ""
+*T26493 ^
+   REPORT.DATE = DATE()
+   HD1 = "" ; HD2 = ""
+   CALL GET.PROG.HEAD(CONO,CONO.NAME,REPORT.NAME,REPORT.NUMBER,REPORT.DATE,HD1,HD2)
+  ZERO.ON.HAND.FLAG = ID<9>;*T21808
+IF @LOGNAME = 'cmykleb' THEN DEBUG
+*T26556 v
+*  R.S.TYPE = ID<8>
+*  BEGIN CASE
+*     CASE R.S.TYPE = "N"
+*        R.S.DESC = "NEW"
+*     CASE R.S.TYPE = "U"
+*        R.S.DESC = "USED"
+*     CASE 1
+*        R.S.DESC = "BOTH"
+*  END CASE
+   PERIOD = ID<8>
+*T26556 ^
+*** PUT PRINTER ON
+   PRINTER ON
+*T28247 v
+   IF PERIOD = 'ALL' THEN PERIOD = ''
+   ZERO.QTY.FLAG = ID<9>
+*T28247 ^
+*** READ AND PROCESS FIRST RECORD
+100*
+   READNEXT KEY ELSE GOTO 999999
+   GOSUB 200
+*** READ THE TWO FILE
+   MATREAD IWH.REC FROM INV.WHSE,KEY ELSE
+      MAT IWH.REC = ''
+      GOTO 100
+   END
+   MATREAD INV.REC FROM INVENTORY,PROD.KEY ELSE
+      MAT INV.REC = ''
+   END
+*T28247 v
+   CALL BUILD.IWH.FI(KEY,MAT IWH.REC,PERIOD,ERR.FLAG,ERRMSG,OPEN.FLAG)
+*  IF ZERO.QTY.FLAG = 'N' THEN
+*     IF IWH.ON.HAND + 0 = 0 THEN GOTO 111
+*  END
+*T28247 ^
+*** SET THE PRODUCT NUMBER
+   PREV.M.P.LINE = INV.M.LINE:" / ":INV.LINE
+   PREV.BAS = INV.BAS.WT
+   PREV.WHSE = WHSE
+   PREV.PROD = PROD
+   NEW.PAGE = 1
+*** SET THE HEADING LINES
+*T26556 v
+*T28102 v
+*  H1.LINE = "PRODUCT NUMBER                      <--- WAREHOUSE INFORMATION ----> <- LOCATION INFORMATION -> <-- ROLL / SKID INFORMATION -->"
+*  H2.LINE = " DESCRIPTION    BAS.WGHT M.WGHT U/M  ON-HAND    ON-ORDER  INPROCESS  LOC#  ON-HAND   INPROCESS  ROLL/SKID #  ON-HAND   LAST-USD"
+*27705 v   H1.LINE = "PRODUCT NUMBER                      <--- WAREHOUSE INFORMATION ----> <- LOCATION INFORMATION -> <---- SERIAL INFORMATION  ---->"
+*   H1.LINE = "PRODUCT NUMBER                      <--- WAREHOUSE INFORMATION ----> <- LOCATION INFORMATION -> <------ SERIAL INFORMATION  ------>"
+*T27705   H2.LINE = " DESCRIPTION    BAS.WGHT M.WGHT U/M  ON-HAND    ON-ORDER  INPROCESS  LOC#  ON-HAND   INPROCESS   SERIAL #   ON-HAND   LAST-USD"
+*   H2.LINE = " DESCRIPTION    BAS.WGHT M.WGHT U/M  ON-HAND    ON-ORDER  INPROCESS  LOC#  ON-HAND   INPROCESS     SERIAL #     ON-HAND   LAST-USD"
+H1.LINE = "PRODUCT NUMBER                      <--- WAREHOUSE INFORMATION ---->      <----------------- ROLL INFORMATION -------------------->"
+H2.LINE = " DESCRIPTION    BAS.WGHT M.WGHT U/M  ON-HAND    ON-ORDER  INPROCESS  LOC# PO NUMBER  RECVD DATE     SERIAL #     ON-HAND   LAST-USD"
+H3.LINE = "--------------- -------- ------ --- ---------- ---------- ---------- ---- ---------- ---------- --------------- ---------- --------"
+*T28102 ^
+*T26556 ^
+*T27705   H3.LINE = "--------------- -------- ------ --- ---------- ---------- ---------- ---- ---------- ---------- ----------- ---------- --------"
+*   H3.LINE = "--------------- -------- ------ --- ---------- ---------- ---------- ---- ---------- ---------- --------------- ---------- --------"
+*   DT.LINE = SPACE(36):"---------- ---------- ----------"
+*   DT1.LINE = SPACE(36):"========== ========== =========="
+    *
+DT.LINE = SPACE(36):"---------- ---------- ----------":SPACE(28):STR('-',15):SP1:STR('-',10)
+DT1.LINE = SPACE(36):"========== ========== ==========":SPACE(28)?:STR('=',15):SP1:STR('=',10)
+*
+*** PROCESS THE FILE
+   GOSUB 1000
+*** READ AND PROCESS THE REST OF THE RECORDS
+*** READ AND PROCESS ALL THE FILES
+   DATA = 0
+   LOOP
+      READNEXT KEY ELSE DATA = 1
+   WHILE DATA = 0 DO
+      GOSUB 200
+*** READ THE TWO FILES
+      MATREAD IWH.REC FROM INV.WHSE,KEY ELSE
+         MAT IWH.REC = ''
+         GOTO 111
+      END
+      MATREAD INV.REC FROM INVENTORY,PROD.KEY ELSE
+         MAT INV.REC = ''
+      END
+*T28247 v
+      CALL BUILD.IWH.FI(KEY,MAT IWH.REC,PERIOD,ERR.FLAG,ERRMSG,OPEN.FLAG)
+      IF ZERO.QTY.FLAG = 'N' THEN
+         IF IWH.ON.HAND + 0 = 0 THEN GOTO 111
+      END
+*T28247 ^
+*** PROCESS THE RECORD
+      GOSUB 1000
+111*
+   REPEAT
+*** PRINT THE TOTAL FOR LAST PRODUCT
+   BEGIN CASE
+      CASE TOT.FLAG # ""
+*         GOSUB 25000
+          GOSUB 24000
+         GOSUB 35000
+         GOSUB 45000
+      CASE GRAND.FLAG
+         GOSUB 35000
+         GOSUB 45000
+   END CASE
+***  END OF JOB
+   GOTO 999999
+*** SEPERATE THE KEY TO PRODUCT, WHSE
+200*
+   PROD.KEY = FIELD(KEY,"!",1)
+   PROD = PROD.KEY[4,99]
+   WHSE = FIELD(KEY,"!",2)
+   RETURN
+*** PROCESS THE RECORD
+1000*
+*T26556 v
+*  IF (R.S.DESC = "NEW" OR R.S.DESC = "USED") AND INV.PAP.TYPE = "REGULAR" THEN RETURN
+*T26556 ^
+   FLG = "Y"
+   BEGIN CASE
+      CASE PREV.WHSE # WHSE
+         BEGIN CASE
+            CASE TOT.FLAG # ""
+               TOT.FLAG = ""
+*               GOSUB 25000
+               GOSUB 24000
+               GOSUB 35000
+               GOSUB 45000
+            CASE GRAND.FLAG
+               GOSUB 35000
+               GOSUB 45000
+         END CASE
+         PREV.BAS = INV.BAS.WT
+         PREV.M.P.LINE = INV.M.LINE:" / ":INV.LINE
+         PREV.WHSE = WHSE
+      CASE PREV.M.P.LINE # INV.M.LINE:" / ":INV.LINE
+         BEGIN CASE
+            CASE TOT.FLAG # ""
+               TOT.FLAG = ""
+*               GOSUB 25000
+               GOSUB 24000
+               GOSUB 35000
+            CASE GRAND.FLAG
+               GOSUB 35000
+         END CASE
+         PREV.BAS = INV.BAS.WT
+         PREV.M.P.LINE = INV.M.LINE:" / ":INV.LINE
+      CASE INV.BAS.WT # PREV.BAS
+         IF TOT.FLAG # "" THEN
+            TOT.FLAG = ""
+*            GOSUB 25000
+            GOSUB 24000
+         END
+         PREV.BAS = INV.BAS.WT
+     CASE PREV.PROD # PROD
+   IF TOT.FLAG # "" THEN
+      TOT.FLAG = ""
+      GOSUB 24000
+   END
+   PREV.PROD = PROD
+   END CASE
+*COPY>ICSBP>INV.UM.CNV
+*     MAT INV.CNV.REC = ''
+*     BEGIN CASE
+*     CASE INV.UNIT<1,2> = 'SHT' AND INV.UNIT<1,3> = 'LBS'
+*        ICR.CNV = "MD0"
+*        ICR.DV1 = INV.M.WT; ICR.MT1 = 1; ICR.DV2 = 1
+*     CASE INV.UNIT<1,2> = 'PC' AND INV.UNIT<1,3> = 'MSI'
+*        ICR.CNV = "MD0"
+*        ICR.DV1 = INV.PAP.WIDTH/100; ICR.MT1 = 10; ICR.DV2 = 1
+*     CASE INV.UNIT<1,2> = 'FT' AND INV.UNIT<1,3> = 'MSI'
+*        ICR.CNV = "MD0"
+*        ICR.DV1 = INV.PAP.WIDTH/100; ICR.MT1 = 100; ICR.DV2 = 12
+*     CASE 1
+*        ICR.CNV = "MD2"
+*        ICR.DV1 = 10; ICR.MT1 = 1; ICR.DV2 = 1
+*     END CASE
+*T24869 v
+   IF INV.M.LINE = "FNGD" THEN
+      MATREAD FGS.REC FROM FNGD.STATS, KEY THEN
+         IWH.ON.ORDER = SUM(FGS.M.QTY)
+      END ELSE
+         IWH.ON.ORDER = 0
+      END
+   END
+*T24869 ^
+   IF IWH.ON.HAND > 0 THEN
+      IWH.ON.HAND=INT((((IWH.ON.HAND / ICR.DV1) * ICR.MT1) / ICR.DV2) + .5)
+   END ELSE
+      IWH.ON.HAND=INT((((IWH.ON.HAND / ICR.DV1) * ICR.MT1) / ICR.DV2) - .5)
+   END
+   IF IWH.ON.ORDER > 0 THEN
+      IWH.ON.ORDER=INT((((IWH.ON.ORDER / ICR.DV1) * ICR.MT1) / ICR.DV2) + .5)
+   END ELSE
+      IWH.ON.ORDER=INT((((IWH.ON.ORDER / ICR.DV1) * ICR.MT1) / ICR.DV2) - .5)
+   END
+   IF IWH.INPRCS > 0 THEN
+      IWH.INPRCS=INT((((IWH.INPRCS / ICR.DV1) * ICR.MT1) / ICR.DV2) + .5)
+   END ELSE
+      IWH.INPRCS=INT((((IWH.INPRCS / ICR.DV1) * ICR.MT1) / ICR.DV2) - .5)
+   END
+*************************
+   LOC = ""
+   PRINT.FLAG = ""
+   ON.HAND = ""
+   INPRCS = ""
+*T26556 v
+*  R.S.ID = ""
+   SERIAL.ID = ""
+  PO.NUMBERS = "" ; * T28102
+RECVD.DATES = "" ; * T28102
+*T26556 ^
+   ORIG.WT = ""
+   CURR.WT = ""
+   CURR.SH = ""
+   LA.USED = ""
+   X = 0
+   LOC.CNT = COUNT(IWH.LOC,VM) + (IWH.LOC # "")
+   FOR I = 1 TO LOC.CNT
+      MATREAD IWLO.REC FROM INV.WHSE.LOC , KEY:"!":IWH.LOC<1,I> ELSE
+         MAT IWLO.REC = ""
+         GOTO 1888
+      END
+*T28247 v
+      IF ZERO.QTY.FLAG = 'N' THEN
+         IF IWLO.LOC.ON.HAND LE 0 THEN GOTO 1888
+      END
+*T28247 ^
+      X = X + 1
+      LOC<1,X> = IWH.LOC<1,I>
+      ON.HAND<1,X> = IWLO.LOC.ON.HAND
+      INPRCS<1,X> = IWLO.LOC.INPRCS
+*T26556 v
+      SERIAL.CNT = DCOUNT(IWLO.SERIAL<1>,VM)
+      XXX = 1
+      FOR S = 1 TO SERIAL.CNT
+         ISTK.KEY = IWLO.SERIAL<1,S>
+*T28079 v IF ISTK.KEY[1,1] # 'R' THEN
+         IF NOT(INDEX(ISTK.KEY,"!",1)) THEN
+            MATREAD ISTK.REC FROM INV_SERIAL, CONO:ISTK.KEY ELSE
+               MAT ISTK.REC = ''
+            END
+        *C43393 v
+            IF ZERO.ON.HAND.FLAG = 'N' THEN
+               IF ISTK.CUR.QTY+0 = 0 THEN GOTO 1777
+            END
+*C43393 ^
+            SERIAL.ID<1,X,XXX> = IWLO.SERIAL<1,S>
+   *T28102 v
+            PO.NUMBERS<1,X,XXX> = ISTK.PO.NO
+            MATREAD INVR.REC FROM INV_RECEIPTS, CONO:ISTK.RECP THEN
+               RECVD.DATES<1,X,XXX> = INVR.ENT.DATE
+            END
+*T28102 ^
+            CURR.WT<1,X,XXX> = ISTK.CUR.QTY
+            LA.USED<1,X,XXX> = ISTK.LA.USED
+            XXX = XXX + 1
+         END
+      NEXT S
+*T26556 ^
+1888 NEXT I
+*********************************************************************
+*T26556 v
+*  IF X = 0 AND R.S.TYPE = "B" THEN
+*  I = 1
+   IF X > 0 THEN PRINT.FLAG = 1
+*  PRINT.FLAG = 1
+*  II = 1
+*  GOSUB 20000
+*  GOTO 1999
+*  END
+*T26556 ^
+   IF PRINT.FLAG = "" THEN GOTO 1999
+   FOR I = 1 TO X
+      II = 1
+      IF I = 1 THEN GOSUB 20000 ELSE GOSUB 21000
+*T26556 v
+*     R.S.CNT = COUNT(R.S.ID<1,I>,SVM) + (R.S.ID<1,I> # "")
+*     FOR II = 2 TO R.S.CNT
+      SERIAL.CNT = DCOUNT(SERIAL.ID<1,I>,SVM)
+      FOR II = 2 TO SERIAL.CNT
+*T26556 ^
+         GOSUB 22000
+      NEXT II
+   NEXT I
+1999*
+   IF FLG = "Y" AND PRINT.FLAG # "" THEN
+      LINE.COUNT = LINE.COUNT + 1
+      PRINT " ":INV.FULL.DESC "L#45"
+      FLG = "N"
+   END
+   RETURN
+*** ROUTINE TO PRINT THE RECORD
+20000*
+   IF NEW.PAGE THEN
+      GOSUB 80000
+      NEW.PAGE = 0
+   END
+   IF LINE.COUNT > 55 THEN GOSUB 80000
+   LINE.COUNT = LINE.COUNT + 1
+   H.LINE = PROD "L#15":SP1:OCONV(PREV.BAS, "MD2") "R#8":SP1
+   H.LINE = H.LINE :OCONV(INV.M.WT, "MD0") "R#6":SP1
+   H.LINE = H.LINE :INV.UNIT<1,2> "L#3":SP1
+   H.LINE = H.LINE : OCONV(IWH.ON.HAND, ICR.CNV) "R#10" :SP1
+   H.LINE = H.LINE : OCONV(IWH.ON.ORDER, ICR.CNV) "R#10":SP1
+   H.LINE = H.LINE : OCONV(IWH.INPRCS, ICR.CNV) "R#10" :SP1
+   H.LINE = H.LINE : LOC<1,I> "L#4" :SP1
+   IF NOT(NUM(ON.HAND<1,I>)) THEN ON.HAND<1,I> = 0
+   IF NOT(NUM(INPRCS<1,I>)) THEN INPRCS<1,I> = 0
+   IF ON.HAND<1,I> > 0 THEN
+      ON.HAND<1,I>=INT((((ON.HAND<1,I> / ICR.DV1) * ICR.MT1) / ICR.DV2) + .5)
+   END ELSE
+      ON.HAND<1,I>=INT((((ON.HAND<1,I> / ICR.DV1) * ICR.MT1) / ICR.DV2) - .5)
+   END
+   IF INPRCS<1,I> > 0 THEN
+      INPRCS<1,I>=INT((((INPRCS<1,I> / ICR.DV1) * ICR.MT1) / ICR.DV2) + .5)
+   END ELSE
+      INPRCS<1,I>=INT((((INPRCS<1,I> / ICR.DV1) * ICR.MT1) / ICR.DV2) - .5)
+   END
+   H.LINE = H.LINE : OCONV(ON.HAND<1,I>, ICR.CNV) "R#10" :SP1
+   H.LINE = H.LINE : OCONV(INPRCS<1,I>, ICR.CNV) "R#10" :SP1
+*T26556 v
+*  H.LINE = H.LINE : R.S.ID<1,I,II> "L#11" :SP1
+*T27705   H.LINE = H.LINE : SERIAL.ID<1,I,II> "L#11" :SP1
+   H.LINE = H.LINE : SERIAL.ID<1,I,II> "L#15" :SP1
+*T26556 ^
+   IF CURR.WT<1,I,II> > 0 THEN
+      CURR.WT<1,I,II>=INT((((CURR.WT<1,I,II> / ICR.DV1) * ICR.MT1) / ICR.DV2) + .5)
+   END ELSE
+      CURR.WT<1,I,II>=INT((((CURR.WT<1,I,II> / ICR.DV1) * ICR.MT1) / ICR.DV2) - .5)
+   END
+   H.LINE = H.LINE : OCONV(CURR.WT<1,I,II>, ICR.CNV) "R#10":SP1
+   H.LINE = H.LINE : OCONV(LA.USED<1,I,II>, 'D2-') "R#8"
+   PRINT H.LINE
+   TOT.FLAG = 1
+   GRAND.FLAG = 1
+   TOT.B.ON.HAND = TOT.B.ON.HAND + IWH.ON.HAND
+   TOT.B.ON.ORD = TOT.B.ON.ORD + IWH.ON.ORDER
+   TOT.B.INPRCS = TOT.B.INPRCS + IWH.INPRCS
+   RETURN
+*** ROUTINE TO PRINT THE LINE FOR SAME ON HAND
+21000*
+   IF LINE.COUNT > 55 THEN GOSUB 80000
+   LINE.COUNT = LINE.COUNT + 1
+   V.LINE = ''
+   IF FLG = "Y" THEN
+      V.LINE = " ":INV.FULL.DESC "L#45":SPACE(23)
+      FLG = "N"
+   END ELSE
+      V.LINE = SPACE(69)
+   END
+   V.LINE = V.LINE : LOC<1,I> "L#4" :SP1
+   IF NOT(NUM(ON.HAND<1,I>)) THEN ON.HAND<1,I> = 0
+   IF NOT(NUM(INPRCS<1,I>)) THEN INPRCS<1,I> = 0
+   IF ON.HAND<1,I> > 0 THEN
+      ON.HAND<1,I>=INT((((ON.HAND<1,I> / ICR.DV1) * ICR.MT1) / ICR.DV2) + .5)
+   END ELSE
+      ON.HAND<1,I>=INT((((ON.HAND<1,I> / ICR.DV1) * ICR.MT1) / ICR.DV2) - .5)
+   END
+   IF INPRCS<1,I> > 0 THEN
+      INPRCS<1,I>=INT((((INPRCS<1,I> / ICR.DV1) * ICR.MT1) / ICR.DV2) + .5)
+   END ELSE
+      INPRCS<1,I>=INT((((INPRCS<1,I> / ICR.DV1) * ICR.MT1) / ICR.DV2) - .5)
+   END
+   V.LINE = V.LINE : OCONV(ON.HAND<1,I>, ICR.CNV) "R#10" :SP1
+   V.LINE = V.LINE : OCONV(INPRCS<1,I>, ICR.CNV) "R#10" :SP1
+*T26556 v
+*  V.LINE = V.LINE : R.S.ID<1,I,II> "L#11" :SP1
+*T27705   V.LINE = V.LINE : SERIAL.ID<1,I,II> "L#11" :SP1
+   V.LINE = V.LINE : SERIAL.ID<1,I,II> "L#15" :SP1
+*T26556 ^
+   IF CURR.WT<1,I,II> > 0 THEN
+      CURR.WT<1,I,II>=INT((((CURR.WT<1,I,II> / ICR.DV1) * ICR.MT1) / ICR.DV2) + .5)
+   END ELSE
+      CURR.WT<1,I,II>=INT((((CURR.WT<1,I,II> / ICR.DV1) * ICR.MT1) / ICR.DV2) - .5)
+   END
+   V.LINE = V.LINE :OCONV(CURR.WT<1,I,II>, ICR.CNV) "R#10":SP1
+   V.LINE = V.LINE : OCONV(LA.USED<1,I,II>, 'D2-') "R#8"
+   PRINT V.LINE
+   RETURN
+*** ROUTINE TO PRINT THE LINE FOR SAME ON HAND
+22000*
+   IF LINE.COUNT > 55 THEN GOSUB 80000
+   LINE.COUNT = LINE.COUNT + 1
+   S.LINE = ''
+   IF FLG = "Y" THEN
+      S.LINE = S.LINE : " ":INV.FULL.DESC "L#45":SPACE(50)
+      FLG = "N"
+   END ELSE
+      S.LINE = S.LINE : SPACE(96)
+   END
+*T26556 v
+*  S.LINE = S.LINE : R.S.ID<1,I,II> "L#11" :SP1
+*T27705   S.LINE = S.LINE : SERIAL.ID<1,I,II> "L#11" :SP1
+   S.LINE = S.LINE : SERIAL.ID<1,I,II> "L#15" :SP1
+*T26556 ^
+   IF CURR.WT<1,I,II> > 0 THEN
+      CURR.WT<1,I,II>=INT((((CURR.WT<1,I,II> / ICR.DV1) * ICR.MT1) / ICR.DV2) + .5)
+   END ELSE
+      CURR.WT<1,I,II>=INT((((CURR.WT<1,I,II> / ICR.DV1) * ICR.MT1) / ICR.DV2) - .5)
+   END
+   S.LINE = S.LINE:OCONV(CURR.WT<1,I,II>, ICR.CNV) "R#10":SP1
+   S.LINE = S.LINE : OCONV(LA.USED<1,I,II>, 'D2-') "R#8"
+   PRINT S.LINE
+   RETURN
+*** PRINT TOTAL LINE FOR BAS.WGHT
+25000*
+   IF LINE.COUNT + 2 > 55 THEN GOSUB 80000
+   LINE.COUNT = LINE.COUNT + 2
+   T.LINE = ''
+   T.LINE = T.LINE : SPACE(36)
+   T.LINE = T.LINE :OCONV(TOT.B.ON.HAND,ICR.CNV) "R#10":SP1
+   T.LINE = T.LINE :OCONV(TOT.B.ON.ORD,ICR.CNV) "R#10":SP1
+   T.LINE = T.LINE :OCONV(TOT.B.INPRCS,ICR.CNV) "R#10"
+   PRINT DT.LINE
+   PRINT T.LINE
+   TOT.ON.HAND = TOT.ON.HAND + TOT.B.ON.HAND
+   TOT.ON.ORD = TOT.ON.ORD + TOT.B.ON.ORD
+   TOT.INPRCS = TOT.INPRCS + TOT.B.INPRCS
+   TOT.B.ON.HAND = 0 ; TOT.B.ON.ORD = 0 ; TOT.B.INPRCS = 0
+   RETURN
+*** PRINT TOTAL LINE FOR MLINE PLINE WHSE
+35000*
+   NEW.PAGE = 1
+   GRAND.FLAG = 0
+   T.LINE = ''
+   T.LINE = SPACE(36):OCONV(TOT.ON.HAND,ICR.CNV) "R#10":SP1
+   T.LINE = T.LINE:OCONV(TOT.ON.ORD,ICR.CNV) "R#10":SP1
+   T.LINE = T.LINE:OCONV(TOT.INPRCS,ICR.CNV) "R#10"
+   PRINT DT1.LINE
+   PRINT T.LINE
+   TOT.ON.HAND = 0 ; TOT.ON.ORD = 0 ; TOT.INPRCS = 0
+   RETURN
+*** ROUTINE TO PRINT HEADINGS
+80000*
+   PRINT CHAR(12):
+   PAGE.NO = PAGE.NO + 1
+   PRINT HD1:PAGE.NO
+   PRINT HD2
+   PRINT
+   H.LINE = ""
+*T26556 v
+*  H.LINE = H.LINE : "WAREHOUSE / SELECTION : ":PREV.WHSE:" / ":R.S.DESC
+   H.LINE = H.LINE : "WAREHOUSE / PERIOD : ":PREV.WHSE:" / ":PERIOD
+*T26556 ^
+   PRINT H.LINE
+   H.LINE = ""
+   H.LINE = H.LINE : "MLINE / PLINE : ":PREV.M.P.LINE
+   PRINT H.LINE
+   PRINT
+   PRINT H1.LINE
+   PRINT H2.LINE
+   PRINT H3.LINE
+   LINE.COUNT = 9
+   RETURN
+*** CALLS FOR SYSCOM
+91000*
+   ERR.TYPE = 1
+   CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+92000*
+   ERR.TYPE = 2
+   CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+93000*
+   ERR.TYPE = 3
+   CALL SYSCOM(MAT SYSCOM.REC)
+999999*
+   PRINTER OFF
+END

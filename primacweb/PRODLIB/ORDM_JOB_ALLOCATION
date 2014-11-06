@@ -1,0 +1,164 @@
+SUBROUTINE ORDM_JOB_ALLOCATION
+********************************************************************************
+*   Program name :- ORDM_JOB_ALLOCATION
+*   Created:- 1/9/2004
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+
+$INCLUDE OPS.CPYLIB ORDER
+$INCLUDE OPS.CPYLIB ORDER.DETAIL
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB INV.CNV
+$INCLUDE ICS.CPYLIB INV.WHSE
+
+$INCLUDE ICS.CPYLIB FNGD.STATS
+$INCLUDE ICS.CPYLIB FNGD.ORDER.STATS
+$INCLUDE ICS.CPYLIB FNGD.JOB.STATS
+$INCLUDE CPYLIB CHAR
+$INCLUDE PMC.CPYLIB CUSTOMER
+* Insert method code here
+
+  OPEN "","ORDER" TO ORDER ELSE
+    ERRMSG = "Cannot locate the ORDER file";GOTO 93000
+  END
+
+  OPEN "","ORDER.DETAIL" TO ORDER.DETAIL ELSE
+    ERRMSG = "Cannot locate the ORDER.DETAIL file";GOTO 93000
+  END
+
+  OPEN "","INVENTORY" TO INVENTORY ELSE
+    ERRMSG = "Cannot locate the INVENTORY file";GOTO 93000
+  END
+
+  OPEN "","CUSTOMER" TO CUSTOMER ELSE
+    ERRMSG = "Cannot locate the CUSTOMER file";GOTO 93000
+  END
+
+  OPEN "","FNGD.STATS" TO FNGD.STATS ELSE
+    ERRMSG = "Cannot locate the FNGD.STATS file";GOTO 93000
+  END
+
+  OPEN "","FNGD.JOB.STATS" TO FNGD.JOB.STATS ELSE
+    ERRMSG = "Cannot locate the FNGD.JOB.STATS file";GOTO 93000
+  END
+
+  OPEN "","FNGD.ORDER.STATS" TO FNGD.ORDER.STATS ELSE
+    ERRMSG = "Cannot locate the FNGD.ORDER.STATS file";GOTO 93000
+  END
+
+  STATUS = RBO.getProperty('', 'PMCProperty', PMCProperty)
+  CONO = PMCProperty<1,4>
+
+  DEFFUN CALC_STK_QTY(COST.QTY,MAT INV.CNV.REC,ROND,LN)
+  DEFFUN CALC_COST_QTY(STK.QTY,MAT INV.CNV.REC,ROND,LN)
+
+  STATUS = RBO.getProperty('', 'JA_JOB', OSD.JOB)
+  STATUS = RBO.getProperty('', 'OSD_PROD', OSD_PROD)
+  STATUS = RBO.getProperty('', 'OSD_WHSE', WHSE.NO)
+  STATUS = RBO.getProperty('', 'JA_ALLOCATE_QTY', OSD.JOB.QTY)
+
+  PDNO = OSD_PROD
+  WHNO = WHSE.NO
+  ORDNO = ORDER.ID
+
+  MATREAD INV.REC FROM INVENTORY,CONO : PDNO ELSE
+	INV.DESC = ""
+	INV.UNIT = ""
+  END
+ $INCLUDE ICSBP INV.UM.CNV
+
+  MATREAD FGS.REC FROM FNGD.STATS,CONO : OSD_PROD : "!" : WHSE.NO THEN
+INDX = 1
+  RCNT = DCOUNT(OSD.JOB<1,INDX>,SVM)
+     FOR R = 1 TO RCNT
+       LOCATE OSD.JOB<1,INDX,R> IN FGS.JOB<1>,1 SETTING JPTR THEN
+          AQTY<1,JPTR> = OSD.JOB.QTY<1,INDX,R>
+       END
+          *OSD.JOB.QTY<1,INDX,R> = 0
+     NEXT R	
+
+
+ LINES = DCOUNT(FGS.JOB,VM)
+ FOR I = 1 TO LINES
+  AQTY<1,I> = CALC_COST_QTY(AQTY<1,I>,MAT INV.CNV.REC,ROND,'')
+  AQTY<1,I> = ICONV(AQTY<1,I>,ICR.CNV)
+ NEXT
+
+ S.A.QTY = ""; S.CUST = ""; S.DATE = ""
+ LN = 0; IWH.ID = CONO:PDNO:"!":WHNO
+
+ ALOC.QTY = AQTY
+ 
+ FOR I = 1 TO LINES
+   MATREAD FJS.REC FROM FNGD.JOB.STATS, IWH.ID:"!":FGS.JOB<1,I> ELSE MAT FJS.REC = ""
+   S.CUST<I> = FJS.CUST
+   S.DATE<I> = FJS.DATE
+   LOCATE ORDNO IN FJS.ORD<1>,1 SETTING OLOC THEN
+     IF FJS.ORD.QTY<1,OLOC> > ALOC.QTY<1,I> THEN
+       S.A.QTY<I> = FJS.A.QTY - FJS.ORD.QTY<1,OLOC>
+     END ELSE
+       S.A.QTY<I> = FJS.A.QTY - ALOC.QTY<1,I>
+     END
+   END ELSE
+     S.A.QTY<I> = FJS.A.QTY
+   END
+   IF S.A.QTY<I> < 0 THEN S.A.QTY<I> = 0
+   S.A.QTY<I> = FJS.M.QTY - FJS.F.QTY - S.A.QTY<I>
+   IF S.A.QTY<I> < 0 THEN S.A.QTY<I> = 0
+   IF LN = 0 THEN
+     IF FJS.M.QTY - FJS.A.QTY > 0 THEN
+       LN = I
+     END
+   END
+
+
+   JA_JOB<1,I> = FGS.JOB<1,I>
+   JA_JOB_DATE<1,I> = OCONV(S.DATE<I>,"D2/")
+   JA_MANUFACT_QTY<1,I> = OCONV(INT(((FGS.M.QTY<1,I>/ICR.DV1) * ICR.MT1) / ICR.DV2 +.5),ICR.CNV1)
+   JA_ALLOCATE_QTY<1,I> = OCONV(INT(((FGS.A.QTY<1,I>/ICR.DV1) * ICR.MT1) / ICR.DV2 +.5),ICR.CNV1)
+   JA_AVAILABLE<1,I> = OCONV(INT((((S.A.QTY<I>)/ICR.DV1) * ICR.MT1) / ICR.DV2 +.5),ICR.CNV1)
+   JA_A_QTY<1,I> = OCONV(INT(((ALOC.QTY<1,I>/ICR.DV1) * ICR.MT1) / ICR.DV2 +.5),ICR.CNV)
+   JA_CUST<1,I> = S.CUST<I>
+
+   MATREAD CUST.REC FROM CUSTOMER, CONO:S.CUST<I> ELSE
+     MAT CUST.REC = ""; CUST.NAME = STR("?",30)
+   END
+
+   JA_CUST_NAME<1,I> = CUST.NAME
+ NEXT I
+  END 
+
+STATUS = RBO.setProperty('', 'JA_JOB', JA_JOB)
+STATUS = RBO.setProperty('', 'JA_JOB_DATE', JA_JOB_DATE)
+STATUS = RBO.setProperty('', 'JA_MANUFACT_QTY', JA_MANUFACT_QTY)
+
+STATUS = RBO.setProperty('', 'JA_ALLOCATE_QTY', JA_ALLOCATE_QTY)
+STATUS = RBO.setProperty('', 'JA_AVAILABLE', JA_AVAILABLE)
+STATUS = RBO.setProperty('', 'JA_A_QTY', JA_A_QTY)
+
+STATUS = RBO.setProperty('', 'JA_CUST', JA_CUST)
+STATUS = RBO.setProperty('', 'JA_CUST_NAME', JA_CUST_NAME)
+
+TOT.STR = OCONV(INT(((SUM(FGS.M.QTY)/ICR.DV1) * ICR.MT1) / ICR.DV2 +.5),ICR.CNV1)
+TOT.STR := VM : OCONV(INT(((SUM(FGS.A.QTY)/ICR.DV1) * ICR.MT1) / ICR.DV2 +.5),ICR.CNV1) 
+TOT.STR := VM : OCONV(INT(((SUM(S.A.QTY)/ICR.DV1) * ICR.MT1) / ICR.DV2 +.5),ICR.CNV1) 
+TOT.STR := VM : OCONV(INT(((SUM(ALOC.QTY)/ICR.DV1) * ICR.MT1) / ICR.DV2 +.5),ICR.CNV1) 
+
+STATUS = RBO.setProperty('', 'ServerStatus', TOT.STR)
+
+* End of method code
+RETURN
+93000*
+   STATUS = RBO.setProperty('', 'ServerStatus', '1')
+   STATUS = RBO.setProperty('', 'ServerMessage', ERRMSG)
+

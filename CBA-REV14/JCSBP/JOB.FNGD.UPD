@@ -1,0 +1,430 @@
+  SUBROUTINE JOB.FNGD.UPD(CONO,ORDNO,JOBNO,JB.BLD,EST.BLD,MAT COMP.REC)
+*COPY>CPYLIB>COM1
+*COPY>JCS.CPYLIB>COM.JCS.LINK
+*COPY>ICS.CPYLIB>COM.INV.MAIN  
+*COPY>ICS.CPYLIB>COM.INV.SERIAL
+*COPY>JCS.CPYLIB>COM.INV.STATS 
+*COPY>PMC.CPYLIB>COM.CUST
+*COPY>OPS.CPYLIB>COM.ORDER
+**********************************************
+* REVISION    - [08.1]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - JCSBP
+* PROGRAM     - JOB.FNGD.UPD
+* BY          - JULIANNE RIVERA, VERCOM SOFTWARE, INC
+* DATE        - 04/10/92
+* DESCRIPTION -
+*
+* TASK 18680
+* TASK 18606 KITTING
+* TASK 20166 DIVISIONALIZE
+* C25806  GAT 5/23/96 * FIXED JOB CATEGORY PROBLEM
+*T22332 rick 10/28/1997 * call to job.book.sub does not have estat
+*                         defined
+*T26334 epitka 12/10/2001 * REV12
+*T26334 epitka 12/19/2001 * REV12
+*T25740 epitka 03/13/2002 * REV12
+*T26421 thompson 03/13/2002 * UPGRADE ISSUES FROM PRODUCTION SCHEDULING
+*T26556 adelgado 05/21/2002 * Fix unassign var.
+*T26773 cmykleb 07/30/2002 * Pass the whole company record to the
+*                            JOB.MAINT.UPD pgm.
+**********************************************
+*COPY>PMC.CPYLIB>COMP.OPS
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>PMC.CPYLIB>SALESMAN
+*COPY>PMC.CPYLIB>COMPANY          ; * T26773
+*COPY>JCS.CPYLIB>JOB
+*COPY>JCS.CPYLIB>GANG.JOB
+*COPY>JES.CPYLIB>ESTIMATE
+*COPY>JES.CPYLIB>RECALC.PARAM
+*COPY>OPS.CPYLIB>ORDER
+*COPY>OPS.CPYLIB>JOB.FNGD.STATS
+*COPY>ICS.CPYLIB>FNGD.STATS
+*COPY>ICS.CPYLIB>FNGD.JOB.STATS
+*COPY>OPS.CPYLIB>ORDER.DETAIL.INQ
+*COPY>ICS.CPYLIB>CATEGORY
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>ICS.CPYLIB>INV.FNGD
+*COPY>ICS.CPYLIB>INV.JOB.STATS
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>PRICE.TABLE
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+  MAT SYSCOM.REC =  ""; SYS.TYPE = 2
+*
+  DIM EST.PAR(10)
+  EPRT = 0
+  PORT.NO="TTY"; CALL SYSVARS.SUB(PORT.NO)
+  EST.NUM = "*"
+  PROD.QTY = ""; PROD.PTR = ""
+  PTABLE = ""; PQTY = ""
+  ESTAT = ''   ;*T22332 Define estat for call to JOB.BOOK.SUB
+*
+100*-- The ORD.REC, CUST.REC & ODQ.REC should already be loaded --*
+*
+  PCNT = DCOUNT(ODQ.PROD,VM)
+  IF EST.BLD THEN
+    FOR P = 1 TO PCNT
+      IF ODQ.KIT<1,P> # "N" THEN 
+        GOTO 101
+      END
+      B.QTY = ODQ.G.QTY<1,P> - ODQ.R.QTY<1,P> - ODQ.A.QTY<1,P> - ODQ.S.QTY<1,P>
+      IF B.QTY > 0 THEN
+        TEMP.EST = ""
+        MATREAD IOF.REC FROM INV.FNGD, CONO:ODQ.PROD<1,P> THEN
+          IF IOF.ESTIMATE = "" THEN TEMP.EST = "*"
+        END ELSE
+          MAT IOF.REC = ""
+          TEMP.EST = "*"
+        END
+        ECNT = DCOUNT(IOF.ESTIMATE,VM)
+        FOR E = 1 TO ECNT WHILE TEMP.EST = ""
+          MATREAD EST.REC FROM ESTIMATE, CONO:IOF.ESTIMATE<1,E> THEN
+            IF EST.DIV[1,2] = ORD.DIV THEN
+              TEMP.EST = IOF.ESTIMATE<1,E>
+            END
+          END
+        NEXT E
+        IF TEMP.EST = "" THEN TEMP.EST = "*"
+        LOCATE TEMP.EST IN EST.NUM,1 SETTING EPTR ELSE
+          EST.NUM<EPTR> = TEMP.EST
+        END
+        PROD.QTY<EPTR> = PROD.QTY<EPTR> + (B.QTY / 1000)
+        PROD.PTR<EPTR,-1> = P
+        MATREAD INV.REC FROM INVENTORY, CONO:ODQ.PROD<1,P> ELSE
+          MAT INV.REC = ""
+        END
+        MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE ELSE
+          MAT CATG.REC = ""
+        END
+        IF CATG.SALE.TYPE = "PT" THEN
+          IWH.ID = ODQ.PROD<1,P>:"!":ODQ.WHSE<1,P>
+          MATREAD IWH.REC FROM INV.WHSE, CONO:IWH.ID THEN
+            LOCATE IWH.PRICE.GRP IN PTABLE<EPTR>,1 SETTING TPTR ELSE
+              PTABLE<EPTR,TPTR> = IWH.PRICE.GRP
+            END
+            PQTY<EPTR,TPTR> = PQTY<EPTR,TPTR> + (B.QTY / 1000)
+          END
+        END
+      END
+*
+101* -- NEXT P LOOP
+*
+    NEXT P
+  END
+  ECNT = DCOUNT(EST.NUM,AM)
+  FOR E = 1 TO ECNT
+    MAT JOB.REC = ""
+    SAVE.INV.JS.REC = ""
+    MAT EST.PAR = ""; MAT EST.REC = ""; OLD.EST = ""
+110*
+    IF EST.NUM<E> # "*" THEN
+      IF OPCO.PROD.OVR = "Y" THEN
+        TYP=13;X=0;Y=21;O.R="O";MAXL=10;DEFAULT=PROD.QTY<E>
+        PMSG="Enter the production quantity for estimate ":EST.NUM<E>:" : "
+        CALL EDIT.SUB
+        P_X  = 0 ; P_Y = 21 ; P_VALUE = "" ; P_OPT = "CL"
+        CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+        QUANITY = VALUE
+        IF VALUE # "END" THEN
+          BEGIN CASE
+            CASE (QUANITY # PROD.QTY<E>) AND CATG.SALE.TYPE = "EP"
+              TYP=8;X=0;Y=21;O.R="R";DEFAULT=""
+              PMSG="Unit price will not be in accordance with Order quantity. Continue (Y/N)"
+              CALL EDIT.SUB
+              P_X  = 0 ; P_Y = 21 ; P_VALUE = "" ; P_OPT = "CL"
+              CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+              IF VALUE # "Y" THEN GOTO 110
+            CASE (QUANITY # PROD.QTY<E>) AND DCOUNT(PROD.PTR<E>,VM) > 1
+              TYP=8;X=0;Y=21;O.R="R";DEFAULT=""
+              PMSG="There will be a mismatch between Estimate and Order quantity. Continue (Y/N)"
+              CALL EDIT.SUB
+              P_X  = 0 ; P_Y = 21 ; P_VALUE = "" ; P_OPT = "CL"
+              CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+              IF VALUE # "Y" THEN GOTO 110
+          END CASE
+        END
+        PROD.QTY<E> = QUANITY
+      END
+      MAT RECALC.REC = ""
+      RECALC.CONO = CONO
+      RECALC.ACTION = "D"
+      RECALC.OLD.KEY = EST.NUM<E>
+      RECALC.NEW.QTY = PROD.QTY<E>
+      RECALC.STD = "E"
+      RECALC.CUST = ORD.CUST
+      RECALC.CUST.PO = ORD.PO
+      RECALC.SALESMAN = ORD.SLSMN
+      RECALC.DATE.ENTERED = DATE()
+      RECALC.DATE.REQUIRED = ORD.DUE - OPCO.JOB.DUE
+      RECALC.ORDER = ORDNO
+      MATWRITE RECALC.REC ON CONTROL, "EST.RECALC.":PORT.NO
+      PERFORM "EST.RECALC"
+      LOOP
+        MATREAD RECALC.REC FROM CONTROL, "EST.RECALC.":PORT.NO ELSE NULL
+      UNTIL RECALC.ACTION = "X" DO
+        SLEEP 1
+      REPEAT
+      IF RECALC.ERRMSG # "" THEN
+        ERRMSG = RECALC.ERRMSG
+        GOSUB 91000
+      END ELSE
+        MATREADU EST.REC FROM ESTIMATE, CONO:RECALC.NEW.KEY THEN
+          TOTAL.TCOST = ''
+          TOTAL.VCOST = ''
+          TOTAL.FCOST = ''
+          TOTAL.TSALE = ''
+          TOTAL.VSALE = ''
+          TOTAL.FSALE = ''
+          DC = DCOUNT(EST.DEPT.COMP,VM)
+          FOR DP = 1 TO DC
+            TOTAL.TCOST=TOTAL.TCOST+EST.DEPT.COMP.COST<1,DP>
+            TOTAL.VCOST=TOTAL.VCOST+EST.DEPT.COMP.VCOST<1,DP>
+            TOTAL.FCOST=TOTAL.TCOST-TOTAL.VCOST
+            TOTAL.TSALE=TOTAL.TSALE+EST.DEPT.COMP.TSALE<1,DP>
+            TOTAL.VSALE=TOTAL.VSALE+EST.DEPT.COMP.VSALE<1,DP>
+            TOTAL.FSALE=TOTAL.TSALE-TOTAL.VSALE
+          NEXT DP
+          EST.PRT.PRICE.THOU = 'Y'
+          EST.PRT.PRICE.UOM = 'M'
+          EST.OM.PCT = '000000'
+          EST.FINAL.PRICE = TOTAL.TSALE
+          EST.PRICE.THOU=INT(TOTAL.VSALE/(EST.QTY/1000)+0.5)
+          EST.COST.THOU=INT(TOTAL.VCOST/(EST.QTY/1000)+0.5)
+          EST.OM.PRICE.M = INT(EST.FINAL.PRICE / EST.QTY * 1000)
+          EST.PRICE.UOM = EST.OM.PRICE.M
+          MATWRITE EST.REC ON ESTIMATE, CONO:RECALC.NEW.KEY
+          CALL JOB.BOOK.SUB(CONO,"1",JOBNO,OLD.EST,RECALC.NEW.KEY,MAT EST.PAR,ESTAT,MAT EST.REC,SAVE.INV.JS.REC,EST.MATL)
+          EST.MATL = 1
+          CALL JOB.BOOK.SUB(CONO,"2",JOBNO,OLD.EST,RECALC.NEW.KEY,MAT EST.PAR,ESTAT,MAT EST.REC,SAVE.INV.JS.REC,EST.MATL)
+          LOCATE RECALC.NEW.KEY IN ORD.ESTIMATE<1>,1 SETTING EPTR ELSE
+            ORD.ESTIMATE<1,EPTR> = RECALC.NEW.KEY
+          END
+*
+          PCNT = DCOUNT(PROD.PTR<E>,VM)
+          FOR PPTR = 1 TO PCNT
+            PRICE = ""
+            P = PROD.PTR<E,PPTR>
+            MATREAD INV.REC FROM INVENTORY, CONO:ODQ.PROD<1,P> ELSE
+              MAT INV.REC = ""
+            END
+            MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE ELSE
+              MAT CATG.REC = ""
+            END
+            BEGIN CASE
+              CASE CATG.SALE.TYPE = "EP"
+                BEGIN CASE
+                  CASE INV.UNIT<1,5> = "M"
+                    UNIT = 1
+                  CASE INV.UNIT<1,5> = "C"
+                    UNIT = 10
+                  CASE 1
+                    UNIT = 1000
+                END CASE
+                PRICE = INT(EST.OM.PRICE.M * 100 / UNIT + .5)
+              CASE CATG.SALE.TYPE = "PT"
+                IWH.ID = ODQ.PROD<1,P>:"!":ODQ.WHSE<1,P>
+                MATREAD IWH.REC FROM INV.WHSE, CONO:IWH.ID ELSE
+                  MAT IWH.REC = ""
+                END
+                MATREAD PGT.REC FROM PRICE.TABLE, CONO:IWH.PRICE.GRP ELSE
+                  MAT PGT.REC=''
+                END
+                LOCATE IWH.PRICE.GRP IN PTABLE<E>,1 SETTING TPTR THEN
+                  QCNT = DCOUNT(PGT.QTY,VM)
+                  FOR Q = 1 TO QCNT WHILE PRICE = ""
+                    IF PQTY<E,TPTR> <= PGT.QTY<1,Q>+0 THEN
+                      PRICE = PGT.PRICE<1,Q>
+                    END
+                  NEXT Q
+                END
+            END CASE
+            IF PRICE # "" THEN
+              SCNT = DCOUNT(ORD.SHIP.TO,VM)
+              FOR S = 1 TO SCNT
+                PTR = 1
+                LOOP
+                  LOCATE ODQ.PROD<1,P> IN ORD.DET.SUM(5,S)<1>,PTR SETTING PFND THEN
+                    IF (ODQ.WHSE<1,P> = ORD.DET.SUM(6,S)<1,PFND>) AND (ODQ.KIT<1,P> = ORD.DET.SUM(32,S)<1,PFND>) AND (ODQ.PROD.SEQ<1,P> = ORD.DET.SUM(34,S)<1,PFND>) THEN
+                      ORD.DET.SUM(14,S)<1,PFND> = PRICE
+                      PQTY = ORD.DET.SUM(13,S)<1,PFND> / 1000
+                      ORD.DET.SUM(25,S)<1,PFND> = INT(PRICE / 100 * PQTY / (INV.COST.WT / 100) + .5)
+                    END
+                    PTR = PFND + 1
+                  END ELSE
+                    PTR = 0
+                  END
+                WHILE PTR DO REPEAT
+              NEXT S
+            END
+          NEXT P
+          STATUS = "UL"; SHPNO = ""
+          CALL ORDER.LINE.UPD(CONO,ORDNO,SHPNO,STATUS)
+        END ELSE
+          RELEASE ESTIMATE, CONO:RECALC.NEW.KEY
+        END
+      END
+    END
+*
+    IF EST.NUM = "*" THEN
+      PCNT = DCOUNT(ODQ.PROD,VM)
+    END ELSE
+      PCNT = DCOUNT(PROD.PTR<E>,VM)
+    END
+    IF EST.NUM = "*" OR PCNT > 0 THEN
+      IF OPCO.ORD.JOB = "N" THEN
+        JOBNO = "N"
+      END ELSE
+        JOBNO = ORDNO
+        READ DUMMY FROM JOB, CONO:JOBNO THEN
+          LIMIT = 10
+          FOR I = 1 TO LIMIT
+            JOBNO = ORDNO:(I-1)
+            READ DUMMY FROM JOB, CONO:JOBNO ELSE LIMIT = 0
+          NEXT I
+          IF LIMIT THEN
+            ERRMSG = "All possible job numbers are already in use"
+            GOSUB 91000; GOTO 300
+          END
+        END
+      END
+    END ELSE
+      GOTO 300
+    END
+    JOB.COLORS = OPCO.JOB.CLR
+    IF JOB.CATG = "" THEN
+      JOB.CATG = OPCO.JOB.CAT
+    END
+    IF JOB.DIV = '' THEN JOB.DIV = ORD.DIV
+    JOB.CUST = ORD.CUST
+    JOB.CSR = ORD.CSR.CODE
+    JOB.SLSMN = ORD.SLSMN
+    JOB.TRACK.DATE<1,2> = DATE()
+    JOB.TRACK.DATE<1,4> = ORD.DUE - OPCO.JOB.DUE
+    JOB.TYPE = "R"
+    JOB.MASTER = JOBNO
+    JOB.SHIP.VIA = CUST.SHIP.VIA
+    JOB.CUST.PO = ORD.PO
+    JOB.ORDER = ORDNO
+    MATREADU JFS.REC FROM JOB.FNGD.STATS, CONO:JOBNO ELSE
+      MAT JFS.REC = ""
+    END
+    IF EST.NUM = "*" AND OPCO.ORD.JOB = "M" THEN GOTO 200
+    FOR PPTR = 1 TO PCNT
+      IF EST.NUM = "*" THEN
+        IF ODQ.KIT<1,PPTR> # "N" THEN
+          GOTO 199
+        END
+        P = PPTR
+      END ELSE
+        P = PROD.PTR<E,PPTR>
+      END
+      B.QTY = ODQ.O.QTY<1,P> - ODQ.R.QTY<1,P> - ODQ.A.QTY<1,P> - ODQ.S.QTY<1,P>
+      IF B.QTY > 0 THEN
+        PDNO = ODQ.PROD<1,P>; WHNO = ODQ.WHSE<1,P>
+        PTR = 1
+        LOOP
+          LOCATE PDNO IN JFS.PROD<1>,PTR SETTING PLOC THEN
+            IF WHNO = JFS.WHSE<1,PLOC> THEN PTR = 0
+          END ELSE
+            JFS.PROD<1,PLOC> = PDNO
+            JFS.WHSE<1,PLOC> = WHNO
+            JFS.DATE<1,PLOC> = JOB.TRACK.DATE<1,4>
+            GOSUB 7000
+            JFS.M.QTY<1,PLOC> = B.QTY
+            JFS.A.QTY<1,PLOC> = B.QTY
+            JFS.F.QTY<1,PLOC> = 0
+            JFS.S.QTY<1,PLOC> = 0
+            JFS.ORDER<1,PLOC> = ORDNO
+            JFS.ORD.QTY<1,PLOC> = B.QTY
+            PTR = 0
+          END
+        WHILE PTR DO
+          PTR = PLOC + 1
+        REPEAT
+      END
+*
+199*--
+*
+    NEXT P
+*
+    IF EST.NUM<E> = "*" THEN
+      CALL CALC.JOB.RESV(CONO,JOBNO,SAVE.INV.JS.REC)
+    END
+*
+    JOB.QTY<1,1> = SUM(JFS.M.QTY)/1000
+    JOB.QTY<1,2> = SUM(JFS.F.QTY)/1000
+    JOB.QTY<1,3> = SUM(JFS.S.QTY)/1000
+200*
+    IF JB.BLD THEN
+      OLD.CUST = ""; OLD.MASTER = ""; REQUEST = "F"
+      OJFS.PROD = ""; OJFS.WHSE = ""; OJFS.ORDER = ""; OJFS.ORD.QTY = ""
+      MAT GJOB.REC = ""; FSCAL.PER = ""; PREV.CRED.AUTH = "" 
+      EST.MATL = 0
+      CUR.JOB.BAL = SUM(CUST.JOB.BAL)
+*T26773 v
+*     CALL JOB.MAINT.UPD(CONO,ORDNO,JOBNUM,JOBNO,CO.JES,CO.POS,CO.OPS,OLD.CUST,OLD.MASTER,REQUEST,FSCAL.PER,OJFS.PROD,OJFS.WHSE,OJFS.ORDER,OJFS.ORD.QTY,SAVE.INV.JS.REC,CUR.JOB.BAL,PREV.CRED.AUTH,OLD.EST,EST.MATL,MAT EST.PAR,MAT EST.REC,MAT GJOB.REC,CO.PSS)
+      CALL JOB.MAINT.UPD(CONO,ORDNO,JOBNUM,JOBNO,OLD.CUST,OLD.MASTER,REQUEST,FSCAL.PER,OJFS.PROD,OJFS.WHSE,OJFS.ORDER,OJFS.ORD.QTY,SAVE.INV.JS.REC,CUR.JOB.BAL,PREV.CRED.AUTH,OLD.EST,EST.MATL,MAT EST.PAR,MAT EST.REC,MAT GJOB.REC,MAT COMP.REC)
+*T26773 ^
+    END
+300 *
+  NEXT E
+  GOTO 99999
+*
+*---- FIND UNIT PRICE
+7000*
+  MATREAD INV.REC FROM INVENTORY, CONO:PDNO ELSE
+    MAT INV.REC = ""
+  END
+  MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE ELSE
+    MAT CATG.REC = ""
+  END
+  MATREAD IWH.REC FROM INV.WHSE, CONO:PDNO:"!":WHNO ELSE
+    MAT IWH.REC = ""
+  END
+  BEGIN CASE
+    CASE CATG.SALE.TYPE = "CB"
+      JFS.U.PRICE<1,PLOC> = ODQ.PRICE<1,P>
+    CASE CATG.FNGD.TYPE = "ES"
+      JFS.U.PRICE<1,PLOC> = IWH.EST.SALE
+    CASE CATG.FNGD.TYPE = "SP"
+      BEGIN CASE
+        CASE CUST.PRICE.CODE = "2"
+          JFS.U.PRICE<1,PLOC> = IWH.SELL<1,2>
+        CASE CUST.PRICE.CODE = "3"
+          JFS.U.PRICE<1,PLOC> = IWH.SELL<1,3>
+        CASE CUST.PRICE.CODE = "4"
+          JFS.U.PRICE<1,PLOC> = IWH.SELL<1,4>
+        CASE 1
+          JFS.U.PRICE<1,PLOC> = IWH.SELL<1,1>
+      END CASE
+    CASE CATG.FNGD.TYPE = "SD"
+      JFS.U.PRICE<1,PLOC> = IWH.STD.COST
+    CASE CATG.FNGD.TYPE = "AV"
+      JFS.U.PRICE<1,PLOC> = IWH.AVG.COST
+    CASE CATG.FNGD.TYPE = "LP"
+      DIV.POS='';FISCAL.FLAG='JC';TRAN.PERIOD=''
+      ERR.FLG='' ; ERRMSG=''
+      IWH.ID = CONO:PDNO:"!":WHNO        ;* T26556
+      CALL GET.LAST.COST(IWH.ID,MAT IWH.REC,WAREHOUSE,CONTROL,ERR.FLG,ERRMSG,DIV.POS,FISCAL.FLAG,TRAN.PERIOD,LAST.PRICE)
+*      IF ERR.FLG='' THEN
+      JFS.U.PRICE<1,PLOC>=LAST.PRICE
+*      END ELSE
+*        GOSUB 91000
+*      END
+*         FI.CNT = DCOUNT(IWH.COST.FI,VM)
+*         JFS.U.PRICE<1,PLOC> = IWH.COST.FI<1,FI.CNT>
+    CASE 1
+      JFS.U.PRICE<1,PLOC> = 0
+  END CASE
+  RETURN
+91000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+  EPRT = 1
+99999 *
+  IF EPRT THEN PRINT @(0,23) : CL :
+  RETURN
+END

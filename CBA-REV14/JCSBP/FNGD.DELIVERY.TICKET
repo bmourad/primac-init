@@ -1,0 +1,278 @@
+*COPY>CPYLIB>COM1
+*************************************************************
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - JCSBP
+* PROGRAM     - FNGD.DELIVERY.TICKET
+* BY          - MARK TRAYWICK
+* DATE        - 2/23/89
+* DESCRIPTION - This program prints the delivery tickets using the
+* DAILY.FNGD.SHIP file.
+*ENDDOC
+*************************************************************
+*
+*---- FILE EQU
+*
+*COPY>JCS.CPYLIB>DAILY.FNGD.SHIP
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>CHAR
+*COPY>JCS.CPYLIB>JOB
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>CPYLIB>FILE.VARS
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>PMC.CPYLIB>SHIP.VIA
+*
+*---- SETUP FOR SYSTEM ERROR MESSAGES
+*
+      SYS.TYPE = 1
+      CALL SYSCOM(MAT SYSCOM.REC)
+*
+*---- OPEN FILES
+*
+      OPEN '','DAILY.FNGD.SHIP' TO DAILY.FNGD.SHIP ELSE ERRMSG = 'DAILY.FNGD.SHIP FILE MISSING';GOTO 93000
+      OPEN '','CUSTOMER' TO CUSTOMER ELSE ERRMSG = 'CUSTOMER FILE MISSING';GOTO 93000
+      OPEN '','SHIP.VIA' TO SHIP.VIA ELSE ERRMSG = 'SHIP.VIA FILE MISSING';GOTO 93000
+      OPEN '','JOB' TO JOB ELSE ERRMSG = 'JOB FILE MISSING';GOTO 93000
+      OPEN '','INVENTORY' TO INVENTORY ELSE ERRMSG = 'INVENTORY FILE MISSING';GOTO 93000
+*
+*---- PROC READ
+*
+      PROCREAD X ELSE ERRMSG = 'MUST RUN FROM PROC'; GOTO 93000
+      CONO = X<1>
+*
+*---- INITIALIZATION
+*
+      MAT DFGS.REC = ''
+      MAT JOB.REC = ''
+      MAT CUST.REC = ''
+      LINE.CNT=0
+      SP=" ";SP2="  ";SP3="   "
+      SP12=STR(" ",12);SP51=STR(" ",51);SP74=STR(" ",74)
+      UNKNOWN=STR("?",25)
+      ERRMSG = ''
+      DESC = ''
+      TOTAL = 0
+      QTY.FLG=0
+*
+*---- MAIN PROCESSING
+*
+      GOSUB 100
+      PRINTER ON
+10 *
+      READNEXT DFGS.KEY ELSE GOTO 15
+      MATREADU DFGS.REC FROM DAILY.FNGD.SHIP,DFGS.KEY ELSE GOTO 10
+      MATREAD JOB.REC FROM JOB,CONO:DFGS.JOB ELSE MAT JOB.REC=""
+      IF JOB.CUST # DFGS.SHIP.TO AND DFGS.SHIP.TO # "SAME" THEN
+         MATREAD CUST.REC FROM CUSTOMER,CONO:DFGS.SHIP.TO ELSE MAT CUST.REC=""
+         ATTENTION = CUST.ATTENTION
+         MATREAD CUST.REC FROM CUSTOMER,CONO:JOB.CUST ELSE MAT CUST.REC=""
+      END ELSE
+         MATREAD CUST.REC FROM CUSTOMER,CONO:JOB.CUST ELSE MAT CUST.REC=""
+         ATTENTION = CUST.ATTENTION
+      END
+      MATREAD SHIP.VIA.REC FROM SHIP.VIA,CONO:DFGS.SHIP.VIA ELSE SHPV.DESC=UNKNOWN
+      MATREAD INV.REC FROM INVENTORY, CONO:DFGS.PROD ELSE MAT INV.REC = ""
+      SHIP.DATE = OCONV(DFGS.SHIP.DATE,"D2/")
+      PO.NO=JOB.CUST.PO
+      REF.NO=DFGS.FREIGHT.NO
+      GOSUB 20
+      D.CNT = COUNT(DFGS.SHIP.DESC,VM) + (DFGS.SHIP.DESC # '')
+      DONE=0;QTY.USED=0;FIRST.TIME=1
+      FOR Z=1 TO D.CNT UNTIL DONE
+         FIRST.FIELD=FIELD(DFGS.SHIP.DESC<1,Z>," ",1)
+         IF NUM(FIRST.FIELD) THEN
+            QTY.USED=1
+            DONE=1
+         END
+      NEXT Z
+      FOR Z = 1 TO D.CNT
+         IF DFGS.SHIP.DESC<1,Z> # "" THEN
+            FIRST.FIELD=FIELD(DFGS.SHIP.DESC<1,Z>," ",1)
+            IF QTY.USED=0 THEN
+               IF FIRST.TIME=1 THEN
+                  FIRST.TIME=0
+                  QTY = SUM(DFGS.QTY)
+                  GOSUB 1000
+                  QTY = INT(((QTY / ICR.DV1) * ICR.MT1) / ICR.DV2)
+                  QTY = OCONV(QTY,ICR.CNV)
+               END ELSE
+                  QTY=""
+               END
+               DESC=DFGS.SHIP.DESC<1,Z>
+            END ELSE
+               IF NUM(FIRST.FIELD) THEN
+                  QTY=OCONV(FIRST.FIELD,"MD0Z,")
+                  FF=LEN(FIRST.FIELD) + 2
+                  DESC=DFGS.SHIP.DESC<1,Z>[FF,99]
+               END ELSE
+                  QTY=""
+                  DESC=DFGS.SHIP.DESC<1,Z>
+               END
+            END
+            IF LINE.CNT >= 9 THEN
+               PRINT
+               P.LINE = "";P.LINE = SPACE(70):"(CONTINUED)"
+               PRINT P.LINE
+               LINE.CNT = LINE.CNT + 2
+               D = 17 - LINE.CNT
+               FOR L = 1 TO D
+                  PRINT
+               NEXT L
+               GOSUB 20
+            END
+            GOSUB 30
+         END
+      NEXT Z
+      GOSUB 40
+      DFGS.PRT.DATE = DATE()
+      MATWRITE DFGS.REC ON DAILY.FNGD.SHIP,DFGS.KEY
+      TOTAL=0;QTY.FLG=0
+      GOTO 10
+15 *
+      GOTO 99999
+*
+*---- PRINT TOP OF FORM
+*
+20 *
+      LINE.CNT = 0
+      FOR P = 1 TO 6
+         PRINT
+      NEXT P
+      PRINT SP74:SHIP.DATE
+      FOR P = 1 TO 6
+         PRINT
+      NEXT P
+      PRINT SP12:DFGS.SHIP.NAME
+      PRINT SP12:DFGS.SHIP.ADDR1
+      PRINT SP12:DFGS.SHIP.ADDR2
+      IF DFGS.SHIP.ADDR3 = "" THEN
+         GOTO 21
+      END ELSE
+         PRINT SP12:DFGS.SHIP.ADDR3
+      END
+21 *
+      IF DFGS.SHIP.ADDR3 = "" THEN
+         PRINT SP12:DFGS.SHIP.CI.ST:SP:DFGS.SHIP.ZIP
+         PRINT SP12:"ATTN: ":ATTENTION "L#29"
+         PRINT
+      END ELSE
+         PRINT SP12:DFGS.SHIP.CI.ST:SP:DFGS.SHIP.ZIP
+         PRINT SP12:"ATTN: ":ATTENTION "L#29"
+      END
+      FOR P = 1 TO 3
+         PRINT
+      NEXT P
+      PRINT SP3:DFGS.JOB "L#8":SP2:PO.NO "L#10":SP:SHPV.DESC "L#25":SP:REF.NO "L#15"
+      PRINT;PRINT
+      RETURN
+*
+*---- PRINT INVOICE BODY
+*
+30 *
+      IF QTY = 0 THEN QTY = ""
+      PRINT SP:QTY "R#11":SP2:DESC "L#70"
+      LINE.CNT = LINE.CNT + 1
+      IF LINE.CNT >= 9 THEN
+         PRINT
+         P.LINE = "";P.LINE = SPACE(70):"(CONTINUED)"
+         PRINT P.LINE
+         LINE.CNT = LINE.CNT + 2
+         D = 17 - LINE.CNT
+         FOR L = 1 TO D
+            PRINT
+         NEXT L
+         GOSUB 20
+      END
+      RETURN
+*
+*---- PRINT TOTAL
+*
+40 *
+*     TOTAL=DSP.MARKUP + DSP.INV.AMT
+      TOTAL= DFGS.INV.AMT
+*     HANDLING=OCONV(DFGS.MARKUP,"MD2Z,")
+      HANDLING=""
+      SHIPPING=OCONV(DFGS.INV.AMT,"MD2Z,")
+      IF LINE.CNT + 2 >= 9 THEN
+         PRINT
+         P.LINE = "";P.LINE = SPACE(70):"(CONTINUED)"
+         PRINT P.LINE
+         LINE.CNT = LINE.CNT + 2
+         D = 17 - LINE.CNT
+         FOR L = 1 TO D
+            PRINT
+         NEXT L
+         GOSUB 20
+      END
+      G.TOTAL = OCONV(TOTAL,"MD2,$")
+      D = 14 - LINE.CNT
+      FOR L = 1 TO D
+         PRINT
+      NEXT L
+      T.LINE = ""
+      T.LINE = SP51:SHIPPING "R#10":SP:HANDLING "R#10":SP:G.TOTAL "R#11"
+      PRINT T.LINE
+      PRINT;PRINT
+      RETURN
+*
+*---- ALIGNMENT ROUTINE
+*
+100 *
+      CALL DELIVERY.TICKET.ALIGN
+      PRINT @(0,15):CL:
+      PRINT @(14,15):"DID ALIGNMENT PRINT CORRECTLY ? (Y/N):":
+      INPUT ANSWER:
+      IF ANSWER = "Y" THEN
+         PRINT @(0,15):CL:
+         PRINTER ON
+         GOTO 199
+      END ELSE
+         PRINT @(14,15):"RE-ALIGN PAPER AND HIT <RETURN> TO CONTINUE":
+         INPUT ANSW:
+         PRINTER ON
+         GOTO 100
+      END
+199 *
+      RETURN
+*
+*---- CONVERT SHEET/WT/QTY
+1000 *
+    MAT INV.CNV.REC = ''
+    BEGIN CASE
+    CASE INV.UNIT<1,2> = 'SHT' AND INV.UNIT<1,3> = 'LBS'
+       ICR.CNV = "MD0"
+       ICR.DV1 = INV.M.WT; ICR.MT1 = 1; ICR.DV2 = 1
+    CASE INV.UNIT<1,2> = 'PC' AND INV.UNIT<1,3> = 'MSI'
+       ICR.CNV = "MD0"
+       ICR.DV1 = INV.PAP.WIDTH/100; ICR.MT1 = 10; ICR.DV2 = 1
+    CASE INV.UNIT<1,2> = 'FT' AND INV.UNIT<1,3> = 'MSI'
+       ICR.CNV = "MD0"
+       ICR.DV1 = INV.PAP.WIDTH/100; ICR.MT1 = 100; ICR.DV2 = 12
+    CASE 1
+       ICR.CNV = "MD2,"
+       ICR.DV1 = 10; ICR.MT1 = 1; ICR.DV2 = 1
+    END CASE
+    RETURN
+*
+*---- CALLS FOR SYSCOM
+*
+91000 *
+      PRINTER OFF
+      ERR.TYPE = 1
+      CALL SYSCOM(MAT SYSCOM.REC)
+      PRINTER ON
+      RETURN
+92000 *
+      ERR.TYPE = 2
+      CALL SYSCOM(MAT SYSCOM.REC)
+      RETURN
+93000 *
+      PRINTER OFF
+      ERR.TYPE = 3
+      CALL SYSCOM(MAT SYSCOM.REC)
+99999 *
+      PRINTER OFF
+      PRINT @(-1)
+      END

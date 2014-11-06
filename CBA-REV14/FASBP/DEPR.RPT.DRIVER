@@ -1,0 +1,249 @@
+*COPY>CPYLIB>COM1
+*********************************************************************
+* REVISION    - [08.1]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM        - PRIMAC
+* SOURCE        - FASBP
+* PROGRAM       - DEPR.RPT.DRIVER
+* BY            - Ziad Yamout, VERCOM Software, Inc.
+* DATE          - 01/16/89
+* MODIFIED      - 11/07/95 TERRY NORTHCUTT TASK 19408 DIVISIONALIZATION
+*
+* DESCRIPTION   - This program maintains the selection criteria for
+*                 the DEPR.RPT program.
+*T21177 diane 01/23/1997 * REV11 UPG
+*T23278 lanny 05/03/2000 * Fix problem with Fiscal periods record due to Div Security Mods.
+*ENDDOC
+*********************************************************************
+*
+*--- Data structure libraries
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>FISCAL
+*COPY>PMC.CPYLIB>SALESDATES
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>CHAR
+*
+      DIM VREC(8) ; *---- TASK 19408
+      EQU R.TYPE TO VREC(1)
+      EQU PERIOD TO VREC(2)
+      EQU FST.YR TO VREC(3)
+      EQU FST.MN TO VREC(4)
+      EQU N.O.Y  TO VREC(5)
+      EQU N.O.P  TO VREC(6)
+      EQU R.DATE TO VREC(7)
+      EQU DIV.OWNER TO VREC(8) ; *---- TASK 19408
+*
+*--- Get PROC info
+      PROCREAD BUFFER ELSE
+         ERRMSG = "Must run from a PROC"
+         GOSUB 91000; GOTO 99999
+      END
+      BUFFER = "END"
+*
+*--- SYSCOM setup
+      SYS.TYPE = 1
+      CALL SYSCOM(MAT SYSCOM.REC)
+*
+*--- Open files
+      MAT FILE.VARS = ""
+      OPEN "","FAS.SCREENS" TO M.SCREENS ELSE ERRMSG = "FAS.SCREENS"; GOTO 93000 ; *---- TASK 19408
+      OPEN "","COMPANY" TO COMPANY ELSE ERRMSG = "COMPANY"; GOTO 93000
+      OPEN "","CONTROL" TO CONTROL ELSE ERRMSG = "CONTROL"; GOTO 93000
+*
+*--- Get company
+      CONO = ""
+      CALL GET.CONO(CONO,MAT COMP.REC)
+      IF CONO = "END" THEN GOTO 99999
+*
+*--- Get other items
+      MATREAD FISCAL.REC FROM CONTROL, CONO:"FAFISCAL" ELSE
+         ERRMSG = "Cannot locate control, ":CONO:"FAFISCAL"
+         GOSUB 91000; GOTO 99999
+      END
+      MATREAD SALESDATES.REC FROM CONTROL, CONO:"SALESDATES" ELSE
+         ERRMSG = "Cannot locate control, ":CONO:"SALESDATES"
+         GOSUB 91000; GOTO 99999
+      END
+      READ PERIOD.REC FROM CONTROL, CONO:"ACCT.PERIODS" ELSE
+         PERIOD.REC = ""; PERIOD.REC<1> = 12
+      END
+*T23278 v
+      READ SECUR.REC FROM CONTROL, CONO:"DIV.SECURITY" ELSE
+        SECUR.REC='N' ; SECUR.REC<2>='N'
+      END
+      IF SECUR.REC<1> = 'Y' AND SECUR.REC<2> = 'Y' THEN
+        READ DIVISIONS FROM CONTROL, CONO:"DIVISIONS" ELSE
+          ERRMSG='Cannot locate Control "DIVISIONS" record'
+          GOTO 93000
+        END
+      END ELSE DIVISIONS = ''
+*T23278 ^
+*
+*--- Initialize SCRN.EDIT
+      MAT EDIT.COM.DRIVER = ""
+      ECD.SCRN.CNT = 1
+      ECD.SCRN.NAME = "DEPR.RPT.DRIVER"
+      ECD.ACTION = 1; CALL SCRN.EDIT
+      ECD.SCRN.NO = 1
+      ECD.ACTION = 2; CALL SCRN.EDIT
+*
+*--- Get all data fields
+      MAT SCV.REC = ""
+      MAT VREC = ""
+      FOR OPTION = 1 TO 5 WHILE ECD.RET.VALUE # "END" ; *---- TASK 19408
+*T23278 v
+*        ON OPTION GOSUB 1000,2000,4000,5000,6000 ; *---- TASK 19408
+         ON OPTION GOSUB 6000,1000,2000,4000,5000 ; *---- TASK 19408
+*T23278 ^
+      NEXT OPTION
+      IF ECD.RET.VALUE = "END" THEN
+         ECD.ACTION = 99 ; CALL SCRN.EDIT
+         GOTO 99999
+      END
+*
+*--- Prompt line routine
+      MORE = 1
+      LOOP
+         ECD.NUM = 21; SCV.REC(ECD.NUM) = ""
+         ECD.ACTION = 4; CALL SCRN.EDIT
+         OPTION = ECD.RET.VALUE
+         BEGIN CASE
+            CASE OPTION = "END" OR OPTION = "E" OR OPTION = ""
+               MORE = 0
+            CASE OPTION = "F"
+               BUFFER = CONO
+               BUFFER<2> = CO.NAME
+               BUFFER<3> = R.TYPE
+               BUFFER<4> = PERIOD
+               BUFFER<5> = N.O.Y
+               BUFFER<6> = N.O.P
+               BUFFER<7> = OCONV(R.DATE,"D2/")
+               BUFFER<8> = DIV.OWNER ; *---- TASK 19408
+               MORE = 0
+            CASE NOT(NUM(OPTION))
+            CASE OPTION < 1 OR OPTION > 6 ; *---- TASK 19408
+            CASE 1
+               ON OPTION GOSUB 1000,2000,3000,4000,5000,6000 ; *---- TASK 19408
+         END CASE
+      WHILE MORE DO REPEAT
+      ECD.ACTION = 99 ; CALL SCRN.EDIT
+      GOTO 99999
+*
+*--- Report type
+1000*
+      ECD.NUM = 1; ECD.ACTION = 4; CALL SCRN.EDIT
+      IF ECD.RET.VALUE # "END" THEN
+         R.TYPE = ECD.RET.VALUE
+      END
+      RETURN
+*
+*--- Period selection
+2000*
+      ECD.DEFAULT = FR.CURR.PER<1,POS>    ;*T23278
+      ECD.NUM = 2; ECD.ACTION = 4; CALL SCRN.EDIT
+      IF ECD.RET.VALUE # "END" THEN
+         TEMP = PERIOD
+         PERIOD = ECD.RET.VALUE
+         FST.YR = PERIOD[1,4]
+         FST.MN = PERIOD[5,2]
+*        IF N.O.P > 13 - FST.MN THEN
+         IF N.O.P > PERIOD.REC<1>+1 - FST.MN THEN
+            GOSUB 3000
+            IF ECD.RET.VALUE = "END" THEN
+               PERIOD = TEMP
+               FST.YR = PERIOD[1,4]
+               FST.MN = PERIOD[5,2]
+               GOTO 2000
+            END
+         END
+      END
+      RETURN
+*
+*--- Number of periods in the last year
+3000*
+      IF N.O.Y > 0 THEN GOTO 3099
+      ECD.MAXV = PERIOD.REC<1> + 1 - FST.MN
+      ECD.NUM = 3; ECD.ACTION = 4; CALL SCRN.EDIT
+      BEGIN CASE
+         CASE ECD.RET.VALUE = "END"
+         CASE ECD.RET.VALUE = 0
+            TEMP = N.O.P
+            N.O.P = ECD.RET.VALUE
+            GOSUB 4000
+            IF ECD.RET.VALUE = "END" THEN
+               N.O.P = TEMP
+               GOTO 3000
+            END
+         CASE 1
+            N.O.P = ECD.RET.VALUE
+            N.O.Y = 0
+            ECD.NUM = 4; SCV.REC(ECD.NUM) = 0
+            ECD.ACTION = 5; CALL SCRN.EDIT
+      END CASE
+3099  RETURN
+*
+*---  Number of years
+4000*
+      IF N.O.P > 0 THEN GOTO 4099
+      ECD.NUM = 4; ECD.ACTION = 4; CALL SCRN.EDIT
+      BEGIN CASE
+         CASE ECD.RET.VALUE = "END"
+         CASE ECD.RET.VALUE = 0
+            TEMP = N.O.Y
+            N.O.Y = ECD.RET.VALUE
+            GOSUB 3000
+            IF ECD.RET.VALUE = "END" THEN
+               N.O.Y = TEMP
+               GOTO 4000
+            END
+         CASE 1
+            N.O.Y = ECD.RET.VALUE
+            N.O.P = 0
+            ECD.NUM = 3; SCV.REC(ECD.NUM) = 0
+            ECD.ACTION = 5; CALL SCRN.EDIT
+      END CASE
+4099  RETURN
+*
+*--- Report date
+5000*
+      ECD.DEFAULT = SALESDATES.REC(FST.MN+1)<1,1>
+      ECD.NUM = 5; ECD.ACTION = 4; CALL SCRN.EDIT
+      IF ECD.RET.VALUE # "END" THEN
+         R.DATE = ECD.RET.VALUE
+      END
+      RETURN
+*---- TASK 19408
+*
+*---- DIVISION
+6000*
+      ECD.NUM = 6; ECD.ACTION = 4; CALL SCRN.EDIT
+      IF ECD.RET.VALUE # "END" THEN
+*T23278 v
+         IF ECD.RET.VALUE # 'ALL' THEN
+          IF SECUR.REC<2> = 'Y' THEN
+           LOCATE ECD.RET.VALUE IN DIVISIONS<1>,1 SETTING POS ELSE
+            ERRMSG='Invalid Division'; GOSUB 91000; GOTO 6000
+           END
+          END ELSE POS = 1
+         END ELSE POS = 1
+*T23278 ^
+         DIV.OWNER = ECD.RET.VALUE
+      END
+      RETURN
+*---- TASK 19408
+*
+*--- Error message routine
+91000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+* 91000 PRINT @(0,23) : ERRMSG : CL :
+*       INPUT REPLY :
+*       PRINT @(0,23) : CL :
+*       RETURN
+*
+*--- Call SYSCOM
+93000 ERR.TYPE=3;CALL SYSCOM(MAT SYSCOM.REC)
+* 93000 ERRMSG = "Cannot locate ":ERRMSG:" file"
+*       ERR.TYPE = 3; CALL SYSCOM(MAT SYSCOM.REC)
+99999 PROCWRITE BUFFER
+   END

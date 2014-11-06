@@ -1,0 +1,136 @@
+SUBROUTINE TU.TO.123.GRAPH(HOSTFILENAME, FIELDLIST, SELECTION, OPTIONS, SHEETNAME, GRAPHTYPE, STATUS)
+*
+** SBClient Host 3GL API
+** Copyright (C) Ardent Software Inc. 1998
+** Copyright (C) UniData, Inc. 1996, 1997
+** Copyright (C) System Builder Corporation. 1995
+**
+**      This software is the proprietary property and contains
+**      trade secrets of Ardent Software, Inc. Any unauthorized use,
+**      disclosure or duplication is strictly prohibited.
+**      All rights reserved.
+*
+***************************************************************************
+*-* TU.TO.123(Pickfilename, Fieldlist, Selection, Options, Sheetname, Graphtype, View,
+*-* Status)
+*-*
+*-*       This function will download formatted pick data into a 123 spreadsheet
+*-* using a combination of file transfer and DDE and convert the data to a graph.
+*-*
+*-* [P] Pickfilename   The name of the pick file to be downloaded.
+*-*                    Can be AM delimited with seperate dictionary
+*-*                    specified. eg Data:AM:Dict .
+*-*
+*-* [P] Fieldlist      List of dictionary definitions of fields to be
+*-*                    downloaded.
+*-*
+*-* [P] Selection      Selection criteria to locate items to be downloaded.
+*-*
+*-* [P] Options        This is an array of characters to indicate minor details
+*-*                    of the transfer. Possible values INCLUDE TUBP :-
+*-*
+*-*                       C, Clear the destination before downloading
+*-*                       F, Use file transfer protocol to send data
+*-*                       M, Transfer field MASKS (spreadsheets only)
+*-*                       H, Transfer Heading
+*-*
+*-* [P] Sheetname      This the name of the PC file to store the data.
+*-*
+*-* [P] Graphtype      This is the graph type, 123 documentation should be
+*-*                    consulted for values.
+*-*
+*-* [R] Status         This is an indication of the success or failure of the
+*-*                    subroutine. A successful call will return with zero
+*-*                    Status and failure will return with a non-zero value.
+***************************************************************************
+*
+ INCLUDE TUBP SPECIAL.H
+ INCLUDE TUBP TU.API.H
+ INCLUDE TUBP HEADER.H
+ INCLUDE TUBP TU.ERRORCODES.H
+ INCLUDE TUBP USER.INCLUDE.H
+*
+DATAFILE = HOSTFILENAME<1>
+DICTFILE = HOSTFILENAME<2>
+IF DICTFILE = "" THEN DICTFILE = DATAFILE
+IF TU.TRACE THEN
+OPEN '','TUSTATE' TO TUSTATE THEN
+TRACE.O = 'TO.123.GRAPH':VM:HOSTFILENAME:VM:FIELDLIST:VM:SELECTION:VM:OPTIONS:VM:SHEETNAME:VM:GRAPHTYPE
+WRITEV TRACE.O ON TUSTATE,('TRACE.':PORTNO),-1
+END
+END
+*
+SIMPLENAME = SHEETNAME
+P = INDEX(SIMPLENAME, '.', 1)
+IF P THEN
+SIMPLENAME = SIMPLENAME[1, P - 1]
+END
+IF INDEX(SIMPLENAME, '\', 1) THEN
+SIMPLENAME = FIELD(SIMPLENAME, '\', COUNT(SIMPLENAME, '\') + 1)
+END
+SIMPLENAME = OCONV(SIMPLENAME, 'MCU')
+TIMEOUT = 60
+HANDLE = ''
+SAVEOPTIONS = OPTIONS
+OPTIONS = OPTIONS:'HM'; * force download of heading and masks
+P = INDEX(OPTIONS, 'P', 1)
+IF P THEN
+OPTIONS = OPTIONS[1, P - 1]:OPTIONS[P + 1, LEN(OPTIONS)]
+END
+P = INDEX(OPTIONS, 'R', 1)
+IF P THEN
+OPTIONS = OPTIONS[1, P - 1]:OPTIONS[P + 1, LEN(OPTIONS)]
+END
+CALL TU.TO.123(DATAFILE:AM:DICTFILE, FIELDLIST, SELECTION, OPTIONS, SHEETNAME, STATUS)
+IF STATUS THEN RETURN
+OPTIONS = SAVEOPTIONS
+OPEN '','TUXFER.DATA.':PORTNO TO TUXFER.DATA ELSE
+OPEN '','TUSTATE' TO TUSTATE ELSE STATUS = FTE.TUSTATE.OPEN.ERROR; RETURN
+WRITE (FTE.TUXFER.DATA.FILE.OPEN.ERROR:AM:'TUXFER.DATA.':PORTNO) ON TUSTATE,'ERROR.':PORTNO
+STATUS = FTE.TUXFER.DATA.FILE.OPEN.ERROR
+RETURN
+END
+READ HEADER FROM TUXFER.DATA,'XFER.HEADER' ELSE
+OPEN '','TUSTATE' TO TUSTATE ELSE STATUS = FTE.TUSTATE.OPEN.ERROR; RETURN
+WRITE (FTE.ITEM.READ.ERROR:AM:'123.CHART':AM:'TUXFER.DATA.':PORTNO:' XFER.HEADER') ON TUSTATE,'ERROR.':PORTNO
+STATUS = FTE.ITEM.READ.ERROR
+RETURN
+END
+FIELDCOUNT = COUNT(HEADER<HED.DICTNAME>, VM) + (HEADER<HED.DICTNAME> # '')
+CALL TU.DDE.CONNECT('123W', 'System', HANDLE, STATUS)
+IF STATUS THEN RETURN
+IF INDEX(OPTIONS, 'H', 1) THEN
+HEADER<HED.RECORDCOUNT> = HEADER<HED.RECORDCOUNT> + 1
+END
+IF INDEX(STATUS, "2", 1) THEN HEADER<HED.RECORDCOUNT> = HEADER<HED.RECORDCOUNT> + 1
+CALL TU.DDE.EXEC.MACRO(HANDLE, TIMEOUT, '[run({Select A1..':CHAR(64 + FIELDCOUNT):HEADER<HED.RECORDCOUNT>:'})]', STATUS)
+IF STATUS THEN GOTO 999
+!      CALL TU.DDE.EXEC.MACRO(HANDLE, TIMEOUT, '[run({Chart-New A1..':CHAR(64 + FIELDCOUNT):HEADER<HED.RECORDCOUNT>:'})]', STATUS)
+CALL TU.DDE.EXEC.MACRO(HANDLE, TIMEOUT, '[run({Chart-New A1..H20})]', STATUS)
+IF STATUS THEN GOTO 999
+CALL TU.DDE.EXEC.MACRO(HANDLE, TIMEOUT, '[run({Chart-Type "':GRAPHTYPE:'";0})]', STATUS)
+IF STATUS THEN GOTO 999
+CALL TU.DDE.EXEC.MACRO(HANDLE, TIMEOUT, '[run({Chart-Title ""})]', STATUS)
+IF STATUS THEN GOTO 999
+IF INDEX(OPTIONS, 'P', 1) THEN
+CALL TU.DDE.EXEC.MACRO(HANDLE, TIMEOUT, '[run({Print "CURRENT";1;9999;1;1})]', STATUS)
+IF STATUS THEN GOTO 999
+END
+IF INDEX(OPTIONS, 'R', 1) THEN
+CALL TU.DDE.EXEC.MACRO(HANDLE, TIMEOUT, '[run({Window-State "RESTORE"})]', STATUS)
+IF STATUS THEN GOTO 999
+END
+!      IF SIMPLENAME # '' THEN
+!         SHEETNAME = SHEETNAME:'.WK4'
+!         CALL TU.DDE.EXEC.MACRO(HANDLE, TIMEOUT, '[Save.As("':SHEETNAME:'",1)]', STATUS)
+!      END
+CALL TU.DDE.DISCONNECT(HANDLE, STATUS)
+RETURN
+*
+*-* error exits
+*
+999 *
+DUMMY = ''
+CALL TU.DDE.DISCONNECT(HANDLE, DUMMY)
+RETURN
+END

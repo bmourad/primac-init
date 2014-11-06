@@ -1,0 +1,250 @@
+************************************************************
+* REVISION    - [08.1]
+* SOURCE      - FASBP
+* PROGRAM     - MAN.DEPR.RPT
+* BY          - JIM PAROSKI C.B.A
+* DATE        - 04/23/89
+* MODIFIED    - 11/06/95 TERRY NORTHCUTT TASK 19408 DIVISIONALIZATION
+* DESCRIPTION - List Manual Depreciation Records
+*T23278 markt 01/13/1999 * Make fiscal data multi-value by division.
+*ENDDOC
+************************************************************
+*
+*--- COPY LIBRARY
+*
+*COPY>FAS.CPYLIB>ASSETS
+*COPY>FAS.CPYLIB>ASSETS.DEPR
+*COPY>FAS.CPYLIB>CLASS
+*COPY>FAS.CPYLIB>MAN.DEPR.CTL
+*COPY>PMC.CPYLIB>FISCAL
+*COPY>CPYLIB>CHAR
+*
+  DIM G.TOT(4)
+  DIM C.TOT(4)
+*
+*---- Get buffer
+*
+  PROCREAD BUFFER ELSE
+      ERRMSG = "Must be executed from a PROC"
+      GOTO 93000
+  END
+  CONO = BUFFER<1>
+  HD1 = BUFFER<2>
+  DIV.OWNER = BUFFER<3> ; *---- TASK 19408
+  HD0 = "DIVISION ":DIV.OWNER   ; *---- TASK 19408
+*
+*---- OPEN FILES
+*
+  OPEN "","CONTROL" TO CONTROL ELSE
+      ERRMSG = "Cannot locate the CONTROL file"; GOTO 93000
+  END
+  OPEN "","ASSETS" TO ASSETS ELSE
+      ERRMSG = "Cannot locate the ASSETS file"; GOTO 93000
+  END
+  OPEN "","ASSETS.DEPR" TO ASSETS.DEPR ELSE
+      ERRMSG = "Cannot locate the ASSETS.DEPR file"; GOTO 93000
+  END
+  OPEN "","CLASS" TO CLASS ELSE
+      ERRMSG = "Cannot locate the CLASS file"; GOTO 93000
+  END
+*
+*------ GET FISCAL PERIOD
+*
+  MATREAD FISCAL.REC FROM CONTROL, CONO : "FAFISCAL" ELSE
+      ERRMSG = "Cannot locate CONTROL, ":CONO:"FAFISCAL"
+      GOTO 93000
+  END
+*
+***** T23278 v
+*
+  READ SECURITY.REC FROM CONTROL, CONO:"DIV.SECURITY" ELSE
+      ERRMSG = "DIV.SECURITY RECORD NOT FOUND IN CONTROL FILE"
+      GOTO 93000
+  END
+  READ DIVISION.REC FROM CONTROL, CONO:"DIVISIONS" ELSE
+      ERRMSG = "CANNOT LOCATE CONTROL, DIVISIONS"
+      GOTO 93000
+  END
+  IF SECURITY.REC<1> = "Y" AND SECURITY.REC<2> = "Y" THEN
+      LOCATE DIV.OWNER IN DIVISION.REC<1>,1 SETTING POS ELSE 
+          ERRMSG = "Division ":DIV.OWNER:" not found on Control File DIVISIONS Record"
+          GOTO 93000
+      END
+  END ELSE
+      POS = 1
+  END
+*
+***** T23278 ^
+  CTL.ID = CONO:"MANUAL.DEPR"
+  MATREADU MAN.DEPR.CTL FROM CONTROL, CTL.ID ELSE
+      MAT MAN.DEPR.CTL = ""
+  END
+***** T23278 v
+*  IF MDC.CUR.PER # FR.CURR.PER THEN
+  IF MDC.CUR.PER<1,POS> # FR.CURR.PER<1,POS> THEN
+***** T23278 ^
+      RELEASE CONTROL, CTL.ID
+      ERRMSG = "Cannot print this report before updating the Manual Depreciation"
+      GOTO 93000
+  END
+  READNEXT AST.ID ELSE
+      RELEASE CONTROL, CTL.ID
+      ERRMSG = "No items selected"; GOTO 93000
+  END
+  MATREAD AST.REC FROM ASSETS, AST.ID ELSE
+      RELEASE CONTROL, CTL.ID
+      ERRMSG = "Cannot locate asset # ":AST.ID[4,99]; GOTO 93000
+  END
+  OLD.CLASS = AST.CLASS
+  PRT.CLASS = 0
+***** T23278 v
+*      CUR.YR = FR.CURR.PER[1,4]
+*      CUR.MN = FR.CURR.PER[5,2]
+  CUR.YR = FR.CURR.PER<1,POS>[1,4]
+  CUR.MN = FR.CURR.PER<1,POS>[5,2]
+***** T23278 ^
+*
+*---- INITIALIZIATION
+*
+  SPC = SPACE(1)
+***** T23278 v
+*      HD2 = SPACE(67):"FOR PERIOD " : FR.CURR.PER
+  HD2 = SPACE(67):"FOR PERIOD " : FR.CURR.PER<1,POS>
+***** T23278 ^
+  HD3 = "                                               <------------- ( B O O K ) ------------->  <-------------- ( T A X ) -------------->"
+  HD4 = "ASSET #          DESCRIPTION           CLASS    FST PR LST PR PERIOD DEPR.  TOTAL DEPR.    FST PR LST PR PERIOD DEPR.  TOTAL DEPR."
+  HD5 = "------- ------------------------------ ------   ------ ------ ------------ ------------    ------ ------ ------------ ------------"
+  SLINE = SPACE(62):"------------ ------------                  ------------ ------------"
+  PRINTER ON
+  HEADING HD1:" 'L'":HD0:" 'L'":HD2:" 'LL'":HD3:"'L'":HD4:"'L'":HD5 ; *---- TASK 19408
+*
+*---- MAIN PROCESSING
+*
+  MAT C.TOT = 0; MAT G.TOT = 0
+  GOSUB 1000
+  DATA = 1
+  LOOP
+      READNEXT AST.ID ELSE DATA = 0
+  WHILE DATA DO
+      MATREAD AST.REC FROM ASSETS, AST.ID THEN
+          IF OLD.CLASS # AST.CLASS THEN
+              IF PRT.CLASS THEN
+                  GOSUB 2000
+                  PRINT
+              END
+              OLD.CLASS = AST.CLASS
+          END
+          GOSUB 1000
+      END
+  REPEAT
+  IF PRT.CLASS THEN GOSUB 2000
+*
+*--- Grand totals
+  PRINT SLINE
+  PLINE = "GRAND TOTALS" : SPACE(50)
+  PLINE = PLINE : OCONV(G.TOT(1),"MD2,") "R#12" : SPC
+  PLINE = PLINE : OCONV(G.TOT(2),"MD2,") "R#12" : SPACE(18)
+  PLINE = PLINE : OCONV(G.TOT(3),"MD2,") "R#12" : SPC
+  PLINE = PLINE : OCONV(G.TOT(4),"MD2,") "R#12"
+  PRINT PLINE
+  PRINTER CLOSE
+  PRINTER OFF
+***** T23278 v
+*  MDC.PRT.FLG = "P"
+  MDC.PRT.FLG<1.POS> = "P"
+***** T23278 ^
+  MATWRITE MAN.DEPR.CTL ON CONTROL, CTL.ID
+  GOTO 99999
+*
+*---- Print Manual depreciation line
+1000*
+  PLINE = AST.ID[4,7]:SPC
+  PLINE = PLINE:AST.DESC "L#30":SPC:AST.CLASS "L#6":SPACE(3)
+  PRT.LN = 0
+  BEGIN CASE
+      CASE AST.DEPR.METHOD<1,1> # "M"
+          PLINE = PLINE:SPACE(43)
+***** T23278 v
+*      CASE AST.LST.PER<1,1> < FR.CURR.PER
+      CASE AST.LST.PER<1,1> < FR.CURR.PER<1,POS>
+***** T23278 ^
+          PLINE = PLINE:SPACE(43)
+***** T23278 v
+*      CASE AST.FST.PER<1,1> > FR.CURR.PER
+      CASE AST.FST.PER<1,1> > FR.CURR.PER<1,POS>
+***** T23278 ^
+          PLINE = PLINE:SPACE(43)
+      CASE 1
+          PRT.LN = 1; PRT.CLASS = 1
+          PLINE = PLINE:AST.FST.PER<1,1> "L#6":SPC:AST.LST.PER<1,1> "L#6":SPC
+          CUM.DEPR = AST.CUM.DEPR<1,1>
+          MATREAD ADR.REC FROM ASSETS.DEPR,AST.ID:"B":CUR.YR ELSE
+              MAT ADR.REC = ""
+          END
+          IF AST.CUR.DEPR.AMT<1,1> = ADR.REC(CUR.MN) THEN
+              PLINE = PLINE:OCONV(ADR.REC(CUR.MN),"MD2,") "R#12":SPC
+              C.TOT(1) = C.TOT(1) + ADR.REC(CUR.MN)
+              CUM.DEPR = CUM.DEPR + ADR.REC(CUR.MN)
+          END ELSE
+              PLINE = PLINE:"  Mismatch  " "L#12":SPC
+          END
+          PLINE = PLINE:OCONV(CUM.DEPR,"MD2,") "R#12":SPACE(4)
+          C.TOT(2) = C.TOT(2) + CUM.DEPR
+  END CASE
+  BEGIN CASE
+      CASE AST.DEPR.METHOD<1,2> # "M"
+          IF PRT.LN THEN PRINT PLINE
+***** T23278 v
+*      CASE AST.LST.PER<1,2> < FR.CURR.PER
+      CASE AST.LST.PER<1,2> < FR.CURR.PER<1,POS>
+***** T23278 ^
+          IF PRT.LN THEN PRINT PLINE
+***** T23278 v
+*      CASE AST.FST.PER<1,2> > FR.CURR.PER
+      CASE AST.FST.PER<1,2> > FR.CURR.PER<1,POS>
+***** T23278 ^
+          IF PRT.LN THEN PRINT PLINE
+      CASE 1
+          PRT.CLASS = 1
+          PLINE = PLINE:AST.FST.PER<1,2> "L#6":SPC:AST.LST.PER<1,2> "L#6":SPC
+          CUM.DEPR = AST.CUM.DEPR<1,2>
+          MATREAD ADR.REC FROM ASSETS.DEPR,AST.ID:"T":CUR.YR ELSE
+              MAT ADR.REC = ""
+          END
+          IF AST.CUR.DEPR.AMT<1,2> = ADR.REC(CUR.MN) THEN
+              PLINE = PLINE:OCONV(ADR.REC(CUR.MN),"MD2,") "R#12":SPC
+              C.TOT(3) = C.TOT(3) + ADR.REC(CUR.MN)
+              CUM.DEPR = CUM.DEPR + ADR.REC(CUR.MN)
+          END ELSE
+              PLINE = PLINE:"  Mismatch  " "L#12":SPC
+          END
+          PLINE = PLINE:OCONV(CUM.DEPR,"MD2,") "R#12"
+          C.TOT(4) = C.TOT(4) + CUM.DEPR
+          PRINT PLINE
+  END CASE
+  RETURN
+*
+*--- Class totals
+2000*
+  MATREAD CLS.REC FROM CLASS, CONO : OLD.CLASS ELSE
+      CLS.DESC = OLD.CLASS
+  END
+  PRINT SLINE
+  PLINE = "CLASS - ":CLS.DESC "L#30":" - TOTALS":SPACE(15)
+  PLINE = PLINE : OCONV(C.TOT(1),"MD2,") "R#12" : SPC
+  PLINE = PLINE : OCONV(C.TOT(2),"MD2,") "R#12" : SPACE(18)
+  PLINE = PLINE : OCONV(C.TOT(3),"MD2,") "R#12" : SPC
+  PLINE = PLINE : OCONV(C.TOT(4),"MD2,") "R#12"
+  PRINT PLINE
+  FOR I = 1 TO 4
+      G.TOT(I) = G.TOT(I) + C.TOT(I)
+  NEXT I
+  PRT.CLASS = 0; MAT C.TOT = 0
+5099 RETURN
+*
+*---- Error message routine
+*
+93000 PRINT @(0,23) : ERRMSG : CL :
+  INPUT REPLY,1 :
+  PRINT @(0,23) : CL :
+99999 END

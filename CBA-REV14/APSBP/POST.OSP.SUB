@@ -1,0 +1,484 @@
+   SUBROUTINE POST.OSP.SUB(CONO,DOS.ID,JOS.ID,POST.OSJ,POSTING.MON,POST.ERROR,PO.LINE.NO)
+*COPY>CPYLIB>COM1
+*COPY>JCS.CPYLIB>COM.JOB
+*COPY>JCS.CPYLIB>COM.DAILY.OSP
+*COPY>JCS.CPYLIB>COM.JOB.CUTOFF.NO
+*COPY>JCS.CPYLIB>COM.WIP.LEVEL
+*COPY>PMC.CPYLIB>COM.COMPANY
+*********************************************************************
+* REVISION    - [08.0][9.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - JCSBP
+* PROGRAM     - POST.OSP.SUB
+* BY          - JIHAD YAMOUT , C.B.A
+* DESCRIPTION - THIS SUBROUTINE IS USED IN VOUCHER POSTING (VOUCHER.POST)
+*
+*
+*T23086 renee 01/28/1998 * Automatically post the transaction to the job
+*                          when the voucher is posting.
+*T23080 cindy 02/23/1999 * upgrade to rev11 buttons
+*T25824 cmykleb 05/29/2002 * Post Non-PRIMAC outside PO's during voucher
+*                            posting.
+*T28171 thompson 06/29/2004 * Read cost cntr to get proper department
+*                             for accounting.
+*T28171 lross 07/06/2004 * Remove mod 6/29/04 and correct logic for JOB
+*                          not IN-PROCESS.
+*T28326 lross 11/10/2004 * Use same method for Fiscal period as in regular
+*                          OSP Posting.
+*T28678 lross 09/23/2005 * Negative rounding problem.
+*********************************************************************
+*
+*---- FILE EQUATE
+*
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>DIVISION
+*COPY>PMC.CPYLIB>DEPARTMENT
+*COPY>PMC.CPYLIB>COST.CNTR
+*COPY>JCS.CPYLIB>JOB
+*COPY>JCS.CPYLIB>JOB.CUTOFF.NO
+*COPY>JCS.CPYLIB>DAILY.OSP
+*COPY>JCS.CPYLIB>JOB.OSP
+*COPY>JCS.CPYLIB>OJOB.OSP
+*COPY>JCS.CPYLIB>CATEGORY.OSP
+*COPY>JCS.CPYLIB>WIP.LEVEL
+*COPY>JCS.CPYLIB>FOH.TABLE
+*COPY>POS.CPYLIB>ACCRUED.LIAB.HIST
+*COPY>JCS.CPYLIB>OPERATION
+*COPY>JCS.CPYLIB>JOB.STAT.CODE
+*COPY>JCS.CPYLIB>PROD.STATS
+*COPY>JCS.CPYLIB>COST.CNTR.WIP
+*COPY>JCS.CPYLIB>SPOIL.STATS
+*COPY>POS.CPYLIB>OUTSIDE.PO
+*COPY>ICS.CPYLIB>WAREHOUSE
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*
+*---- FILE OPEN
+*
+*
+*--- INIT
+*
+   GXR.CO = CONO
+   MAT JOS.REC = ''
+   MAT OJOS.REC = ''
+   MAT OPO.REC = ''
+   POST.ERROR = ''
+*
+*--- MAIN PROCESS
+*
+   IF CO.POS = "Y" THEN
+      MATREADU OPO.REC FROM OUTSIDE.PO , CONO:DOS.PO ELSE
+         MAT OPO.REC = ''
+      END
+      IF OPO.JOB.NO<1,PO.LINE.NO> # '' AND OPO.JOB.NO<1,PO.LINE.NO> # DOS.JOB THEN
+         BEGIN CASE
+            CASE OPO.JOB.NO<1,PO.LINE.NO> = "BLANKET"
+            CASE OPO.JOB.NO<1,PO.LINE.NO> = "CLOSED"
+               DOS.STATUS = "OUTSIDE PO (":DOS.PO:") JOB IS CLOSED."
+               GOTO 2899
+            CASE 1
+               DOS.STATUS = 'OUTSIDE PO (':DOS.PO:') BELONGS TO JOB # (':OPO.JOB.NO<1,PO.LINE.NO>:')'
+               GOTO 2899
+         END CASE
+      END
+   END
+*T28326 v
+  DIV.CODE = DOS.DIV
+  READ SECURITY.REC FROM CONTROL, CONO:"DIV.SECURITY" ELSE
+    DOS.STATUS = "DIV.SECURITY RECORD NOT FOUND IN CONTROL FILE"
+    GOTO 2899
+  END
+  READ DIVISION.REC FROM CONTROL, CONO:"DIVISIONS" ELSE
+    DOS.STATUS = "CANNOT LOCATE CONTROL, DIVISIONS"
+    GOTO 2899
+  END
+  IF SECURITY.REC<1> = "Y" THEN
+    IF SECURITY.REC<1> = "Y" AND SECURITY.REC<2> = "Y" THEN
+      IF DIV.CODE = "" THEN POS = 1 ; GOTO 80
+      IF DIV.CODE = 'ALL' OR DIV.CODE = '00' THEN
+        DOS.STATUS='DIV "ALL" OR "00" INVALID WHEN DIVISION-LEVEL CLOSING ENABLED'
+        GOTO 2899
+      END
+      LOCATE DIV.CODE IN DIVISION.REC<1> SETTING POS ELSE
+        DOS.STATUS = "MISSING DIV CODE ":DIV.CODE:" IN DIVISION.REC"
+        GOTO 2899
+      END
+    END ELSE
+      POS = 1
+    END
+  END ELSE
+    POS = 1
+  END
+80 *
+  READ FISCAL.PERIODS FROM CONTROL, CONO:"JCFISCAL" ELSE DOS.STATUS = "MISSING JCFISCAL CONTROL RECORD"; GOTO 2899
+  POSTING.MON = FISCAL.PERIODS<1,POS>
+IF POSTING.MON = "END" OR POSTING.MON = '' THEN
+   DOS.STATUS = 'Cannot determine FISCAL PERIOD'
+   GOTO 2899
+END
+*T28326 ^
+   MATREAD CAOS.REC FROM CATEGORY.OSP , CONO:DOS.PRD.LINE ELSE
+      DOS.STATUS = "CATEGORY.OSP # (":DOS.PRD.LINE:") NOT ON FILE"
+      GOTO 2899
+   END
+   BEGIN CASE
+      CASE JOB.STATUS<1,1> = 9
+         DOS.STATUS = 'JOB # ':DOS.JOB:' IS CANCELED'
+         GOTO 2899
+      CASE JOB.STATUS<1,1> = 7
+         DOS.STATUS = 'JOB # ':DOS.JOB:' IS READY TO PURGE'
+         GOTO 2899
+      CASE JOB.STATUS<1,1> = 8
+         DOS.STATUS = 'JOB # ':DOS.JOB:' IS PURGED'
+         GOTO 2899
+   END CASE
+   IF JOB.TYPE # "R" AND JOB.TYPE # DOS.TYPE THEN
+      DOS.STATUS = "JOB BELONGS TO A DIFFERENT TYPE"
+      GOTO 2899
+   END
+   IF JOB.DIV # DOS.DIV THEN
+      DOS.STATUS = "JOB BELONGS TO DIFFERENT DIVISION"
+      GOTO 2899
+   END
+   IF JOB.DEPT # DOS.DEPT[1,LEN(JOB.DEPT)] THEN
+      DOS.STATUS = "JOB BELONGS TO DIFFERENT DEPARTMENT"
+      GOTO 2899
+   END
+*T28171 v IF JOB.STATUS<1,1> > 1 OR JOB.TRACK.DATE<1,7> # "" OR JOB.TRACK.DATE<1,8> # "" THEN 
+   IF (JOB.STATUS<1,1> > 1 AND JOB.STATUS<1,1> # 5) OR JOB.TRACK.DATE<1,7> # "" OR JOB.TRACK.DATE<1,8> # "" THEN 
+      IF DOS.INIT = "" THEN
+         DOS.STATUS = 'JOB # ':DOS.JOB:' STATUS IS NOT BOOKED, NOR IN PROCESS AND INITIALS ARE MISSING'
+         GOTO 2899
+      END ELSE
+         MATREAD JSI.REC FROM JOB.STAT.CODE,CONO:DOS.INIT ELSE
+            DOS.STATUS = 'JOB # ':DOS.JOB:' STATUS IS NOT BOOKED, NOR IN PROCESS AND INITIALS ARE INVALID'
+            GOTO 2899
+         END
+      END
+   END
+   MATREAD DIV.REC FROM DIVISION, CONO : DOS.DIV ELSE
+      DOS.STATUS = 'DIV # ':DOS.DIV:' IS MISSING'
+      GOTO 2899
+   END
+   MATREAD DEPT.REC FROM DEPARTMENT, CONO : DOS.DEPT ELSE
+      DOS.STATUS = 'DEPT # ':DOS.DEPT:' IS MISSING'
+      GOTO 2899
+   END
+   LOCATE DOS.DEPT IN DIV.DEPT<1>,1 SETTING FND.DEPT ELSE
+      DOS.STATUS = 'DEPT # ':DOS.DEPT:' IS NOT UNDER DIV # ':DOS.DIV
+      GOTO 2899
+   END
+   MATREAD CCTR.REC FROM COST.CNTR, CONO : DOS.CCTR ELSE
+      DOS.STATUS = 'CCTR # ':DOS.CCTR:' IS MISSING'
+      GOTO 2899
+   END
+* T28171
+*IF @LOGNAME = 'thompson' THEN DEBUG
+*  DOS.DEPT = CCTR.DEPT
+*T28171
+   IF CCTR.DEPT # DOS.DEPT THEN
+      DOS.STATUS = 'INCORRECT DEPARTMENT FOR CCTR # ':DOS.CCTR
+      GOTO 2899
+   END
+   IF CCTR.TYPE='F' THEN
+      DOS.STATUS='CCTR # ':DOS.CCTR:' IS FROZEN'
+      GOTO 2899
+   END
+   LOCATE DOS.CCTR IN DEPT.CCTRS<1>,1 SETTING FND.CCTR ELSE
+      DOS.STATUS = 'CCTR # ':DOS.CCTR:' IS NOT UNDER DEPT # ':DOS.DEPT
+      GOTO 2899
+   END
+   MATREAD OPER.REC FROM OPERATION, CONO : DOS.OPER ELSE
+      DOS.STATUS = 'OPER # ':DOS.OPER:' IS MISSING'
+      GOTO 2899
+   END
+   LOCATE DOS.OPER IN CCTR.OPER<1>,1 SETTING FND.OPER ELSE
+      DOS.STATUS = 'OPER # ':DOS.OPER:' IS NOT IN CCTR # ':DOS.CCTR
+      GOTO 2899
+   END
+   IF DOS.WHSE # "" THEN
+      MATREAD WHSE.REC FROM WAREHOUSE, CONO : DOS.WHSE ELSE
+         DOS.STATUS = "CANNOT LOCATE WAREHOUSE - " : DOS.WHSE
+         GOTO 2899
+      END
+      IF DOS.LOC = "" THEN
+         DOS.STATUS = "MISSING LOCATION # FOR WAREHOUSE - " : DOS.WHSE
+         GOTO 2899
+      END
+   END
+2899*
+   BEGIN CASE
+      CASE DOS.STATUS # ""
+         RELEASE JOB, CONO:DOS.JOB
+         IF CO.POS = "Y" THEN
+            RELEASE OUTSIDE.PO ,CONO:DOS.PO
+         END
+         MATWRITE DOS.REC ON DAILY.OSP, DOS.ID
+         POST.ERROR = 1
+         GOTO 999999
+      CASE POST.OSJ = 0
+         JOS.SEQ = DOS.ID[4,99]
+         JOS.TYPE = DOS.TYPE
+         JOS.SPOIL.CODE = DOS.SPOIL.CODE
+         JOS.DIV = DOS.DIV
+         JOS.OPER = DOS.OPER
+         JOS.INV.DATE = DOS.INV.DATE
+         JOS.DUE.DATE = DOS.DUE.DATE
+         JOS.DATE = DOS.DATE
+         JOS.VEND = DOS.VEND
+         JOS.PO = DOS.PO
+         JOS.QTY = DOS.QTY
+         IF DOS.GRS.AMT < 0 THEN ROND = (-.5) ELSE ROND = (.5) ;*T28678
+*T28326v JOS.MON = POSTING.MON<1,JOS.DIV>
+         JOS.MON = POSTING.MON
+         JOS.INV = DOS.INV
+         JOS.DESC = DOS.DESC
+         JOS.REV.MON = DOS.REV.MON
+         JOS.REASON = DOS.REASON
+         JOS.WHSE = DOS.WHSE
+         JOS.LOC = DOS.LOC
+         JOS.GRS.AMT = DOS.GRS.AMT
+         JOS.DSC.AMT = DOS.DSC.AMT
+         IF DOS.TYPE = "S" OR DOS.TYPE = "N" THEN
+            JOS.SALE = 0
+         END ELSE
+            JOS.SALE = DOS.SALE.AMT
+         END
+         JOS.DCOST = JOS.GRS.AMT
+         PTR = 1
+         LOOP
+            LOCATE DOS.DEPT IN JOB.OS.DEPT<1>,PTR SETTING DFND ELSE
+               JOB.OS.DEPT<1,DFND> = DOS.DEPT
+               JOB.OS.CCTR<1,DFND> = DOS.CCTR
+               JOB.OS.PLINE<1,DFND> = DOS.PRD.LINE
+               PTR = 0
+            END
+            BEGIN CASE
+               CASE PTR = 0
+               CASE DOS.CCTR # JOB.OS.CCTR<1,DFND>
+                  PTR = DFND + 1
+               CASE DOS.PRD.LINE # JOB.OS.PLINE<1,DFND>
+                  PTR = DFND + 1
+               CASE 1
+                  PTR = 0
+            END CASE
+         WHILE PTR DO
+         REPEAT
+         BEGIN CASE
+            CASE WLR.OS.COST < 2
+               JOS.COST = JOS.DCOST
+            CASE NUM(CAOS.FOH.PCT)
+*T28678        JOS.COST = INT((JOS.DCOST*(1 + CAOS.FOH.PCT/10000)) + .5)
+               JOS.COST = INT((JOS.DCOST*(1 + CAOS.FOH.PCT/10000)) + ROND)
+            CASE 1
+               MATREAD FTR.REC FROM FOH.TABLE, CONO : CAOS.FOH.PCT ELSE
+                  MAT FTR.REC = ''
+               END
+               IF FTR.QTY = '' THEN
+                  FOH.PCT = 0
+               END ELSE
+                  TOT.DCOST = JOS.DCOST
+                  TOT.COST = 0
+                  K = 1
+                  LOOP
+                     LOCATE DOS.PRD.LINE IN JOB.OS.PLINE<1>,K SETTING CPTR ELSE CPTR = 0
+                  WHILE CPTR DO
+                     TOT.DCOST = TOT.DCOST + JOB.OS.DCOST<1,CPTR>
+                     TOT.COST = TOT.COST + JOB.OS.COST<1,CPTR>
+                     K = CPTR + 1
+                  REPEAT
+                  FTR.CNT = COUNT(FTR.QTY,VM) + 1
+                  IF TOT.DCOST >= FTR.QTY<1,FTR.CNT> THEN
+                     FOH.PCT = FTR.PCT<1,FTR.CNT>
+                  END ELSE
+                     FOH.PCT = 0
+                     FOR FTR = 1 TO FTR.CNT WHILE FOH.PCT = 0
+                        IF TOT.DCOST <= FTR.QTY<1,FTR> THEN
+                           FOH.PCT = FTR.PCT<1,FTR>
+                        END
+                     NEXT FTR
+                  END
+               END
+*T28678        JOS.COST = INT((TOT.DCOST * (1 + FOH.PCT/10000)) + .5) - TOT.COST
+               JOS.COST = INT((TOT.DCOST * (1 + FOH.PCT/10000)) + ROND) - TOT.COST
+         END CASE
+         JOB.OS.QTY<1,DFND> = JOB.OS.QTY<1,DFND> + JOS.QTY
+         JOB.OS.DCOST<1,DFND> = JOB.OS.DCOST<1,DFND> + JOS.DCOST
+         JOB.OS.COST<1,DFND> = JOB.OS.COST<1,DFND> + JOS.COST
+         JOS.WIP = ""
+         BEGIN CASE
+            CASE WLR.SPL = "N" AND JOS.TYPE = "S"
+            CASE WLR.NON.CHG = "N" AND JOS.TYPE = "N"
+            CASE WLR.OS.WIP > 1
+               JOS.WIP<1,1,1> = JOS.DCOST
+               JOS.WIP<1,1,2> = JOS.COST - JOS.DCOST
+            CASE WLR.OS.WIP > 0
+               JOS.WIP<1,1,1> = JOS.DCOST
+         END CASE
+         OS.ID = CONO:DOS.JOB:"!":DOS.DEPT:"!":DOS.CCTR:"!"
+         LOOP
+            JOB.OS.SEQ<1,DFND> = JOB.OS.SEQ<1,DFND> + 1
+            JOS.ID = OS.ID:DOS.PRD.LINE:"!":JOB.OS.SEQ<1,DFND>
+            READ DUMMY FROM JOB.OSP, JOS.ID ELSE DUMMY = ""
+         WHILE DUMMY # "" DO REPEAT
+         IF JOS.DATE > JOB.OS.DATE<1,DFND,1> THEN
+            JOB.OS.DATE<1,DFND,1> = JOS.DATE
+         END
+         IF JOS.SEQ > JOB.OS.DATE<1,DFND,2> THEN
+            JOB.OS.VEND<1,DFND> = JOS.VEND
+            JOB.OS.DATE<1,DFND,2> = JOS.SEQ
+            JOB.OS.DATE<1,DFND,3> = JOB.OS.SEQ<1,DFND>
+         END
+         JOB.OS.SALE<1,DFND> = JOB.OS.SALE<1,DFND> + JOS.SALE
+         IF JOS.WIP # "" THEN
+            CCW.ID = CONO : JOS.DIV : DOS.DEPT : "!" : DOS.CCTR : JOS.MON
+            MATREADU CCW.REC FROM COST.CNTR.WIP, CCW.ID ELSE MAT CCW.REC = ""
+            JOB.WIP<1,1> = JOB.WIP<1,1> + 2
+            JOB.OS.WIP<1,1> = JOB.OS.WIP<1,1> + 2
+            FOR W = 1 TO WLR.OS.WIP
+               JOB.WIP<1,2,W> = JOB.WIP<1,2,W> + JOS.WIP<1,1,W>
+               JOB.OS.WIP<1,2,W> = JOB.OS.WIP<1,2,W> + JOS.WIP<1,1,W>
+               CCW.OS.I<1,W> = CCW.OS.I<1,W> + JOS.WIP<1,1,W>
+            NEXT W
+            MATWRITE CCW.REC ON COST.CNTR.WIP, CCW.ID
+         END
+         IF JOS.MON < JOB.OS.WIP<1,4> OR JOB.OS.WIP<1,4> = "" THEN
+            JOB.OS.WIP<1,4> = JOS.MON
+            IF JOS.MON < JOB.WIP<1,4> OR JOB.WIP<1,4> = "" THEN
+               JOB.WIP<1,4> = JOS.MON
+            END
+         END
+         IF JOS.MON > JOB.OS.WIP<1,5> THEN
+            JOB.OS.WIP<1,5> = JOS.MON
+            IF JOS.MON > JOB.WIP<1,5> THEN
+               JOB.WIP<1,5> = JOS.MON
+            END
+         END
+         JOB.OS.VEND<1,DFND> = JOS.VEND
+         PRDS.ID = CONO:"*":JOS.DIV:"*":DOS.DEPT:"*":DOS.CCTR:"*":JOS.MON:"*1*A"
+         MATREADU PRDS.REC FROM PROD.STATS, PRDS.ID ELSE MAT PRDS.REC = ""
+         BEGIN CASE
+            CASE JOS.TYPE = 'N'
+               PTR = 2
+               PRDS.OSP.NC.DCOST = PRDS.OSP.NC.DCOST + JOS.DCOST
+               PRDS.OSP.NC.COST = PRDS.OSP.NC.COST + JOS.COST
+            CASE JOS.TYPE = 'C'
+               PTR = 3
+               PRDS.OSP.DCOST = PRDS.OSP.DCOST + JOS.DCOST
+               PRDS.OSP.COST = PRDS.OSP.COST + JOS.COST
+            CASE JOS.TYPE = 'S'
+               PTR = 4
+               PRDS.OSP.SP.DCOST = PRDS.OSP.SP.DCOST + JOS.DCOST
+               PRDS.OSP.SP.COST = PRDS.OSP.SP.COST + JOS.COST
+               IF JOS.SPOIL.CODE # "" THEN
+                  SSR.ID=CONO:JOS.DIV:DOS.DEPT:"!":DOS.CCTR:JOS.MON:JOS.SPOIL.CODE
+                  MATREADU SSR.REC FROM SPOIL.STATS, SSR.ID ELSE MAT SSR.REC = ""
+                  SSR.OS<1,1> = SSR.OS<1,1> + JOS.DCOST
+                  IF JOS.DCOST <> JOS.COST THEN
+                     SSR.OS<1,2> = SSR.OS<1,2> + JOS.COST - JOS.DCOST
+                  END
+                  MATWRITE SSR.REC ON SPOIL.STATS, SSR.ID
+               END
+            CASE 1
+               PTR = 1
+               JOS.TYPE = "R"
+               PRDS.OSP.DCOST = PRDS.OSP.DCOST + JOS.DCOST
+               PRDS.OSP.COST = PRDS.OSP.COST + JOS.COST
+         END CASE
+         MATWRITE PRDS.REC ON PROD.STATS, PRDS.ID
+         JOB.OS.TCOST<1,DFND,PTR> = JOB.OS.TCOST<1,DFND,PTR> + JOS.COST
+         IF JOB.STATUS<1,1> # 1 THEN
+            JOB.STATUS = INSERT(JOB.STATUS,1,1,0,"1")
+            JOB.STAT.DATE = INSERT(JOB.STAT.DATE,1,1,0,DATE())
+         END
+         JOB.TOT.SALE = JOB.TOT.SALE + JOS.SALE
+         JOB.TOT.COST = JOB.TOT.COST + JOS.COST
+         JOB.TOT.DCOST = JOB.TOT.DCOST + JOS.DCOST
+         IF CO.POS = "Y" THEN
+            PTR = 1
+            CFND = 0
+            LOOP
+            UNTIL CFND > 0 OR OPO.JOB.NO<1,PTR> = '' DO
+               LOCATE DOS.JOB IN OPO.JOB.NO<1>,PTR SETTING CFND ELSE CFND = 0
+               IF CFND # 0 THEN
+                  IF DOS.PRD.LINE = OPO.PROD.LINE<1,CFND> THEN CFND= CFND ELSE CFND = 0
+               END
+               PTR = PTR + 1
+            REPEAT
+            IF CFND # 0 THEN
+               OPO.QTY.RECVD<1,CFND> = OPO.QTY.RECVD<1,CFND> + DOS.QTY
+               OPO.TOT.OPEN<1,CFND> = OPO.TOT.OPEN<1,CFND> - DOS.QTY
+               IF OPO.TOT.OPEN<1,CFND> < 0 THEN OPO.TOT.OPEN<1,CFND> = 0
+               OPO.DATE.RECVD<1,CFND> = DOS.DATE
+               OPO.INV.NO<1,CFND> = DOS.INV
+               OPO.AMT.RECVD<1,CFND> = OPO.AMT.RECVD<1,CFND> + DOS.GRS.AMT
+               IF OPO.EST.COST<1,CFND> # OPO.AMT.RECVD<1,CFND> THEN
+                  OPO.STATUS = 1
+               END
+               IF OPO.JOB.TRAN = "" THEN
+                  OPO.JOB.TRAN<1,1> = JOS.SEQ
+               END ELSE
+                  TR.CNT = COUNT(OPO.JOB.TRAN,VM) + (OPO.JOB.TRAN # "") + 1
+                  OPO.JOB.TRAN<1,TR.CNT> = JOS.SEQ
+               END
+               MATWRITE OPO.REC ON OUTSIDE.PO , CONO:DOS.PO
+* Upate Accrued Liability History
+               IF OPO.ACCRUE = "Y" THEN
+                  READU ALH.CT FROM CONTROL,CONO:"ALHCOUNTER" ELSE ALH.CT=0
+                  ALH.CT = ALH.CT + 1
+                  IF ALH.CT > 999999 THEN ALH.CT = 1
+                  WRITE ALH.CT ON CONTROL,CONO:"ALHCOUNTER"
+                  MAT ALH.REC = ""
+                  ALH.ID = CONO:STR("0",6-LEN(ALH.CT)):ALH.CT
+                  ALH.DATE = DATE()
+                  ALH.REF = "O*":JOS.PO:"*":DOS.JOB
+                  ALH.SRC = "OR"
+                  ALH.MON = JOS.MON
+                  ALH.AMT = 0 - DOS.GRS.AMT
+                  ALH.ACCT = CAOS.ACCRU.LIAB
+                  ALH.DV.DP.CC = DOS.DIV:DOS.DEPT:DOS.CCTR
+                  MATWRITE ALH.REC ON ACCRUED.LIAB.HIST,ALH.ID
+               END
+            END ELSE
+               RELEASE OUTSIDE.PO, CONO:DOS.PO
+            END
+         END
+         MATWRITE JOB.REC ON JOB, CONO : DOS.JOB
+         MATWRITE JOS.REC ON JOB.OSP, JOS.ID
+      CASE 1
+         MAT OJOS.REC = ""
+         OJOS.JOB = DOS.JOB
+         OJOS.TYPE = DOS.TYPE
+         OJOS.SPOIL.CODE = DOS.SPOIL.CODE
+         OJOS.DIV = DOS.DIV
+         OJOS.DEPT = DOS.DEPT
+         OJOS.CCTR = DOS.CCTR
+         OJOS.OPER = DOS.OPER
+         OJOS.PRD.LINE = DOS.PRD.LINE
+         OJOS.INV.DATE = DOS.INV.DATE
+         OJOS.DUE.DATE = DOS.DUE.DATE
+         OJOS.DATE = DOS.DATE
+         OJOS.VEND = DOS.VEND
+         OJOS.PO = DOS.PO
+         OJOS.QTY = DOS.QTY
+         OJOS.MON = POSTING.MON
+         OJOS.INV = DOS.INV
+         OJOS.DESC = DOS.DESC
+         OJOS.WHSE = DOS.WHSE
+         OJOS.LOC = DOS.LOC
+         OJOS.GRS.AMT = DOS.GRS.AMT
+         OJOS.DSC.AMT = DOS.DSC.AMT
+         IF DOS.TYPE = "S" OR DOS.TYPE = "N" THEN
+            OJOS.SALE = 0
+         END ELSE
+            OJOS.SALE = DOS.SALE.AMT
+         END
+         OJOS.COST = OJOS.GRS.AMT
+         MATWRITE OJOS.REC ON OJOB.OSP , DOS.ID
+   END CASE
+*
+999999*
+*
+   RETURN
+END

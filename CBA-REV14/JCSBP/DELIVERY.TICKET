@@ -1,0 +1,464 @@
+*COPY>CPYLIB>COM1
+*************************************************************
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - JCSBP
+* PROGRAM     - DELIVERY.TICKET
+* BY          - RHONDA PERRIN, COMPUTER BUSINESS ASSOCIATES
+* DATE        - 06/19/85
+* DESCRIPTION -
+* This program prints the delivery tickets using the
+* DAILY.SHIP file.
+*T21147 GAT/LMR 10/30/1996 - SPACING PROBLEM AFTER 1ST TICKET.
+*T22081 stefanie 08/06/1997 * Add check to see if using a laser printer
+*                             and use laser settings if you are.
+*T23941 cm 05/07/1999 * Correct Form Line Spacing Problem.
+*C35347 cm 01/18/2000 * Correct line spacing problem.
+*T24741 cm 01/19/2000 * Make the alignment process optional.
+*T25949 cmykleb 02/20/2002 * Get the Attention field from the DSP.ATTN
+*                            when it is not empty.
+*ENDDOC
+*************************************************************
+*
+*---- FILE EQUATES
+*
+*COPY>JCS.CPYLIB>DAILY.SHIP
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>CHAR
+*COPY>JCS.CPYLIB>JOB
+*COPY>CPYLIB>FILE.VARS
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>PMC.CPYLIB>SHIP.VIA
+*
+*---- SETUP FOR SYSTEM ERROR MESSAGES
+*
+      SYS.TYPE = 1
+      CALL SYSCOM(MAT SYSCOM.REC)
+*
+*---- OPEN FILES
+*
+      OPEN '','DAILY.SHIP' TO DAILY.SHIP ELSE ERRMSG = 'DAILY.SHIP FILE MISSING';GOTO 93000
+      OPEN '','CUSTOMER' TO CUSTOMER ELSE ERRMSG = 'CUSTOMER FILE MISSING';GOTO 93000
+      OPEN '','SHIP.VIA' TO SHIP.VIA ELSE ERRMSG = 'SHIP.VIA FILE MISSING';GOTO 93000
+      OPEN '','COMPANY' TO COMPANY ELSE ERRMSG = 'COMPANY FILE MISSING';GOTO 93000
+      OPEN '','CONTROL' TO CONTROL ELSE ERRMSG = 'CONTROL FILE MISSING';GOTO 93000
+      OPEN '','JOB' TO JOB ELSE ERRMSG = 'JOB FILE MISSING';GOTO 93000
+*
+*---- INITIALIZATION
+*
+      MAT DSP.REC = ''
+      MAT JOB.REC = ''
+      MAT CUST.REC = ''
+      LINE.CNT=0
+      SP=" ";SP2="  ";SP3="   "
+      SP12=STR(" ",12);SP51=STR(" ",51);SP74=STR(" ",74)
+* T22081 v
+      SP72 = STR(" ",72)
+      SP47 = STR(" ",47)
+      SP9  = STR(" ",9)
+* T22081 ^
+      UNKNOWN=STR("?",25)
+      ERRMSG = ''
+      DESC = ''
+      TOTAL = 0
+      QTY.FLG=0
+*
+*---- GET COMPANY NUMBER
+*
+      CONO = ""
+      CALL GET.CONO(CONO,MAT COMP.REC)
+      IF CONO = 'END' THEN GOTO 99999
+*
+*---- MAIN PROCESSING
+*
+* T22081 v
+      LASER.FLAG = ''
+      IF OCONV(CONO:OCONV(@LOGNAME,'MCU'):'!LASER','TSECURITY;X;0;0') # '' THEN LASER.FLAG = 1
+      *
+      IF LASER.FLAG = '' THEN
+* T22081 ^
+        GOSUB 100
+* T22081 v
+      END
+* T22081 ^
+      PRINTER ON
+10*
+      READNEXT DSP.KEY ELSE GOTO 15
+      MATREADU DSP.REC FROM DAILY.SHIP,DSP.KEY ELSE GOTO 10
+      MATREAD JOB.REC FROM JOB,CONO:DSP.JOB ELSE MAT JOB.REC=""
+      IF JOB.CUST # DSP.SHIP.TO AND DSP.SHIP.TO # "SAME" THEN
+         MATREAD CUST.REC FROM CUSTOMER,CONO:DSP.SHIP.TO ELSE MAT CUST.REC=""
+         ATTENTION = CUST.ATTENTION
+         MATREAD CUST.REC FROM CUSTOMER,CONO:JOB.CUST ELSE MAT CUST.REC=""
+      END ELSE
+         MATREAD CUST.REC FROM CUSTOMER,CONO:JOB.CUST ELSE MAT CUST.REC=""
+         ATTENTION = CUST.ATTENTION
+      END
+      IF DSP.ATTN # "" THEN ATTENTION = DSP.ATTN ; * T25959
+      MATREAD SHIP.VIA.REC FROM SHIP.VIA,CONO:DSP.VIA ELSE SHPV.DESC=UNKNOWN
+      SHIP.DATE = OCONV(DSP.DATE,"D2/")
+      PO.NO=JOB.CUST.PO
+      REF.NO=DSP.FRT.NO
+      GOSUB 20
+      D.CNT = COUNT(DSP.DESC,VM) + (DSP.DESC # '')
+      DONE=0;QTY.USED=0;FIRST.TIME=1
+      FOR Z=1 TO D.CNT UNTIL DONE
+         FIRST.FIELD=FIELD(DSP.DESC<1,Z>," ",1)
+         IF NUM(FIRST.FIELD) THEN
+            QTY.USED=1
+            DONE=1
+         END
+      NEXT Z
+* T22081 v
+      *
+      **  This will loop thru records to see if there are any numbers
+      **  with eight digits in it.  If so, then print without commas.
+      **     -- THIS IS ONLY FOR LASER PRINTERS --
+      *
+      PTRN.FOUND = ''
+      PTRN       = "MD0Z,"
+      *
+      IF LASER.FLAG # '' THEN
+        FOR TOTAL.CNT = 1 TO D.CNT UNTIL PTRN.FOUND
+          IF DSP.DESC<1,TOTAL.CNT> # '' THEN
+            FIRST.FIELD = FIELD(DSP.DESC<1,TOTAL.CNT>," ",1)
+            IF QTY.USED = 0 THEN
+              IF DSP.QTY MATCHES "8N" THEN
+                PTRN.FOUND = 1
+              END
+            END ELSE
+              IF NUM(FIRST.FIELD) THEN
+                IF FIRST.FIELD MATCHES "8N" THEN
+                  PTRN.FOUND = 1
+                END
+              END
+            END
+          END
+        NEXT TOTAL.CNT
+      END
+      *
+      IF PTRN.FOUND THEN PTRN = "MD0Z"
+      *
+* T22081 ^      
+      FOR Z = 1 TO D.CNT
+         IF DSP.DESC<1,Z> # "" THEN
+            FIRST.FIELD=FIELD(DSP.DESC<1,Z>," ",1)
+            IF QTY.USED=0 THEN
+               IF FIRST.TIME=1 THEN
+                  FIRST.TIME=0
+                  QTY=OCONV(DSP.QTY,PTRN)   ;* T22081 (WAS "MD0Z,")
+               END ELSE
+                  QTY=""
+               END
+               DESC=DSP.DESC<1,Z>
+            END ELSE
+               IF NUM(FIRST.FIELD) THEN
+                  QTY=OCONV(FIRST.FIELD,PTRN)  ;* T22081 (WAS "MD0Z,")
+                  FF=LEN(FIRST.FIELD) + 2
+                  DESC=DSP.DESC<1,Z>[FF,99]
+               END ELSE
+                  QTY=""
+                  DESC=DSP.DESC<1,Z>
+               END
+            END
+            IF LINE.CNT >= 9 THEN
+               PRINT
+* T22081 v
+               IF LASER.FLAG = '' THEN
+* T22081 ^
+                 P.LINE = "";P.LINE = SPACE(70):"(CONTINUED)"
+* T22081 v
+               END ELSE
+                 P.LINE = "";P.LINE = SPACE(68):"(CONTINUED)"
+               END
+* T22081 ^
+               PRINT P.LINE
+               LINE.CNT = LINE.CNT + 2
+               D = 17 - LINE.CNT
+               FOR L = 1 TO D
+                  PRINT
+               NEXT L
+               GOSUB 20
+            END
+            GOSUB 30
+         END
+      NEXT Z
+      GOSUB 40
+      DSP.PRT.DATE = DATE()
+      MATWRITE DSP.REC ON DAILY.SHIP,DSP.KEY
+      TOTAL=0;QTY.FLG=0
+      GOTO 10
+15*
+      GOTO 99999
+*
+*---- PRINT TOP OF FORM
+*
+20*
+      LINE.CNT = 0
+*T21147 v
+*     FOR P = 1 TO 6
+      FOR P = 1 TO 9
+*T21147 ^
+         PRINT
+      NEXT P
+* T22081 v
+      IF LASER.FLAG = '' THEN
+* T22081 ^      
+        PRINT SP74:SHIP.DATE
+* T22081 v
+      END ELSE
+        PRINT SP72:SHIP.DATE
+      END
+* T22081 ^
+      FOR P = 1 TO 6
+         PRINT
+      NEXT P
+* T22081 v
+      IF LASER.FLAG = '' THEN
+* T22081 ^      
+        PRINT SP12:DSP.NAME
+        PRINT SP12:DSP.ADDR1
+        PRINT SP12:DSP.ADDR2
+* T22081 v
+      END ELSE
+        PRINT SP9:DSP.NAME
+        PRINT SP9:DSP.ADDR1
+        PRINT SP9:DSP.ADDR2
+      END
+* T22081 ^    
+      IF DSP.ADDR3 = "" THEN
+         GOTO 21
+      END ELSE
+* T22081 v
+         IF LASER.FLAG = '' THEN
+* T22081 ^
+           PRINT SP12:DSP.ADDR3
+* T22081 v
+         END ELSE
+           PRINT SP9:DSP.ADDR3
+         END
+* T22081 ^       
+      END
+21*
+      IF DSP.ADDR4 = "" THEN
+         IF DSP.ADDR3="" THEN
+* T22081 v
+            IF LASER.FLAG = '' THEN
+* T22081 ^           
+              PRINT SP12:"ATTN: ":ATTENTION "L#29"
+* T22081 v
+            END ELSE
+              PRINT SP9:"ATTN: ":ATTENTION "L#29"
+            END
+* T22081 ^
+            PRINT;PRINT
+         END ELSE
+* T22081 v
+            IF LASER.FLAG = '' THEN
+* T22081 ^           
+              PRINT SP12:"ATTN: ":ATTENTION "L#29"
+* T22081 v
+            END ELSE
+              PRINT SP9:"ATTN: ":ATTENTION "L#29"
+            END
+* T22081 ^
+            PRINT
+         END
+      END ELSE
+         IF DSP.ADDR3 = "" THEN
+* T22081 v
+            IF LASER.FLAG = '' THEN
+* T22081 ^           
+              PRINT SP12:DSP.ADDR4
+              PRINT SP12:"ATTN: ":ATTENTION "L#29"
+* T22081 v
+            END ELSE
+              PRINT SP9:DSP.ADDR4
+              PRINT SP9:"ATTN: ":ATTENTION "L#29"
+            END
+* T22081 ^
+            PRINT
+         END ELSE
+* T22081 v
+            IF LASER.FLAG = '' THEN
+* T22081 ^           
+              PRINT SP12:DSP.ADDR4
+              PRINT SP12:"ATTN: ":ATTENTION "L#29"
+* T22081 v
+            END ELSE
+              PRINT SP9:DSP.ADDR4
+              PRINT SP9:"ATTN: ":ATTENTION "L#29"
+            END
+* T22081 ^
+         END
+      END
+      FOR P = 1 TO 3
+         PRINT
+      NEXT P
+* T22081 v
+      IF LASER.FLAG = '' THEN
+* T22081 ^
+        PRINT SP3:DSP.JOB "L#8":SP2:PO.NO "L#10":SP:SHPV.DESC "L#25":SP:REF.NO "L#15"
+* T22081 v
+      END ELSE
+        PRINT SP:DSP.JOB "L#8":SP2:PO.NO "L#10":SP:SHPV.DESC "L#25":SP:REF.NO "L#15"
+      END
+* T22081 ^
+      PRINT
+      PRINT ; * C35347
+      IF LASER.FLAG # '' THEN PRINT   ;*T22081 <
+      RETURN
+*
+*---- PRINT INVOICE BODY
+*
+30*
+      IF QTY = 0 THEN QTY = ""
+* T22081 v
+      IF LASER.FLAG = '' THEN
+* T22081 ^
+        PRINT SP:QTY "R#11":SP2:DESC "L#70"
+* T22081 v
+      END ELSE
+        PRINT QTY "R#9":SP2:DESC "L#69"
+      END
+* T22081 ^
+      LINE.CNT = LINE.CNT + 1
+      IF LINE.CNT >= 9 THEN
+         PRINT
+* T22081 v
+         IF LASER.FLAG = '' THEN
+* T22081 ^
+           P.LINE = "";P.LINE = SPACE(70):"(CONTINUED)"
+* T22081 v
+         END ELSE
+           P.LINE = "";P.LINE = SPACE(68):"(CONTINUED)"
+         END
+* T22081 ^
+         PRINT P.LINE
+         LINE.CNT = LINE.CNT + 2
+         D = 17 - LINE.CNT
+         FOR L = 1 TO D
+            PRINT
+         NEXT L
+* T22081 v
+         IF LASER.FLAG # '' THEN PRINT CHAR(12):
+* T22081 ^
+         GOSUB 20
+      END
+      RETURN
+*
+*---- PRINT TOTAL
+*
+40*
+      TOTAL=DSP.MARKUP + DSP.INV.AMT
+      HANDLING=OCONV(DSP.MARKUP,"MD2Z,")
+      SHIPPING=OCONV(DSP.INV.AMT,"MD2Z,")
+      IF LINE.CNT + 2 >= 9 THEN
+         PRINT
+         P.LINE = "";P.LINE = SPACE(70):"(CONTINUED)"
+         PRINT P.LINE
+         LINE.CNT = LINE.CNT + 2
+         D = 17 - LINE.CNT
+         FOR L = 1 TO D
+            PRINT
+         NEXT L
+* T22081 v
+         IF LASER.FLAG # '' THEN PRINT CHAR(12):
+* T22081 ^
+         GOSUB 20
+      END
+      G.TOTAL = OCONV(TOTAL,"MD2,$")
+*C35347 v
+*     D = 14 - LINE.CNT
+      D = 13 - LINE.CNT
+*C35347 ^
+      IF LASER.FLAG # '' THEN D = 13 - LINE.CNT   ;*T22081 <
+      FOR L = 1 TO D
+         PRINT
+      NEXT L
+      T.LINE = ""
+* T22081 v
+      IF LASER.FLAG = '' THEN
+* T22081 ^      
+        T.LINE = SP51:SHIPPING "R#10":SP:HANDLING "R#10":SP:G.TOTAL "R#11"
+      END ELSE
+* T22081 v
+        T.LINE = SPACE(49):SHIPPING "R#10":HANDLING "R#10":G.TOTAL "R#11"
+      END
+* T22081 ^
+      PRINT T.LINE
+* T22081 v
+*      PRINT;PRINT
+*T23941 v
+* COMMENTED OUT NEXT LINE
+*     IF LASER.FLAG = '' THEN PRINT;PRINT
+*T23941 ^
+      IF LASER.FLAG # '' THEN
+        PRINT CHAR(12):
+      END
+* T22081 ^      
+      RETURN
+*
+*---- ALIGNMENT ROUTINE
+*
+100*
+*T24741 v
+      PRINT @(14,15):CL:"DO YOU WANT TO PRINT AN ALIGNMENT? (Y/N):":
+      INPUT ANSWER:
+      IF ANSWER # "Y" AND ANSWER # "N" THEN GOTO 100
+      IF ANSWER = "N" THEN
+         PRINT @(0,15):CL:
+         GOTO 199
+      END
+101 *
+*T24741 ^
+      CALL DELIVERY.TICKET.ALIGN
+      PRINT @(0,15):CL:
+      PRINT @(14,15):"DID ALIGNMENT PRINT CORRECTLY ? (Y/N):":
+      INPUT ANSWER:
+      IF ANSWER = "Y" THEN
+         PRINT @(0,15):CL:
+         PRINTER ON
+         GOTO 199
+      END ELSE
+         PRINT @(14,15):"RE-ALIGN PAPER AND HIT <RETURN> TO CONTINUE":
+         INPUT ANSW:
+*T24741 v
+*        GOTO 100
+         GOTO 101
+*T24741 ^
+      END
+199*
+      RETURN
+*
+*---- CALLS FOR SYSCOM
+*
+91000*
+      PRINTER OFF
+      ERR.TYPE = 1
+      CALL SYSCOM(MAT SYSCOM.REC)
+      PRINTER ON
+      RETURN
+92000*
+      ERR.TYPE = 2
+      CALL SYSCOM(MAT SYSCOM.REC)
+      RETURN
+93000*
+      PRINTER OFF
+      ERR.TYPE = 3
+      CALL SYSCOM(MAT SYSCOM.REC)
+99999*
+      PRINTER OFF
+* T22081 v
+      IF LASER.FLAG # '' THEN
+        OPEN '',"SECURITY" TO SECURITY THEN
+          READ TEMP.REC FROM SECURITY, CONO:OCONV(@LOGNAME,'MCU'):'!LASER' THEN
+            DELETE SECURITY, CONO:OCONV(@LOGNAME,'MCU'):'!LASER'
+          END
+        END
+      END
+* T22081 ^      
+      PRINT @(-1)
+   END

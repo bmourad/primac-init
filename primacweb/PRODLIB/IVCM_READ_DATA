@@ -1,0 +1,220 @@
+SUBROUTINE IVCM_READ_DATA
+********************************************************************************
+*   Program name :- IVCM_READ_DATA
+*   Created:- 8/30/2003
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+
+$INCLUDE WWINSERT RBO.H
+
+$INCLUDE JCS.CPYLIB JOB
+$INCLUDE OPS.CPYLIB JOB.FNGD.STATS
+$INCLUDE PMC.CPYLIB CUSTOMER
+$INCLUDE PMC.CPYLIB SALESMAN
+$INCLUDE PMC.CPYLIB DIVISION
+
+OPEN "","JOB" TO JOB ELSE ERRMSG="JOB FILE IS MISSING"; GOTO 99999
+OPEN "","CUSTOMER" TO CUSTOMER ELSE ERRMSG="CUSTOMER FILE IS MISSING"; GOTO 99999
+OPEN "","SALESMAN" TO SALESMAN ELSE ERRMSG="SALESMAN FILE IS MISSING"; GOTO 99999
+OPEN "","DIVISION" TO DIVISION ELSE ERRMSG="DIVISION FILE IS MISSING"; GOTO 99999
+OPEN "","JOB.FNGD.STATS" TO JOB.FNGD.STATS ELSE ERRMSG = "Cannot locate the JOB.FNGD.STATS file" ; GOTO 99999
+OPEN "","JOB.CATEGORY" TO JOB.CATEGORY ELSE ERRMSG="JOB.CATEGORY FILE IS MISSING"; GOTO 99999
+
+UNKNOWN = "????????"
+JOB.TYPE.DESC = ''
+JOB_COMMENTS = ''
+JOB.DESC = ''
+
+* Insert method code here
+STATUS=RBO.getProperty('','PMCProperty',PMCProperty)
+CONO = PMCProperty<1,4>
+STATUS = RBO.getProperty('','JOB_NO',JOB.NO)
+
+MATREAD JOB.REC FROM JOB, CONO:JOB.NO ELSE
+    ERRMSG = "Cannot locate Job record - ":JOB.NO
+    GOTO 99999
+END
+*JOB ESTIMATE FOR PASSING TO MEHTOD REVENUE  ALLOCATION
+STATUS = RBO.setProperty('','JOB_EST',JOB.EST)
+STATUS = RBO.setProperty('','JOB_CONF_AMT',JOB.CONF.AMT) ; * ADDED TO GET THE DEFAULT MARKETABLE COST
+
+MATREAD JFS.REC FROM JOB.FNGD.STATS, CONO:JOB.NO THEN
+      IF JFS.PROD # "" THEN
+        ERRMSG = "Cannot Invoice a Finished Goods JOB"
+        GOTO 99999
+     END
+END
+
+IF JOB.SUBS # "" THEN
+      FOR SJ = 1 TO DCOUNT(JOB.SUBS,@VM)
+        MATREAD JFS.REC FROM JOB.FNGD.STATS, CONO:JOB.SUBS<1,SJ> THEN
+          IF JFS.PROD # "" THEN
+            ERRMSG = "Cannot Invoice a JOB with Finished Goods on Sub-Job"
+            GOTO 99999
+          END
+        END
+      NEXT SJ
+END
+
+MATREAD CUST.REC FROM CUSTOMER, CONO:JOB.CUST ELSE
+    CUST.NAME = UNKNOWN
+    CUST.ACCT = ""
+END
+
+MATREAD DIV.REC FROM DIVISION, CONO:JOB.DIV ELSE
+    MAT DIV.REC = ""
+    DIV.DESC = "??????????"
+END
+
+MATREAD SALESMAN.REC FROM SALESMAN, CONO:JOB.SLSMN ELSE
+    MAT SALESMAN.REC = ""
+    SALS.NAME = "??????????"
+END
+
+READV CATG.DESC FROM JOB.CATEGORY, CONO:JOB.CATG,1 ELSE
+    CATG.DESC = "??????????"
+END
+
+BEGIN CASE
+    CASE JOB.TYPE = "R"
+      JOB.TYPE.DESC ="REGULAR"
+    CASE JOB.TYPE = "S"
+      JOB.TYPE.DESC = "SPOILAGE"
+    CASE JOB.TYPE = "N"
+      JOB.TYPE.DESC = "NON-CHARGEABLE"
+    CASE JOB.TYPE = "C"
+       JOB.TYPE.DESC = "CHANGE ORDER"
+    CASE 1
+      JOB.TYPE.DESC="UNKNOWN"
+END CASE
+
+CUST_TAX_JURIS = ""
+JOB_DESC = ""
+JCNT = COUNT(CUST.TAX.JUR,@VM) + (CUST.TAX.JUR # "")
+  FOR J = 1 TO JCNT
+    IF CUST.TAXABLE<1,J> = "Y" THEN
+      IF CUST_TAX_JURIS = "" THEN
+        CUST_TAX_JURIS = CUST.TAX.JUR<1,J>
+      END ELSE
+        CUST_TAX_JURIS = CUST_TAX_JURIS:", ":CUST.TAX.JUR<1,J>
+      END
+    END
+  NEXT J
+
+  CNT = COUNT(JOB.COMMENTS,@VM)+(JOB.COMMENTS # "")
+  FOR C = 1 TO CNT
+    JOB_COMMENTS<1,C>=JOB.COMMENTS<1,C>
+  NEXT C
+  CNT = COUNT(JOB.DESC,@VM)+(JOB.DESC # "")
+  FOR C = 1 TO CNT
+    JOB_DESC<1,C>=JOB.DESC<1,C>
+  NEXT C
+
+  BEGIN CASE
+    CASE JOB.STATUS<1,1>=""
+      JOB_STATUS="BOOKED"
+    CASE JOB.STATUS<1,1>="9"
+      JOB_STATUS="CANCELLED"
+    CASE JOB.STATUS<1,1>="7"
+      JOB_STATUS="READY TO PURGE"
+    CASE JOB.STATUS<1,1>="8"
+      JOB_STATUS="PURGED"
+    CASE JOB.TRACK.DATE<1,10> # ""
+      BEGIN CASE
+        CASE JOB.STATUS<1,1> = "1"
+          JOB_STATUS = "IN PROCESS"
+        CASE JOB.STATUS<1,1> = "5" 
+          JOB_STATUS = "REOPENED"
+        CASE 1
+          JOB_STATUS = "COMPLETED"
+      END CASE
+    CASE JOB.TRACK.DATE<1,9> # ""
+      BEGIN CASE
+        CASE JOB.STATUS<1,1> = "1"
+          JOB_STATUS = "IN PROCESS"
+        CASE JOB.STATUS<1,1> = "5"
+          JOB_STATUS = "REOPENED"
+        CASE 1
+          JOB_STATUS = "INVOICED"
+      END CASE
+    CASE JOB.TRACK.DATE<1,8> # ""
+      JOB_STATUS = "COSTED"
+    CASE JOB.TRACK.DATE<1,7> # ""
+      JOB_STATUS = "RDY-TO-BILL"
+    CASE JOB.TRACK.DATE<1,6> # ""
+      JOB_STATUS = "DELIVERED"
+    CASE JOB.TRACK.DATE<1,5> # ""
+      JOB_STATUS = "IN PROCESS"
+    CASE JOB.TRACK.DATE<1,3> # ""
+      JOB_STATUS = "IN PROCESS"
+    CASE JOB.STATUS<1,1>="1"
+      JOB_STATUS = "IN PROCESS"
+    CASE JOB.STATUS<1,1>="3"
+      JOB_STATUS= "INVOICED"
+    CASE 1
+      JOB_STATUS = "UNKNOWN"
+  END CASE
+
+
+STATUS = RBO.setProperty('','CUST_NAME',CUST.NAME)
+STATUS = RBO.setProperty('','JOB_DIV',JOB.DIV)
+STATUS = RBO.setProperty('','DIV_DESC',DIV.DESC)
+STATUS = RBO.setProperty('','JOB_SLSMN',JOB.SLSMN)
+STATUS = RBO.setProperty('','SALS_NAME',SALS.NAME)
+
+STATUS = RBO.setProperty('','JOB_TYPE',JOB.TYPE)
+STATUS = RBO.setProperty('','JOB_TYPE_DESC',JOB.TYPE.DESC)
+
+STATUS = RBO.setProperty('','JOB_SALES_CODE',JOB.SALES.CODE)
+STATUS = RBO.setProperty('','JOB_CATG',JOB.CATG)
+STATUS = RBO.setProperty('','CATG_DESC',CATG.DESC)
+STATUS = RBO.setProperty('','JOB_MASTER',JOB.MASTER)
+
+STATUS = RBO.setProperty('','CUST_TAX_JURIS',CUST_TAX_JURIS)
+STATUS = RBO.setProperty('','JOB_COLORS',JOB.COLORS)
+STATUS = RBO.setProperty('','JOB_ORDERED',JOB.QTY<1,1>)
+STATUS = RBO.setProperty('','JOB_SHIPPED',JOB.QTY<1,3>)
+
+STATUS = RBO.setProperty('','JOB_CUST_PO',JOB.CUST.PO)
+
+STATUS = RBO.setProperty('','JOB_COMMENTS',JOB.COMMENTS)
+STATUS = RBO.setProperty('','JOB_DESC',JOB.DESC)
+
+STATUS = RBO.setProperty('','JOB_STATUS',JOB_STATUS)
+*STATUS = RBO.setProperty('','SCV_24',SCV.24)
+
+STATUS = RBO.setProperty('','RA_JS',JOB.SALES.CODE)
+
+***ADDED
+STATUS = RBO.setProperty('','JOB_SUB',JOB.SUBS)
+TEST.1 = JOB.SUBS
+SUB_JOB_DESC = ''
+RCNT = DCOUNT(TEST.1,@VM)
+*STATUS = RBO.setProperty('','ServerMessage',TEST.1 : 'RCNT --' : RCNT)
+FOR I = 1 TO RCNT
+    MATREAD JOB.REC FROM JOB, CONO:TEST.1<1,I> THEN
+	TEMP_SUB_JOB_DESC = LOWER(JOB.DESC);* : CONO:TEST.1<1,I> : "___________" : I
+	SUB_JOB_DESC<1,I> = CHANGE(TEMP_SUB_JOB_DESC,@VM,",")
+    END ELSE
+	SUB_JOB_DESC<1,I> = '' ;*  NULL" : CONO:TEST.1<1,I>;* : "___________" : I
+    END    
+NEXT 
+STATUS = RBO.setProperty('','JOB_SUB_DESC',SUB_JOB_DESC)
+RETURN
+
+* End of method code
+99999*
+STATUS = RBO.setProperty('','ServerStatus',1)
+STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+RETURN
+
+

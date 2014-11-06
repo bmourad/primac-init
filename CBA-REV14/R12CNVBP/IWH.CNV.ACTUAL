@@ -1,0 +1,498 @@
+*
+* NOTE! This program uses pre-formed LISTS for input - See Below.
+* This program will take a SELECT LIST of INV.WHSE.OLD records; copy
+* them to INV.WHSE.ACTUAL; zero out the IWH.RSV.FI and IWH.QTY.FI MV's
+* zero out the IWH.RESV field; rebuild the FIFO qty on-hand using the
+* ROLL.SKID.INFO.R12 data into Actual Qty on-hand; then copy the INV.
+* JOB.STATS.OLD to INV.JOB.STATS.ACTUAL and re-reserve the qtys using
+* newly created INV.WHSE.ACTUAL data. Any quantities already used from
+* the original FIFO buckets will remain but any balances of the original
+* reserves will be reallocated to buckets based on the new file.
+* List name for INV.WHSE is "INV.WHSE.ACTUAL"
+* List name for INV.JOB.STATS is "INV.JOB.STATS.ACTUAL"
+* List name for ROLL.SKID.INFO.R12 is "RSKI.R12"
+* NOTE: The above list should be sorted by PROD BY WHSE.
+* Note also that if conversion to ACTUAL is being done, a CONTROL file
+* record CONO:'CONVERT.TO.ACTUAL' is required to have 'Y' in attr 1.
+* 
+*!!!!!!!! AFTER THIS STEP IS COMPLETED ---
+*!!!!!!!! BE SURE TO BACKUP INV.WHSE.OLD AND THEN COPY INV.WHSE.ACTUAL
+*!!!!!!!! TO INV.WHSE.OLD (OVERWRITING) PRIOR TO CONTINUING THE REV12
+*!!!!!!!! CONVERSION (CONV).
+*
+*COPY>CPYLIB>COM1
+*COPY>CPYLIB>FILE.VARS
+*COPY>ICS.CPYLIB>ROLL.SKID.INFO.R12
+*COPY>ICS.CPYLIB>INV.WHSE.LOC.REV11
+*COPY>ICS.CPYLIB>INV.WHSE.REV11
+*COPY>PMC.CPYLIB>PO
+*COPY>ICS.CPYLIB>CATEGORY.REV11
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>ICS.CPYLIB>INV.JOB.STATS
+*COPY>JCS.CPYLIB>JOB
+*COPY>PMC.CPYLIB>COMPANY
+*
+*COPY>CPYLIB>CHAR
+*
+*
+DEFFUN CALC.STK.QTY(COST.QTY,MAT INV.CNV.REC,ROND,LN)
+*
+OPEN '','INV.WHSE.LOC.OLD' TO INV.WHSE.LOC.OLD ELSE STOP 201
+OPEN '','ROLL.SKID.INFO.R12' TO ROLL.SKID.INFO.R12 ELSE STOP 201
+OPEN '','INV.WHSE.OLD' TO INV.WHSE.OLD ELSE STOP 201
+OPEN '','PO' TO PO ELSE STOP 201
+OPEN '','JOB' TO JOB ELSE STOP 201
+OPEN '','INV.JOB.STATS.OLD' TO INV.JOB.STATS.OLD ELSE STOP 201
+OPEN '','INVENTORY' TO INVENTORY ELSE STOP 201
+OPEN '','CATEGORY.OLD' TO CATEGORY.OLD ELSE STOP 201
+OPEN '','CONVERSION.ERRORS' TO CONVERSION.ERRORS ELSE STOP 201
+OPEN '','CONTROL' TO CONTROL ELSE STOP 201
+OPEN '','COMPANY' TO COMPANY ELSE STOP 201
+CONO=''; MAT COMP.REC = ''
+CALL GET.CONO(CONO,MAT COMP.REC)
+CRT @(-1)
+READ CONV.ACTUAL FROM CONTROL, CONO:'CONVERT.TO.ACTUAL' ELSE CONV.ACTUAL='N'
+IF CONV.ACTUAL='N' THEN
+  CRT 'The CONTROL file item CONO:CONVERT.TO.ACTUAL is set to "N" - ABORT!'
+  GOTO 99999
+END
+*
+OPEN 'INV.WHSE.ACTUAL' TO INV.WHSE.ACTUAL ELSE
+  MODULO=FILEINFO(INV.WHSE.OLD,5)
+  UDTEXECUTE 'CREATE.FILE INV.WHSE.ACTUAL ':MODULO CAPTURING JUNK
+  OPEN 'INV.WHSE.ACTUAL' TO INV.WHSE.ACTUAL ELSE
+    CRT 'Cannot Create/Open INV.WHSE.ACTUAL File!'; STOP 201
+  END
+END
+OPEN 'INV.JOB.STATS.ACTUAL' TO INV.JOB.STATS.ACTUAL ELSE
+  MODULO=FILEINFO(INV.JOB.STATS.OLD,5)
+  UDTEXECUTE 'CREATE.FILE INV.JOB.STATS.ACTUAL ':MODULO CAPTURING JUNK
+  OPEN 'INV.JOB.STATS.ACTUAL' TO INV.JOB.STATS.ACTUAL ELSE
+    CRT 'Cannot Create/Open INV.JOB.STATS.ACTUAL File!'; STOP 201
+  END
+END
+CMD='GET.LIST RSKI.R12'
+UDTEXECUTE CMD CAPTURING MSG
+IF MSG[1,2] = 'No' THEN
+  CRT 'There is nothing in the LIST "RSKI.R12" - Cannot Execute!'
+  GOTO 99999
+END
+UDTEXECUTE 'CLEARSELECT' CAPTURING MSG
+CMD='GET.LIST INV.WHSE.ACTUAL'
+UDTEXECUTE CMD
+CRT @(1,5):'Copying INV.WHSE.OLD to INV.WHSE.ACTUAL':@(-4)
+MORE=1
+LOOP
+  READNEXT IWH.ID ELSE MORE = 0
+WHILE MORE DO
+  MATREAD R11.IWH.REC FROM INV.WHSE.OLD, IWH.ID THEN
+    MATWRITE R11.IWH.REC ON INV.WHSE.ACTUAL, IWH.ID
+  END
+REPEAT
+CMD='GET.LIST INV.JOB.STATS.ACTUAL'
+UDTEXECUTE CMD
+CRT @(1,5):'Copying INV.JOB.STATS.OLD to INV.JOB.STATS.ACTUAL':@(-4)
+MORE=1
+LOOP
+  READNEXT IJS.ID ELSE MORE = 0
+WHILE MORE DO
+  MATREAD INV.JS.REC FROM INV.JOB.STATS.OLD, IJS.ID THEN
+    MATWRITE INV.JS.REC ON INV.JOB.STATS.ACTUAL, IJS.ID
+  END
+REPEAT
+CMD='GET.LIST INV.WHSE.ACTUAL'
+UDTEXECUTE CMD
+ERR=""
+FIRST.TIME=1
+;*
+* Zero out IWH.RSV.FI, IWH.QTY.FI & IWH.RESV fields
+;*
+PRINT @(-1)
+PRINT @(1,5):'PROCESSING INV.WHSE.ACTUAL.RECS':@(-4)
+DONE=0; ERR.CNT=0;ERR=''
+CNT=0
+LOOP
+  READNEXT IWH.ID ELSE DONE=1
+UNTIL (DONE) DO 
+  CONO=IWH.ID[1,3]
+  INV.ID=CONO:OCONV(IWH.ID,"G!1")
+  CNT+=1
+  IF REM(CNT,100)=0 THEN
+    PRINT @(45,5):CNT:@(-4)
+  END
+  MATREADU R11.IWH.REC FROM INV.WHSE.ACTUAL, IWH.ID THEN
+    ERRMSG=''
+    RCNT=DCOUNT(R11.IWH.RECV.FI,VM)
+    ON.HAND=0
+    RESVD=0
+    FOR R = 1 TO RCNT
+      IF R11.IWH.QTY.FI<1,R>+0 # 0 THEN
+        RESVD += (R11.IWH.QTY.FI<1,R> - R11.IWH.RSV.FI<1,R>)
+        ON.HAND += R11.IWH.QTY.FI<1,R>
+        R11.IWH.QTY.FI<1,R> = 0
+        R11.IWH.RSV.FI<1,R> = 0
+      END
+    NEXT R
+    IF ON.HAND = R11.IWH.ON.HAND+0 AND RESVD = R11.IWH.RESV+0 THEN
+      R11.IWH.RESV = 0
+      MATWRITE R11.IWH.REC ON INV.WHSE.ACTUAL, IWH.ID
+    END ELSE
+      ERRMSG='FIFO SUM NE ON HAND OR RESVD SUM NE RESERVED'
+      ID = IWH.ID
+      GOSUB SET.ERRMSG
+      RELEASE INV.WHSE.ACTUAL, IWH.ID
+    END
+  END ELSE RELEASE INV.WHSE.ACTUAL, IWH.ID
+REPEAT
+* Now select ROLL.SKID.INFO.R12 and rebuild the on-hand.
+CMD='GET.LIST RSKI.R12'
+UDTEXECUTE CMD CAPTURING MSG
+PRINT @(1,5):'PROCESSING ROLL.SKID.INFO.R12 against INV.WHSE.ACTUAL':@(-4)
+DONE=0
+PREV.PROD=''; PREV.WHSE=''
+CNT=0
+LOOP
+  READNEXT RSKI.ID ELSE
+    DONE=1
+    RSKI.INV.NO = STR('Z',15)
+    RSKI.WHSE = 'ZZZZ'
+    GOSUB TEST.BREAK
+  END
+UNTIL (DONE) DO 
+  ERRMSG=''
+  CONO=RSKI.ID[1,3]
+  MATREAD RSKI.REC FROM ROLL.SKID.INFO.R12, RSKI.ID THEN
+    GOSUB TEST.BREAK
+    IF ERRMSG='' THEN
+      PTR = 1
+      LOOP
+        LOCATE RSKI.PO.NO IN R11.IWH.PO.NO.FI<1>,PTR SETTING PFND ELSE PFND = 0
+        BEGIN CASE
+          CASE PFND = 0
+            PTR = 0
+          CASE RSKI.POST.DATE # R11.IWH.RECV.FI<1,PFND>
+            PTR = PFND+1
+          CASE RSKI.U.COST # R11.IWH.COST.FI<1,PFND>
+            PTR = PFND+1
+          CASE 1
+            R11.IWH.RSV.FI<1,PFND> += RSKI.CURR.WGHT
+            R11.IWH.QTY.FI<1,PFND> += RSKI.CURR.WGHT
+            ON.HAND += RSKI.CURR.WGHT
+            PTR = 0
+        END CASE
+      WHILE PTR DO REPEAT
+      IF PFND = 0 THEN
+        ERRMSG='Cannot find receipt bucket match for ROLL ':RSKI.ID
+        ID=IWH.ID
+        GOSUB SET.ERRMSG
+      END
+    END
+  END
+REPEAT
+IF ERR = '' THEN
+  CRT @(1,5):'REVERSING RESERVES FROM INV.JOB.STATS.ACTUAL':@(-4)
+  CMD='GET.LIST INV.JOB.STATS.ACTUAL'
+  UDTEXECUTE CMD CAPTURING MSG
+  DONE=0
+  LOOP
+    READNEXT IJS.ID ELSE DONE = 1
+  UNTIL DONE DO
+    CONO = IJS.ID[1,3]
+    MATREADU INV.JS.REC FROM INV.JOB.STATS.ACTUAL, IJS.ID THEN
+      IF IJS.JOB.QTY > 0 THEN
+        FOR I = DCOUNT(IJS.FI.NO,VM) TO 1 STEP -1
+          IF IJS.FI.QTY<1,I> > 0 THEN
+            IJS.JOB.QTY -= IJS.FI.QTY<1,I>
+            IJS.FI.ORG<1,I> -= IJS.FI.QTY<1,I>
+            IJS.FI.QTY<1,I> = 0
+            IF IJS.FI.ORG<1,I> = 0 THEN
+              DEL IJS.FI.NO<1,I>
+              DEL IJS.FI.ORG<1,I>
+              DEL IJS.FI.QTY<1,I>
+              DEL IJS.FI.AMT<1,I>
+            END
+          END
+        NEXT I
+      END
+      IF IJS.JOB.QTY < 0 THEN IJS.JOB.QTY = 0
+    END ELSE
+      ERRMSG='Cannot locate INV.JOB.STATS.ACTUAL'
+      ID = IJS.ID
+      GOSUB SET.ERRMSG
+    END
+    IF ERRMSG = '' THEN
+      JOB.ID = CONO:FIELD(IJS.ID,"!",3)
+      MATREAD JOB.REC FROM JOB, JOB.ID THEN
+        PROD = FIELD(IJS.ID,"!",1)[4,15]
+        WHSE = FIELD(IJS.ID,"!",2)
+        PTR = 1
+        LOOP
+          LOCATE PROD IN JOB.RESV.MATL<1>,PTR SETTING MFND ELSE MFND = 0
+          BEGIN CASE
+            CASE MFND = 0
+              PTR = 0
+            CASE WHSE # JOB.RESV.WHSE<1,MFND>
+              PTR = MFND+1
+            CASE 1
+              PTR = 0
+          END CASE
+        WHILE PTR DO REPEAT
+        IF MFND THEN
+          MAT R11.CATG.REC = ''
+          MATREAD INV.REC FROM INVENTORY, CONO:PROD THEN
+            MATREAD R11.CATG.REC FROM CATEGORY.OLD, CONO:INV.LINE ELSE NULL
+          END
+          IF R11.CATG.TRACK.QOH = '' THEN
+            ERRMSG='Error in locating CATEGORY ':INV.LINE
+            ID = CONO:PROD
+            GOSUB SET.ERRMSG
+          END
+          IF ERRMSG = '' THEN
+            MATREADU R11.IWH.REC FROM INV.WHSE.ACTUAL, CONO:PROD:"!":WHSE ELSE
+              ERRMSG='Cannot locate INV.WHSE.ACTUAL record'
+              ID = CONO:PROD:"!":WHSE
+              GOSUB SET.ERRMSG
+              CONTINUE
+            END
+            RESV.QTY = JOB.RESV.QTY<1,MFND>
+***COPY>REV11.JCSBP>FIFO.RESV.SUB
+* CODE from above loaded directly here - next 140 lines.
+* REVISION      - [08.0]
+*T25690 edwin 03/23/2001 * TO ADD CODE TO FIX MULTI FIFO BUCKET
+*                            INSERTION/DELETION PROBLEM
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+*
+            CUR.PRICE = 0
+            STD.PRICE = 0
+            ERRMSG = ''
+            BEGIN CASE
+              CASE R11.CATG.TRACK.QOH # 'Y' AND RESV.QTY > 0
+                BEGIN CASE
+                  CASE R11.CATG.COST.TYPE = 'SD'
+                    CHECK.COST = R11.IWH.STD.COST
+                  CASE R11.CATG.COST.TYPE = 'AV'
+                    CHECK.COST = R11.IWH.AVG.COST
+                  CASE R11.CATG.COST.TYPE = 'LT'
+                    CHECK.COST = R11.IWH.LIST.COST
+                  CASE 1
+                    CHECK.COST = 0
+                END CASE
+                CHECK.QTY = RESV.QTY
+                FLOC = COUNT(IJS.FI.NO,VM) + (IJS.FI.NO # '')
+                BEGIN CASE
+                  CASE FLOC < 1
+                    FLOC = 1
+                    IJS.FI.NO<1,FLOC> = 0
+                    IJS.FI.ORG<1,FLOC> = CHECK.QTY
+                    IJS.FI.QTY<1,FLOC> = CHECK.QTY
+                    IJS.FI.AMT<1,FLOC> = CHECK.COST
+                  CASE IJS.FI.NO<1,FLOC> = 0 AND IJS.FI.AMT<1,FLOC> = CHECK.COST
+                    IJS.FI.ORG<1,FLOC> = IJS.FI.ORG<1,FLOC> + CHECK.QTY
+                    IJS.FI.QTY<1,FLOC> = IJS.FI.QTY<1,FLOC> + CHECK.QTY
+                  CASE 1
+                    FLOC = FLOC + 1
+                    IJS.FI.NO<1,FLOC> = 0
+                    IJS.FI.ORG<1,FLOC> = CHECK.QTY
+                    IJS.FI.QTY<1,FLOC> = CHECK.QTY
+                    IJS.FI.AMT<1,FLOC> = CHECK.COST
+                END CASE
+                IJS.JOB.QTY = IJS.JOB.QTY + CHECK.QTY
+                STD.PRICE = STD.PRICE + INT((CHECK.COST/10000) * ((CHECK.QTY/10) / (INV.COST.WT/100)))
+                CUR.PRICE = 0
+                RESV.QTY = 0
+              CASE RESV.QTY > 0
+                QCNT = COUNT(R11.IWH.RSV.FI,VM) + (R11.IWH.RSV.FI # '')
+                FOR FNO = 1 TO QCNT WHILE RESV.QTY <> 0
+                  IF R11.IWH.RSV.FI<1,FNO> + 0 <> 0 THEN
+                    BEGIN CASE
+                      CASE R11.CATG.COST.TYPE = 'FI'
+                        CHECK.COST = R11.IWH.COST.FI<1,FNO>
+                      CASE R11.CATG.COST.TYPE = 'LC'
+                        CHECK.COST = R11.IWH.COST.FI<1,QCNT>
+                      CASE R11.CATG.COST.TYPE = 'SD'
+                        CHECK.COST = R11.IWH.STD.COST
+                      CASE R11.CATG.COST.TYPE = 'AV'
+                        CHECK.COST = R11.IWH.AVG.COST
+                      CASE R11.CATG.COST.TYPE = 'LT'
+                        CHECK.COST = R11.IWH.LIST.COST
+                      CASE 1
+                        CHECK.COST = 0
+                    END CASE
+                    IF RESV.QTY > R11.IWH.RSV.FI<1,FNO> THEN
+                      CHECK.QTY = R11.IWH.RSV.FI<1,FNO>
+                    END ELSE
+                      CHECK.QTY = RESV.QTY
+                    END
+                    UPD.FLAG = 0
+                    PTR = 1
+                    LOOP
+                      LOCATE FNO IN IJS.FI.NO<1>,PTR BY 'AR' SETTING FLOC THEN
+                        IF IJS.FI.AMT<1,FLOC> = CHECK.COST THEN
+                          IJS.FI.ORG<1,FLOC> += CHECK.QTY
+                          IJS.FI.QTY<1,FLOC> += CHECK.QTY
+                          UPD.FLAG = 1
+                        END ELSE
+                          PTR = FLOC + 1
+                        END
+                      END ELSE
+                        IJS.FI.NO = INSERT(IJS.FI.NO,1,FLOC,0,FNO)
+                        IJS.FI.ORG = INSERT(IJS.FI.ORG,1,FLOC,0,CHECK.QTY)
+                        IJS.FI.QTY = INSERT(IJS.FI.QTY,1,FLOC,0,CHECK.QTY)
+                        IJS.FI.AMT = INSERT(IJS.FI.AMT,1,FLOC,0,CHECK.COST)
+                        IJS.JMT.SEQ = INSERT(IJS.JMT.SEQ,1,FLOC,0,'')
+                        IJS.JMT.QTY = INSERT(IJS.JMT.QTY,1,FLOC,0,'')
+                        UPD.FLAG = 1
+                      END
+*                  PTR += 1
+                    UNTIL UPD.FLAG REPEAT
+                    IJS.JOB.QTY = IJS.JOB.QTY + CHECK.QTY
+                    R11.IWH.RESV = R11.IWH.RESV + CHECK.QTY
+                    R11.IWH.RSV.FI<1,FNO> = R11.IWH.RSV.FI<1,FNO> - CHECK.QTY
+                    STD.PRICE = STD.PRICE + INT((CHECK.COST/10000) * ((CHECK.QTY/10) / (INV.COST.WT/100)))
+                    CUR.PRICE = CUR.PRICE + INT((R11.IWH.COST.FI<1,FNO>/10000) * ((CHECK.QTY/10) / (INV.COST.WT/100)))
+                    RESV.QTY = RESV.QTY - CHECK.QTY
+                  END
+                NEXT FNO
+                IF RESV.QTY <> 0 THEN
+                  ERRMSG = 'RSV QTY IS MORE THAN AVAIL, QTY.LEFT = ':OCONV(INT(RESV.QTY/10),"MD2")
+                END
+              CASE RESV.QTY < 0
+                RESV.QTY = 0 - RESV.QTY
+                QCNT = COUNT(IJS.FI.NO,VM) + (IJS.FI.NO # '')
+                FOR Q = QCNT TO 1 STEP -1 WHILE RESV.QTY <> 0
+                  FNO = IJS.FI.NO<1,Q>
+                  CHECK.QTY = IJS.FI.QTY<1,Q>
+                  BEGIN CASE
+                    CASE CHECK.QTY > RESV.QTY
+                      CHECK.QTY = RESV.QTY
+                      STD.PRICE = STD.PRICE - INT((IJS.FI.AMT<1,Q>/10000) * ((CHECK.QTY/10) / (INV.COST.WT/100)))
+                      IJS.FI.ORG<1,Q> = IJS.FI.ORG<1,Q> - CHECK.QTY
+                      IJS.FI.QTY<1,Q> = IJS.FI.QTY<1,Q> - CHECK.QTY
+                    CASE IJS.FI.ORG<1,Q> <> CHECK.QTY
+                      STD.PRICE = STD.PRICE - INT((IJS.FI.AMT<1,Q>/10000) * ((CHECK.QTY/10) / (INV.COST.WT/100)))
+                      IJS.FI.ORG<1,Q> = IJS.FI.ORG<1,Q> - CHECK.QTY
+                      IJS.FI.QTY<1,Q> = 0
+                    CASE IJS.JMT.SEQ<1,Q> = ''
+                      STD.PRICE = STD.PRICE - INT((IJS.FI.AMT<1,Q>/100) * ((CHECK.QTY/10) / (INV.COST.WT/100)))
+                      IJS.FI.NO = DELETE(IJS.FI.NO,1,Q,0)
+                      IJS.FI.ORG = DELETE(IJS.FI.ORG,1,Q,0)
+                      IJS.FI.QTY = DELETE(IJS.FI.QTY,1,Q,0)
+                      IJS.FI.AMT = DELETE(IJS.FI.AMT,1,Q,0)
+                      IJS.JMT.SEQ = DELETE(IJS.JMT.SEQ,1,Q,0)
+                      IJS.JMT.QTY = DELETE(IJS.JMT.QTY,1,Q,0)
+                    CASE 1
+                      STD.PRICE = STD.PRICE - INT((IJS.FI.AMT<1,Q>/10000) * ((CHECK.QTY/10) / (INV.COST.WT/100)))
+                      IJS.FI.ORG<1,Q> = IJS.FI.ORG<1,Q> - CHECK.QTY
+                      IJS.FI.QTY<1,Q> = 0
+                  END CASE
+                  IJS.JOB.QTY = IJS.JOB.QTY - CHECK.QTY
+                  IF FNO > 0 THEN
+                    R11.IWH.RSV.FI<1,FNO> = R11.IWH.RSV.FI<1,FNO> + CHECK.QTY
+                    R11.IWH.RESV = R11.IWH.RESV - CHECK.QTY
+                    CUR.PRICE = CUR.PRICE - INT((R11.IWH.COST.FI<1,FNO>/10000) * ((CHECK.QTY/10) / (INV.COST.WT/100)))
+                  END
+                  RESV.QTY = RESV.QTY - CHECK.QTY
+                NEXT Q
+                IF RESV.QTY <> 0 THEN
+                  ERRMSG = 'ADJUST QTY IS MORE THAN RSV, QTY.LEFT = ':OCONV(INT(RESV.QTY/10),"MD2")
+                END
+            END CASE
+* END of loaded code.
+            IF ERRMSG # '' THEN
+              ID = IJS.ID
+              GOSUB SET.ERRMSG
+            END
+          END
+        END ELSE
+          ERRMSG='Cannot locate Product/Whse ':PROD:' / ':WHSE:' in JOB'
+          ID = IJS.ID
+          GOSUB SET.ERRMSG
+        END
+      END ELSE
+        ERRMSG='Cannot locate JOB record'
+        ID = IJS.ID
+        GOSUB SET.ERRMSG
+      END
+      IF ERRMSG = '' THEN
+        MATWRITE INV.JS.REC ON INV.JOB.STATS.ACTUAL, IJS.ID
+        MATWRITE R11.IWH.REC ON INV.WHSE.ACTUAL, CONO:PROD:"!":WHSE
+      END ELSE
+        RELEASE INV.JOB.STATS.ACTUAL, IJS.ID
+        RELEASE INV.WHSE.ACTUAL, CONO:PROD:"!":WHSE
+      END
+    END
+  REPEAT
+END
+IF ERR # '' THEN
+  WRITE ERR ON CONVERSION.ERRORS,"IWH.CNV.ACTUAL"
+  CALL CONV.RPT("IWH.CNV.ACTUAL")
+END
+GO 99999
+*
+**************************************************************************
+**** S U B R O U T I N E S ***********************************************
+**************************************************************************
+*
+SET.ERRMSG: 
+*
+IF ERRMSG THEN
+  FIND ID IN ERR SETTING FLD THEN
+    CONVERT @AM TO @VM IN ERRMSG
+    ERR<FLD>=ERR<FLD>:@VM:ERRMSG
+  END ELSE
+    ERR.CNT+=1                             
+    ERR<ERR.CNT>=ERRMSG                    
+    ERR=INSERT(ERR,ERR.CNT,1,0,IWH.ID) 
+  END
+END
+RETURN
+*
+*************
+TEST.BREAK:
+*************
+*
+IF NOT(FIRST.TIME) THEN
+  IF RSKI.INV.NO # PREV.PROD OR RSKI.WHSE # PREV.WHSE THEN
+    IF ON.HAND # R11.IWH.ON.HAND THEN
+      ERRMSG='New ON-HAND NE Orig ON-HAND'
+      ID=IWH.ID
+      GOSUB SET.ERRMSG
+      RELEASE INV.WHSE.ACTUAL, IWH.ID
+    END ELSE
+      MATWRITE R11.IWH.REC ON INV.WHSE.ACTUAL, IWH.ID
+    END
+    IF NOT(DONE) THEN GOSUB SET.IWH.ID
+  END
+END ELSE
+  FIRST.TIME=0
+  IF NOT(DONE) THEN GOSUB SET.IWH.ID
+END
+RETURN
+*
+*************
+SET.IWH.ID: 
+*************
+PREV.PROD = RSKI.INV.NO
+PREV.WHSE = RSKI.WHSE
+ON.HAND=0
+MATREAD INV.REC FROM INVENTORY, CONO:PREV.PROD ELSE
+  ERRMSG='Cannot locate INVENTORY record'
+  ID = CONO:PREV.PROD
+  GOSUB SET.ERRMSG
+END
+MATREAD R11.CATG.REC FROM CATEGORY.OLD, CONO:INV.LINE ELSE
+  ERRMSG='Cannot locate R11.CATEGORY record'
+  ID = CONO:INV.LINE
+  GOSUB SET.ERRMSG
+END
+IWH.ID = CONO:PREV.PROD:"!":PREV.WHSE
+MATREADU R11.IWH.REC FROM INV.WHSE.ACTUAL, IWH.ID ELSE
+  ERRMSG='Cannot read INV.WHSE.ACTUAL record'
+  ID=IWH.ID
+  GOSUB SET.ERRMSG
+END
+RETURN
+*
+99999 
+END

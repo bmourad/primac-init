@@ -1,0 +1,142 @@
+SUBROUTINE CREATEBARCODEYES
+********************************************************************************
+*   Program name :- CREATEBARCODEYES
+*   Created:- 3/30/2005
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE CPYLIB CHAR
+$INCLUDE PMC.CPYLIB PO
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB CATEGORY
+$INCLUDE ICS.CPYLIB PO.RSKI.XREF
+$INCLUDE ICS.CPYLIB INV_SERIAL
+* Insert method code here
+*
+  DEFFUN GET.SERIAL.SEQ(CONO,CONTROL.FILE,INV_SERIAL.FILE)
+*
+OPEN '','PO.RSKI.XREF' TO PO.RSKI.XREF ELSE 
+	ERRMSG = 'PO.RSKI.XREF FILE IS MISSING'; GOTO 93000
+END
+
+OPEN '','PO' TO PO ELSE 
+	ERRMSG = 'PO FILE IS MISSING'; GOTO 93000
+END
+
+OPEN '','CATEGORY' TO CATEGORY ELSE 
+	ERRMSG = 'CATEGORY FILE IS MISSING'; GOTO 93000
+END
+
+OPEN '','INVENTORY' TO INVENTORY ELSE 
+	ERRMSG = 'INVENTORY FILE IS MISSING'; GOTO 93000
+END
+
+OPEN '','INV_SERIAL' TO INV_SERIAL ELSE ERRMSG = 'INV_SERIAL FILE IS MISSING'; GOTO 93000
+
+OPEN '','INV_SERIAL_DELETED' TO INV_SERIAL_DELETED ELSE ERRMSG = 'INV_SERIAL_DELETED FILE IS MISSING'; GOTO 93000
+
+OPEN '','CONTROL' TO CONTROL ELSE ERRMSG = 'CONTROL FILE IS MISSING'; GOTO 93000
+
+STATUS = RBO.getProperty('','ID',ID)
+
+ITEM.LIST = ""
+ITEM.LIST2 = ""
+CONO       = ID[1,3]
+PO.CODE    = ID[4,99]
+
+MATREAD PO.REC FROM PO, ID THEN
+STATUS = RBO.setProperty('','ServerMessage',ID)
+      MAT RSXRF.REC = ""
+
+      PO.LINE.CNT = DCOUNT(PO.PROD.NUM,VM)
+      CNT = 0 ;* 25740
+
+      FOR PO.LINE.PTR = 1 TO PO.LINE.CNT
+         LINE.CNT = 0
+         MATREAD INV.REC FROM INVENTORY, CONO:PO.PROD.NUM<1,PO.LINE.PTR> ELSE
+            ERRMSG = "NO INVENTORY RECORD FOR PRODUCT " PO.PROD.NUM<1,PO.LINE.PTR>
+            GOTO 93000
+            RETURN
+         END
+         MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE ELSE MAT CATG.REC = ""
+         IF CATG.TRK.LVL='S' AND CATG.BARCODE='Y' THEN
+
+            	*** CHECK INV_SERIAL_DELETED FIRST ***
+            	SELKEY = CONO:PO.CODE:"!":PO.LINE.PTR
+            	IDX = "PO_POLN_IDX"
+            	SELECTINDEX IDX, SELKEY FROM INV_SERIAL_DELETED TO ITEM.LIST
+            	DONE = 0
+            	LOOP
+               	READNEXT KEY FROM ITEM.LIST ELSE DONE = 1
+            	UNTIL DONE DO
+	       		MATREADU ISTK.REC FROM INV_SERIAL_DELETED,KEY ELSE
+                  		ERRMSG = 'CANNOT FIND INV_SERIAL_DELETED INFORMATION RECORD'
+                	  	GOTO 93000
+               		END
+               		CNT = CNT + 1
+	               	LINE.CNT = LINE.CNT + 1
+        	       	RSXRF.RS.NO<1,CNT> = KEY[4,99]
+               		RSXRF.LN.NO<1,CNT> = PO.LINE.PTR
+           	REPEAT
+            	*** CHECK INV_SERIAL NEXT ***
+            	SELECTINDEX IDX, SELKEY FROM INV_SERIAL TO ITEM.LIST2
+
+	        DONE = 0
+            	LOOP
+               	READNEXT KEY FROM ITEM.LIST2 ELSE DONE = 1
+            	UNTIL DONE DO
+               		MATREADU ISTK.REC FROM INV_SERIAL,KEY ELSE
+                  		ERRMSG = 'CANNOT FIND SERIAL INFORMATION RECORD'
+                  		GOTO 93000
+               		END
+               		GOSUB 20050
+               		MATWRITE ISTK.REC ON INV_SERIAL,KEY
+               		RSXRF.RS.NO<1,CNT> = KEY[4,99]
+               		RSXRF.LN.NO<1,CNT>=PO.LINE.PTR
+            	REPEAT
+            	MAT ISTK.REC=''
+            	LOOP WHILE LINE.CNT < PO.NO.OF.ROLLS<1,PO.LINE.PTR> DO
+               		ISTK.SEQ = GET.SERIAL.SEQ(CONO,CONTROL,INV_SERIAL)
+	                ISTK.ID=CONO:ISTK.SEQ                           
+         		GOSUB 20050
+               		ISTK.PRINT.DATE=''
+               		MATWRITE ISTK.REC ON INV_SERIAL,ISTK.ID
+		        RSXRF.RS.NO<1,CNT>= ISTK.SEQ
+		        RSXRF.LN.NO<1,CNT>=PO.LINE.PTR
+		REPEAT
+         END
+      NEXT PO.LINE.PTR
+      IF RSXRF.RS.NO # "" THEN
+         MATWRITE RSXRF.REC ON PO.RSKI.XREF, CONO:PO.CODE
+      END
+END
+*
+*------------------ WRITE ROLL SKID INFO RECORD ---------------------
+*
+20050*
+   IF ISTK.LOC = "" THEN  
+      ISTK.PO.NO=PO.CODE
+      ISTK.PO.LINE=PO.LINE.PTR
+      ISTK.PROD=PO.PROD.NUM<1,PO.LINE.PTR>
+      ISTK.WHSE = PO.WHSE<1,PO.LINE.PTR>
+      ISTK.UOM = PO.UNIT.FLG<1,PO.LINE.PTR>
+      ISTK.UNIT.PRICE=PO.GROS.PRICE<1,PO.LINE.PTR>
+   END
+   CNT= CNT + 1
+   LINE.CNT = LINE.CNT + 1
+   RETURN
+* End of method code
+93000:
+  STATUS = RBO.setProperty('','ServerStatus',1)        
+  STATUS = RBO.setProperty('','ServerMessage',ERRMSG) 
+RETURN
+

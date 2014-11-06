@@ -1,0 +1,657 @@
+      SUBROUTINE GANG.MT.ALLOC.SUB(CONO,MTL.ID,DPTR,MAT WIP.LEVEL.REC,GANG.JOB,GANG.ALLOC,STATUS,WPTR)
+*********************************************************************
+*
+* Copyright 1982 by Vercom Software Inc.
+*
+* REVISION - [09.1]
+*
+* PROGRAM  - GANG.MT.ALLOC.SUB
+*
+* AUTHOR   - NICK AMENDOLA, COMPUTER BUSINESS ASSOCIATES
+*
+* DATE     - 11/11/92
+*
+* DESCRIPTION
+*
+* This subroutine is used to allocate cost among ganged jobs.
+* MOD CSF 22378 (LMR) 1/26/95
+*
+*T20838 lanny 08/12/1996 * ITH.COST getting JMT.COST vs JMT.DCOST<1,1>
+*                          as in POST.TIME.MATL.
+*T21233 LLH 12/31/1996 * UPDATE JOB REQUIREMENTS IN INV.JOB.STATS FOR
+*                        MASTER GANG JOB
+*
+*T26334 epitka 12/12/2001 * REV12
+*CSF40101 ajibaly 06/04/2002 * REV12 problem 484, gang allocation error
+*                              output when the dept is not found
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>CPYLIB>COM1
+*COPY>JCS.CPYLIB>COM.JOB
+*COPY>JCS.CPYLIB>GANG.JOB
+*COPY>JCS.CPYLIB>GANG.ALLOC
+*COPY>JCS.CPYLIB>JOB
+*COPY>JCS.CPYLIB>JOB.MATL
+*COPY>JCS.CPYLIB>WIP.LEVEL
+*COPY>ICS.CPYLIB>INV.STATS
+*COPY>ICS.CPYLIB>INV.JOB.STATS
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*
+*---- INITIALIZATION
+*
+      TODAY = DATE()
+      GJOB.ID = FIELD(MTL.ID,"!",1)
+      DEPT = FIELD(MTL.ID,"!",2)
+      CCTR = FIELD(MTL.ID,"!",3)
+      PROD = FIELD(MTL.ID,"!",4)
+      WHSE = FIELD(MTL.ID,"!",5)
+      IWH.ID = PROD:"!":WHSE
+      STATUS = ""
+*
+*---- MAIN PROCESSING
+*
+100 *
+      JOBNO = GJOB.ID
+      MATREADU JOB.REC FROM JOB, CONO:JOBNO ELSE
+         STATUS = "INVALID JOB"
+         GOTO 99999
+      END
+      PDATE = JOB.TRACK.DATE<1,5>
+      MATREADU JMT.REC FROM JOB.MATL, CONO:MTL.ID ELSE
+         STATUS = "INVALID JOB.MATL"
+         GOTO 99999
+      END
+      MATREAD GJOB.REC FROM GANG.JOB, CONO:GJOB.ID ELSE
+         STATUS = "INVALID GANG JOB"
+         GOTO 99999
+      END
+      JCNT = DCOUNT(GJOB.JOB,VM)
+      FOR JPTR = 1 TO JCNT
+         READV REC FROM JOB, CONO:GJOB.JOB<1,JPTR>,1 ELSE
+            STATUS = "GANG JOB ERROR"
+            GOTO 99999
+         END
+      NEXT JPTR
+*
+      IF GJOB.ALLOC = "" THEN
+         MAT GAT.REC = ""
+         GAT.DEPT = GJOB.DEPT
+         GAT.CCTR = GJOB.CCTR
+         GAT.TYPE = GJOB.TYPE
+      END ELSE
+         MATREAD GAT.REC FROM GANG.ALLOC, CONO:GJOB.ALLOC ELSE
+            STATUS = "INVALID GANG ALLOC"
+            GOTO 99999
+         END
+      END
+*
+      LOCATE CCTR IN GAT.CCTR<1>,1 SETTING APTR ELSE
+         PTR=1
+         LOOP
+            LOCATE DEPT IN GAT.DEPT<1>,PTR SETTING APTR THEN
+               IF GAT.CCTR<1,APTR> = "" THEN PTR=0
+            END ELSE
+               APTR=0
+               PTR=0
+            END
+         UNTIL PTR = 0 DO
+            PTR=APTR+1
+         REPEAT
+         IF APTR = 0 THEN
+            ;* CSF40101 v
+            ;  * If there is no allocation for this department then do not
+            ;  * indicate an error and do not perform any calculations
+            LOCATE DEPT IN GAT.DEPT SETTING F ELSE GOTO 99999
+            ;* CSF40101 ^
+            STATUS = "GANG ALLOC ERROR"
+            GOTO 99999
+         END
+      END
+      ATYPE = GAT.TYPE<1,APTR>
+      GOSUB 2000                  ;* DERIVE COST ALLOCATION
+      GOSUB 3000                  ;* DISTRIBUTE COST TO GANGED JOBS
+      GOTO 99999
+*
+*---- DERIVE ALLOCATED PERCENTAGE BY JOB
+*
+2000 *
+      JTRAN = JMT.SEQ
+      JTYPE = JMT.TYPE
+      JMON  = JMT.MON<1,1>
+      TQTY = JMT.QTY
+      TSHT = JMT.SHEET
+      DCOST = JMT.DCOST
+      TCOST = JMT.COST
+      TSALE = JMT.SALE
+*T29134 v
+*     IF WPTR + 0 = 0 THEN
+         BEGIN CASE
+            CASE WLR.SPL = "N" AND JTYPE = "S"
+               WPTR = 0
+            CASE WLR.NON.CHG = "N" AND JTYPE = "N"
+               WPTR = 0
+            CASE DPTR < WLR.MT.WIP
+               WPTR = DPTR
+            CASE 1
+               WPTR = WLR.MT.WIP
+         END CASE
+*
+*     END
+*T29134 ^
+*
+      FIPTR = JMT.PTR<1,1>
+      FIQTY = JMT.PTR<1,2>
+      FCNT = DCOUNT(FIPTR<1,1>,SVM)
+      AFQTY = ''
+      AFTQTY = ''
+*
+      ATQTY = ""
+      ATSHT = ""
+      ADCOST = ""
+      ATCOST = ""
+      ATSALE = ""
+      CALC.TQTY = ""
+      CALC.TSHT = ""
+      CALC.DCOST = ""
+      CALC.TCOST = ""
+      CALC.TSALE = ""
+      HIPTR = 1
+*
+      JCNT = DCOUNT(GJOB.JOB,VM)
+      TAREA = 0
+      FOR JPTR = 1 TO JCNT
+         JSPOTS = GJOB.SPOTS<1,JPTR>
+         W = GJOB.WIDTH<1,JPTR>
+         L = GJOB.LENGTH<1,JPTR>
+         JAREA  = INT(W / 1000 * L / 1000 * JSPOTS + 0.5)
+         TAREA = TAREA + JAREA
+      NEXT JPTR
+      TSPOTS = SUM(GJOB.SPOTS)
+*
+      FOR JPTR = 1 TO JCNT
+         JSPOTS = GJOB.SPOTS<1,JPTR>
+         W = GJOB.WIDTH<1,JPTR>
+         L = GJOB.LENGTH<1,JPTR>
+         JAREA  = INT(W / 1000 * L / 1000 * JSPOTS + 0.5)
+         BEGIN CASE
+            CASE ATYPE = "A"
+               APCT = INT(JAREA * 10000 / TAREA * 100 + 0.5) / 10000
+            CASE ATYPE = "S"
+               APCT = INT(JSPOTS * 10000 / TSPOTS * 100 + 0.5) / 10000
+            CASE ATYPE = "B"
+               APCT = INT(JAREA * 5000 / TAREA * 100 + 0.5)
+               APCT = APCT + INT(JSPOTS * 5000 / TSPOTS * 100 + 0.5)
+               APCT = APCT / 10000
+            CASE 1
+               IF GJOB.PCT<1,JPTR>+0 > 0 THEN
+                  APCT = GJOB.PCT<1,JPTR>
+               END ELSE
+                  APCT = INT(10000 / JCNT * 100 + 0.5) / 10000
+               END
+         END CASE
+         ATQTY<JPTR> = INT(TQTY * APCT / 100 + 0.5)
+         AFQTY<1,JPTR> = ''
+         FOR F = 1 TO FCNT
+            AFQTY<1,JPTR,F> = INT(FIQTY<1,1,F> * APCT / 100 + .5)
+            AFTQTY<F> = AFTQTY<F> + AFQTY<1,JPTR,F>
+         NEXT F
+*
+** The following allocation could produce different result
+** than if calculated from above quantity
+         ATSHT<JPTR> = INT(TSHT * APCT / 100 + 0.5)
+         FOR N = 1 TO 5
+            IF DCOST<1,N> # "" THEN
+               ADCOST<JPTR,N> = INT(DCOST<1,N> * APCT / 100 + 0.5)
+               CALC.DCOST<1,N> = CALC.DCOST<1,N> + ADCOST<JPTR,N>
+            END
+         NEXT N
+         ATCOST<JPTR> = SUM(ADCOST<JPTR>)
+         IF TCOST = TSALE THEN
+            ATSALE<JPTR> = ATCOST<JPTR>
+         END ELSE
+            ATSALE<JPTR> = INT(TSALE * APCT / 100 + 0.5)
+         END
+         CALC.TQTY = CALC.TQTY + ATQTY<JPTR>
+         CALC.TSHT = CALC.TSHT + ATSHT<JPTR>
+         CALC.TCOST = CALC.TCOST + ATCOST<JPTR>
+         CALC.TSALE = CALC.TSALE + ATSALE<JPTR>
+         IF ATCOST<JPTR> > ATCOST<HIPTR> THEN HIPTR = JPTR
+      NEXT JPTR
+*---- CORRECT ROUNDING ERRORS
+      ATQTY<HIPTR> = ATQTY<HIPTR> + (TQTY - CALC.TQTY)
+      ATSHT<HIPTR> = ATSHT<HIPTR> + (TSHT - CALC.TSHT)
+      FF = 1
+      FOR JJ = 1 TO JCNT
+         FOR F = 1 TO FCNT
+            IF AFQTY<1,JJ,F> > AFQTY<1,JJ,FF> THEN FF = F
+         NEXT F
+         AFQTY<1,JJ,FF> = AFQTY<1,JJ,FF> + (ATQTY<JJ> - SUM(AFQTY<1,JJ>))
+         AFTQTY<FF> = AFTQTY<FF> + (ATQTY<JJ> - SUM(AFQTY<1,JJ>))
+      NEXT JJ
+      FOR N = 1 TO 5
+         IF ADCOST<HIPTR,N> # "" THEN
+            ADCOST<HIPTR,N> = ADCOST<HIPTR,N> + (DCOST<1,N> - CALC.DCOST<1,N>)
+         END
+      NEXT N
+      ATCOST<HIPTR> = SUM(ADCOST<HIPTR>)
+      IF TCOST = TSALE THEN
+         ATSALE<HIPTR> = ATCOST<HIPTR>
+      END ELSE
+         ATSALE<HIPTR> = ATSALE<HIPTR> + (TSALE - CALC.TSALE)
+      END
+      RETURN
+*
+*---- REVERSE COST FROM GANG JOB AND UPDATE GANGED JOBS
+*
+3000 *
+*- UPDATE ORIGINAL TRANSACTION
+      IF WPTR > 0 THEN
+         JMT.MON<1,2> = JMT.MON<1,1>
+         JMT.WIP<1,2,1> = 0-JMT.DCOST<1,1>
+         BEGIN CASE
+            CASE WPTR > 2
+               JMT.WIP<1,2,2> = 0-JMT.DCOST<1,3>
+               JMT.WIP<1,2,3> = 0-JMT.DCOST<1,2>
+            CASE WPTR > 1
+               JMT.WIP<1,2,2> = 0-JMT.DCOST<1,3>
+         END CASE
+*
+      END
+      JMT.RC.COST = JMT.COST
+      JMT.RC.QTY = JMT.QTY
+      MATWRITE JMT.REC ON JOB.MATL, CONO:MTL.ID
+      GOSUB 5100                  ;* UPDATE INV.JOB.STATS
+*- CREATE REVERSING ENTRY
+      GOSUB 89000
+      JMT.SEQ = NEW.SEQ
+      IF JMT.QTY+0 # 0 THEN JMT.QTY = 0-JMT.QTY
+      JMT.DIAM = 0
+      IF JMT.SHEET+0 # 0 THEN JMT.SHEET = 0-JMT.SHEET
+      FOR I = 1 TO DPTR
+         JMT.DCOST<1,I> = 0-JMT.DCOST<1,I>
+      NEXT I
+      JMT.COST = 0-JMT.COST
+      JMT.SALE = 0-JMT.SALE
+      JMT.MON = ""
+      JMT.WIP = ""
+      IF WPTR > 0 THEN
+         JMT.MON<1,1> = JMON
+         JMT.MON<1,2> = JMON
+         JMT.WIP<1,1,1> = JMT.DCOST<1,1>
+         JMT.WIP<1,2,1> = 0-JMT.DCOST<1,1>
+         BEGIN CASE
+            CASE WPTR > 2
+               JMT.WIP<1,1,2> = JMT.DCOST<1,3>
+               JMT.WIP<1,2,2> = 0-JMT.DCOST<1,3>
+               JMT.WIP<1,1,3> = JMT.DCOST<1,2>
+               JMT.WIP<1,2,3> = 0-JMT.DCOST<1,2>
+            CASE WPTR > 1
+               JMT.WIP<1,1,2> = JMT.DCOST<1,3>
+               JMT.WIP<1,2,2> = 0-JMT.DCOST<1,3>
+         END CASE
+*
+      END
+      FOR F = 1 TO FCNT
+         IF JMT.PTR<1,2,F>+0 # 0 THEN JMT.PTR<1,2,F> = 0-JMT.PTR<1,2,F>
+      NEXT F
+*
+      JMT.RC.COST = 0
+      JMT.RC.QTY = 0
+      JMT.RC.TRAN = JTRAN
+      JMT.RC.JOB  = "GANG"
+      JMT.RC.DESC = "GANG ALLOC"
+      GOSUB 4100
+*- CREATE TRANSACTIONS FOR GANGED JOBS
+      MATREAD JMT.REC FROM JOB.MATL, CONO:MTL.ID ELSE MAT JMT.REC=""
+      FOR JPTR = 1 TO JCNT
+         JOBNO = GJOB.JOB<1,JPTR>
+         MATREADU JOB.REC FROM JOB, CONO:JOBNO ELSE MAT JOB.REC=""
+         GOSUB 89000
+         JMT.SEQ = NEW.SEQ
+         JMT.QTY = ATQTY<JPTR>
+         JMT.DIAM = 0
+         JMT.SHEET = ATSHT<JPTR>
+         JMT.DCOST = ADCOST<JPTR>
+         JMT.COST = ATCOST<JPTR>
+         JMT.SALE = ATSALE<JPTR>
+         JMT.MON = ""
+         JMT.WIP = ""
+         IF WPTR > 0 THEN
+            JMT.MON<1,1> = JMON
+            JMT.WIP<1,1,1> = JMT.DCOST<1,1>
+            BEGIN CASE
+               CASE WPTR > 2
+                  JMT.WIP<1,1,2> = JMT.DCOST<1,3>
+                  JMT.WIP<1,1,3> = JMT.DCOST<1,2>
+               CASE WPTR > 1
+                  JMT.WIP<1,1,2> = JMT.DCOST<1,3>
+            END CASE
+   *
+         END
+         JMT.PTR<1,2> = AFQTY<1,JPTR>
+*
+         JMT.RC.COST = 0
+         JMT.RC.QTY = 0
+         JMT.RC.TRAN = JTRAN
+         JMT.RC.JOB  = GJOB.ID
+         JMT.RC.DESC = "GANG ALLOC"
+         GOSUB 4200
+         GOSUB 5200               ;* UPDATE INV.JOB.STATS
+      NEXT JPTR
+      RETURN
+*
+*---- REVERSE COST FROM GANG JOB
+*
+4100 *
+      DCNT = DCOUNT(JOB.MT.DEPT,VM)
+      DFND = DCNT + 1
+      FOR D = 1 TO DCNT WHILE DFND > DCNT
+         BEGIN CASE
+            CASE DEPT # JOB.MT.DEPT<1,D>
+            CASE CCTR # JOB.MT.CCTR<1,D>
+            CASE PROD # JOB.MT.PROD<1,D>
+            CASE WHSE # JOB.MT.WHSE<1,D>
+            CASE 1
+               DFND = D
+         END CASE
+      NEXT D
+      IF DFND > DCNT THEN
+         JOB.MT.DEPT<1,DFND> = DEPT
+         JOB.MT.CCTR<1,DFND> = CCTR
+         JOB.MT.PROD<1,DFND> = PROD
+         JOB.MT.WHSE<1,DFND> = WHSE
+         JOB.MT.DATE<1,DFND,1> = JMT.DATE
+      END
+*
+      MCNT = DCOUNT(JOB.RESV.MATL,VM)
+      MLOC = MCNT + 1
+      FOR M = 1 TO MCNT WHILE MLOC > MCNT
+         BEGIN CASE
+            CASE PROD # JOB.RESV.MATL<1,M>
+            CASE WHSE # JOB.RESV.WHSE<1,M>
+            CASE 1
+               MLOC = M
+         END CASE
+      NEXT M
+      IF MLOC > MCNT THEN
+         JOB.RESV.MATL<1,MLOC> = PROD
+         JOB.RESV.WHSE<1,MLOC> = WHSE
+         JOB.RESV.DATE<1,MLOC> = "NOT RESV"
+         JOB.ALOC.QTY<1,MLOC> = 0
+         JOB.ALOC.AMT<1,MLOC> = 0
+         JOB.RESV.QTY<1,MLOC> = 0
+         JOB.RESV.AMT<1,MLOC> = 0
+      END
+      JOB.USED.QTY<1,MLOC> = JOB.USED.QTY<1,MLOC> + JMT.QTY
+      JOB.USED.AMT<1,MLOC> = JOB.USED.AMT<1,MLOC> + JMT.DCOST<1,1> + JMT.DCOST<1,2>
+*
+      MT.ID = JOBNO:"!":DEPT:"!":CCTR:"!":PROD:"!":WHSE:"!"
+      LOOP
+         JOB.MT.SEQ<1,DFND> = JOB.MT.SEQ<1,DFND> + 1
+         JMT.ID = MT.ID:JOB.MT.SEQ<1,DFND>
+         READ DUMMY FROM JOB.MATL, CONO:JMT.ID ELSE DUMMY = ""
+      WHILE DUMMY # "" DO REPEAT
+*
+      IF JMT.WIP # "" THEN
+         JOB.WIP<1,1> = JOB.WIP<1,1> - 2
+         JOB.MT.WIP<1,1> = JOB.MT.WIP<1,1> - 2
+         FOR W = 1 TO WPTR
+            JOB.WIP<1,2,W> = JOB.WIP<1,2,W> + JMT.WIP<1,1,W>
+            JOB.MT.WIP<1,2,W> = JOB.MT.WIP<1,2,W> + JMT.WIP<1,1,W>
+         NEXT W
+      END
+*
+      IF JMT.SEQ > JOB.MT.DATE<1,DFND,2> THEN
+         JOB.MT.DATE<1,DFND,2> = JMT.SEQ
+         JOB.MT.DATE<1,DFND,3> = JOB.MT.SEQ<1,DFND>
+      END
+      JOB.MT.QTY<1,DFND> = JOB.MT.QTY<1,DFND> + JMT.QTY
+      JOB.MT.COST<1,DFND> = JOB.MT.COST<1,DFND> + JMT.COST
+      FOR I = 1 TO DPTR
+         JOB.MT.DCOST<1,DFND,I> = JOB.MT.DCOST<1,DFND,I> + JMT.DCOST<1,I>
+      NEXT I
+      JOB.MT.SALE<1,DFND> = JOB.MT.SALE<1,DFND> + JMT.SALE
+      BEGIN CASE
+         CASE JMT.TYPE = "N"
+            PTR = 2
+         CASE JMT.TYPE = "C"
+            PTR = 3
+         CASE JMT.TYPE = "S"
+            PTR = 4
+         CASE 1
+            PTR = 1
+            JMT.TYPE = "R"
+      END CASE
+      JOB.MT.TCOST<1,DFND,PTR> = JOB.MT.TCOST<1,DFND,PTR> + JMT.COST
+*
+      JOB.TOT.DCOST = JOB.TOT.DCOST + JMT.DCOST<1,1>
+      JOB.TOT.COST = JOB.TOT.COST + JMT.COST
+      JOB.TOT.SALE = JOB.TOT.SALE + JMT.SALE
+      MATWRITE JMT.REC ON JOB.MATL, CONO:JMT.ID
+      MATWRITE JOB.REC ON JOB, CONO:JOBNO
+      RETURN
+*
+*---- UPDATE JOB RECORD
+*
+4200 *
+      DCNT = DCOUNT(JOB.MT.DEPT,VM)
+      DFND = DCNT + 1
+      FOR D = 1 TO DCNT WHILE DFND > DCNT
+         BEGIN CASE
+            CASE DEPT # JOB.MT.DEPT<1,D>
+            CASE CCTR # JOB.MT.CCTR<1,D>
+            CASE PROD # JOB.MT.PROD<1,D>
+            CASE WHSE # JOB.MT.WHSE<1,D>
+            CASE 1
+               DFND = D
+         END CASE
+      NEXT D
+      IF DFND > DCNT THEN
+         JOB.MT.DEPT<1,DFND> = DEPT
+         JOB.MT.CCTR<1,DFND> = CCTR
+         JOB.MT.PROD<1,DFND> = PROD
+         JOB.MT.WHSE<1,DFND> = WHSE
+         JOB.MT.DATE<1,DFND,1> = JMT.DATE
+      END
+*
+      MCNT = DCOUNT(JOB.RESV.MATL,VM)
+      MLOC = MCNT + 1
+      FOR M = 1 TO MCNT WHILE MLOC > MCNT
+         BEGIN CASE
+            CASE PROD # JOB.RESV.MATL<1,M>
+            CASE WHSE # JOB.RESV.WHSE<1,M>
+            CASE 1
+               MLOC = M
+         END CASE
+      NEXT D
+      IF MLOC > MCNT THEN
+         JOB.RESV.MATL<1,MLOC> = PROD
+         JOB.RESV.WHSE<1,MLOC> = WHSE
+         JOB.RESV.DATE<1,MLOC> = "NOT RESV"
+         JOB.ALOC.QTY<1,MLOC> = 0
+         JOB.ALOC.AMT<1,MLOC> = 0
+         JOB.RESV.QTY<1,MLOC> = 0
+         JOB.RESV.AMT<1,MLOC> = 0
+      END
+      JOB.USED.QTY<1,MLOC> = JOB.USED.QTY<1,MLOC> + JMT.QTY
+      JOB.USED.AMT<1,MLOC> = JOB.USED.AMT<1,MLOC> + JMT.DCOST<1,1> + JMT.DCOST<1,2>
+*
+      MT.ID = JOBNO:"!":DEPT:"!":CCTR:"!":PROD:"!":WHSE:"!"
+      LOOP
+         JOB.MT.SEQ<1,DFND> = JOB.MT.SEQ<1,DFND> + 1
+         JMT.ID = MT.ID:JOB.MT.SEQ<1,DFND>
+         READ DUMMY FROM JOB.MATL, CONO:JMT.ID ELSE DUMMY = ""
+      WHILE DUMMY # "" DO REPEAT
+      MATWRITE JMT.REC ON JOB.MATL, CONO:JMT.ID
+*
+      IF JMT.WIP # "" THEN
+         JOB.WIP<1,1> = JOB.WIP<1,1> + 2
+         JOB.MT.WIP<1,1> = JOB.MT.WIP<1,1> + 2
+         FOR W = 1 TO WPTR
+            JOB.WIP<1,2,W> = JOB.WIP<1,2,W> + JMT.WIP<1,1,W>
+            JOB.MT.WIP<1,2,W> = JOB.MT.WIP<1,2,W> + JMT.WIP<1,1,W>
+         NEXT W
+         IF JMT.MON < JOB.MT.WIP<1,4> OR JOB.MT.WIP<1,4> = "" THEN
+            JOB.MT.WIP<1,4> = JMT.MON
+            IF JMT.MON < JOB.WIP<1,4> OR JOB.WIP<1,4> = "" THEN
+               JOB.WIP<1,4> = JMT.MON
+            END
+         END
+         IF JMT.MON > JOB.MT.WIP<1,5> THEN
+            JOB.MT.WIP<1,5> = JMT.MON
+            IF JMT.MON > JOB.WIP<1,5> THEN
+               JOB.WIP<1,5> = JMT.MON
+            END
+         END
+      END
+*
+      IF JMT.DATE >= JOB.MT.DATE<1,DFND,1> THEN
+         JOB.MT.DATE<1,DFND,1> = JMT.DATE
+      END
+      IF JMT.SEQ > JOB.MT.DATE<1,DFND,2> THEN
+         JOB.MT.DATE<1,DFND,2> = JMT.SEQ
+         JOB.MT.DATE<1,DFND,3> = JOB.MT.SEQ<1,DFND>
+      END
+      JOB.MT.QTY<1,DFND> = JOB.MT.QTY<1,DFND> + JMT.QTY
+      JOB.MT.COST<1,DFND> = JOB.MT.COST<1,DFND> + JMT.COST
+      FOR I = 1 TO DPTR
+         JOB.MT.DCOST<1,DFND,I> = JOB.MT.DCOST<1,DFND,I> + JMT.DCOST<1,I>
+      NEXT I
+      JOB.MT.SALE<1,DFND> = JOB.MT.SALE<1,DFND> + JMT.SALE
+      BEGIN CASE
+         CASE JMT.TYPE = "N"
+            PTR = 2
+         CASE JMT.TYPE = "C"
+            PTR = 3
+         CASE JMT.TYPE = "S"
+            PTR = 4
+         CASE 1
+            JMT.TYPE = "R"
+            PTR = 1
+      END CASE
+      JOB.MT.TCOST<1,DFND,PTR> = JOB.MT.TCOST<1,DFND,PTR> + JMT.COST
+*
+*********************************************************************
+      BEGIN CASE
+         CASE JOB.STATUS = ""
+            JOB.STATUS = INSERT(JOB.STATUS,1,1,0,"1")
+            JOB.STAT.DATE = INSERT(JOB.STAT.DATE,1,1,0,TODAY)
+         CASE JOB.STATUS<1,1>="1"
+         CASE JOB.STATUS<1,1>="5"
+         CASE 1
+            JOB.STATUS = INSERT(JOB.STATUS,1,1,0,"5")
+            JOB.STAT.DATE = INSERT(JOB.STAT.DATE,1,1,0,TODAY)
+      END CASE
+*********************************************************************
+*
+      IF JOB.TRACK.DATE<1,5> = "" THEN JOB.TRACK.DATE<1,5> = PDATE
+      JOB.TOT.DCOST = JOB.TOT.DCOST + JMT.DCOST<1,1>
+      JOB.TOT.COST = JOB.TOT.COST + JMT.COST
+      JOB.TOT.SALE = JOB.TOT.SALE + JMT.SALE
+      MATWRITE JOB.REC ON JOB,CONO : JOBNO
+      RETURN
+*
+*---- UPDATE STATISTICAL FILES FOR GANG JOB
+*
+5100 *
+      IJS.ID = IWH.ID:"!":JOBNO
+      MATREADU INV.JS.REC FROM INV.JOB.STATS, CONO:IJS.ID ELSE
+         MAT INV.JS.REC = ""
+      END
+      IJS.JOB.USED = IJS.JOB.USED - TQTY
+      IJS.REQ.QTY  = IJS.REQ.QTY - TQTY
+      IF IJS.REQ.QTY < 0 THEN IJS.REQ.QTY = 0
+      FOR F = 1 TO FCNT
+         LOCATE FIPTR<1,1,F> IN IJS.RECP.NO<1>,1 SETTING FPTR ELSE
+            IJS.RECP.NO<1,FPTR> = FIPTR<1,1,F>
+         END
+         IJS.FI.ORG<1,FPTR> = IJS.FI.ORG<1,FPTR> - FIQTY<1,1,F>
+         JAMT = IJS.FI.AMT<1,FPTR>
+         MSEQ = DEPT:"!":CCTR:"!":FIELD(MTL.ID,"!",6)
+         LOCATE MSEQ IN IJS.JMT.SEQ<1,FPTR>,1 SETTING SPTR THEN
+*           IJS.JMT.QTY<1,FPTR,SPTR> = IJS.JMT.QTY<1,FPTR,SPTR> - TQTY
+            IJS.JMT.QTY<1,FPTR,SPTR> = IJS.JMT.QTY<1,FPTR,SPTR> - FIQTY<1,1,F>
+            IF IJS.JMT.QTY<1,FPTR,SPTR> = 0 THEN
+               IJS.JMT.SEQ = DELETE(IJS.JMT.SEQ,1,FPTR,SPTR)
+               IJS.JMT.QTY = DELETE(IJS.JMT.QTY,1,FPTR,SPTR)
+            END
+         END
+      NEXT F
+*
+      IF IJS.JOB.ALOC < 1 AND IJS.JOB.QTY < 1 AND IJS.JMT.SEQ = "" AND IJS.REQ.QTY < 1 THEN
+         DELETE INV.JOB.STATS, CONO:IJS.ID
+*
+         MATREADU INV.STAT.REC FROM INV.STATS, CONO:IWH.ID THEN
+            LOCATE JOBNO IN ISTAT.JOB<1>,1 SETTING IJPTR THEN
+               ISTAT.JOB = DELETE(ISTAT.JOB,1,IJPTR,0)
+            END
+            IF ISTAT.PO = "" AND ISTAT.JOB = "" THEN
+               DELETE INV.STATS, CONO:IWH.ID
+            END ELSE
+               MATWRITE INV.STAT.REC ON INV.STATS, CONO:IWH.ID
+            END
+         END ELSE
+            RELEASE INV.STATS, CONO:IWH.ID
+         END
+      END ELSE
+         MATWRITE INV.JS.REC ON INV.JOB.STATS, CONO:IJS.ID
+      END
+      RETURN
+*
+*---- UPDATE INVENTORY JOB STATS FOR GANGED JOBS
+*
+5200 *
+      NEW.REC = 0
+      IJS.ID = IWH.ID:"!":JOBNO
+      MATREADU INV.JS.REC FROM INV.JOB.STATS, CONO:IJS.ID ELSE
+         NEW.REC = 1
+         MAT INV.JS.REC = ""
+         IJS.JOB.CUST = JOB.CUST
+         IJS.JOB.DATE = "NOT RESV"
+         IJS.JOB.ALOC = 0
+         IJS.JOB.QTY = 0
+      END
+      IJS.JOB.USED = IJS.JOB.USED + ATQTY<JPTR>
+      FOR F = 1 TO FCNT
+         LOCATE FIPTR<1,1,F> IN IJS.RECP.NO<1>,1 SETTING FPTR ELSE
+            IJS.RECP.NO<1,FPTR> = FIPTR<1,1,F>
+            IJS.FI.AMT<1,FPTR> = JAMT
+         END
+         IJS.FI.ORG<1,FPTR> = IJS.FI.ORG<1,FPTR> + AFQTY<1,JPTR,F>
+         MSEQ = DEPT:"!":CCTR:"!":FIELD(JMT.ID,"!",6)
+         LOCATE MSEQ IN IJS.JMT.SEQ<1,FPTR>,1 SETTING SPTR ELSE
+            IJS.JMT.SEQ<1,FPTR,SPTR> = MSEQ
+         END
+         IJS.JMT.QTY<1,FPTR,SPTR> = IJS.JMT.QTY<1,FPTR,SPTR> + AFQTY<1,JPTR,F>
+      NEXT F
+*
+      MATWRITE INV.JS.REC ON INV.JOB.STATS, CONO:IJS.ID
+*
+      MATREADU INV.STAT.REC FROM INV.STATS, CONO:IWH.ID ELSE
+         MAT INV.STAT.REC = ""
+      END
+      LOCATE JOBNO IN ISTAT.JOB<1>,1 SETTING IJPTR ELSE
+         ISTAT.JOB<1,IJPTR> = JOBNO
+      END
+      MATWRITE INV.STAT.REC ON INV.STATS, CONO:IWH.ID
+*
+      RETURN
+*
+*---- DERIVE NEXT TRANSACTION NUMBER
+*
+89000 *
+      READU NEW.SEQ FROM CONTROL,CONO:"DAILY.MATL" ELSE NEW.SEQ=10001
+      NEXT.SEQ = NEW.SEQ + 1
+      WRITE NEXT.SEQ ON CONTROL,CONO:"DAILY.MATL"
+      RETURN
+*
+*---- END OF PROGRAM
+*
+99999 *
+      RELEASE JOB,CONO:GJOB.ID
+      RELEASE JOB.MATL,CONO:MTL.ID
+      RETURN
+   END

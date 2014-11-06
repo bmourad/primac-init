@@ -1,0 +1,761 @@
+**********************************************
+* REVISION    - [11.0]
+* Copyright 1995 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - CBABP
+* PROGRAM     - CONVERT.PROGRAM.TO.GUI
+* BY          - diane; CBA
+* DATE        - 11/20/1996
+* DESCRIPTION - Convert programs to SBClient format for REV11
+* File to convert is prompted, select list containing programs 
+* to convert is prompted.
+* Converted programs are written to DEVBP.
+*
+*ENDDOC
+**********************************************
+*
+*COPY>PMC.CPYLIB>MENUS.CONTROL
+*COPY>CPYLIB>CHAR
+*COPY>PMC.CPYLIB>PMC_PROCESS
+*
+*---- DEFINE VARIABLES
+*
+*
+*---- OPEN ALL FILES
+*
+   OPEN "","VOC" TO VOC ELSE ERRMSG = 'CANNOT OPEN VOC';GOTO 93000
+   OPEN "","SAVEDLISTS" TO SAVEDLISTS ELSE ERRMSG = 'CANNOT OPEN SAVEDLISTS';GOTO 93000
+*
+*---- INITIALIZATION
+*
+   PFILE = ""
+   PROGRAM.NAME = ""
+   SCPYLIB = '*COPY>CPYLIB>SYSCOM'
+   SINIT = 'MAT SYSCOM.REC =  ""; SYS.TYPE = 2'
+   COM1 = '*COPY>CPYLIB>COM1'
+   COM2 = '*COPY>CPYLIB>COM2'
+   COM3 = '*COPY>CPYLIB>COM3'
+   SCOM1 = '*COPY>CPYLIB>SCOMMON1'
+   S90000 = '90000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN'
+   SI90000 = '90000 ERR.TYPE=1;CALL SI_SYSCOM(MAT SYSCOM.REC);RETURN'
+   S91000 = '91000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN'
+   SI91000 = '91000 ERR.TYPE=1;CALL SI_SYSCOM(MAT SYSCOM.REC);RETURN'
+   S92000 = '92000 ERR.TYPE=2;CALL SYSCOM(MAT SYSCOM.REC);RETURN'
+   SI92000 = '92000 ERR.TYPE=2;CALL SI_SYSCOM(MAT SYSCOM.REC);RETURN'
+   S93000 = '93000 ERR.TYPE=3;CALL SYSCOM(MAT SYSCOM.REC)'
+   SI93000 = '93000 ERR.TYPE=3;CALL SI_SYSCOM(MAT SYSCOM.REC)'
+   CALLLINE = "CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)"
+*
+*---- ENTER PARAMETERS
+*
+50 *
+   CRT CS
+   CRT @(10,2)'PROGRAM CONVERSION TO GUI'
+   CRT @(10,4):'ENTER SOURCE PROGRAM FILE : ': ; INPUT PFILE :
+   CRT @(10,6):'ENTER TARGET PROGRAM FILE : ': ; INPUT NEW.PFILE :
+   CRT @(10,8):'ENTER SELECT LIST  : ': ; INPUT SLIST :
+   CRT
+   BEGIN CASE
+      CASE PFILE = "" OR PFILE = "END"
+         GOTO 99999
+      CASE NEW.PFILE = "" OR NEW.PFILE = "END"
+         GOTO 99999
+      CASE SLIST = "" OR SLIST = "END"
+         GOTO 99999
+      CASE 1
+         IF PFILE = NEW.PFILE THEN
+            CRT @(10,11): "** WARNING, SOURCE WILL BE OVERLAID **, CONTINUE (YES/N)? ":
+            INPUT ANS:
+            IF ANS # "YES" THEN GOTO 99999
+         END
+   END CASE
+*
+*---- MAIN PROCESSING
+100 *
+   PROGRAMS.NOT.CONVERTED = ''
+   BADLIST = ''
+   PROGRAMS.NOT.CONVERTED = ''
+   PRINT
+   PRINT 'PROCESSING FILE ':PFILE
+   ERR = 0
+   OPEN '',PFILE TO PROGFILE ELSE
+      ERRMSG = "INVALID FILE NAME - ":PFILE
+      PRINT @(0,23):CL:ERRMSG
+      GOTO 99999
+   END
+   OPEN '',NEW.PFILE TO NEW.PROGFILE ELSE
+      ERRMSG = "INVALID FILE NAME - ":NEW.PFILE
+      PRINT @(0,23):CL:ERRMSG
+      GOTO 99999
+   END
+   RESPONSE = ''
+   LISTVAR = ''
+   READLIST PROGRAM.LIST FROM SLIST SETTING PCNT ELSE
+      ERRMSG = "NO ITEMS SELECTED"
+      PRINT @(0,23):CL:ERRMSG
+      GOTO 99999
+   END
+   FOR PTR = 1 TO PCNT
+      PROGRAM.NAME = PROGRAM.LIST<PTR>
+* TEMP  PRINT 'PROCESSING PROGRAM ':PROGRAM.NAME
+      ERR = 0
+      UPDATE.FLAG = 0
+      CONVERT.INPUT = 0
+      CONVERT.PRINT = 0
+      GOSUB 1000    ;* CHECK FOR CONVERTABILITY
+      IF NOT(ERRMSG) AND CONVERT.OK THEN
+         GOSUB 2000
+      END
+      IF NOT(FPTRON) AND NOT(FPTROFF) AND NOT(ERR) THEN
+         IF NOT(FC1LN) AND NOT(FC2LN) AND NOT(FC3LN) AND NOT(FSC1LN) AND NOT(FSEC1LN) AND NOT(FCFRMLN) THEN
+            GOSUB 2100
+         END
+         GOSUB 3000
+      END
+      IF UPDATE.FLAG THEN
+         WRITE NEW.PROGRAM.REC ON NEW.PROGFILE,PROGRAM.NAME
+         PRINT 'UPDATED PROGRAM ':PROGRAM.NAME
+      END
+   NEXT PTR
+199 *
+   WRITE PROGRAMS.NOT.CONVERTED ON SAVEDLISTS, "DT":NEW.PFILE:".NOT.CONVERTED000"
+   GOTO 99999
+*
+*---- Check if need to convert
+*
+1000 *
+   PROGRAM.REC = ''
+   ERRMSG = ''
+   CONVERT.OK = ''
+   FC1LN = ''; FC2LN = ''; FC3LN = ''; FSC1LN =  ''; FSEC1LN = ''; FCFRMLN = ''
+   READ PROGRAM.REC FROM PROGFILE, PROGRAM.NAME ELSE
+      ERRMSG = 'CANNOT READ PROGRAM ':PROGRAM.NAME
+      RETURN
+   END
+   SAVE.PROGRAM.REC = PROGRAM.REC
+   NEW.PROGRAM.REC = ''
+   FIP = 0; F90 = 0; F91 = 0; F92 = 0; F93 = 0
+   FIPLN = ''; F90LN = ''; F91LN = ''; F92LN = ''; F93LN = ''
+   FPTRON = 0 ; FPTROFF = 0
+   LCNT = DCOUNT(PROGRAM.REC,AM)
+   FOR LPTR = LCNT TO 1 STEP -1
+      CLINE = TRIM(PROGRAM.REC<LPTR>)
+      IF CLINE[1,1] # "*" THEN
+         FIP = 0
+         IPOS = INDEX(CLINE,"INPUT",1)
+         BEGIN CASE
+            CASE IPOS = 0
+            CASE IPOS = 1
+               FIP = 1
+            CASE 1
+               CLINE = CHANGE(CLINE,";",VM)
+               CCNT = DCOUNT(CLINE,VM)
+               FOR CPTR = 1 TO CCNT
+                  SCLINE = TRIM(CLINE<1,CPTR>)
+                  IPOS = INDEX(SCLINE,"INPUT",1)
+                  IF IPOS = 1 THEN
+                     FIP = 1
+                  END
+               NEXT CPTR
+         END CASE
+         IF IPOS THEN
+         END
+         IF FIP THEN
+            IF FIPLN = '' THEN
+               FIPLN = LPTR
+            END ELSE
+               FIPLN = FIPLN:VM:LPTR
+            END
+         END
+         LPOS = INDEX(CLINE,"90000",1)
+         IF LPOS = 1 THEN
+            F90 = 1
+            F90LN = LPTR
+         END
+         LPOS = INDEX(CLINE,"91000",1)
+         IF LPOS = 1 THEN
+            F91 = 1
+            F91LN = LPTR
+         END
+         LPOS = INDEX(CLINE,"92000",1)
+         IF LPOS = 1 THEN
+            F92 = 1
+            F92LN = LPTR
+         END
+         LPOS = INDEX(CLINE,"93000",1)
+         IF LPOS = 1 THEN
+            F93 = 1
+            F93LN = LPTR
+         END
+*           FINDSTR "90000" IN PROGRAM.REC<LPTR> SETTING F90 THEN F90LN = LPTR
+*           FINDSTR "91000" IN PROGRAM.REC<LPTR> SETTING F91 THEN F91LN = LPTR
+*           FINDSTR "92000" IN PROGRAM.REC<LPTR> SETTING F92 THEN F92LN = LPTR
+*           FINDSTR "93000" IN PROGRAM.REC<LPTR> SETTING F93 THEN F93LN = LPTR
+      END
+   NEXT LPTR
+   ERROR.ONLY = 1
+   ICNT = DCOUNT(FIPLN,VM)
+   FOR IPTR = 1 TO ICNT
+      LPTR = FIPLN<1,IPTR>
+      LINE = PROGRAM.REC<LPTR>
+      LCNT = DCOUNT(LINE,";")
+      IF LCNT = 1 THEN
+         FINDSTR "PRINT @(0,23)" IN PROGRAM.REC<LPTR-1> SETTING XX ELSE
+            FINDSTR "CRT @(0,23)" IN PROGRAM.REC<LPTR-1> SETTING XX ELSE
+               FINDSTR "PRINT ERRMSG" IN PROGRAM.REC<LPTR-1> SETTING XX ELSE ERROR.ONLY = 0
+            END
+         END
+         GOSUB 1500
+      END ELSE
+         FINDSTR "PRINT @(0,23)" IN PROGRAM.REC<LPTR> SETTING XX ELSE
+            FINDSTR "CRT @(0,23)" IN PROGRAM.REC<LPTR> SETTING XX ELSE
+               FINDSTR "PRINT ERRMSG" IN PROGRAM.REC<LPTR> SETTING XX ELSE ERROR.ONLY = 0
+            END
+         END
+         GOSUB 1500
+      END
+   NEXT IPTR
+   IF NOT(ERROR.ONLY) THEN
+      CONVERT.OK = ''
+      ERRMSG = 'CANNOT CONVERT PROGRAM *** ':PROGRAM.NAME:' *** FOR INPUT *** MANUAL UPDATE'
+      PRINT @(0,23):CL:ERRMSG
+*      IF PROGRAMS.TO.CONVERT.MANUAL = '' THEN
+*         PROGRAMS.TO.CONVERT.MANUAL = PROGRAM.NAME
+*      END ELSE
+*         PROGRAMS.TO.CONVERT.MANUAL = PROGRAMS.TO.CONVERT.MANUAL:AM:PROGRAM.NAME
+*      END
+   END ELSE
+      IF FIPLN THEN
+         CONVERT.OK = 1
+      END
+   END
+   IF INDEX(PROGRAM.REC,"PRINTER ON",1) THEN
+      FPTRON = 1
+   END
+   IF INDEX(PROGRAM.REC,"PRINTER OFF",1) THEN
+      FPTROFF = 1
+   END
+   IF INDEX(PROGRAM.REC,"PRINT CHAR(12)",1) THEN
+      FPTRON = 1
+   END
+   IF INDEX(PROGRAM.REC,"PRINT CHAR(012)",1) THEN
+      FPTRON = 1
+   END
+   IF INDEX(PROGRAM.REC,"PRINT NEW.PAGE",1) THEN
+      FPTRON = 1
+   END
+   RETURN
+*
+*---- Double check for input in Error routine
+1500 *
+   RETURN
+*
+*---- Find the stuff we need
+2000 *
+   FSYSCPYLN = ''; FCHARLN = ''; FSYSCALLN = ''
+   FC1LN = ''; FC2LN = ''; FC3LN = ''; FSC1LN =  ''; FSEC1LN = ''; FCFRMLN = ''
+   F90LN = ''; F91LN = ''; F92LN = ''; F93LN = ''
+   NEW.PROGRAM.REC = PROGRAM.REC
+   LCNT = DCOUNT(PROGRAM.REC,AM)
+   GOSUB 2100
+   GOSUB 2200
+   BEGIN CASE
+      CASE NOT(FC1LN) AND NOT(FC2LN) AND NOT(FC3LN) AND NOT(FSC1LN) AND NOT(FSEC1LN) AND NOT(FCFRMLN)
+         ERRMSG = 'CANNOT UPDATE  PROGRAM *** ':PROGRAM.NAME:' *** DUE TO TCC.REC MISSING'
+         PRINT @(0,23):CL:ERRMSG
+         ERR = 1
+*         IF PROGRAMS.NOT.CONVERTED = '' THEN
+*            PROGRAMS.NOT.CONVERTED = PROGRAM.NAME
+*         END ELSE
+*            PROGRAMS.NOT.CONVERTED = PROGRAMS.NOT.CONVERTED:AM:PROGRAM.NAME
+*         END
+*         IF BADLIST = '' THEN
+*            BADLIST = PROGRAM.NAME
+*         END ELSE
+*            BADLIST = BADLIST:AM:PROGRAM.NAME
+*         END
+         GOTO 2099
+      CASE NOT(FSYSCPYLN) AND NOT(FSYSCALLN) AND FCHARLN
+         GOSUB 2300   ;* UPDATE ERROR MESSAGE ROUTINES
+         GOSUB 2400   ;* INSERT INIT
+         GOSUB 2500   ;* INSERT CPYLIB
+      CASE FSYSCPYLN AND NOT(FSYSCALLN)
+         GOSUB 2300   ;* UPDATE ERROR MESSAGE ROUTINES
+         GOSUB 2600   ;* INSERT INIT
+      CASE FSYSCPYLN AND FSYSCALLN
+         GOSUB 2300   ;* UPDATE ERROR MESSAGE ROUTINES
+   END CASE
+2099 *
+   RETURN
+*
+*---- Find SYSCOM cpylib and init routine
+2100 *
+   FOR LPTR = 1 TO LCNT
+      CLINE = TRIM(PROGRAM.REC<LPTR>)
+      BEGIN CASE
+         CASE CLINE = '*COPY>CPYLIB>SYSCOM' OR CLINE = '*COPY CPYLIB>SYSCOM'
+            FSYSCPYLN = LPTR
+         CASE CLINE = '*COPY>CPYLIB>CHAR' OR CLINE = '*COPY CPYLIB>CHAR'
+            FCHARLN = LPTR
+         CASE INDEX(CLINE,"CALL SYSCOM",1) = 1
+            FSYSCALLN = LPTR
+         CASE CLINE = '*COPY>CPYLIB>COM1' OR CLINE = '*COPY CPYLIB>COM1'
+            FC1LN = LPTR
+         CASE CLINE = '*COPY>CPYLIB>COM2' OR CLINE = '*COPY CPYLIB>COM2'
+            FC2LN = LPTR
+         CASE CLINE = '*COPY>CPYLIB>COM3' OR CLINE = '*COPY CPYLIB>COM3'
+            FC3LN = LPTR
+         CASE CLINE = '*COPY>CPYLIB>SCOMMON1' OR CLINE = '*COPY CPYLIB>SCOMMON1'
+            FSC1LN = LPTR
+         CASE CLINE = '*COPY>JES.CPYLIB>SCOMMON.ESTIMATE' OR CLINE = '*COPY JES.CPYLIB>SCOMMON.ESTIMATE'
+            FSEC1LN = LPTR
+         CASE CLINE = '*COPY>CPYLIB>COM_FORMCTL' OR CLINE = '*COPY CPYLIB>COM_FORMCTL'
+            FCFRMLN = LPTR
+      END CASE
+   NEXT LPTR
+   RETURN
+*
+*---- Find Error message print routines
+2200 *
+   MOST = LCNT - 50
+   IF MOST LE 0 THEN MOST =  1
+   FOR LPTR = LCNT TO MOST STEP -1
+      CLINE = TRIM(PROGRAM.REC<LPTR>)
+      IF CLINE[1,1] # "*" THEN
+         LPOS = INDEX(CLINE,"90000",1)
+         IF LPOS = 1 THEN
+            F90LN = LPTR
+         END
+         LPOS = INDEX(CLINE,"91000",1)
+         IF LPOS = 1 THEN
+            F91LN = LPTR
+         END
+         LPOS = INDEX(CLINE,"92000",1)
+         IF LPOS = 1 THEN
+            F92LN = LPTR
+         END
+         LPOS = INDEX(CLINE,"93000",1)
+         IF LPOS = 1 THEN
+            F93LN = LPTR
+         END
+      END
+   NEXT LPTR
+   RETURN
+*
+*---- Update the program Error message routines
+2300 *
+   ORDER.LN = F90LN
+   IF NOT(FSC1LN) AND NOT(FSEC1LN) THEN
+      ORDER.ITEM = S90000
+   END ELSE
+      ORDER.ITEM = SI90000
+   END
+   LOCATE F91LN IN ORDER.LN<1>,1 BY 'AR' SETTING XX ELSE NULL
+   ORDER.LN = INSERT(ORDER.LN,1,XX,0,F91LN)
+   IF NOT(FSC1LN) AND NOT(FSEC1LN) THEN
+      ORDER.ITEM = INSERT(ORDER.ITEM,1,XX,0,S91000)
+   END ELSE
+      ORDER.ITEM = INSERT(ORDER.ITEM,1,XX,0,SI91000)
+   END
+   LOCATE F92LN IN ORDER.LN<1>,1 BY 'AR' SETTING XX ELSE NULL
+   ORDER.LN = INSERT(ORDER.LN,1,XX,0,F92LN)
+   IF NOT(FSC1LN) AND NOT(FSEC1LN) THEN
+      ORDER.ITEM = INSERT(ORDER.ITEM,1,XX,0,S92000)
+   END ELSE
+      ORDER.ITEM = INSERT(ORDER.ITEM,1,XX,0,SI92000)
+   END
+   LOCATE F93LN IN ORDER.LN<1>,1 BY 'AR' SETTING XX ELSE NULL
+   ORDER.LN = INSERT(ORDER.LN,1,XX,0,F93LN)
+   IF NOT(FSC1LN) AND NOT(FSEC1LN) THEN
+      ORDER.ITEM = INSERT(ORDER.ITEM,1,XX,0,S93000)
+   END ELSE
+      ORDER.ITEM = INSERT(ORDER.ITEM,1,XX,0,SI93000)
+   END
+*
+   OCNT = DCOUNT(ORDER.LN,VM)
+   FOR OPTR = OCNT TO 1 STEP -1
+      STRT = ORDER.LN<1,OPTR>
+      ITEM = ORDER.ITEM<1,OPTR>
+      IF OPTR = OCNT THEN
+         STPP = LCNT
+      END ELSE
+         STPP = ORDER.LN<1,OPTR+1>-1
+      END
+      IF STRT AND STPP THEN
+         GOSUB 2350
+      END
+   NEXT OPTR
+   RETURN
+*
+2350 *
+   FOR APTR = STRT TO STPP
+      CLINE = TRIM(PROGRAM.REC<APTR>)
+      AA = INDEX(CLINE,"99999",1)
+      BB = INDEX(CLINE,"INPUT",1)
+      CC = INDEX(CLINE,"PRINT",1)
+      DD = INDEX(CLINE,"RETURN",1)
+      EE = INDEX(CLINE,"CALL SYSCOM",1)
+      FF = INDEX(CLINE,"CRT",1)
+      GG = INDEX(CLINE,"ERRMSG",1)
+      HH = INDEX(CLINE,"ERR.TYPE",1)
+      BEGIN CASE
+         CASE AA = 1
+            APTR = STPP
+         CASE BB = 1 OR CC = 1 OR DD = 1 OR EE = 1 OR FF = 1 OR GG =  1 OR HH = 1
+            NEW.PROGRAM.REC<APTR> = "* ":NEW.PROGRAM.REC<APTR>
+         CASE APTR = STRT
+            NEW.PROGRAM.REC<APTR> = "* ":NEW.PROGRAM.REC<APTR>
+      END CASE
+   NEXT APTR
+   NEW.PROGRAM.REC = INSERT(NEW.PROGRAM.REC,STRT,0,0,ITEM)
+   UPDATE.FLAG = 1
+   RETURN
+*
+*---- Update the program SYSCOM cpylib and init routines
+2400 *
+   NEW.PROGRAM.REC = INSERT(NEW.PROGRAM.REC,FCHARLN+1,0,0,SINIT)
+   UPDATE.FLAG = 1
+   RETURN
+*
+2500 *
+   NEW.PROGRAM.REC = INSERT(NEW.PROGRAM.REC,FCHARLN+1,0,0,SCPYLIB)
+   UPDATE.FLAG = 1
+   RETURN
+*
+2600 *
+   NEW.PROGRAM.REC = INSERT(NEW.PROGRAM.REC,FSYSCPYLN+1,0,0,SINIT)
+   UPDATE.FLAG = 1
+   RETURN
+*
+*---- Convert for PRINT
+*
+3000 *
+*
+* This program will check programs for PRINT or CRT statements.
+* Convert the lines to call a subroutine sending the appropriate
+* X,Y, and VALUE to print.
+* SLN will indicate a Scrolling area.
+*
+** PRINT @(53,SLN):CUST.CONTACT.CD<1,L>"L#2"
+** P_X = 53 ; P_Y = SLN ; P_VALUE = CUST.CONTACT.CD<1,L>"L#2" ; P_OPT = ""
+** P_OPT may be 'CL' to clear to the end of the line or
+** to clear the entire line.
+** PRINT @(-1) will be commented out.
+** PRINT "COMMENTS" will print at 0,23.
+** PRINT BUFFER will print at 0,23.
+*********************************************************************
+*
+   SAVE.PROGRAM.REC = PROGRAM.REC
+   IF NEW.PROGRAM.REC # '' THEN
+      PROGRAM.REC = NEW.PROGRAM.REC
+   END
+   LCNT = DCOUNT(PROGRAM.REC,AM)
+   PRIOR.LPTR = ''
+   GROUP.START = ''
+   GROUP.END = ''
+   SAVE.VALUE = "$%#*(&)@!"
+   SAVE.P_X = "$%#*(&)@!"
+   SAVE.P_Y = "$%#*(&)@!"
+   FOR LPTR = 1 TO LCNT
+      OLDLINE = TRIM(PROGRAM.REC<LPTR>)      ;* Remove leading/trailing space
+      OLDLINE = CHANGE(OLDLINE,": ",":")     ;* Remove spaces around :
+      OLDLINE = CHANGE(OLDLINE," :",":")
+      LABEL = ""                             ;* Identify labels
+      IF NUM(OLDLINE[1,1]) THEN              ;* Remove labels
+         FOR I = 1 TO LEN(OLDLINE)
+            IF NOT(NUM(OLDLINE[I,1])) THEN
+               I = LEN(OLDLINE)
+            END ELSE
+               LABEL := OLDLINE[I,1]
+            END
+         NEXT I
+      END
+      OLDLINE = TRIM(OLDLINE[LEN(LABEL)+1,999])
+      IF OLDLINE[1,1] # "*" THEN
+         IPOS = INDEX(OLDLINE,"PRINT",1)
+         CPOS = INDEX(OLDLINE,"CRT",1)
+         BEGIN CASE
+            CASE IPOS = 0 AND CPOS = 0
+            CASE IPOS = 1 OR CPOS = 1
+               PRTLN = LPTR
+               MLN = ''
+               LINE = TRIM(OLDLINE)
+               MULTI = 0
+               GOSUB 3100
+            CASE 1
+               OLDLINE = CHANGE(OLDLINE,";",VM)
+               CCNT = DCOUNT(OLDLINE,VM)
+               FOR CPTR = 1 TO CCNT
+                  LINE = TRIM(OLDLINE<1,CPTR>)
+                  IF LINE[1,1] # "*" THEN
+                     IPOS = INDEX(LINE,"PRINT",1)
+                     CPOS = INDEX(LINE,"CRT",1)
+                     IF IPOS = 1 OR CPOS = 1 THEN
+                        PRTLN = LPTR
+                        MLN = CPTR
+                        MULTI = 1
+                        GOSUB 3100
+                     END
+                  END
+               NEXT CPTR
+         END CASE
+      END
+*        PRIOR.LPTR = LPTR
+   NEXT LPTR
+   BEGIN CASE
+      CASE GROUP.START = ''             ;* FIRST LINE HIT
+      CASE GROUP.START AND GROUP.END    ;* TAKE CARE OF PRIOR GROUP
+         GOSUB 3200
+      CASE GROUP.END = ''               ;* TAKE CARE OF PRIOR SINGLE
+         IF SAVE.VALUE = '' THEN          ;* SCROLLING AREA
+            IF FIELD(TRIM(PROGRAM.REC<GROUP.START+1>)," ",1) = 'NEXT' THEN
+**                      P_OPT = '"CLA"'
+**                      GOSUB 3300                        ;* INSERT SCROLLING
+**                      P_OPT = '""'
+               GOSUB 3200
+            END ELSE
+               GOSUB 3200
+            END
+            SAVE.VALUE = "$%#*(&)@!"
+         END ELSE
+            GOSUB 3200
+         END
+   END CASE
+   NEW.PROGRAM.REC = PROGRAM.REC
+   IF NOT(FC1LN) AND NOT(FC2LN) AND NOT(FC3LN) AND NOT(FSC1LN) AND NOT(FSEC1LN) AND NOT(FCFRMLN) THEN
+      IF UPDATE.FLAG THEN
+         ERRMSG = 'CANNOT UPDATE  PROGRAM *** ':PROGRAM.NAME:' *** FOR PRINT TCC.REC MISSING'
+         PRINT @(0,23):CL:ERRMSG
+         ERR = 1
+         GOTO 3999
+      END
+   END
+3999 *
+   RETURN
+*
+*---- Change lines to call subroutine
+3100 *
+   FLD1 = FIELD(LINE," ",1)
+   FLD2COL = COL2()
+   VALUE = TRIM(LINE[FLD2COL,999])
+* PRINT 'OLDLINE = ':LINE
+   BEGIN CASE
+*-- Comment out clear screen on a line with a label
+      CASE VALUE[1,5] = "@(-1)" AND LABEL
+         PROGRAM.REC<LPTR> = CHANGE(PROGRAM.REC<LPTR>," "," * ")
+         UPDATE.FLAG = 1
+         GOTO 3199
+*-- Comment out clear screen
+      CASE VALUE[1,5] = "@(-1)"
+         PROGRAM.REC<LPTR> = "* ":PROGRAM.REC<LPTR>
+         UPDATE.FLAG = 1
+         GOTO 3199
+      CASE VALUE[1,2] = "CS" AND LABEL
+         PROGRAM.REC<LPTR> = CHANGE(PROGRAM.REC<LPTR>," "," * ")
+         UPDATE.FLAG = 1
+         GOTO 3199
+*-- Comment out clear screen
+      CASE VALUE[1,2] = "CS"
+         PROGRAM.REC<LPTR> = "* ":PROGRAM.REC<LPTR>
+         UPDATE.FLAG = 1
+         GOTO 3199
+      CASE VALUE[1,2] # "@(" AND VALUE # ""
+         P_X = 0
+         P_Y = 23
+         P_OPT = '""'
+         CLPOS = INDEX(VALUE:":","CL:",1)
+         CLPOS2 = INDEX(VALUE:":","@(-4):",1)
+         IF CLPOS # 0 THEN
+            IF CLPOS-1 = 0 THEN
+               IF VALUE[1,3] = 'CL:' THEN
+                  VALUE = CHANGE(VALUE,"CL:","")    ;* REMOVE IMBEDED CL
+                  P_OPT = '"CL"'
+               END
+            END ELSE
+               VALUE = VALUE[1,CLPOS-1]             ;* REMOVE TRAILING CL
+               P_OPT = '"CL"'
+            END
+         END ELSE
+            IF CLPOS2 # 0 THEN
+               IF CLPOS2-1 = 0 THEN
+                  IF VALUE[1,3] = '@(-4):' THEN
+                     VALUE = CHANGE(VALUE,"@(-4):","")    ;* REMOVE IMBEDED CL
+                     P_OPT = '"CL"'
+                  END
+               END ELSE
+                  VALUE = VALUE[1,CLPOS2-1]             ;* REMOVE TRAILING CL
+                  P_OPT = '"CL"'
+               END
+            END ELSE
+               P_OPT = '""'
+            END
+         END
+         IF VALUE = '' THEN
+            P_VALUE = '""'
+         END ELSE
+            IF VALUE[LEN(VALUE),1] = ":" THEN
+               P_VALUE = VALUE[1,LEN(VALUE)-1]
+            END ELSE
+               P_VALUE = VALUE
+            END
+         END
+         GOTO 3150
+      CASE 1
+         XPOS = INDEX(LINE,"@(",1)
+         YPOS = INDEX(LINE,")",1)
+**          VALUE = FIELD(LINE,":",2)
+         VALUE = LINE[YPOS+2,999]
+* PRINT 'VALUE = ':VALUE
+         CLPOS = INDEX(VALUE:":","CL:",1)
+* PRINT 'CLPOS = ':CLPOS
+         IF CLPOS # 0 THEN
+            IF CLPOS-1 = 0 THEN
+               IF VALUE[1,3] = 'CL:' THEN
+                  VALUE = CHANGE(VALUE,"CL:","")    ;* REMOVE IMBEDED CL
+                  P_OPT = '"CL"'
+               END
+            END ELSE
+               VALUE = VALUE[1,CLPOS-1]             ;* REMOVE TRAILING CL
+               P_OPT = '"CL"'
+            END
+         END ELSE
+            P_OPT = '""'
+         END
+         IF VALUE = '' THEN
+            P_VALUE = '""'
+         END ELSE
+            IF VALUE[LEN(VALUE),1] = ":" THEN
+               P_VALUE = VALUE[1,LEN(VALUE)-1]
+            END ELSE
+               P_VALUE = VALUE
+            END
+         END
+* PRINT 'P_VALUE = ':P_VALUE
+         MLINE = LINE[XPOS+2,9999]
+         P_X = FIELD(MLINE,",",1)
+         MLINE = LINE[XPOS+2+LEN(P_X)+1,999]
+         P_Y = FIELD(MLINE,")",1)
+3150 *
+         BEGIN CASE
+*        CASE VALUE = ''                         ;* CLEAR LINE
+            CASE LINE = 'PRINT CS:' AND LPTR > LCNT-5  ;* CLEAR SCREEN
+               PROGRAM.REC = DELETE(PROGRAM.REC,LPTR,0,0)
+               UPDATE.FLAG = 1
+               LCNT -= 1
+               LPTR -= 1
+            CASE LINE[1,11] = 'PRINT @(-1)' AND LPTR > LCNT-5  ;* CLEAR SCREEN
+               PROGRAM.REC = DELETE(PROGRAM.REC,LPTR,0,0)
+               UPDATE.FLAG = 1
+               LCNT -= 1
+               LPTR -= 1
+            CASE PRIOR.LPTR+1 = LPTR                ;* TWO IN A ROW
+               NEWLINE = 'P_X  := AM:':P_X:' ; '
+               NEWLINE := 'P_Y := AM:':P_Y:' ; '
+               NEWLINE := 'P_VALUE := AM:':P_VALUE
+**          NEWLINE := 'P_VALUE := AM:':P_VALUE:' ; '
+**          NEWLINE := 'P_OPT = ':P_OPT
+**          NEWLINE := 'P_OPT := AM:':P_OPT
+               SAVELINE := AM:NEWLINE
+**          IF GROUP.START = '' THEN
+**             GROUP.START = PRIOR.LPTR
+               IF GROUP.END = '' THEN
+                  GROUP.END = LPTR
+                  SAVE.P_X = PRIOR.P_X
+                  SAVE.P_Y = PRIOR.P_Y
+               END ELSE
+                  GROUP.END = LPTR
+               END
+               PRIOR.LPTR = LPTR
+            CASE 1                                  ;* SINGLE LINE
+               BEGIN CASE
+                  CASE GROUP.START = ''             ;* FIRST LINE HIT
+                     GROUP.START = LPTR
+                  CASE GROUP.START AND GROUP.END    ;* TAKE CARE OF PRIOR GROUP
+                     GOSUB 3200
+                     GROUP.START = LPTR
+                     GROUP.END = ''
+                  CASE GROUP.END = ''               ;* TAKE CARE OF PRIOR SINGLE
+                     IF SAVE.VALUE = '' THEN          ;* SCROLLING AREA
+**                   IF (SAVE.P_X = P_X) AND (SAVE.P_Y = P_Y) THEN
+                        IF FIELD(TRIM(PROGRAM.REC<GROUP.START+1>)," ",1) = 'NEXT' THEN
+**                      P_OPT = '"CLA"'
+**                      GOSUB 3300                        ;* INSERT SCROLLING
+                           GOSUB 3200
+**                            LPTR += GCNT
+**                            LCNT += GCNT
+                           GROUP.START = LPTR
+                        END ELSE
+                           GOSUB 3200
+                           GROUP.START = LPTR
+                        END
+                        SAVE.VALUE = "$%#*(&)@!"
+                     END ELSE
+                        GOSUB 3200
+                        GROUP.START = LPTR
+                     END
+               END CASE
+               NEWLINE = 'P_X  = ':P_X:' ; '
+               NEWLINE := 'P_Y = ':P_Y:' ; '
+               NEWLINE := 'P_VALUE = ':P_VALUE:' ; '
+               NEWLINE := 'P_OPT = ':P_OPT
+               SAVELINE = NEWLINE
+               SAVE.VALUE = VALUE
+               PRIOR.LPTR = LPTR
+               PRIOR.P_X = P_X
+               PRIOR.P_Y = P_Y
+         END CASE
+   END CASE
+3199 *
+   RETURN
+*
+3200 *
+   GCNT = DCOUNT(SAVELINE,AM)
+   PROGRAM.REC = INSERT(PROGRAM.REC,GROUP.START,0,0,SAVELINE)
+   PROGRAM.REC = INSERT(PROGRAM.REC,GROUP.START+GCNT,0,0,CALLLINE)
+   FOR DPTR = 1 TO GCNT
+      PROGRAM.REC = DELETE(PROGRAM.REC,GROUP.START+GCNT+1,0,0)
+   NEXT DPTR
+   LPTR += 1
+   LCNT += 1
+   SAVEGROUP = SAVELINE
+   UPDATE.FLAG = 1
+   RETURN
+ *
+3300 *
+* PRINT '2200 SAVEGROUP = ':SAVEGROUP
+   GCNT = DCOUNT(SAVEGROUP,AM)
+   SAVEGROUP = CHANGE(SAVEGROUP,";",VM)
+   FOR JXPT = 1 TO GCNT
+      IF JXPT = 1 THEN
+         SAVEGROUP = REPLACE(SAVEGROUP,JXPT,3,0,'P_VALUE = ""')
+         SAVEGROUP = REPLACE(SAVEGROUP,JXPT,4,0,'P_OPT = "CL"')
+      END ELSE
+         SAVEGROUP = REPLACE(SAVEGROUP,JXPT,3,0,'P_VALUE := AM:""')
+      END
+   NEXT JXPT
+   SAVEGROUP = CHANGE(SAVEGROUP,VM,";")
+   PROGRAM.REC = INSERT(PROGRAM.REC,GROUP.START,0,0,SAVEGROUP)
+   PROGRAM.REC = INSERT(PROGRAM.REC,GROUP.START+GCNT,0,0,CALLLINE)
+   PROGRAM.REC = DELETE(PROGRAM.REC,GROUP.START+GCNT+1,0,0)
+   LPTR += GCNT
+   LCNT += GCNT
+   SAVEGROUP = SAVELINE
+   UPDATE.FLAG = 1
+   RETURN
+*
+*---- ERROR PROCESS
+*
+91000*
+   PRINT @(0,23):CL:ERRMSG
+   INPUT REPLY,1:
+   PRINT @(0,23):CL:
+   RETURN
+*
+93000*
+   PRINT @(0,23):CL:ERRMSG:
+   INPUT REPLY,1:
+   PRINT @(0,23):CL:
+99999*
+   STOP
+   END
+*************************

@@ -1,0 +1,408 @@
+*COPY>CPYLIB>COM1
+*COPY>JCS.CPYLIB>COM.JCS.LINK  
+*COPY>ICS.CPYLIB>COM.INV.MAIN  
+*COPY>ICS.CPYLIB>COM.INV.SERIAL
+*COPY>JCS.CPYLIB>COM.INV.STATS 
+*COPY>PMC.CPYLIB>COM.CUST
+*COPY>OPS.CPYLIB>COM.ORDER
+*COPY>ICS.CPYLIB>COM.INV.CNV
+********************************************************************
+* REVISION    - [08.1]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SOURCE        - OPSBP
+* PROGRAM       - ORDER.CANCEL
+* DATE          - 01/23/90
+* DESCRIPTION   -
+* P.S           - A work file will be required to replace ORD.DET.SUM
+* TASK 18606 02/27/95 LLH - KITTING
+*T23278 markt 10/22/1998 * Add check for divisional security
+*T25159 alex 05/11/2000 * Add PMC.CPYLIB>COUNTRY.CODE, since the
+*                         COUNTRY.CODE file can hold multiple attributes
+*                         of data.
+*T26126 adelgado 02/26/2002 * Implement the LOCKED clause for READU.
+*T26927 cmykleb 10/21/2002 * CUST.ORD.BAL not always getting zeroed.
+********************************************************************
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>COMP.OPS
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>PMC.CPYLIB>SALESMAN
+*COPY>PMC.CPYLIB>CSR.CODE
+*COPY>OPS.CPYLIB>ORDER
+*COPY>OPS.CPYLIB>ORDER.DETAIL
+*COPY>OPS.CPYLIB>ORDER.DETAIL.INQ
+*COPY>OPS.CPYLIB>BOL
+*COPY>ICS.CPYLIB>FNGD.STATS
+*COPY>ICS.CPYLIB>FNGD.ORDER.STATS
+*COPY>PMC.CPYLIB>COUNTRY.CODE        ;*T25159
+*COPY>CPYLIB>GEN.XREF.SUB
+*COPY>CPYLIB>PORT.CONTROL
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+   MAT SYSCOM.REC =  ""; SYS.TYPE = 2
+*
+*---- Open files
+*
+   OPEN "","CONTROL" TO CONTROL ELSE
+      ERRMSG = "Cannot locate the CONTROL file";GOTO 93000
+   END
+   OPEN "","COMPANY" TO COMPANY ELSE
+      ERRMSG = "Cannot locate the COMPANY file";GOTO 93000
+   END
+   OPEN "","OPS.SCREENS" TO M.SCREENS ELSE
+      ERRMSG = "Cannot locate the OPS.SCREENS file";GOTO 93000
+   END
+   OPEN "","SHIP.TO" TO SHIP.TO ELSE
+      ERRMSG = "Cannot locate the SHIP.TO file";GOTO 93000
+   END
+   OPEN "","BOL" TO BOL ELSE
+      ERRMSG = "Cannot locate the BOL file";GOTO 93000
+   END
+   OPEN "","CSR.CODE" TO CSR.CODE ELSE
+      ERRMSG = "Cannot locate the CSR.CODE file"; GOTO 93000
+   END
+   OPEN "","COUNTRY.CODE" TO COUNTRY.CODE ELSE
+      ERRMSG = "Cannot locate the COUNTRY.CODE file";GOTO 93000
+   END
+*
+*---- Get company
+*
+   CONO = ""; MAT COMP.REC = ""
+   CALL GET.CONO(CONO,MAT COMP.REC)
+   IF CONO = "END" THEN GOTO 99999
+   MATREAD OPCO.REC FROM CONTROL, CONO:"OPS" ELSE
+      ERRMSG = "Cannot locate Order Processing company setup"
+      GOTO 93000
+   END
+*
+   CALL JOB.MAINT.OPEN(CO.JES,CO.POS,NOT.OPEN)
+   IF NOT.OPEN THEN GOTO 99999
+*
+   PORT.NO = "TTY"; CALL SYSVARS.SUB(PORT.NO)
+   MATREAD USER.REC FROM SECURITY, "R.":PORT.NO ELSE
+      ERRMSG = "Cannot locate the logged on user ID !"
+      GOTO 93000
+   END
+*
+*---- Setup SCRN.EDIT & EDIT.SUB
+*
+* MAT EDIT.COM = ""
+* TYP = 0; CALL EDIT.SUB
+   MAT EDIT.COM.DRIVER = ""
+   ECD.SCRN.CNT = 1
+   ECD.SCRN.NAME = "ORDER.CANCEL"
+   ECD.ACTION = 1; CALL SCRN.EDIT
+   ECD.SCRN.NO = 1; ESN = 1
+   ECD.ACTION = 2; CALL SCRN.EDIT
+*
+*---- Initialize
+*
+   MAT GEN.XREF.REC = ""
+   GXR.CO = CONO
+*
+*---- Get order number
+100 *
+   MAT SCV.REC = ""; ECD.NUM = 1
+   ECD.ACTION = 4; CALL SCRN.EDIT
+   BEGIN CASE
+      CASE ECD.RET.VALUE = "END"
+         GOTO 99999
+      CASE ECD.RET.VALUE = ""
+         ORD.STATUS = ""; ODQ.PROD = ""; GOSUB 1100
+         IF ECD.RET.VALUE = "END" THEN
+            ECD.ACTION = 6; CALL SCRN.EDIT
+            GOTO 100
+         END
+         GXR.NAME = "ORDER"
+         GXR.XREF = CUSTOMER
+         GXR.FILE = ORDER
+         GXR.SRCH.ID = ORD.CUST
+         CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+         ECD.ACTION = 2; CALL SCRN.EDIT
+         IF GXR.ID = "" THEN GOTO 100
+         SCV.REC(1) = GXR.ID
+         ORDNO = GXR.ID
+      CASE 1
+         ORDNO = ECD.RET.VALUE
+   END CASE
+  * T26126 v
+   MATREADU ORD.REC FROM ORDER, CONO:ORDNO LOCKED
+      ERRMSG = 'ORDER record is locked by user - ':GETUSERNAME(STATUS())
+      GOSUB 91000 
+      GOSUB 8000; GOTO 100
+   END ELSE
+  * T26126 ^
+      RELEASE ORDER, CONO:ORDNO
+      GOSUB 8000; GOTO 100
+   END
+*T23278 v
+   DIV.CODE = ORD.DIV; USER.ID = UPCASE(@LOGNAME); ERRMSG = ''
+   CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+   IF ERRMSG # '' THEN
+      GOSUB 91000; GOTO 100
+   END
+*T23278 ^
+*
+*---- Build ORD.DET.INQ & ORD.DET.SUM
+*
+   STATUS = "L"; SHPNO = "ALL"
+   CALL ORDER.LINE.UPD(CONO,ORDNO,SHPNO,STATUS)
+   GOSUB 8100
+   GOSUB 8000
+*
+*---- Prompt line
+500 *
+   MORE = 1
+   LOOP
+      ECD.NUM = 55; SCV.REC(ECD.NUM)<ESN> = ""
+      ECD.ACTION = 4; CALL SCRN.EDIT
+      OPTION = ECD.RET.VALUE
+      BEGIN CASE
+         CASE OPTION = "END" OR OPTION = "E"
+            RELEASE ORDER, CONO:ORDNO
+            MORE = 0
+         CASE OPTION = "C"
+            ERRMSG = ""
+            BEGIN CASE
+               CASE ORD.STATUS<1,1> = "CLOSED"
+                  ERRMSG = "Order has already been closed"
+               CASE ORD.STATUS<1,1> = "CANCEL"
+                  ERRMSG = "Order has already been cancelled"
+               CASE SUM(ODQ.A.QTY) # 0
+                  ERRMSG = "Order cannot be cancelled because of allocated quantity"
+               CASE SUM(ODQ.R.QTY) # 0
+                  ERRMSG = "Order cannot be cancelled because of reserved quantity"
+               CASE SUM(ODQ.F.QTY) # 0
+                  ERRMSG = "Order cannot be cancelled because of finished quantity"
+               CASE SUM(ODQ.S.QTY) # 0
+                  ERRMSG = "Order cannot be cancelled because of shipped quantity"
+               CASE SUM(ODQ.I.QTY) # 0
+                  ERRMSG = "Order cannot be cancelled because of invoiced quantity"
+               CASE ORD.REL.NO # ""
+                  ERRMSG = "Order cannot be cancelled because Releases exist"
+            END CASE
+            BCNT = DCOUNT(ORD.BOL,VM)
+            FOR B = 1 TO BCNT
+               MATREAD BOL.REC FROM BOL, CONO:ORD.BOL<1,B> THEN
+                  IF BOL.STATUS # "CANCEL" THEN
+                     ERRMSG = "Order cannot be cancelled because Bill of Ladings exist"
+                  END
+               END
+            NEXT B
+            MATREADU CUST.REC FROM CUSTOMER, CONO:ORD.CUST ELSE
+               ERRMSG = "Cannot locate customer # ":ORD.CUST
+               RELEASE CUSTOMER, CONO:ORD.CUST
+            END
+            IF ERRMSG = "" THEN
+               ECD.NUM = 56; SCV.REC(ECD.NUM)<ESN> = ""
+               ECD.ACTION = 4; CALL SCRN.EDIT
+               IF ECD.RET.VALUE = "Y" THEN
+*T26927 v
+*                 LOCATE ORDNO IN CUST.ORD.NUM<1>,1 SETTING OFND ELSE
+*                    CUST.ORD.NUM<1,OFND> = ORDNO
+*                 END
+*                 CUST.ORD.BAL<1,OFND> = 0
+                  LOCATE ORDNO IN CUST.ORD.NUM<1>,1 SETTING OFND THEN
+                     CUST.ORD.BAL<1,OFND> = 0
+                  END
+*T26927 ^
+                  MATWRITE CUST.REC ON CUSTOMER, CONO:ORD.CUST
+                  ORD.STATUS = INSERT(ORD.STATUS,1,1,0,"CANCEL")
+                  ORD.STAT.DATE = INSERT(ORD.STAT.DATE,1,1,0,DATE())
+                  STATUS = "U"; SHPNO = ""
+                  CALL ORDER.LINE.UPD(CONO,ORDNO,SHPNO,STATUS)
+                  PCNT = DCOUNT(ODQ.PROD,VM)
+                  FOR P = 1 TO PCNT
+                     IWH.ID = CONO:ODQ.PROD<1,P>:"!":ODQ.WHSE<1,P>
+                     MATREADU FGS.REC FROM FNGD.STATS, IWH.ID THEN
+*T18606 v
+                        PTR = 1
+                        LOOP
+                           LOCATE ORDNO IN FGS.ORDER<1>,PTR SETTING OLOC THEN
+                              FGS.ORDER = DELETE(FGS.ORDER,1,OLOC,0)
+                              FGS.O.QTY = DELETE(FGS.O.QTY,1,OLOC,0)
+                              FGS.B.QTY = DELETE(FGS.B.QTY,1,OLOC,0)
+                              FGS.SEQ = DELETE(FGS.SEQ,1,OLOC,0)
+                              FGS.KIT = DELETE(FGS.KIT,1,OLOC,0)
+                           END ELSE
+                              PTR = 0
+                           END
+                        UNTIL PTR = 0 DO
+                           PTR = 1
+                        REPEAT
+                        IF FGS.ORDER # "" OR FGS.JOB # "" THEN
+                           MATWRITE FGS.REC ON FNGD.STATS, IWH.ID
+                        END ELSE
+                           DELETE FNGD.STATS, IWH.ID
+                        END
+                     END
+                     RELEASE FNGD.STATS, IWH.ID
+*T18606 v
+                     MATREADU FOS.REC FROM FNGD.ORDER.STATS, IWH.ID:"!":ORDNO:"!":ODQ.PROD.SEQ<1,P>:"!":ODQ.KIT<1,P> THEN
+                        DELETE FNGD.ORDER.STATS, IWH.ID:"!":ORDNO:"!":ODQ.PROD.SEQ<1,P>:"!":ODQ.KIT<1,P>
+                     END ELSE
+                        RELEASE FNGD.ORDER.STATS, IWH.ID:"!":ORDNO:"!":ODQ.PROD.SEQ<1,P>:"!":ODQ.KIT<1,P>
+                        MATREADU FOS.REC FROM FNGD.ORDER.STATS, IWH.ID:"!":ORDNO THEN
+                           DELETE FNGD.ORDER.STATS, IWH.ID:"!":ORDNO
+                        END
+                        RELEASE FNGD.ORDER.STATS, IWH.ID:"!":ORDNO
+                     END
+                     RELEASE FNGD.ORDER.STATS, IWH.ID:"!":ORDNO:"!":ODQ.PROD.SEQ<1,P>:"!":ODQ.KIT<1,P>
+*T18606 ^
+                  NEXT P
+                  MORE = 0
+               END
+            END ELSE
+               GOSUB 91000
+            END
+      END CASE
+   WHILE MORE DO REPEAT
+   ECD.ACTION = 6; CALL SCRN.EDIT
+   GOTO 100
+*
+*---- Customer
+1100 *
+   IF ODQ.PROD # "" THEN
+      ERRMSG = "Sorry, Cannot switch customer for an order with line items."
+      GOSUB 91000; GOTO 1199
+   END
+1101 *
+   ECD.NUM = 4; ECD.ACTION = 4; CALL SCRN.EDIT
+   OVALUE = SCV.REC(5)<ESN>
+   BEGIN CASE
+      CASE ECD.RET.VALUE = "END"
+         GOTO 1199
+      CASE ECD.RET.VALUE = ""
+         ECD.NUM = 5; ECD.ACTION = 4; CALL SCRN.EDIT
+         IF ECD.RET.VALUE = "" OR ECD.RET.VALUE = "END" THEN GOTO 1101
+         GXR.NAME = "CUSTOMER"
+         GXR.XREF = CUSTOMER.XREF
+         GXR.FILE = CUSTOMER
+         GXR.SRCH.ID = ECD.RET.VALUE
+         CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+         ECD.ACTION = 2; CALL SCRN.EDIT
+         IF GXR.ID = "" THEN
+            SCV.REC(5)<ESN> = OVALUE; GOSUB 8000; GOTO 1101
+         END
+         ECD.RET.VALUE = ""
+      CASE 1
+         SCV.REC(5)<ESN> = OVALUE; GXR.ID = ECD.RET.VALUE
+   END CASE
+   MATREAD CUST.REC FROM CUSTOMER, CONO:GXR.ID ELSE
+      IF ECD.RET.VALUE = "" THEN GOSUB 8000
+      ERRMSG = "Cannot locate customer # ":GXR.ID
+      GOSUB 91000; GOTO 1101
+   END
+   ORD.CUST = GXR.ID
+   GOSUB 8200; GOSUB 8000
+1199 *
+   RETURN
+*
+*---- Display data
+8000 *
+   ECD.ACTION = 3; CALL SCRN.EDIT
+   RETURN
+*
+*---- Load SCV.REC
+8100 *
+   SCV.REC(2) = ORD.STATUS
+   MATREAD CUST.REC FROM CUSTOMER, CONO:ORD.CUST ELSE
+      MAT CUST.REC = ""; CUST.NAME = "Unknown"
+   END
+   GOSUB 8200
+   SCV.REC(12) = ORD.SLSMN
+   IF ORD.SLSMN # "" THEN
+      MATREAD SALESMAN.REC FROM SALESMAN, CONO:ORD.SLSMN ELSE
+         MAT SALESMAN.REC = ""; SALS.NAME = "Unknown"
+      END
+   END ELSE
+      SALS.NAME = ""
+   END
+   SCV.REC(14) = SALS.NAME
+   SCV.REC(16) = ORD.DATE
+   SCV.REC(17) = ORD.PO
+   SCV.REC(18) = ORD.RCV.DATE
+   SCV.REC(20) = ORD.REQ.DATE
+   SCV.REC(21) = ORD.CSR.CODE
+   SCV.REC(22) = ORD.DUE
+   IF ORD.CSR.CODE # "" THEN
+      MATREAD CSR.REC FROM CSR.CODE, CONO:ORD.CSR.CODE ELSE
+         MAT CSR.REC = ""; CSR.DESC = "Unknown"
+      END
+   END ELSE
+      CSR.DESC = ""
+   END
+   SCV.REC(23) = CSR.DESC
+   SCV.REC(26) = ORD.PRINT
+   SCV.REC(27) = ORD.CRED.AUTH
+* SCV.REC(40) = OCONV(SUM(ODQ.O.QTY)/1000,'MD0')
+* SCV.REC(41) = OCONV(SUM(ODQ.A.QTY)/1000,'MD0')
+* SCV.REC(42) = OCONV(SUM(ODQ.R.QTY)/1000,'MD0')
+* SCV.REC(43) = OCONV(SUM(ODQ.F.QTY)/1000,'MD0')
+* SCV.REC(44) = OCONV(SUM(ODQ.S.QTY)/1000,'MD0')
+* SCV.REC(45) = OCONV(SUM(ODQ.I.QTY)/1000,'MD0')
+*T18606 v
+   TOTAL.O.QTY=0; TOTAL.A.QTY=0; TOTAL.R.QTY=0
+   TOTAL.S.QTY=0; TOTAL.I.QTY=0
+   NUM.PRODS = DCOUNT(ODQ.KIT<1>,VM)
+   FOR I = 1 TO NUM.PRODS
+      IF ODQ.KIT<1,I> = "K" THEN
+         TOTAL.O.QTY = TOTAL.O.QTY + ODQ.KIT.G.QTY<1,I>
+         TOTAL.A.QTY = TOTAL.A.QTY + ODQ.KIT.A.QTY<1,I>
+         TOTAL.R.QTY = TOTAL.R.QTY + ODQ.KIT.R.QTY<1,I>
+         TOTAL.S.QTY = TOTAL.S.QTY + ODQ.KIT.S.QTY<1,I>
+         TOTAL.I.QTY = TOTAL.I.QTY + ODQ.KIT.I.QTY<1,I>
+      END 
+      IF ODQ.KIT<1,I> = "N" THEN
+         TOTAL.O.QTY = TOTAL.O.QTY + ODQ.G.QTY<1,I>
+         TOTAL.A.QTY = TOTAL.A.QTY + ODQ.A.QTY<1,I>
+         TOTAL.R.QTY = TOTAL.R.QTY + ODQ.R.QTY<1,I>
+         TOTAL.S.QTY = TOTAL.S.QTY + ODQ.S.QTY<1,I>
+         TOTAL.I.QTY = TOTAL.I.QTY + ODQ.I.QTY<1,I>
+      END
+   NEXT I
+   SCV.REC(40) = OCONV(TOTAL.O.QTY/1000,'MD0')
+   SCV.REC(41) = OCONV(TOTAL.A.QTY/1000,'MD0')
+   SCV.REC(42) = OCONV(TOTAL.R.QTY/1000,'MD0')
+   SCV.REC(44) = OCONV(TOTAL.S.QTY/1000,'MD0')
+   SCV.REC(45) = OCONV(TOTAL.I.QTY/1000,'MD0')
+*T18606 ^
+   RETURN
+*
+*---- Load customer info
+8200 *
+   SCV.REC(4)<ESN> = ORD.CUST
+   SCV.REC(5)<ESN> = CUST.NAME
+   SCV.REC(7)<ESN> = CUST.ADDR1
+   SCV.REC(9)<ESN> = CUST.ADDR2
+   SCV.REC(11)<ESN> = CUST.ADDR3
+   SCV.REC(13)<ESN> = CUST.ADDR4
+   SCV.REC(15)<ESN> = CUST.ZIP
+   IF CUST.ADDL.OPS<1,4> = "" THEN
+      COUNTRY = ""
+   END ELSE
+    *T25159 v
+    * READ COUNTRY FROM COUNTRY.CODE, CONO:CUST.ADDL.OPS<1,4> ELSE
+    *   COUNTRY = ""
+    * END
+      MATREAD CTY.REC FROM COUNTRY.CODE, CONO:CUST.ADDL.OPS<1,4> ELSE MAT CTY.REC = ''
+      COUNTRY = CTY.DESC
+    *T25159 ^
+   END
+   SCV.REC(19)<ESN> = COUNTRY
+   RETURN
+91000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+* 91000 *
+* PRINT @(0,23) : ERRMSG : @(-4) :
+* INPUT REPLY,1 :
+* PRINT @(0,23) : @(-4) :
+* RETURN
+93000 ERR.TYPE=3;CALL SYSCOM(MAT SYSCOM.REC)
+* 93000 *
+* PRINT @(0,23) : ERRMSG : @(-4) :
+* INPUT REPLY,1 :
+* PRINT @(0,23) : @(-4) :
+99999 *
+END

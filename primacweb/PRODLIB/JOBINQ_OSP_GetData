@@ -1,0 +1,174 @@
+SUBROUTINE JOBINQ_OSP_GetData
+********************************************************************************
+*   Program name :- JOBINQ_OSP_GetData
+*   Created:- 12/17/2002
+*   Author:- L. Ross
+*   Gets info for Job Inquiry 'OP' option.
+*------------------------------------------------------------------------------*
+*
+*  
+
+* In Properties:
+* --------------
+*  
+IN_PARAM=''
+*
+* Out Properties:
+* ---------------
+*  
+OUT_PARAM=''
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE JCS.CPYLIB JOB
+$INCLUDE JCS.CPYLIB JOB.STATS
+$INCLUDE POS.CPYLIB OUTSIDE.PO
+$INCLUDE CPYLIB CHAR
+
+;* open files
+
+ERRMSG=''
+IF FILEINFO(JOB,0)=0 THEN
+   OPEN '','JOB' TO JOB ELSE
+      ERRMSG<1,-1>='JOB FILE IS MISSING'
+   END
+END
+IF FILEINFO(OUTSIDE.PO,0)=0 THEN
+   OPEN '','OUTSIDE.PO' TO OUTSIDE.PO ELSE
+      ERRMSG<1,-1>='OUTSIDE.PO FILE IS MISSING'
+   END
+END
+IF FILEINFO(JOB.STATS,0)=0 THEN
+   OPEN '','JOB.STATS' TO JOB.STATS ELSE
+      ERRMSG<1,-1>='JOB.STATS FILE IS MISSING'
+   END
+END
+IF ERRMSG#'' THEN GOTO 93000
+UNKNOWN = STR("?",20)
+
+;* initialize
+
+
+;* get ID
+
+STATUS=RBO.getProperty('','ID',ID)
+CONO=ID[1,3]
+JOB_NO=ID[4,8]
+STATUS=RBO.getProperty('','MAST_SUB_FLAG',MAST.SUB.FLAG)
+
+;* get database values
+
+MATREAD JOB.REC FROM JOB,ID ELSE
+   ERRMSG='Cannot read JOB record ':ID
+   GOTO 93000
+END
+VAR=''
+JOBS = ''; PLINE = '';* T21065
+EXP.DATE = ""; OPEN.QTY = ""; VEND.NO = ""; DATE.RECVD = ""; OPEN.AMT = ""
+PCNT = 0
+LN = 0
+IF MAST.SUB.FLAG = "1" THEN
+   SUBS = DCOUNT(JOB.SUBS,VM)
+   FOR X = 1 TO SUBS
+      MATREAD  JSTAT.REC FROM JOB.STATS, CONO:JOB.SUBS<1,X> ELSE
+         MAT JSTAT.REC = ''
+      END
+      IF JSTAT.OPO.NO # "" THEN
+         JJCNT = DCOUNT(JSTAT.OPO.NO,VM)
+         FOR JJ = 1 TO JJCNT
+            MATREAD OPO.REC FROM OUTSIDE.PO, CONO:JSTAT.OPO.NO<1,JJ> ELSE
+               MAT OPO.REC = ""
+            END
+            OJCNT = DCOUNT(OPO.JOB.NO,VM)
+            FOR OJ = 1 TO OJCNT
+               IF (JOB.SUBS<1,X> = OPO.JOB.NO<1,OJ>) AND (JSTAT.PROD.LINE<1,JJ> = OPO.PROD.LINE<1,OJ>:"@":OPO.PROD.SEQ<1,OJ>) THEN
+                  PCNT = PCNT + 1
+                  VAR<1,PCNT> = JSTAT.OPO.NO<1,JJ>
+                  PLINE<1,PCNT> = FIELD(JSTAT.PROD.LINE<1,JJ>,'@',1)
+                  EXP.DATE<1,PCNT> = OCONV(OPO.EXP.DATE<1,OJ>,'D2/')
+                  OPEN.QTY<1,PCNT> = OPO.QTY<1,OJ> - OPO.QTY.RECVD<1,OJ> - OPO.CANCEL.QTY<1,OJ>
+                  IF OPEN.QTY<1,PCNT> < 0 THEN OPEN.QTY<1,PCNT> = 0
+                  IF OPEN.QTY<1,PCNT> # 0 THEN
+                     OPEN.QTY<1,PCNT> = OPO.QTY<1,OJ> - OPO.QTY.RECVD<1,OJ> - OPO.CANCEL.QTY<1,OJ>
+                     DESC.PRICE = INT(OPO.U.PRICE<1,OJ>*((OPO.DISCOUNT<1,OJ>/10000)))
+                     DESC.PRICE = INT(OPO.U.PRICE<1,OJ> - DESC.PRICE)
+                     BEGIN CASE 
+                        CASE OPO.UOM<1,OJ> = "M"
+                           OPEN.AMT<1,PCNT> = INT((DESC.PRICE/100)*(OPEN.QTY<1,PCNT>/100000)+.5) 
+                        CASE OPO.UOM<1,OJ> = "C"
+                           OPEN.AMT<1,PCNT> = INT((DESC.PRICE/100)*(OPEN.QTY<1,PCNT>/10000)+.5) 
+                        CASE 1 
+                           OPEN.AMT<1,PCNT> = INT((DESC.PRICE/100) * (OPEN.QTY<1,PCNT>/100)+ .5) 
+                     END CASE
+                  END ELSE
+                     OPEN.AMT<1,PCNT> = 0
+                  END
+                  IF OPEN.AMT<1,PCNT> < 0 THEN OPEN.AMT<1,PCNT> = 0
+                  OPEN.QTY<1,PCNT> = OCONV(OPEN.QTY<1,PCNT>,'MD2,')
+                  OPEN.AMT<1,PCNT> = OCONV(OPEN.AMT<1,PCNT>,'MD2,')
+                  VEND.NO<1,PCNT> = OPO.VEND.NO
+                  DATE.RECVD<1,PCNT> = OCONV(OPO.DATE.RECVD<1,OJ>,'D2/')
+               END
+            NEXT OJ
+         NEXT JJ
+      END
+   NEXT X
+END
+MATREAD JSTAT.REC FROM JOB.STATS, CONO:JOB_NO ELSE
+   MAT JSTAT.REC=''
+END
+IF JSTAT.OPO.NO # "" THEN
+   JJCNT = DCOUNT(JSTAT.OPO.NO,VM)
+   FOR JJ = 1 TO JJCNT
+      MATREAD OPO.REC FROM OUTSIDE.PO, CONO:JSTAT.OPO.NO<1,JJ> ELSE
+         MAT OPO.REC = ""
+      END
+      OJCNT = DCOUNT(OPO.JOB.NO,VM)
+      FOR OJ = 1 TO OJCNT
+         IF JOB_NO = OPO.JOB.NO<1,OJ> AND JSTAT.PROD.LINE<1,JJ> = OPO.PROD.LINE<1,OJ>:"@":OPO.PROD.SEQ<1,OJ> THEN
+            PCNT = PCNT + 1
+            VAR<1,PCNT> = JSTAT.OPO.NO<1,JJ>
+            PLINE<1,PCNT> = FIELD(JSTAT.PROD.LINE<1,JJ>,'@',1)
+            EXP.DATE<1,PCNT> = OCONV(OPO.EXP.DATE<1,OJ>,'D2/')
+            OPEN.QTY<1,PCNT> = OPO.QTY<1,OJ> - OPO.QTY.RECVD<1,OJ> - OPO.CANCEL.QTY<1,OJ>
+            IF OPEN.QTY<1,PCNT> < 0 THEN OPEN.QTY<1,PCNT> = 0
+            IF OPEN.QTY<1,PCNT> # 0 THEN
+               OPEN.QTY<1,PCNT> = OPO.QTY<1,OJ> - OPO.QTY.RECVD<1,OJ> - OPO.CANCEL.QTY<1,OJ>
+               DESC.PRICE = INT(OPO.U.PRICE<1,OJ>*((OPO.DISCOUNT<1,OJ>/10000)))
+               DESC.PRICE = INT(OPO.U.PRICE<1,OJ> - DESC.PRICE)
+               BEGIN CASE                         
+                  CASE OPO.UOM<1,OJ> = "M"         
+                     OPEN.AMT<1,PCNT> = INT((DESC.PRICE/100)*(OPEN.QTY<1,PCNT>/100000)+.5)
+                  CASE OPO.UOM<1,OJ> = "C"         
+                     OPEN.AMT<1,PCNT> = INT((DESC.PRICE/100)*(OPEN.QTY<1,PCNT>/10000)+.5) 
+                  CASE 1                           
+                     OPEN.AMT<1,PCNT> = INT((DESC.PRICE/100) * (OPEN.QTY<1,PCNT>/100)+ .5)
+               END CASE                           
+            END ELSE
+               OPEN.AMT<1,PCNT> = 0
+            END
+            IF OPEN.AMT<1,PCNT> < 0 THEN OPEN.AMT<1,PCNT> = 0
+            OPEN.QTY<1,PCNT> = OCONV(OPEN.QTY<1,PCNT>,'MD2,')
+            OPEN.AMT<1,PCNT> = OCONV(OPEN.AMT<1,PCNT>,'MD2,')
+            VEND.NO<1,PCNT> = OPO.VEND.NO
+            DATE.RECVD<1,PCNT> = OCONV(OPO.DATE.RECVD<1,OJ>,'D2/')
+         END
+      NEXT OJ
+   NEXT JJ
+END
+
+STATUS=RBO.setProperty('','PO',VAR)
+STATUS=RBO.setProperty('','VEND',VEND.NO)
+STATUS=RBO.setProperty('','CATEG',PLINE)
+STATUS=RBO.setProperty('','EXP_DATE',EXP.DATE)
+STATUS=RBO.setProperty('','LAST_DATE',DATE.RECVD)
+STATUS=RBO.setProperty('','QTY',OPEN.QTY)
+STATUS=RBO.setProperty('','AMT',OPEN.AMT)
+GOTO 99999
+
+93000 
+STATUS = RBO.setProperty('','ServerStatus',1)        
+STATUS = RBO.setProperty('','ServerMessage',ERRMSG)  
+
+99999 
+RETURN
+

@@ -1,0 +1,748 @@
+SUBROUTINE CustomerUsers.elogic(METHOD, ARGS)
+**********************************************
+* REVISION    - [12.0]
+* Copyright 1995 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - eLOGICBP
+* PROGRAM     - CustomerUsers.elogic
+* BY          - ABDULLAH JIBALY; CBA
+* DATE        - 08/21/2002
+* DESCRIPTION - BUSINESS LOGIC FOR CUSTOMER USERS WEB APPLICATION
+*
+*ENDDOC
+**********************************************
+  ;*
+  ;* Libraries and initialization
+  ;*
+*COPY>PMC.CPYLIB>CUSTOMER_LOGIN
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>JCS.CPYLIB>JOB
+*COPY>JCS.CPYLIB>INVOICE
+*COPY>ARS.CPYLIB>MANUAL.INVOICE
+*COPY>ARS.CPYLIB>OPEN.RECV
+*COPY>OPS.CPYLIB>ORDER
+*COPY>PMC.CPYLIB>SALESMAN
+*COPY>PMC.CPYLIB>SALES.CODE
+*COPY>PMC.CPYLIB>SHIP.VIA
+*COPY>PMC.CPYLIB>TERMS
+*COPY>PMC.CPYLIB>COUNTRY.CODE
+  ;*
+  ;* Setup Constants
+  ;*
+  CUSTOMER_LOGIN_CPYLIB = "PMC.CPYLIB/CUSTOMER_LOGIN"
+  XML.ADD.DESC.ATTR     = @VM:@SVM:"desc"
+  ;*
+  ;* Function definitions
+  ;*
+  DEFFUN toXML(STR) CALLING "XML_FORMAT_CDATA"
+  DEFFUN RECORD2XML(REC,ID,CPYLIB.PATH,RET.LIST,MV.LIST)
+  ;*
+  ;* Method handler
+  ;*
+  ERROR_INVALID_METHOD = "Invalid method name."
+  BEGIN CASE
+    CASE METHOD = "login"
+      GOSUB login
+    CASE METHOD = "changeAccount"
+      GOSUB changeAccount
+    CASE METHOD = "getInvoiceList"
+      GOSUB getInvoiceList
+    CASE METHOD = "getOrderList"
+      GOSUB getOrderList
+    CASE METHOD = "getJobList"
+      GOSUB getJobList
+    CASE METHOD = "getInvoiceToPrint"
+      GOSUB getInvoiceToPrint
+    CASE 1
+      ERR.STRING = ERROR_INVALID_METHOD
+      GOSUB setupErrorMsg
+      METHOD = ERR.STRING
+  END CASE
+  SWAP @AM WITH "" IN METHOD
+  METHOD = '<?xml version="1.0"?>':METHOD
+RETURN
+
+  ;**
+  ;* Logs the user into the database
+  ;*
+  ;* @param  ARGS<1> - The customer's user id
+  ;* @param  ARGS<2> - The customer's user password
+  ;* @return METHOD  - The customer's user login record in XML
+  ;*;
+login:
+  ;*
+  ;* Get parameters
+  ;*
+  USER_ID   = ARGS<1>
+  USER_PASS = ARGS<2>
+  ;*
+  ;* Setup error strings
+  ;*
+  ERR.NOTEXIST.FILE = "Database error, please try again later."
+  ERR.NOTEXIST.REC  = "Invalid record."
+  ERR.INVALID.USER  = "Invalid username or password."
+  ERR.INVALID.PASS  = ERR.INVALID.USER
+  ;*
+  ;* Open files
+  ;*
+  ERROR.FILE = 0
+  OPEN "CUSTOMER"       TO CUSTOMER       ELSE ERROR.FILE = 1
+  OPEN "CUSTOMER_LOGIN" TO CUSTOMER_LOGIN ELSE ERROR.FILE = 1
+  IF ERROR.FILE THEN
+    ERR.STRING = ERR.NOTEXIST.FILE
+    GOSUB setupErrorMsg
+    METHOD = ERR.STRING
+    RETURN
+  END
+  ;*
+  ;* Read login record and verify password
+  ;*
+  ERR.STRING = ''
+  MATREAD CUSTLOGIN.REC FROM CUSTOMER_LOGIN, USER_ID ELSE
+    ERR.STRING = ERR.INVALID.USER
+  END
+  MATREAD CUST.REC FROM CUSTOMER, CUSTLOGIN.CONO:CUSTLOGIN.CUST.ID ELSE
+    ERR.STRING = ERR.NOTEXIST.REC
+  END
+  IF ERR.STRING THEN
+    GOSUB setupErrorMsg
+    METHOD = ERR.STRING
+    RETURN
+  END
+  ;*
+  ;* If password matches then return customer login record
+  ;* Otherwise return an error message
+  ;*
+  IF USER_PASS = CUSTLOGIN.PASSWORD THEN
+    CUSTLOGIN.CONO<1,-1> = CUST.NAME
+    ;*
+    ;* Setup RECORD2XML function call
+    ;*
+    MV.LIST = "cono":XML.ADD.DESC.ATTR
+    MATBUILD REC FROM CUSTLOGIN.REC
+    METHOD = RECORD2XML(REC,USER_ID,CUSTOMER_LOGIN_CPYLIB,"",MV.LIST)
+    SWAP @AM WITH '' IN METHOD
+  END ELSE
+    ERR.STRING = ERR.INVALID.PASS
+    GOSUB setupErrorMsg
+    METHOD = ERR.STRING
+  END
+RETURN
+
+  ;**
+  ;* Updates the customer's user login record
+  ;*
+  ;* @param  ARGS<1> - The user id
+  ;* @param  ARGS<2> - The user password
+  ;* @param  ARGS<3> - The user name
+  ;* @param  ARGS<4> - The user email
+  ;* @return METHOD  - The user login record in XML
+  ;* @see    login
+  ;*;
+changeAccount:
+  ;*
+  ;* Get parameters
+  ;*
+  USER_ID     = ARGS<1>
+  USER_PASS   = ARGS<2>
+  USER_NAME   = ARGS<3>
+  USER_EMAIL  = ARGS<4>
+  ;*
+  ;* Setup error strings
+  ;*
+  ERR.NOTEXIST.FILE = "Database error, please try again later."
+  ERR.INVALID.USER  = "Invalid username or password."
+  ERR.INVALID.PASS  = ERR.INVALID.USER
+  ;*
+  ;* Open login file
+  ;*
+  OPEN "CUSTOMER_LOGIN" TO CUSTOMER_LOGIN ELSE
+    ERR.STRING = ERR.NOTEXIST.FILE
+    GOSUB setupErrorMsg
+    METHOD = ERR.STRING
+    RETURN
+  END
+  ;*
+  ;* Read user's record
+  ;*
+  MATREAD CUSTLOGIN.REC FROM CUSTOMER_LOGIN, USER_ID ELSE
+    ERR.STRING = ERR.INVALID.USER
+    GOSUB setupErrorMsg
+    METHOD = ERR.STRING
+    RETURN
+  END
+  IF USER_PASS   # '' THEN CUSTLOGIN.PASSWORD = USER_PASS
+  IF USER_NAME   # '' THEN CUSTLOGIN.NAME     = USER_NAME
+  IF USER_EMAIL  # '' THEN CUSTLOGIN.EMAIL    = USER_EMAIL
+  MATWRITE CUSTLOGIN.REC ON CUSTOMER_LOGIN, USER_ID
+  GOSUB login
+RETURN
+
+  ;**
+  ;* Gets the list of invoices for a customer
+  ;*
+  ;* @param  ARGS<1> - The customer number
+  ;* @param  ARGS<2> - The customer login company number
+  ;* @param  ARGS<3> - The customer login division number
+  ;* @return METHOD  - The list of invoices in this format:
+  ;*                   <invoice-list>{<invoice id="...">
+  ;*                   <job/><po/><inv-date/><inv-amt/><bal/><payments/><desc/>
+  ;*                   </invoice>}*</invoice-list>
+  ;*;
+getInvoiceList:
+  ;*
+  ;* Get parameters
+  ;*
+  USER_CUST = ARGS<1>
+  USER_CONO = ARGS<2>
+  USER_DIV  = ARGS<3>
+  ;*
+  ;* Setup error strings
+  ;*
+  ERR.NOTEXIST.FILE = "Database error, please try again later."
+  ERR.NOTEXIST.REC  = "Invalid record."
+  ;*
+  ;* Open files
+  ;*
+  ERROR.FILE = 0
+  OPEN "CUSTOMER"       TO CUSTOMER       ELSE ERROR.FILE = 1
+  OPEN "INVOICE"        TO INVOICE        ELSE ERROR.FILE = 1
+  OPEN "MANUAL.INVOICE" TO MANUAL.INVOICE ELSE ERROR.FILE = 1
+  OPEN "OPEN.RECV"      TO OPEN.RECV      ELSE ERROR.FILE = 1
+  IF ERROR.FILE THEN
+    ERR.STRING = ERR.NOTEXIST.FILE
+    GOSUB setupErrorMsg
+    METHOD = ERR.STRING
+    RETURN
+  END
+  ;*
+  ;* Read customer record and get invoices
+  ;*
+  MATREAD CUST.REC FROM CUSTOMER, USER_CONO:USER_CUST ELSE
+    ERR.STRING = ERR.NOTEXIST.REC
+    GOSUB setupErrorMsg
+    METHOD = ERR.STRING
+    RETURN
+  END
+  ;*
+  ;* Select invoices and place them into a list
+  ;*
+  IVC_LIST = '<invoice-list>'
+  IVC_CNT = DCOUNT(CUST.INVOICE,@VM)
+  FOR IVC_IDX = 1 TO IVC_CNT
+    IVC_ID = CUST.INVOICE<1,IVC_IDX>
+    MATREAD OR.REC FROM OPEN.RECV, USER_CONO:IVC_ID ELSE CONTINUE
+    ;*
+    ;* Find the invoice desc
+    ;*
+    IVC_DESC = ''
+    MATREAD IVC.REC FROM INVOICE, USER_CONO:IVC_ID THEN
+      IVC_DESC = IVC.DESC<1,1>
+    END ELSE
+      MATREAD MIV.REC FROM MANUAL.INVOICE, USER_CONO:IVC_ID THEN
+        IVC_DESC = MIV.DESC<1,1>
+      END
+    END
+    OR.INV.DATE = OR.INV.DATE : @VM : OCONV(OR.INV.DATE,"D2/")
+    ;*
+    ;* Total up the invoice amount
+    ;*
+    AMT = OR.INV.AMT<1,1>
+    FOR I = 2 TO 6
+      TYPE = OR.TYPE<1,I>
+      IF TYPE="T" OR TYPE="S" OR TYPE="G" OR TYPE="U" OR TYPE="M" THEN
+        AMT = AMT + OR.INV.AMT<1,I>
+      END
+    NEXT I
+    OR.INV.AMT = OCONV(AMT,"MD2")
+    PAYMENTS = OCONV(AMT - OR.BAL, "MD2")
+    OR.BAL = OCONV(OR.BAL,"MD2")
+    ;*
+    ;* Setup RECORD2XML function call
+    ;*
+    REC = ''
+    REC<1> = OR.JOB
+    REC<2> = OR.PO
+    REC<3> = OR.INV.DATE
+    REC<4> = OR.INV.AMT
+    REC<5> = OR.BAL
+    REC<6> = PAYMENTS
+    REC<7> = IVC_DESC
+    CPYLIB = CHANGE("job,po,inv-date,inv-amt,bal,payments,desc",",",@AM)
+    MV.LIST = "inv-date":XML.ADD.DESC.ATTR
+    IVC_LIST<-1> = '<invoice id=':QUOTE(toXML(IVC_ID)):'>'
+    IVC_LIST<-1> = RECORD2XML(REC,"",CPYLIB,"",MV.LIST)
+    IVC_LIST<-1> = '</invoice>'
+  NEXT IVC_IDX
+  ;*
+  ;* Convert list to string
+  ;* Assign list to METHOD to return to calling program
+  ;*
+  IVC_LIST<-1> = '</invoice-list>'
+  METHOD = CHANGE(IVC_LIST,@AM,"")
+RETURN
+
+  ;**
+  ;* Gets the list of jobs for a customer
+  ;*
+  ;* @param  ARGS<1> - The customer number
+  ;* @param  ARGS<2> - The customer login company number
+  ;* @param  ARGS<3> - The customer login division number
+  ;* @return METHOD  - The list of invoices in this format:
+  ;*                   <job-list>{<job>
+  ;*                    <status/><stat-date/><conf-amt/><tot-inv/><balance/>
+  ;*                   </job>}*</job-list>
+  ;*;
+getJobList:
+  ;*
+  ;* Get parameters
+  ;*
+  USER_CUST = ARGS<1>
+  USER_CONO = ARGS<2>
+  USER_DIV  = ARGS<3>
+  ;*
+  ;* Setup error strings
+  ;*
+  ERR.NOTEXIST.FILE = "Database error, please try again later."
+  ERR.NOTEXIST.REC  = "Invalid record."
+  ;*
+  ;* Open files
+  ;*
+  ERROR.FILE = 0
+  OPEN "JOB"      TO JOB      ELSE ERROR.FILE = 1
+  OPEN "CUSTOMER" TO CUSTOMER ELSE ERROR.FILE = 1
+  IF ERROR.FILE THEN
+    ERR.STRING = ERR.NOTEXIST.FILE
+    GOSUB setupErrorMsg
+    METHOD = ERR.STRING
+    RETURN
+  END
+  ;*
+  ;* Read customer record and get jobs
+  ;*
+  MATREAD CUST.REC FROM CUSTOMER, USER_CONO:USER_CUST ELSE
+    ERR.STRING = ERR.NOTEXIST.REC
+    GOSUB setupErrorMsg
+    METHOD = ERR.STRING
+    RETURN
+  END
+  ;*
+  ;* Select jobs and place them into a list
+  ;*
+  JOB_LIST = '<job-list>'
+  JOB_CNT = DCOUNT(CUST.JOB,@VM)
+  FOR JOB_IDX = 1 TO JOB_CNT
+    JOB_ID = CUST.JOB<1,JOB_IDX>
+    MATREAD JOB.REC FROM JOB, USER_CONO:JOB_ID ELSE CONTINUE
+    ;*
+    ;* Get the status and format the job information
+    ;*
+    CALL JOB.STATUS.SUB(JOB.STATUS,JOB.TRACK.DATE,STATUS)
+    REC = ''
+    REC<1> = STATUS
+    REC<2> = JOB.STAT.DATE<1,1> : @VM : OCONV(JOB.STAT.DATE<1,1>,"D2/")
+    REC<3> = OCONV(JOB.CONF.AMT,"MD2Z,")
+    REC<4> = OCONV(JOB.TOT.INV,"MD2Z,<")
+    REC<5> = OCONV(CUST.JOB.BAL<1,JOB_IDX>,"MD2Z,")
+    ;*
+    ;* Setup RECORD2XML function call
+    ;*
+    CPYLIB = "status,stat-date,conf-amt,tot-inv,balance"
+    CPYLIB = CHANGE(CPYLIB,",",@AM)
+    MV.LIST = "stat-date" : XML.ADD.DESC.ATTR
+    JOB_LIST<-1> = '<job id=':QUOTE(toXML(JOB_ID)):'>'
+    JOB_LIST<-1> = RECORD2XML(REC,"",CPYLIB,"",MV.LIST)
+    JOB_LIST<-1> = '</job>'
+  NEXT JOB_IDX
+  ;*
+  ;* Convert list to string
+  ;* Assign the selected list to METHOD to return to calling program
+  ;*
+  JOB_LIST<-1> = '</job-list>'
+  METHOD = CHANGE(JOB_LIST,@AM,"")
+RETURN
+
+  ;**
+  ;* Gets the list of orders for a customer
+  ;*
+  ;* @param  ARGS<1> - The customer number
+  ;* @param  ARGS<2> - The customer login company number
+  ;* @param  ARGS<3> - The customer login division number
+  ;* @return METHOD  - The list of orders in this format:
+  ;*                    <order-list>{<order>...
+  ;*                    <po/><date/><due/><status/><tot-amt/><tot-inv/>
+  ;*                    </order>}*</order-list>
+  ;*;
+getOrderList:
+  ;*
+  ;* Get parameters
+  ;*
+  USER_CUST = ARGS<1>
+  USER_CONO = ARGS<2>
+  USER_DIV  = ARGS<3>
+  ;*
+  ;* Setup error strings
+  ;*
+  ERR.NOTEXIST.FILE = "Database error, please try again later."
+  ERR.NOTEXIST.REC  = "Invalid record."
+  ;*
+  ;* Open files
+  ;*
+  ERROR.FILE = 0
+  OPEN "ORDER"    TO ORDER    ELSE ERROR.FILE = 1
+  OPEN "CUSTOMER" TO CUSTOMER ELSE ERROR.FILE = 1
+  IF ERROR.FILE THEN
+    ERR.STRING = ERR.NOTEXIST.FILE
+    GOSUB setupErrorMsg
+    METHOD = ERR.STRING
+    RETURN
+  END
+  ;*
+  ;* Read customer record and get orders
+  ;*
+  MATREAD CUST.REC FROM CUSTOMER, USER_CONO:USER_CUST ELSE
+    ERR.STRING = ERR.NOTEXIST.REC
+    GOSUB setupErrorMsg
+    METHOD = ERR.STRING
+    RETURN
+  END
+  ;*
+  ;* Select orders and place them into a list
+  ;*
+  ORDER_LIST = '<order-list>'
+  ORDER_CNT = DCOUNT(CUST.ORD.NUM,@VM)
+  FOR ORDER_IDX = 1 TO ORDER_CNT
+    ORDER_ID = CUST.ORD.NUM<1,ORDER_IDX>
+    MATREAD ORD.REC FROM ORDER, USER_CONO:ORDER_ID ELSE CONTINUE
+    ;*
+    ;* Get the order info
+    ;*
+    REC = ''
+    REC<1> = ORD.PO
+    REC<2> = ORD.DATE : @VM : OCONV(ORD.DATE,"D2/")
+    REC<3> = ORD.DUE : @VM : OCONV(ORD.DUE,"D2/")
+    REC<4> = ORD.STATUS<1,1>
+    REC<5> = OCONV(ORD.TOT.AMT,"MD2")
+    REC<6> = OCONV(ORD.TOT.INV,"MD2")
+    ;*
+    ;* Setup RECORD2XML function call
+    ;*
+    CPYLIB = "po,date,due,status,tot-amt,tot-inv"
+    CPYLIB = CHANGE(CPYLIB,",",@AM)
+    MV.LIST = "date" : XML.ADD.DESC.ATTR
+    MV.LIST<-1> = "due" : XML.ADD.DESC.ATTR
+    ORDER_LIST<-1> = '<order id=':QUOTE(toXML(ORDER_ID)):'>'
+    ORDER_LIST<-1> = RECORD2XML(REC,"",CPYLIB,"",MV.LIST)
+    ORDER_LIST<-1> = '</order>'
+  NEXT ORDER_IDX
+  ;*
+  ;* Convert list to string
+  ;* Assign the selected list to METHOD to return to calling program
+  ;*
+  ORDER_LIST<-1> = '</order-list>'
+  METHOD = CHANGE(ORDER_LIST,@AM,"")
+RETURN
+
+  ;**
+  ;* Gets an invoice record in print format
+  ;*
+  ;* @param  ARGS<1> - The invoice number
+  ;* @param  ARGS<2> - The customer login company number
+  ;* @param  ARGS<3> - The customer login division number
+  ;* @return METHOD  - The invoice record:
+  ;*                   <invoice>...fields(see cpylib)...</invoice>
+  ;*;
+getInvoiceToPrint:
+  ;*
+  ;* Get parameters
+  ;*
+  INVOICE_ID = ARGS<1>
+  USER_CONO  = ARGS<2>
+  USER_DIV   = ARGS<3>
+  ;*
+  ;* Setup error strings
+  ;*
+  ERR.NOTEXIST.FILE = "Database error, please try again later."
+  ERR.NOTEXIST.REC  = "Invalid record."
+  ;*
+  ;* Open files
+  ;*
+  ERROR.FILE = 0
+  OPEN "OPEN.RECV"      TO OPEN.RECV      ELSE ERROR.FILE = 1
+  OPEN "INVOICE"        TO INVOICE        ELSE ERROR.FILE = 1
+  OPEN "ORDER.INVOICE"  TO ORDER.INVOICE  ELSE ERROR.FILE = 1
+  OPEN "MANUAL.INVOICE" TO MANUAL.INVOICE ELSE ERROR.FILE = 1
+  OPEN "JOB"            TO JOB            ELSE ERROR.FILE = 1
+  OPEN "SALES.CODE"     TO SALES.CODE     ELSE ERROR.FILE = 1
+  OPEN "SALESMAN"       TO SALESMAN       ELSE ERROR.FILE = 1
+  OPEN "CUSTOMER"       TO CUSTOMER       ELSE ERROR.FILE = 1
+  OPEN "SHIP.VIA"       TO SHIP.VIA       ELSE ERROR.FILE = 1
+  OPEN "TERMS"          TO TERMS          ELSE ERROR.FILE = 1
+  OPEN "COUNTRY.CODE"   TO COUNTRY.CODE   ELSE ERROR.FILE = 1
+  IF ERROR.FILE THEN
+    ERR.STRING = ERR.NOTEXIST.FILE
+    GOSUB setupErrorMsg
+    METHOD = ERR.STRING
+    RETURN
+  END
+  ;*
+  ;* Read invoice record from OPEN.RECV and check the type
+  ;*
+  MATREAD OR.REC FROM OPEN.RECV, USER_CONO:INVOICE_ID ELSE
+    ERR.STRING = ERR.NOTEXIST.REC
+    GOSUB setupErrorMsg
+    METHOD = ERR.STRING
+    RETURN
+  END
+  ERR.STRING = ''
+  IVC_KEY = USER_CONO : INVOICE_ID
+  IF OR.ORDER.FLG = "Y" THEN
+    ;*
+    ;* This is an OPS invoice
+    ;*
+    MATREAD IVC.REC FROM ORDER.INVOICE, IVC_KEY ELSE
+      ERR.STRING = ERR.NOTEXIST.REC
+    END
+  END ELSE
+    ;*
+    ;* This is a manual or JCS invoice
+    ;*
+    MATREAD IVC.REC FROM INVOICE, IVC_KEY ELSE
+      MATREAD IVC.REC FROM MANUAL.INVOICE, IVC_KEY ELSE
+        ERR.STRING = ERR.NOTEXIST.REC
+      END
+    END
+  END
+  IF ERR.STRING # '' THEN
+    GOSUB setupErrorMsg
+    METHOD = ERR.STRING
+    RETURN
+  END
+  MATREAD JOB.REC FROM JOB, USER_CONO:IVC.JOB.NO ELSE MAT JOB.REC = ''
+  MATREAD SLC.REC FROM SALES.CODE, USER_CONO:JOB.SALES.CODE ELSE
+    MAT SLC.REC = ''
+  END
+  MATREAD SALESMAN.REC FROM SALESMAN, USER_CONO:JOB.SLSMN ELSE SALS.NAME = ''
+  MATREAD CUST.REC FROM CUSTOMER, USER_CONO:IVC.CUST.NO ELSE MAT CUST.REC = ''
+  MATREAD SHIP.VIA.REC FROM SHIP.VIA, USER_CONO:JOB.SHIP.VIA ELSE
+    MAT SHIP.VIA.REC = ''
+  END
+  MATREAD TERMS.REC FROM TERMS, USER_CONO:CUST.TERMS ELSE MAT TERMS.REC = ''
+  ;*
+  ;* Create xml format
+  ;*
+  XML.INVOICE = '<invoice id=':QUOTE(toXML(INVOICE_ID)):'>'
+  ;*
+  ;* Add invoice info
+  ;*
+  REC = ''
+  REC<1> = IVC.DATE : @VM : OCONV(IVC.DATE,"D2/")
+  REC<2> = IVC.PO.NO
+  REC<3> = JOB.SLSMN:' ':SALS.NAME
+  REC<4> = IVC.JOB.NO
+  REC<5> = SHPV.DESC
+  REC<6> = TERMS.DESC
+  CPYLIB = "date,po,salesman,job,ship-via,terms"
+  CPYLIB = CHANGE(CPYLIB,",",@AM)
+  MV.LIST = "date" : XML.ADD.DESC.ATTR
+  XML.INVOICE<-1> = RECORD2XML(REC,"",CPYLIB,"",MV.LIST)
+  ;*
+  ;* Add billing address info
+  ;*
+  XML.INVOICE<-1> = '<bill-to>'
+  REC = ''
+  REC<1> = CUST.NAME
+  REC<2> = CUST.ADDR1
+  REC<3> = CUST.ADDR2
+  REC<4> = CUST.ADDR3
+  REC<5> = CUST.ADDR4
+  REC<6> = CUST.ZIP
+  IF CUST.ADDR4 # '' THEN
+    BILL.TO.CNTY = CUST.ADDL.OPS<1,4>
+    IF BILL.TO.CNTY # '' THEN
+      MATREAD CTY.REC FROM COUNTRY.CODE, USER_CONO:BILL.TO.CNTY THEN
+        REC<7> = CTY.DESC
+      END
+    END
+  END
+  REC<8> = CUST.ATTENTION
+  CPYLIB = "name,addr1,addr2,addr3,addr4,zip,country,attn"
+  CPYLIB = CHANGE(CPYLIB,",",@AM)
+  XML.INVOICE<-1> = RECORD2XML(REC,"",CPYLIB,"","")
+  XML.INVOICE<-1> = '</bill-to>'
+  ;*
+  ;* Add shipping address info
+  ;*
+  XML.INVOICE<-1> = '<ship-to>'
+  REC = ''
+  REC<1> = IVC.CUST.NAME
+  REC<2> = IVC.ADDR1
+  REC<3> = IVC.ADDR2
+  REC<4> = IVC.ADDR3
+  REC<5> = IVC.ADDR4
+  REC<6> = IVC.ATTENTION
+  CPYLIB = "name,addr1,addr2,addr3,addr4,attn"
+  CPYLIB = CHANGE(CPYLIB,",",@AM)
+  XML.INVOICE<-1> = RECORD2XML(REC,"",CPYLIB,"","")
+  XML.INVOICE<-1> = '</ship-to>'
+  ;*
+  ;* Add invoice body
+  ;*
+  XML.INVOICE<-1> = '<body>'
+  CHG.CODE.CNT = DCOUNT(IVC.CHG.CODE,@VM)
+  IF IVC.CHG.CODE = '' THEN CHG.CODE.CNT = 0
+  PRINTED.TOT  = 0
+  TOTAL        = 0
+  CR.KEY       = IVC_KEY[(LEN(IVC_KEY) - 1),2]
+  BUFFER       = "M"
+  FOR CODE.IDX = 1 TO CHG.CODE.CNT
+    IF IVC.HIDDEN<1,CODE.IDX> = 'Y' THEN CONTINUE
+    CODE      = IVC.CHG.CODE<1,CODE.IDX>
+    NEXT.CODE = IVC.CHG.CODE<1,CODE.IDX+1>
+    CHG.CAT   = IVC.CHG.CAT<1,CODE.IDX>
+    HIDDEN.AMT   = 0
+    HIDDEN.QTY   = 0
+    HIDDEN.PRICE = 0
+    FOR IDX = CODE.IDX+1 TO CHG.CODE.CNT
+      IF IVC.HIDDEN<1,IDX> # 'Y' THEN EXIT
+      HIDDEN.AMT   += IVC.AMOUNT<1,IDX>
+      HIDDEN.QTY   += IVC.QUANTITY<1,IDX>
+      HIDDEN.PRICE += IVC.UNIT.PRICE<1,IDX>
+    NEXT IDX
+    AMT        = IVC.AMOUNT<1,CODE.IDX>+HIDDEN.AMT
+    QUANTITY   = IVC.QUANTITY<1,CODE.IDX>+HIDDEN.QTY
+    UNIT.PRICE = IVC.UNIT.PRICE<1,CODE.IDX>+HIDDEN.PRICE
+    UM         = IVC.UM<1,CODE.IDX>
+    IF HIDDEN.AMT+0 # 0 AND QUANTITY+0 # 0 THEN
+      BEGIN CASE
+        CASE UM = 'M'
+          FACTOR = 1000
+        CASE UM = 'C'
+          FACTOR = 100
+        CASE 1
+          FACTOR = 1
+      END CASE
+      UNIT.PRICE = ICONV((AMT/100) / (QUANTITY/FACTOR),'MD3')
+    END
+    DESC = IVC.DESC<1,CODE.IDX>
+    IF AMT="" OR AMT=0 THEN
+      AMOUNT=""
+    END ELSE
+      IF CODE = "SUB" OR CODE = "SUBT" OR CODE = "TOT" THEN
+        IF CR.KEY = "CM" AND BUFFER # "M" THEN
+          AMOUNT = OCONV(AMT * (-1),"MD2,$")
+        END ELSE
+          AMOUNT = OCONV(AMT,"MD2,$")
+        END
+      END ELSE
+        IF CR.KEY = "CM" AND BUFFER # "M" THEN
+          AMOUNT = OCONV(AMT * (-1),"MD2,")
+        END ELSE
+          AMOUNT = OCONV(AMT,"MD2,")
+        END
+      END
+    END
+    IF CODE # 'SUB' AND CODE # 'SUBT' AND CODE # 'TOT' THEN
+      IF CR.KEY = "CM" AND BUFFER # "M" THEN
+        TOTAL += (AMT * (-1))
+      END ELSE
+        TOTAL += AMT
+      END
+    END
+    IF CODE = "TOT" THEN
+      PRINTED.TOT=1
+      GOSUB getInvoiceToPrint.TOTAL
+      XML.INVOICE<-1> = XML.INVOICE.TOTAL
+    END ELSE
+      GOSUB getInvoiceToPrint.LINE
+      XML.INVOICE<-1> = XML.INVOICE.LINE
+    END
+  NEXT CODE.IDX
+  PRINTED.TOT = 0
+  GOSUB getInvoiceToPrint.TOTAL
+  XML.INVOICE<-1> = XML.INVOICE.TOTAL
+  ;*
+  ;* Completed processing body
+  ;*
+  XML.INVOICE<-1> = '</body>'
+  ;*
+  ;* Return xml data
+  ;*
+  XML.INVOICE<-1> = '</invoice>'
+  METHOD = CHANGE(XML.INVOICE,@AM,"")
+RETURN
+
+  ;**
+  ;* Internal subroutine
+  ;* Gets an invoice body line item as an XML element
+  ;*
+  ;* @param  QUANTITY
+  ;* @param  UNIT.PRICE
+  ;* @param  CODE
+  ;* @param  DESC
+  ;* @param  UM
+  ;* @param  CHG.CAT
+  ;* @param  AMOUNT
+  ;* @return XML.INVOICE.LINE  - The invoice line element:
+  ;*                           <line {type="subtotal"}?>
+  ;*                           <desc/><qty/><um/><unit-price/><amount/>
+  ;*                           </line>
+  ;*;
+getInvoiceToPrint.LINE:
+  XML.INVOICE.LINE = '<line>'
+  IF QUANTITY   = 0 THEN QUANTITY   = ""
+  IF UNIT.PRICE = 0 THEN UNIT.PRICE = ""
+  IF CODE = "SUB" OR CODE = "SUBT" THEN
+    XML.INVOICE.LINE = '<line type="subtotal">'
+  END
+  REC = ''
+  REC<1> = DESC
+  REC<2> = OCONV(QUANTITY,"MD0")
+  IF CHG.CAT = "OTH" OR CHG.CAT= "MSC" THEN
+    REC<3> = UM
+  END
+  REC<4> = OCONV(UNIT.PRICE,'MD4')
+  DEC.POS = INDEX(AMOUNT,".",1)
+  IF DEC.POS = 0 THEN AMOUNT = OCONV(AMOUNT,"MD2")
+  REC<5> = AMOUNT
+  CPYLIB = CHANGE("desc,qty,um,unit-price,amount",",",@AM)
+  XML.INVOICE.LINE<-1> = RECORD2XML(REC,"",CPYLIB,"","")
+  XML.INVOICE.LINE<-1> = '</line>'
+RETURN
+
+  ;**
+  ;* Internal subroutine
+  ;* Gets an invoice total item as an XML element
+  ;*
+  ;* @param  PRINTED.TOT
+  ;* @param  DESC
+  ;* @param  TOTAL
+  ;* @return XML.INVOICE.TOTAL - The invoice total element:
+  ;*                   <total loc="inline|bottom">
+  ;*                     <desc/><amount/>
+  ;*                   </total>
+  ;*;
+getInvoiceToPrint.TOTAL:
+  XML.INVOICE.TOTAL = '<total>'
+  REC = ''
+  IF PRINTED.TOT THEN
+    XML.INVOICE.TOTAL = '<total loc="inline">'
+    REC<1> = DESC
+  END ELSE
+    XML.INVOICE.TOTAL = '<total loc="bottom">'
+  END
+  REC<2> = OCONV(TOTAL,'MD2,$')
+  CPYLIB = CHANGE("desc,amount",",",@AM)
+  XML.INVOICE.TOTAL<-1> = RECORD2XML(REC,"",CPYLIB,"","")
+  XML.INVOICE.TOTAL<-1> = '</total>'
+RETURN
+
+  ;**
+  ;* Sets up an XML error message
+  ;*
+  ;* @param  ERR.STRING - The error message
+  ;* @return ERR.STRING - The xml error message
+  ;*;
+setupErrorMsg:
+  ERR.STRING = '<error>':toXML(ERR.STRING):'</error>'
+RETURN

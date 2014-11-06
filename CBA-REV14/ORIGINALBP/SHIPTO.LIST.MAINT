@@ -1,0 +1,785 @@
+*COPY>CPYLIB>COM1
+*COPY>JCS.CPYLIB>COM.DRS.FILE.VARS
+**************************************************************
+* REVISION    - [08.1]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+*
+* SOURCE         - DRSBP
+*
+* PROGRAM        - SHIPTO.LIST.MAINT
+*
+* BY             - L. ROSS, COMPUTER BUSINESS ASSOCIATES
+*
+* DATE           - 08/30/91
+*
+* DESCRIPTION    -
+* This program will be used to maintain the CUST.SHIPTO.LIST and  
+* CUST.TEMPLATE.LIST files.
+*
+*T18062 llh 04/16/1997 * PURGE TEMPLATE
+*T25458 alex 11/06/2000 * Fix port number assignment. After doing some
+*                         research, it turns out that CUST.TEMPLATE.LIST
+*                         & CUST.SHIPTO.LIST were becoming corrupted due
+*                         to live update of TEMP .CTL/CSL files. The
+*                         method of the temp files containing only 100
+*                         shiptos' per record was replaced with dynamic
+*                         arrays. This fix involved a redo of the
+*                         program, but not a redo of the structure of
+*                         the two files.
+*T25978 cmykleb 07/21/2003 * Add the use of prompts (S,SR,SB,ST).
+*ENDDOC
+**************************************************************
+*
+*---- FILE EQUATES
+*
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>JCS.CPYLIB>DRS.FILE.VARS
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>FILE.VARS
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>JCS.CPYLIB>SHIPTO.MASTER
+*COPY>JCS.CPYLIB>CUST.TEMPLATE.LIST
+*COPY>JCS.CPYLIB>CUST.SHIPTO.LIST
+*COPY>JCS.CPYLIB>SHIPTO.DETAIL
+*COPY>JCS.CPYLIB>TEMPLATE.DETAIL
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>GEN.XREF
+*
+   DIM SAV.REC(5)
+   MAT SAV.REC = ''
+*---- SETUP FOR SYSTEM ERROR MESSAGES
+*
+   SYS.TYPE = 1
+   CALL SYSCOM(MAT SYSCOM.REC)
+*
+*---- OPEN FILES
+*
+   OPEN '','COMPANY' TO COMPANY ELSE ERRMSG = 'COMPANY FILE MISSING';GOTO 93000
+   OPEN '','CONTROL' TO CONTROL ELSE ERRMSG = 'CONTROL FILE MISSING';GOTO 93000
+   OPEN '','SECURITY' TO SECURITY ELSE ERRMSG = 'SECURITY FILE MISSING';GOTO 93000
+   OPEN '','JCS.SCREENS' TO M.SCREENS ELSE ERRMSG = 'JCS.SCREENS FILE MISSING';GOTO 93000
+   OPEN '','SHIPTO.MASTER' TO SHIPTO.MASTER ELSE ERRMSG = 'SHIPTO.MASTER FILE MISSING';GOTO 93000
+   OPEN '','SHIPTO.DETAIL' TO SHIPTO.DETAIL ELSE ERRMSG = 'SHIPTO.DETAIL FILE MISSING';GOTO 93000
+   OPEN '','TEMPLATE.DETAIL' TO TEMPLATE.DETAIL ELSE ERRMSG = 'TEMPLATE.DETAIL FILE MISSING';GOTO 93000
+   OPEN '','CUST.TEMPLATE.LIST' TO CUST.TEMPLATE.LIST ELSE ERRMSG = 'CUST.TEMPLATE.LIST FILE MISSING'; GOTO 93000
+   OPEN '','CUST.SHIPTO.LIST' TO CUST.SHIPTO.LIST ELSE ERRMSG = 'CUST.SHIPTO.LIST FILE MISSING'; GOTO 93000
+   OPEN '','CUSTOMER' TO CUSTOMER ELSE ERRMSG = 'CUSTOMER FILE MISSING'; GOTO 93000
+   OPEN '','CUSTOMER.XREF' TO CUSTOMER.XREF ELSE ERRMSG = 'CUSTOMER.XREF FILE MISSING'; GOTO 93000
+   OPEN '','PREFIX' TO PREFIX ELSE ERRMSG = 'PREFIX FILE MISSING'; GOTO 93000
+*
+*---- GET COMPANY NUMBER
+*
+   CONO = ""
+   CALL GET.CONO(CONO,MAT COMP.REC)
+   IF CONO = "END" THEN GOTO 99999
+*
+*---- INITIALIZATION
+*
+   MAT EDIT.COM = ""
+   MAT EDIT.COM.DRIVER = ""
+   MAT GEN.XREF.REC = ''
+   TYP = 0
+   CALL EDIT.SUB
+   ERRMSG = ""
+   C.P.NAME = 'CUSTOMER'
+   GXR.CO=CONO
+   GXR.HEADING<1,2>='DESCRIPTION'
+   GXR.ATT<1,1>=0
+   GXR.ATT<1,2>=1
+   GXR.LEN<1,1>=10
+   GXR.LEN<1,2>=60
+   UNKNOWN = "???????????????"
+   OPTION = ''
+   HOLD.DESC = ''        ;*T25458
+*
+*---- PRINT SCREEN
+*
+   ECD.SCRN.CNT = 1
+   ECD.SCRN.NAME<1> = 'SHIPTO.LIST.MAINT'
+   ECD.ACTION = 1; CALL SCRN.EDIT
+   ECD.SCRN.NO = 1
+*
+*---- MAIN PROCESSING
+   BEGIN.PAGE = 8
+   PAGE.SIZE = 12
+   LINE.SPACE = 1
+*
+*---- GET CUSTOMER
+*
+5 *
+   LINES = 0
+   LN = 0
+   TREC.CNT = 0 ; CREC.CNT = 0
+   TEMP.CTL = '' ; TEMP.CSL = ''
+   ORIG.TEMP.CTL = ''
+   OLD.START.LINE = 0
+   MAT SCV.REC = ''
+   ECD.ACTION = 2
+   CALL SCRN.EDIT
+   ECD.ACTION = 6
+   CALL SCRN.EDIT
+   MAT CSL.REC = ''
+   MAT CTL.REC = ''
+   NEW = 0
+   NX = 0
+   ECD.NUM = 1
+   ECD.VALDAT.CODE = 2
+   ECD.VALDAT.FILE = CUSTOMER
+   ECD.PREFIX.ID = CONO
+   ECD.ACTION = 4; CALL SCRN.EDIT
+   BEGIN CASE
+      CASE ECD.RET.VALUE='END'
+         GOTO 99999
+      CASE ECD.RET.VALUE=''
+         ECD.NUM=2;ECD.ACTION=4;CALL SCRN.EDIT
+         IF ECD.RET.VALUE='' OR ECD.RET.VALUE='END' THEN
+            GOSUB 2000;GOTO 5
+         END
+         GXR.XREF=CUSTOMER.XREF
+         GXR.FILE=CUSTOMER
+         GXR.LOC=1
+         GXR.TOP.LINE=C.P.NAME:" XREF SEARCH"
+         GXR.HEADING<1,1>=C.P.NAME
+         GXR.ID=''
+         GXR.SRCH.ID=ECD.RET.VALUE
+         CALL GEN.XREF(MAT GEN.XREF.REC,PREFIX)
+         ECD.ACTION=2;CALL SCRN.EDIT
+         IF GXR.ID='' THEN
+            GOSUB 2000;GOTO 5
+         END ELSE
+            MATREAD CUST.REC FROM CUSTOMER,CONO:GXR.ID ELSE
+               ERRMSG=C.P.NAME:' ':GXR.ID:' IS MISSING'
+               GOSUB 91000;GOSUB 2000;GOTO 5
+            END
+            CUST.NO = GXR.ID
+            SCV.REC(1)<ECD.SCRN.NO>=CUST.NO
+            ECD.NUM=1;ECD.ACTION=5;CALL SCRN.EDIT
+            SCV.REC(2)<ECD.SCRN.NO> = CUST.NAME
+            ECD.NUM=2;ECD.ACTION=5;CALL SCRN.EDIT
+         END
+      CASE ECD.RET.VALUE # '' AND ECD.VALDAT.ITEM # ''
+         CUST.NO = ECD.RET.VALUE
+         SCV.REC(1) = CUST.NO
+         CUST.NAME = ECD.VALDAT.ITEM<1>
+         ECD.NUM = 2
+         SCV.REC(2) = CUST.NAME
+         ECD.ACTION = 5; CALL SCRN.EDIT
+      CASE 1
+         ERRMSG = 'Customer is not on file'
+         GOSUB 91000
+         GOTO 5
+   END CASE
+   ADD.FLG = 0
+   CFILE = ''
+*
+*---- GET TEMPLATE
+*
+10 *
+   CCUR.RECNO = '001'
+   TCUR.RECNO = '001'
+   TMP.FLG = 0
+   TEMP.NO = ''
+   ECD.NUM = 3
+   ECD.ACTION = 4; CALL SCRN.EDIT
+   IF ECD.RET.VALUE = 'END' THEN GOTO 5
+   IF ECD.RET.VALUE # '' AND ECD.RET.VALUE # STR('0',LEN(ECD.RET.VALUE)) THEN
+      TEMP.NO = ECD.RET.VALUE
+      CTL.KEY = CONO:CUST.NO:"!":TEMP.NO:"!"
+      MATREAD CTL.REC FROM CUST.TEMPLATE.LIST, CTL.KEY:"001" ELSE
+         MAT CTL.REC = ''
+         TMP.FLG = 1
+         GOSUB GET.TEMPLATE.DESC             ;*T25458
+      END
+      IF NOT(TMP.FLG) THEN
+         IF CTL.STATUS<1,1> = 1 THEN
+            ERRMSG = "This customer's template list is frozen"
+            GOSUB 91000
+            GOTO 10
+         END
+         GOSUB GET.TEMPLATE.DESC             ;*T25458
+         CL.TEMP = TEMP.NO
+         GOSUB 4000
+         IF TEMP.CTL<1> # '' THEN
+            TMP.FLG = 2
+         END ELSE TMP.FLG = 1
+      END
+   END ELSE
+      SCV.REC(3) = '0'
+      SCV.REC(4) = 'MASTER SHIPTO LIST'
+      HOLD.DESC = 'MASTER SHIPTO LIST'
+      ECD.NUM = 3; ECD.ACTION = 5; CALL SCRN.EDIT
+      ECD.NUM = 4; ECD.ACTION = 5; CALL SCRN.EDIT
+      CTL.KEY = CONO:CUST.NO:"!0!"
+      TEMP.NO = 0
+   END
+   SHP.FLG = 0
+   MATREAD CSL.REC FROM CUST.SHIPTO.LIST, CONO:CUST.NO:"!001" THEN
+      SHP.FLG = 1
+      GOSUB 3000            ;* COPY MASTER TO TEMP.CSL
+      IF TMP.FLG = 0 THEN
+         TEMP.CTL = TEMP.CSL         ;* COPY MASTER TO TEMP.CTL
+         LINES = DCOUNT(TEMP.CTL<1>, VM)        ;*T25458
+      END
+   END ELSE
+      MAT CSL.REC = ''
+   END
+   ORIG.TEMP.CTL = TEMP.CTL
+*
+*---- TEST FOR CLONE REQ'D
+*
+   IF NOT(SHP.FLG) THEN NEW = 1
+   IF SHP.FLG = 1 AND TMP.FLG = 1 THEN     ;* MASTER BUT NO DETAIL
+      GOSUB 5000
+      NEW = 1
+   END
+   IF NOT(NEW) THEN
+      LN = 1
+      GOSUB 10000
+   END
+   IF NEW AND NOT(NX) THEN 
+      OPTION = 'A'
+      LOOP
+         LN = LINES + 1
+         OLD.LINES = LINES
+         GOSUB 50
+      WHILE LINES > OLD.LINES DO
+         IF SHP.FLG THEN GOSUB 12000
+      REPEAT
+      LN = LINES
+   END
+   GOSUB 1000
+   GOTO 5
+*T25458 v                                            
+*                                                    
+GET.TEMPLATE.DESC: 
+*                                                    
+   ECD.NUM = 4                                        
+   SCV.REC(4) = CTL.DESC                              
+   ECD.ACTION = 4; CALL SCRN.EDIT                     
+   IF ECD.RET.VALUE = 'END' OR ECD.RET.VALUE = '' THEN
+      GOTO 10                                          
+   END                                                
+   TMP.FLG = 1                                        
+   CTL.DESC = TRIM(ECD.RET.VALUE)                     
+   HOLD.DESC = CTL.DESC                               
+   ECD.NUM = 4; ECD.ACTION = 5; CALL SCRN.EDIT        
+  *                                                  
+   RETURN                                             
+*T25458 ^                                            
+*
+*---- ENTER SHIPTO INFO (SCROLLED)
+*
+50 *
+   GOSUB 10000
+   SLN = BEGIN.PAGE + LINE.SPACE * MOD(LN-1,PAGE.SIZE)
+   P_X  = 0 ; P_Y = SLN ; P_VALUE = OCONV(LN,'MD0Z') 'R#4':' ' ; P_OPT = ""
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   X = 5; Y = SLN; TYP = 3; MAXL = 7; O.R = 'O'; JUSTIFY = 'R'
+   IF OPTION # 'I' THEN
+      DEFAULT = TEMP.CTL<1,LN>
+      SAV.VALUE = DEFAULT
+   END ELSE SAV.VALUE = ''
+   CALL EDIT.SUB
+   VALUE = TRIM(VALUE)
+   BEGIN CASE
+      CASE VALUE # 'END'
+         IF VALUE # '' THEN
+            SHM.KEY = VALUE
+            GOSUB 16000
+            IF SHM.SP.NAME = UNKNOWN THEN
+               ERRMSG = 'SHIPTO.MASTER NOT ON FILE'
+               GOSUB 91000
+               GOTO 50
+            END
+            LOCATE VALUE IN TEMP.CTL<1>,1 SETTING INDX ELSE INDX = 0
+            IF INDX > 0 THEN                                        
+               ERRMSG = 'SHIPTO ALREADY EXIST IN TEMPLATE LIST'      
+               GOSUB 91000                                           
+               GOTO 50                                               
+            END                                                     
+            IF OPTION = 'A' OR OPTION = 'I' THEN
+               LINES = LINES + 1
+               INS VALUE BEFORE TEMP.CTL<1,LN>
+               ADD.FLG = 1
+            END
+         END ELSE
+            IF TEMP.CTL<1,LN> = '' THEN
+               P_X  = 0 ; P_Y = SLN ; P_VALUE = "" ; P_OPT = "CL"
+               CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+               GOTO 99
+            END ELSE
+               SHM.KEY = TEMP.CTL<1,LN>
+               GOSUB 16000
+            END
+            P_X  = 5 ; P_Y = SLN ; P_VALUE = TEMP.CTL<1,LN> 'R#7' ; P_OPT = ""
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         END
+         P_X  = 13 ; P_Y = SLN ; P_VALUE = SHM.SP.STORE 'R#4' ; P_OPT = ""
+         P_X  := AM:19 ; P_Y := AM:SLN ; P_VALUE := AM:SHM.SP.NAME 'L#30'
+         P_X  := AM:50 ; P_Y := AM:SLN ; P_VALUE := AM:SHM.DT.NAME 'L#30'
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      CASE 1
+         IF TEMP.CTL<1,LN> = '' THEN 
+            P_X  = 0 ; P_Y = SLN ; P_VALUE = "" ; P_OPT = "CL"
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         END
+   END CASE
+99 *
+   RETURN
+*
+*---- ENTER OPTIONS
+*
+1000 *
+   MORE = 1
+   LOOP
+      LINES = DCOUNT(TEMP.CTL<1>, VM)         ;*T25458
+      ECD.NUM = 20
+      ECD.ACTION = 4; CALL SCRN.EDIT
+      OPTION = ECD.RET.VALUE
+      BEGIN CASE
+         CASE OPTION = 'END' OR OPTION = 'E'
+            RELEASE
+            MORE = 0
+         CASE OPTION = 'A'
+            LOOP
+               LN = LINES + 1
+               OLD.LINES = LINES
+               GOSUB 50
+            WHILE LINES > OLD.LINES DO
+               IF SHP.FLG THEN GOSUB 12000   ;* LOCATE IN CSL.REC
+            REPEAT
+            LN = LINES
+         CASE OPTION = 'CL'
+            IF NOT(SHP.FLG) OR (SHP.FLG AND NOT(TMP.FLG)) THEN
+               ERRMSG = 'THIS OPTION NOT AVAILABLE FOR MASTER-ONLY MAINT'
+               GOSUB 91000
+            END ELSE
+               IF NEW THEN
+                  GOSUB 5000
+               END ELSE
+                  ERRMSG = 'THIS OPTION AVAILABLE FOR NEW TEMPLATE ONLY'
+                  GOSUB 91000
+               END
+            END
+         CASE OPTION = 'D'
+            ECD.NUM = 23
+            ECD.ACTION = 4; CALL SCRN.EDIT
+            IF ECD.RET.VALUE # 'END' THEN
+               IF ECD.RET.VALUE >= START.LINE AND ECD.RET.VALUE <= LAST.LINE THEN
+                  ST.DEL = ECD.RET.VALUE
+                  ECD.NUM = 24
+                  ECD.ACTION = 4; CALL SCRN.EDIT
+                  IF ECD.RET.VALUE # 'END' THEN
+                     IF ECD.RET.VALUE >= START.LINE AND ECD.RET.VALUE <= LAST.LINE THEN
+                        IF ECD.RET.VALUE < ST.DEL THEN
+                           ERRMSG = 'END SEQ# MUST NOT BE LESS THAN START SEQ#'
+                           GOSUB 91000
+                        END ELSE
+                           EN.DEL = ECD.RET.VALUE
+                           GOSUB 9000
+                        END
+                     END ELSE
+                        ERRMSG = '** OUT OF RANGE **'
+                        GOSUB 91000
+                     END
+                  END
+               END ELSE
+                  ERRMSG = '** OUT OF RANGE **'
+                  GOSUB 91000
+               END
+            END
+         CASE OPTION = 'I'
+            ECD.NUM = 21
+            ECD.ACTION = 4; CALL SCRN.EDIT
+            IF ECD.RET.VALUE # 'END' THEN
+               IF ECD.RET.VALUE >= START.LINE AND ECD.RET.VALUE <= LAST.LINE THEN
+                  LN = ECD.RET.VALUE
+                  GOSUB 8000
+                  GOSUB 50
+                  IF VALUE # 'END' AND VALUE # '' THEN
+                     GOSUB 12000     ;* LOCATE SHIPTO IN MASTER
+                  END
+                  OLD.START.LINE = 0
+*            LN = LN + 1
+                  GOSUB 10000
+               END
+            END
+         CASE OPTION = 'C'
+            ECD.NUM = 21
+            ECD.ACTION = 4; CALL SCRN.EDIT
+            IF ECD.RET.VALUE # 'END' THEN
+               IF ECD.RET.VALUE >= START.LINE AND ECD.RET.VALUE <= LAST.LINE THEN
+                  LN = ECD.RET.VALUE
+                  GOSUB 50
+                  IF VALUE # 'END' AND VALUE # '' AND VALUE # SAV.VALUE THEN
+                     TEMP.CTL<1,LN> = VALUE
+                     GOSUB 12000
+                  END
+               END ELSE
+                  ERRMSG = '** OUT OF RANGE **'
+                  GOSUB 91000
+               END
+            END
+         CASE OPTION = 'S'
+            LN = START.LINE + PAGE.SIZE
+            IF LN > LINES THEN
+               LN = 1
+            END
+            OLD.START.LINE = 0
+            GOSUB 10000
+         CASE OPTION = 'SR'
+            LN = START.LINE - PAGE.SIZE
+            IF LN < 1 THEN LN = 1
+            OLD.START.LINE = 0
+            GOSUB 10000
+*T25978 v
+         CASE OPTION = 'SB'
+            LN = LINES
+            GOSUB 10000
+         CASE OPTION = 'ST'
+            LN = 1
+            GOSUB 10000
+*T25978 ^
+         CASE OPTION = 'F'
+            BEGIN CASE
+               CASE LINES < 1
+                  ERRMSG='You may not file a record with 0 lines.'
+                  GOSUB 91000
+               CASE 1
+                  GOSUB 20000
+                  MORE = 0
+            END CASE
+      END CASE
+   WHILE MORE DO REPEAT
+   RETURN
+*
+*---- CLEAR SCREEN AND RE-INITIALIZE
+*
+2000 *
+   ECD.ACTION = 6; CALL SCRN.EDIT
+   FOR I = BEGIN.PAGE TO BEGIN.PAGE + PAGE.SIZE - 1
+      P_X  = 0 ; P_Y = I ; P_VALUE = "" ; P_OPT = "CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   NEXT I
+   SCV.REC(10) = ''
+   RETURN
+*
+*---- COPY CUST.SHIPTO.LIST TO TEMP.CSL.FILE
+*
+3000 *
+   TEMP.CSL = ''      ;*T25458
+   LOOP
+      MATREADU SAV.REC FROM CUST.SHIPTO.LIST, CONO:CUST.NO:"!":CCUR.RECNO THEN
+         FND = 1
+      *T25458 v DO FOR-NEXT LOOP TO EXCLUDE NULL VM.
+         SHP.CNT = DCOUNT(SAV.REC(2), VM)              
+         FOR XX = 1 TO SHP.CNT                         
+            IF SAV.REC(2)<1,XX> # '' THEN               
+               TEMP.CSL<1,-1> = SAV.REC(2)<1,XX>         
+            END                                         
+         NEXT XX                                       
+         CREC.CNT += 1                                 
+      *T25458 ^                                     
+         CCUR.RECNO = CCUR.RECNO + 1
+         IF LEN(CCUR.RECNO) < 3 THEN CCUR.RECNO = STR('0',3-LEN(CCUR.RECNO)):CCUR.RECNO
+      END ELSE
+         MAT SAV.REC = ''
+         FND = 0
+      END
+   WHILE FND DO
+   REPEAT
+   RETURN
+*
+*---- COPY CUST.TEMPLATE.LIST TO TEMP.CTL.FILE
+*
+4000 *
+   TEMP.CTL = ''        ;*T25458
+   LINES = ''
+   LOOP
+      MATREADU SAV.REC FROM CUST.TEMPLATE.LIST, CONO:CUST.NO:"!":CL.TEMP:"!":TCUR.RECNO THEN
+         FND = 1
+      *C37077 v DO FOR-NEXT LOOP TO EXCLUDE NULL VM.
+         SHP.CNT = DCOUNT(SAV.REC(2), VM)              
+         FOR XX = 1 TO SHP.CNT                         
+            IF SAV.REC(2)<1,XX> # '' THEN               
+               TEMP.CTL<1,-1> = SAV.REC(2)<1,XX>         
+            END                                         
+         NEXT XX                                       
+         TREC.CNT += 1                                 
+      *C37077 ^                                     
+         TCUR.RECNO = TCUR.RECNO + 1
+         IF LEN(TCUR.RECNO) < 3 THEN TCUR.RECNO = STR('0',3-LEN(TCUR.RECNO)):TCUR.RECNO
+      END ELSE
+         MAT SAV.REC = ''
+         FND = 0
+      END
+   WHILE FND DO
+   REPEAT
+   LINES = DCOUNT(TEMP.CTL<1>, VM)       ;*T25458
+   RETURN
+5000 * READ CLONE-FROM RECORDS
+   NX = 0
+   CLONE = 1
+   MAT SAV.REC = ''
+   LOOP
+      ECD.NUM = 25
+      ECD.ACTION = 4; CALL SCRN.EDIT
+      BEGIN CASE
+         CASE ECD.RET.VALUE # 'END' AND ECD.RET.VALUE # ''
+            IF ECD.RET.VALUE = 'D' THEN
+               CLONE1 = 1
+               LOOP
+                  ECD.NUM = 22
+                  ECD.ACTION = 4; CALL SCRN.EDIT
+                  BEGIN CASE
+                     CASE ECD.RET.VALUE # 'END' AND ECD.RET.VALUE # ''
+                        CL.TEMP = TRIM(ECD.RET.VALUE)
+                        MATREAD SAV.REC FROM CUST.TEMPLATE.LIST, CONO:CUST.NO:"!":CL.TEMP:"!001" THEN
+                           NX = 1
+                           CFILE = 'D'
+                           CLONE1 = 0; CLONE = 0
+                           TCUR.RECNO = '001'
+                           GOSUB 4000
+                        END ELSE
+                           ERRMSG = 'CUST.TEMPLATE.LIST RECORD DOES NOT EXIST.'
+                           GOSUB 91000
+                        END
+                     CASE 1
+                        CLONE1 = 0
+                  END CASE
+               WHILE CLONE1 DO REPEAT
+            END ELSE
+               MATREAD SAV.REC FROM CUST.SHIPTO.LIST, CONO:CUST.NO:"!001" THEN
+                  NX = 1
+                  CFILE = 'M'
+                  CLONE = 0
+                  TCUR.RECNO = '001'
+                  CCUR.RECNO = '001'
+                  GOSUB 3000
+                  TEMP.CTL = TEMP.CSL         ;* COPY MASTER TO TEMP.CTL
+                  LINES = DCOUNT(TEMP.CTL<1>, VM)       ;*T25458        
+               END ELSE
+                  ERRMSG = 'CUST.SHIPTO.LIST RECORD DOES NOT EXIST'
+                  GOSUB 91000
+               END
+            END
+         CASE 1
+            CLONE = 0
+      END CASE
+   WHILE CLONE DO REPEAT
+   IF NX THEN
+      LN = 1
+      TCUR.RECNO = 0
+      OLD.START.LINE = 0
+      GOSUB 10000
+   END
+   RETURN
+*
+8000* SHIFT LINES DOWN 1 FOR INSERTION
+*
+  * IF LAST.LINE = START.LINE + PAGE.SIZE - 1 THEN I = LAST.LINE - 1 ELSE I = LAST.LINE
+   I = LAST.LINE
+   LOOP
+      SLN = BEGIN.PAGE + LINE.SPACE * MOD(I-1,PAGE.SIZE)
+      IF I < START.LINE + PAGE.SIZE - 1 THEN
+         P_X  = 0 ; P_Y = SLN+1 ; P_VALUE = I+1 'R#4':@(5,SLN+1):TEMP.CTL<1,I> 'R#7' ; P_OPT = ""
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         SHM.KEY = TEMP.CTL<1,I>
+         GOSUB 16000
+         P_X  = 13 ; P_Y = SLN+1 ; P_VALUE = SHM.SP.STORE 'R#4' ; P_OPT = ""
+         P_X  := AM:19 ; P_Y := AM:SLN+1 ; P_VALUE := AM:SHM.SP.NAME 'L#30'
+         P_X  := AM:50 ; P_Y := AM:SLN+1 ; P_VALUE := AM:SHM.DT.NAME 'L#30'
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      END
+   WHILE I > LN DO
+      I = I - 1
+   REPEAT
+   P_X  = 0 ; P_Y = SLN ; P_VALUE = I 'R#4':@(5,SLN) ; P_OPT = "CL"
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   RETURN
+*
+9000* DELETE LINES *
+*
+  *T25458 v
+   FOR I = EN.DEL TO ST.DEL STEP - 1
+      TEMP.CTL = DELETE(TEMP.CTL,1,I,0)
+      LINES = LINES - 1
+   NEXT I
+   LN = ST.DEL
+   OLD.START.LINE = 0
+   GOSUB 10000
+  *T25458 ^
+   RETURN
+*
+10000 *PRINT SCROLL LINES
+*
+   START.LINE=1 + INT((LN-1)/PAGE.SIZE) * PAGE.SIZE
+   LAST.LINE=START.LINE + PAGE.SIZE - 1
+   IF LAST.LINE > LINES THEN LAST.LINE=LINES
+   IF START.LINE=OLD.START.LINE THEN GOTO 10099
+   OLD.START.LINE=START.LINE
+   CNT=1
+   FOR N=START.LINE TO LAST.LINE 
+      SLN=BEGIN.PAGE + LINE.SPACE * MOD(N-1,PAGE.SIZE)
+      P_X  = 0 ; P_Y = SLN ; P_VALUE = "" ; P_OPT = "CL"
+      P_X  := AM:0 ; P_Y := AM:SLN ; P_VALUE := AM:N "R#4"
+      P_X  := AM:5 ; P_Y := AM:SLN ; P_VALUE := AM:TEMP.CTL<1,N> 'R#7'
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      SHM.KEY = TEMP.CTL<1,N>
+      GOSUB 16000
+      P_X  = 13 ; P_Y = SLN ; P_VALUE = SHM.SP.STORE 'R#4' ; P_OPT = ""
+      P_X  := AM:19 ; P_Y := AM:SLN ; P_VALUE := AM:SHM.SP.NAME 'L#30'
+      P_X  := AM:50 ; P_Y := AM:SLN ; P_VALUE := AM:SHM.DT.NAME 'L#30'
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      CNT=CNT + 1
+   NEXT N
+   FOR M=CNT TO PAGE.SIZE
+      SLN=BEGIN.PAGE + LINE.SPACE * MOD(M-1,PAGE.SIZE)
+      P_X  = 0 ; P_Y = SLN ; P_VALUE = "" ; P_OPT = "CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   NEXT M
+10099 *
+   RETURN
+*
+12000 * LOCATE SHIPTO IN CUST.TEMPLATE.LIST
+*
+  *T25458 v
+   IF VALUE # '' THEN                              
+      LOCATE VALUE IN TEMP.CSL<1>,1 SETTING FND ELSE
+         TEMP.CSL<1,-1> = VALUE                      
+      END                                           
+   END                                             
+  *T25458 ^
+   RETURN
+*
+16000 * GET SHIPTO MASTER *
+*
+   MATREAD SHM.REC FROM SHIPTO.MASTER, CONO:SHM.KEY ELSE
+      MAT SHM.REC = UNKNOWN
+   END
+   RETURN
+*
+16500 * GET TEMPLATE.DETAIL
+   *** ADDED 12/17/91 PER REQUEST OF D. DOBY
+   MATREADU TDT.REC FROM TEMPLATE.DETAIL, CONO:SHM.KEY:'!':TEMP.NO THEN
+      RELEASE TEMPLATE.DETAIL, CONO:SHM.KEY:'!':TEMP.NO
+   END ELSE
+      IF CFILE = 'M' THEN
+         MATREAD TDT.REC FROM SHIPTO.DETAIL, CONO:SHM.KEY THEN
+            TDT.SHIP.VIA = SHM.DT.SHPVIA
+            MATWRITE TDT.REC ON TEMPLATE.DETAIL, CONO:SHM.KEY:'!':TEMP.NO
+         END
+      END ELSE
+         MATREAD TDT.REC FROM TEMPLATE.DETAIL, CONO:SHM.KEY:"!":CL.TEMP THEN
+            MATWRITE TDT.REC ON TEMPLATE.DETAIL, CONO:SHM.KEY:"!":TEMP.NO
+         END ELSE
+            MATREAD TDT.REC FROM SHIPTO.DETAIL, CONO:SHM.KEY THEN
+               TDT.SHIP.VIA = SHM.DT.SHPVIA
+               MATWRITE TDT.REC ON TEMPLATE.DETAIL, CONO:SHM.KEY:"!":TEMP.NO
+            END
+         END
+      END
+   END
+   RELEASE TEMPLATE.DETAIL, CONO:SHM.KEY:"!":TEMP.NO
+   RETURN
+*
+20000 * WRITE TEMP FILE BACK TO LIVE FILE
+*
+   CTL.CNT = DCOUNT(TEMP.CTL<1>, VM)
+   CSL.CNT = DCOUNT(TEMP.CSL<1>, VM)
+   TREC = '' ; SREC = ''
+   POS = 1
+   FOR X = 1 TO CTL.CNT
+      TREC<POS,-1> = TEMP.CTL<1,X>
+      IF MOD(X,100) = 0 THEN POS += 1
+   NEXT X
+   POS = 1
+   FOR X = 1 TO CSL.CNT
+      SREC<POS,-1> = TEMP.CSL<1,X>
+      IF MOD(X,100) = 0 THEN POS += 1
+   NEXT X
+  *
+   IF TEMP.NO # '0' AND TEMP.NO # '' THEN TEMP.X = 1 ELSE TEMP.X = 0
+   IF (NOT(SHP.FLG) AND NOT(TEMP.X)) OR (SHP.FLG AND NOT(TMP.FLG) AND NOT(TEMP.X)) THEN
+      CRECS = DCOUNT(TREC, AM)
+      IF CREC.CNT GT CRECS THEN CRECS = CREC.CNT
+      FOR I = 1 TO CRECS
+         POS = I
+         IF LEN(I) < 3 THEN I = STR('0',3-LEN(I)):I
+         MATREADU CSL.REC FROM CUST.SHIPTO.LIST, CONO:CUST.NO:"!":I ELSE MAT CSL.REC = ""
+         IF TREC<POS,1> = '' THEN
+            DELETE CUST.SHIPTO.LIST, CONO:CUST.NO:'!':I
+         END ELSE
+            CSL.SHIPS = TREC<POS>
+            MATWRITE CSL.REC ON CUST.SHIPTO.LIST, CONO:CUST.NO:"!":I
+         END
+      NEXT I
+   END ELSE
+      IF NOT(SHP.FLG) THEN SREC = TREC
+      CRECS = DCOUNT(SREC,AM)
+      IF CREC.CNT GT CRECS THEN CRECS = CREC.CNT
+      FOR I = 1 TO CRECS
+         POS = I
+         IF LEN(I) < 3 THEN I = STR('0',3-LEN(I)):I
+         MATREADU CSL.REC FROM CUST.SHIPTO.LIST, CONO:CUST.NO:"!":I ELSE MAT CSL.REC = ""
+         IF SREC<POS,1> = '' THEN
+            DELETE CUST.SHIPTO.LIST, CONO:CUST.NO:'!':I
+         END ELSE
+            CSL.SHIPS = SREC<POS>
+            MATWRITE CSL.REC ON CUST.SHIPTO.LIST, CONO:CUST.NO:"!":I
+         END
+      NEXT I
+      TRECS = DCOUNT(TREC,AM)
+      TCUR.RECNO = '001'
+      IF TREC.CNT GT TRECS THEN TRECS = TREC.CNT
+      FOR POS = 1 TO TRECS
+         CTL.KEY = CONO:CUST.NO:'!':TEMP.NO:'!':TCUR.RECNO
+         MATREADU CTL.REC FROM CUST.TEMPLATE.LIST, CTL.KEY ELSE MAT CTL.REC = ''
+         IF TREC<POS,1> = '' THEN
+            DELETE CUST.TEMPLATE.LIST, CTL.KEY
+         END ELSE
+            IF POS = 1 THEN CTL.DESC = HOLD.DESC
+            CTL.SHIPS = TREC<POS>
+            MATWRITE CTL.REC ON CUST.TEMPLATE.LIST, CTL.KEY
+            IF ADD.FLG OR NX THEN
+               IF ADD.FLG AND CFILE = '' THEN CFILE = 'M'
+               IF CFILE = '' THEN CFILE = 'M'
+               FOR D = 1 TO 100
+                  IF CTL.SHIPS<1,D> = '' THEN
+                     D = 101
+                  END ELSE
+                     SHM.KEY = CTL.SHIPS<1,D>
+                     GOSUB 16000
+                     GOSUB 16500
+                  END
+               NEXT D
+            END
+            TCUR.RECNO = TCUR.RECNO + 1
+            IF LEN(TCUR.RECNO) < 3 THEN TCUR.RECNO = STR('0',3-LEN(TCUR.RECNO)):TCUR.RECNO
+         END
+      NEXT POS
+* 18062                                                             
+      NUM.ORIG = DCOUNT(ORIG.TEMP.CTL<1>,VM)                             
+      FOR I = 1 TO NUM.ORIG                                           
+         LOCATE ORIG.TEMP.CTL<1,I> IN TEMP.CTL<1>,1 SETTING LINDX ELSE
+            DELETE TEMPLATE.DETAIL, CONO:ORIG.TEMP.CTL<1,I>:"!":TEMP.NO 
+         END                                                           
+      NEXT I                                                          
+   END
+   RETURN
+*
+*---- CALLS FOR SYSCOM
+*
+91000 *
+   ERR.TYPE = 1
+   CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+93000 *
+   ERR.TYPE = 3
+   CALL SYSCOM(MAT SYSCOM.REC)
+99999 *
+   RELEASE
+* PRINT @(-1):
+END

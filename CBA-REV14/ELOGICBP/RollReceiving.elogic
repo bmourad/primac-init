@@ -1,0 +1,328 @@
+  SUBROUTINE RollReceiving.elogic(METHOD, ARGS)
+**********************************************
+* REVISION    - [12.0]
+* Copyright 1995 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - eLOGICBP
+* PROGRAM     - RollReceiving.elogic
+* BY          - ABDULLAH JIBALY; CBA
+* DATE        - 08/15/2002
+* DESCRIPTION - BUSINESS LOGIC FOR ROLL RECEIVING RF UNITS
+*
+*ENDDOC
+**********************************************
+  ;*
+  ;* Libraries and initialization
+  ;*
+*COPY>ICS.CPYLIB>INV.WHSE.LOC
+*COPY>ICS.CPYLIB>INV_SERIAL
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>CATEGORY
+*COPY>PMC.CPYLIB>EMPLOYEE
+*COPY>CPYLIB>CHAR
+  DEFFUN toXML(STR) CALLING "XML_FORMAT_CDATA"
+  DEFFUN RECORD2XML(REC,ID,CPYLIB.PATH,RET.LIST,PROP.LIST)
+  ;*
+  ;* Method handler
+  ;*
+  ERROR_INVALID_METHOD = "Invalid method name."
+  ERR.STRING = ''
+  BEGIN CASE
+    CASE METHOD = "login"
+      GOSUB login
+    CASE METHOD = "receiveStock"
+      GOSUB receiveStock
+    CASE METHOD = "bayLocator"
+      GOSUB bayLocator
+    CASE 1
+      ERR.STRING = ERROR_INVALID_METHOD
+  END CASE
+  IF ERR.STRING THEN
+    GOSUB setupErrorMsg
+    METHOD = ERR.STRING
+  END
+  SWAP @AM WITH "" IN METHOD
+  METHOD = '<?xml version="1.0"?>':METHOD
+  RETURN
+
+  ;**
+  ;* Logs the employee into the database
+  ;*
+  ;* @param  ARGS<1>  The Company number
+  ;* @param  ARGS<2>  The employee id
+  ;* @param  ARGS<3>  The employee password
+  ;* @return METHOD The user login record in XML
+  ;*;
+login: 
+  ;*
+  ;* Get parameters
+  ;*
+  CONO      = ARGS<1>
+  USER_ID   = ARGS<2>
+  USER_PASS = ARGS<3>
+  ;*
+  ;* Setup error strings
+  ;*
+  ERR.NOTEXIST.FILE = "Database error, please try again later."
+  ERR.NOTEXIST.REC  = "Invalid record."
+  ERR.INVALID.USER  = "Invalid username or password."
+  ERR.INVALID.PASS  = ERR.INVALID.USER
+  ;*
+  ;* Open files
+  ;*
+  OPEN 'EMPLOYEE' TO EMPLOYEE ELSE
+    ERR.STRING = ERR.NOTEXIST.FILE
+    RETURN
+  END
+  ;*
+  ;* Read login record and verify password
+  ;*
+  MATREAD EMP.REC FROM EMPLOYEE, CONO : USER_ID ELSE
+    ERR.STRING = ERR.INVALID.USER
+    RETURN
+  END
+  ;*
+  ;* If password matches then return employee record
+  ;* Otherwise return an error message
+  ;*
+  IF USER_PASS # EMP.PASSWORD THEN
+    ERR.STRING = ERR.INVALID.PASS
+    RETURN
+  END
+  ;*
+  ;* Setup RECORD2XML function call
+  ;*
+  CPYLIB.PATH  = "PMC.CPYLIB/EMPLOYEE"
+  MATBUILD REC FROM EMP.REC
+  METHOD = RECORD2XML(REC,USER_ID,CPYLIB.PATH,"","")
+  SWAP @AM WITH '' IN METHOD
+  RETURN
+
+  ;**
+  ;* Processes Roll Receiving transaction from hand-held units on
+  ;* the receiving dock
+  ;*
+  ;* @param  ARGS<1>  The company number
+  ;* @param  ARGS<2>  PO number
+  ;* @param  ARGS<3>  Manifest number
+  ;* @param  ARGS<4>  Manifest Weight
+  ;* @param  ARGS<5>  Warehouse
+  ;* @param  ARGS<6>  Location
+  ;* @return METHOD
+  ;* @see    RCVBP RCV.RF.RECEIVE
+  ;*;
+receiveStock: 
+  ;*
+  ;* Get parameters
+  ;*
+  CONO    = ARGS<1>
+  PO.NO   = ARGS<2>
+  MAN.NO  = ARGS<3>
+  TOT.WGT = ARGS<4>
+  WHSE    = ARGS<5>
+  WLOC    = ARGS<6>
+  ;*
+  ;* Initialize values
+  ;*
+  PROD.ID = ''
+  RCV.WGT = ''
+  ;*
+  ;* Setup error strings
+  ;*
+  ERR.NOTEXIST.FILE = "Database error, please try again later."
+  ERR.LOCKED.REC    = " record is currently locked."
+  ERR.NOTEXIST.REC  = " record does not exist."
+  ERR.DIV.MISMATCH  = "Division mismatch."
+  ;*
+  ;* Open files
+  ;*
+  OPEN 'PO.MAN.XREF'  TO PO.MAN.XREF  ELSE ERR.STRING = ERR.NOTEXIST.FILE
+  OPEN 'PO.RSKI.XREF' TO PO.RSKI.XREF ELSE ERR.STRING = ERR.NOTEXIST.FILE
+  OPEN 'DAILY_STOCK'  TO DAILY_STOCK  ELSE ERR.STRING = ERR.NOTEXIST.FILE
+  OPEN 'CATEGORY'     TO CATEGORY     ELSE ERR.STRING = ERR.NOTEXIST.FILE
+  OPEN 'INV_SERIAL'   TO INV_SERIAL   ELSE ERR.STRING = ERR.NOTEXIST.FILE
+  OPEN 'INVENTORY'    TO INVENTORY    ELSE ERR.STRING = ERR.NOTEXIST.FILE
+  IF ERR.STRING THEN RETURN
+  ;*
+  ;* Read PO record
+  ;*
+* MATREADU PO.REC FROM PO, CONO : PO.NO LOCKED
+*   ERR.STRING = "P/O" : ERR.LOCKED.REC
+* END ELSE
+*   ERR.STRING = "P/O" : ERR.NOTEXIST.REC
+* END
+* IF ERR.STRING THEN RETURN
+* ;*
+* ;* Read manifest info
+* ;*
+* MATREADU DSR.REC FROM DAILY_STOCK, CONO : PO.NO : "!" : MAN.NO LOCKED
+*   ERR.STRING = "Manifest " : ERR.LOCKED.REC
+*   RETURN
+* END ELSE
+*   MAT DSR.REC = ""
+* END
+* MATREADU RSMAN.REC FROM PO.MAN.XREF, CONO : PO.NO : "!" : MAN.NO LOCKED
+*   ERR.STRING = "Manifest " : ERR.LOCKED.REC
+*   RETURN
+* END ELSE
+*   MAT RSMAN.REC = ""
+* END
+* DSR.SHPMNT.NO = MAN.NO
+* PCNT = DCOUNT(PO.PROD.NUM, @VM)
+* FOR PO.LINE = 1 TO PCNT
+*   PROD.NO = PO.PROD.NUM<1,PO.LINE>
+*   MATREAD INV.REC FROM INVENTORY,CONO:PROD.NO ELSE
+*     MAT INV.REC = ""
+*   END
+*   MATREAD CATG.REC FROM CATEGORY,CONO:INV.LINE ELSE
+*     MAT CATG.REC = ""
+*   END
+*   IF CATG.TRK.LVL = "S" THEN
+*     LOCATE PO.LINE IN DSR.PO.LINE<1>,1 SETTING P ELSE
+*       DSR.PO.LINE<1,P> = PO.LINE
+*       DSR.PROD<1,P> = PROD.NO
+*       DSR.WHSE<1,P> = PO.WHSE<1,PO.LINE>
+*       DSR.UN.PRICE<1,P> = PO.GROS.PRICE<1,PO.LINE>
+*     END
+*   END
+* NEXT PO.LINE
+* ;*
+* ;* Calculate received weight
+* ;*
+* DSR.SHPMNT.TOT = TOT.WGT
+* ENTERED = ""
+* IF DSR.SERIAL # "" THEN
+*   NUM.PROD = DCOUNT(DSR.PROD,VM)
+*   FOR P = 1 TO NUM.PROD
+*     NUM.SERIAL = DCOUNT(DSR.SERIAL<1,P>,SVM)
+*     FOR S = 1 TO NUM.SERIAL
+*       MATREAD ISTK.REC FROM INV_SERIAL, CONO:DSR.SERIAL<1,P,S> ELSE
+*         MAT ISTK.REC = ""
+*       END
+*       IF DSR.POST.DATE<1,P,S> = "" THEN
+*         IF DSR.UOM<1,P> = "LBS" OR DSR.UOM<1,P> = "MSI" THEN
+*           ENTERED+=ISTK.QTY.ENTERED
+*         END ELSE
+*           ENTERED+=ISTK.QTY.ENTERED*100
+*         END
+*       END
+*     NEXT S
+*   NEXT P
+* END
+* RCV.WGT = ENTERED
+* ;*
+* ;* Read warehouse record
+* ;*
+* IF PO.WHSE<1,PO.LINE> = "" THEN
+*   MATREAD WHSE.REC FROM WAREHOUSE, CONO : S$VALUE ELSE
+*     ERR.STRING = "Warehouse " : ERR.NOTEXIST.REC
+*     RETURN
+*   END
+*   IF WHS.DIV # PO.DIV.OWNER AND PO.DIV.OWNER # "00" THEN
+*     ERR.STRING = ERR.DIV.MISMATCH
+*     RETURN
+*   END
+* END ELSE
+*   WHSE = PO.WHSE<1,PO.LINE>
+* END
+* ;*
+* ;* Process received rolls
+* ;*
+  RETURN
+ 
+  ;**
+  ;* Locates bays containing rolls with a particular serial number
+  ;*
+  ;* @param  ARGS<1>  The company number
+  ;* @param  ARGS<2>  The roll's serial number
+  ;* @return METHOD XML listing of available locations
+  ;* @see    RCVBP RCV.RF.PFINDER
+  ;*;
+bayLocator: 
+  ;*
+  ;* Get parameters
+  ;*
+  CONO   = ARGS<1>
+  SERIAL = ARGS<2>
+  ;*
+  ;* Setup error strings
+  ;*
+  ERR.NOTEXIST.FILE = "Database error, please try again later."
+  ERR.NOTEXIST.REC  = "Invalid serial."
+  ERR.DATA.MISSING  = "Data missing."
+  ;*
+  ;* Open files
+  ;*
+  OPEN 'INV_SERIAL'   TO INV_SERIAL   ELSE ERR.STRING = ERR.NOTEXIST.FILE
+  OPEN 'INV.WHSE.LOC' TO INV.WHSE.LOC ELSE ERR.STRING = ERR.NOTEXIST.FILE
+  OPEN 'CATEGORY'     TO CATEGORY     ELSE ERR.STRING = ERR.NOTEXIST.FILE
+  OPEN 'INVENTORY'    TO INVENTORY    ELSE ERR.STRING = ERR.NOTEXIST.FILE
+  IF ERR.STRING THEN RETURN
+  ;*
+  ;* Verify that the serial exists and data is present
+  ;*
+  MATREAD ISTK.REC FROM INV_SERIAL,CONO:SERIAL ELSE
+    ERR.STRING = ERR.NOTEXIST.REC
+    RETURN
+  END
+  WHSE = ISTK.WHSE
+  LOC  = ISTK.LOC
+  PROD = ISTK.PROD
+  IF WHSE = '' OR LOC = '' OR PROD = '' THEN
+    ERR.STRING = ERR.DATA.MISSING
+    RETURN
+  END
+  ;*
+  ;* Setup XML root
+  ;*
+  METHOD = '<location-list>'
+  ;*
+  ;* Select all locations for the product/whse combo
+  ;*
+  CMD = 'SSELECT INV.WHSE.LOC WITH @ID LIKE ':QUOTE(CONO:PROD:'!':WHSE:'...')
+  UDTEXECUTE CMD CAPTURING JUNK RETURNING JUNK
+  LOOP
+    READNEXT IWLO_ID ELSE EXIT
+    MATREAD IWLO.REC FROM INV.WHSE.LOC, IWLO_ID ELSE CONTINUE
+    INV_ID = FIELD(IWLO_ID,"!",1)
+    MATREAD INV.REC FROM INVENTORY, INV_ID ELSE CONTINUE
+    CATG_ID = CONO:INV.LINE
+    MATREAD CATG.REC FROM CATEGORY, CATG_ID ELSE CONTINUE
+    ;*
+    ;* Get the roll count by looping through every location
+    ;*
+    ROLLCOUNT = 0
+    FOR SER.IDX = 1 TO DCOUNT(IWLO.SERIAL,VM)
+      ISTK_ID = CONO:IWLO.SERIAL<1,SER.IDX>
+      MATREAD ISTK.REC FROM INV_SERIAL,ISTK_ID ELSE
+        MAT ISTK.REC = ""
+      END
+      IF ISTK.CUR.QTY GT "0" THEN
+        ROLLCOUNT += 1
+      END
+    NEXT SER.IDX
+    ;*
+    ;* Add this location to the list
+    ;*
+    IF ROLLCOUNT > 0 THEN
+      IF CATG.TYPE = "S" THEN CATG.TYPE = "Skids" ELSE CATG.TYPE = "Rolls"
+      LOCATION  = FIELD(IWLO_ID,"!",3)
+      XML.LOCATION = '<location type=':QUOTE(CATG.TYPE)
+      XML.LOCATION:= ' count=':QUOTE(ROLLCOUNT):'>':LOCATION:'</location>'
+      METHOD<-1> = XML.LOCATION
+    END
+  REPEAT
+  METHOD<-1> = '</location-list>'
+  SWAP @AM WITH "" IN METHOD
+  RETURN
+
+  ;**
+  ;* Sets up an XML error message
+  ;*
+  ;* @param  ERR.STRING  The error message
+  ;* @return ERR.STRING  The xml error message
+  ;*;
+setupErrorMsg: 
+  ERR.STRING = '<error>':toXML(ERR.STRING):'</error>'
+  RETURN
+*

@@ -1,0 +1,291 @@
+SUBROUTINE JCSOPE_VALIDATE_PO
+********************************************************************************
+*   Program name :- JCSOPE_VALIDATE_PO
+*   Created:- 7/17/2006
+*   Programmer :- Suhail Huassain S
+*T540 Added by yakub on 08/08/07
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE POS.CPYLIB OUTSIDE.PO
+$INCLUDE CPYLIB FILE.VARS
+$INCLUDE CPYLIB CHAR
+$INCLUDE JCS.CPYLIB JOB.STATS
+$INCLUDE JCS.CPYLIB JOB
+$INCLUDE APS.CPYLIB VEND.PROD.STATS
+$INCLUDE PMC.CPYLIB DIVISION
+$INCLUDE PMC.CPYLIB DEPARTMENT
+$INCLUDE PMC.CPYLIB COST.CNTR
+$INCLUDE PMC.CPYLIB COMPANY
+$INCLUDE JCS.CPYLIB CATEGORY.OSP
+$INCLUDE PMC.CPYLIB VEND
+*vvv T1608
+$INCLUDE JCS.CPYLIB OPERATION
+*^^^
+
+STATUS = RBO.getProperty('','PMCProperty',PMCProperty)
+STATUS = RBO.getProperty('','PONUM',PO_NUM)
+STATUS = RBO.getProperty('','DOS_JOB',DOS_JOB)
+STATUS = RBO.getProperty('','CATEGORY',DOS.PRD.LINE);*T540
+STATUS = RBO.getProperty('','LINE_NO',VALUE);*T540
+CONO    = PMCProperty<1,4>
+PONUM = '';  VENDNUM = '';  QTY = '';  CATG = '';  ESTCOST = '';  DATEREC = '';  LINENO = '';  REF = '';  TEMP="";OPERCODE= ''
+PODESC = '';DEPTCODE= '';COSTCENTERS = '';CODEDESCS=''
+MAT VPDS.REC = ""
+*VPDS.KEY = '';VPDS_REC_DATE = '';VPDS.REC.DATE = '';
+UNIT_COST=''
+UNIT_COST1=''
+DOS.UOM=''
+OPO_UOM=''
+TST = 1
+VPDS.PRESENT = 0
+PTR = 0
+ERRMSG = "";*2207
+  OPEN '','OUTSIDE.PO' TO OUTSIDE.PO ELSE ERRMSG = 'CANNOT OPEN OUTSIDE.PO FILE';GOSUB 91000
+  OPEN '','JOB.STATS' TO JOB.STATS ELSE ERRMSG='JOB.STATS FILE IS MISSING';GOTO 91000
+  OPEN '','VEND.PROD.STATS' TO VEND.PROD.STATS ELSE ERRMSG = 'VEND.PROD.STATS FILE IS MISSING';GOSUB 91000
+  OPEN '','DIVISION' TO DIVISION ELSE ERRMSG = 'Cannot open DIVISION file!';GOTO 91000
+  OPEN '','DEPARTMENT' TO DEPARTMENT ELSE	ERRMSG = 'Cannot open DEPARTMENT file!';GOTO 91000
+  OPEN '','COST.CNTR' TO COST.CNTR ELSE ERRMSG = 'COST.CNTR FILE IS MISSING'; GOTO 91000
+  OPEN '','CONTROL' TO CONTROL ELSE ERRMSG = 'CONTROL FILE IS MISSING';GOTO 91000
+  OPEN '','COMPANY' TO COMPANY ELSE ERRMSG = 'COMPANY FILE IS MISSING';GOTO 91000
+  OPEN '','CATEGORY.OSP' TO CATEGORY.OSP ELSE ERRMSG = 'CATEGORY.OSP FILE IS MISSING';GOTO 91000
+  OPEN '','VEND' TO VEND ELSE ERRMSG = 'VENDOR FILE IS MISSING';GOTO 91000
+  *vvv T1608
+  OPEN '','OPERATION' TO OPERATION ELSE ERRMSG = 'OPERATION FILE IS MISSING';GOTO 91000
+  *^^^
+  VAL.CAT = ''
+   MATREAD COMP.REC FROM COMPANY , CONO ELSE ERRMSG = "CANNOT READ COMPANY FILE";GOTO 91000
+   OPO.FND=0
+   IF CO.POS="Y" THEN
+     OPO.FND = 1
+   END
+   MATREAD OPO.REC FROM OUTSIDE.PO,CONO:PO_NUM ELSE MAT OPO.REC = ""
+
+   IF OPO.JOB.NO = '' THEN DOS.PRD.SEQ = 1
+   VAL.CAT = ""
+   VAL.LINE.NO = ""
+   VAL.SEQ = ""
+   FND = 0
+   FOR PTR = 1 TO DCOUNT(OPO.JOB.NO,VM)
+      IF OPO.JOB.NO<1,PTR> = DOS_JOB THEN
+         FND += 1
+         VAL.CAT <1,FND> = OPO.PROD.LINE<1,PTR>
+	  CATG<1,FND> =  VAL.CAT <1,FND>;*T540
+         VAL.LINE.NO<1,FND>=PTR
+         VAL.SEQ<1,FND>=OPO.PROD.SEQ<1,PTR>
+         REF<1,PTR> = PTR
+         PONUM<1,PTR> = PO_NUM
+      END
+   NEXT PTR
+  FOR PTR = 1 TO DCOUNT(OPO.JOB.NO,VM)
+      IF OPO.JOB.NO<1,PTR> = DOS_JOB THEN
+        IF DCOUNT(VAL.CAT,VM) = 1 THEN CATG<1,PTR> = VAL.CAT
+            MATREAD CAOS.REC FROM CATEGORY.OSP, CONO:CATG<1,PTR> THEN
+            *DOS.PRD.LINE = CATG<1,PTR>;*T540
+	  END
+ 
+        IF OPO.FND # 0 THEN
+            FND.MSG=""
+            FND.CNT=0
+            ALL.DONE=0
+            VAL.LINE.LIST=""
+            VAL.SEQ.LIST=""
+            POS=1
+            LOCAT=1
+            LOOP
+            UNTIL ALL.DONE DO
+               LOCATE DOS_JOB IN OPO.JOB.NO<1>,POS SETTING POS THEN
+                 LOCATE DOS.PRD.LINE IN VAL.CAT<1>,LOCAT SETTING LOCAT THEN
+                    FND.CNT+=1
+                     VAL.LINE.LIST<1,-1>=VAL.LINE.NO<1,LOCAT>
+                     VAL.SEQ.LIST<1,-1>=VAL.SEQ<1,LOCAT>
+                     IF FND.CNT = 1 THEN
+                        FND.MSG="This Job/Category exits on lines ":VAL.LINE.NO<1,LOCAT>
+                     END ELSE
+                        FND.MSG:=",":VAL.LINE.NO<1,LOCAT>
+                     END
+                     LOCAT+=1
+                  END
+                  POS+=1
+               END ELSE
+                  ALL.DONE=1
+               END
+            REPEAT
+           IF FND.CNT > 1 THEN
+               FND.MSG:=" Please choose:"
+               VAL.RESP=0
+               *LOOP
+               *UNTIL VAL.RESP DO
+                  PMSG=FND.MSG
+               *T540 v
+		   ERRMSG=PMSG 
+STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+                 * GOTO 91000
+               *T540 ^
+
+                  * HERE INPUT IS TO BE TAKEN.... AND THE PROCESS CONTINUED
+                *  VALUE = "" ;* THIS IS TO BE ASSIGNED A VALUE WHICH THE USER SELECTS FROM VAL.LINE.LIST
+                  BEGIN CASE
+                     CASE VALUE # ""
+                        LOCATE VALUE IN VAL.LINE.LIST<1>,1 SETTING OFFSET THEN
+                           DOS.PRD.SEQ = VAL.SEQ.LIST<1,OFFSET>
+                           VAL.RESP =1 
+                        END ELSE
+                       *T540 v
+                         *  ERRMSG="Must choose a valid line number"
+                         *  GOTO 91000
+			  *T540 ^
+                        END
+                     CASE 1
+                       *T540 v
+                        *ERRMSG="You must choose a valid line number"
+                        *GOTO 91000
+                       *T540 ^
+                  END CASE
+
+               *REPEAT
+               LOCATE DOS.PRD.SEQ IN OPO.PROD.SEQ<1>,1 SETTING TST ELSE TST=1
+            END ELSE
+               IF FND.CNT = 1 THEN
+                  TST = VAL.LINE.LIST
+                  DOS.PRD.SEQ = VAL.SEQ.LIST<1>
+               END ELSE
+                  ERRMSG='Cannot locate JOB/CATEGORY combination on PO'
+                  GOTO 91000
+               END
+            END
+           MATREAD VEND.REC FROM VEND,CONO:OPO.VEND.NO<1,1> ELSE MAT VEND.REC = ''
+            MATREAD CCTR.REC FROM COST.CNTR,CONO:OPO.DVDPCC<1,3,TST> ELSE MAT CCTR.REC = ''
+	*vvvT1608
+            COMBO.OPER.DESC = ""
+	     COMBO.OPER.CODES = ""
+	     FOR CCTR.CNT=1 TO DCOUNT(CCTR.OPER,VM)
+                MATREAD OPER.REC FROM OPERATION,CONO:CCTR.OPER<1,CCTR.CNT> THEN
+			COMBO.OPER.CODES<1,CCTR.CNT> = CCTR.OPER<1,CCTR.CNT>
+ 			COMBO.OPER.DESC<1,CCTR.CNT> = CCTR.OPER<1,CCTR.CNT> :"-":OPER.DESC
+		  END ELSE 
+                    MAT CCTR.REC = ''
+                END
+	     NEXT CCTR.CNT		
+	*^^^
+            MATREAD DIV.REC FROM DIVISION,CONO:OPO.DVDPCC<1,1,TST> ELSE MAT DIV.REC = ''
+            MATREAD DEPT.REC FROM DEPARTMENT,CONO:OPO.DVDPCC<1,2,TST> ELSE MAT DEPT.REC = ''
+            DOS.VEND = OPO.VEND.NO<1,1>
+            DOS.UOM = OPO.UOM<1,TST>
+            GOSUB 20000
+            ESTCOST<1,PTR> = OCONV(OPO.EST.COST<1,PTR> ,"MD2,")
+            DATEREC<1,PTR> = OCONV(OPO.DATE.RECVD<1,PTR>,"D4/")
+            VENDNUM<1,PTR> = OPO.VEND.NO<1,1>
+            CODEDESCS<1,PTR> = DIV.DESC :VM :DEPT.DESC
+            IF DEPTCODE = "" THEN 
+               DEPTCODE = OPO.DEPT<1,1,PTR>:VM:OPO.DEPT<1,2,PTR>:VM:OPO.DEPT<1,3,PTR>
+               PODESC = OPO.ITEM.COMM<1,PTR>
+            END ELSE
+               DEPTCODE = DEPTCODE : "~" : OPO.DEPT<1,1,PTR>:VM:OPO.DEPT<1,2,PTR>:VM:OPO.DEPT<1,3,PTR>
+*T1707v
+               *PODESC = PODESC : "~" : OPO.ITEM.COMM<1,PTR>
+		  PODESC<1,PTR> = OPO.ITEM.COMM<1,PTR>
+*T1707^
+	        XYZ<1,PTR> = OPO.ITEM.COMM<1,PTR>
+		WRITE XYZ ON CONTROL,'01DES'
+            END
+            DOS.DIV = JOB.DIV
+            DOS.TYPE = JOB.TYPE
+            DOS.OPER = ''
+            IF DOS.OPER = '' AND TST # '' THEN
+               OPERCODE = OPO.OPER.CODE<1,1,TST>
+            END
+           
+            DOS.UOM = OPO.UOM<1,TST>
+            IF DOS.UOM = "" THEN
+               OPO_UOM = "EA"
+            END ELSE
+               OPO_UOM = DOS.UOM
+            END
+            IF VPDS.PRESENT THEN
+               QTY<1,PTR> = OCONV(VPDS.ORD.QTY - SUM(VPDS.REC.QTY),"MD2")
+            END ELSE
+               QTY<1,PTR> = OCONV(OPO.TOT.OPEN<1,TST> ,"MD2,")
+            END	
+          IF VPDS.PRESENT THEN
+              *T2207 v
+                * UNIT_COST= OCONV(VPDS.ORD.UN.COST<1,1>,'MD4')
+ 		   UNIT_COST= VPDS.ORD.UN.COST<1,1>
+             *T2207 ^
+            END ELSE
+               IF TST > 0 AND OPO.EST.COST<1,TST>+0 > 0 THEN
+                  BEGIN CASE                  
+                     CASE OPO.UOM<1,PTR> = 'M'
+                        *T2207 v
+                       *  UNIT_COST = OCONV((OPO.EST.COST<1,TST> * 100) / (OPO.QTY<1,PTR>/1000), 'MD0') * 100
+  			     UNIT_COST = OCONV((OPO.EST.COST<1,TST> * 100) / (OPO.QTY<1,TST>/1000), 'MD0') * 100
+                     *T2207 ^
+                     CASE OPO.UOM<1,TST> = 'C'
+			 *T2207 v
+                       * UNIT_COST = OCONV((OPO.EST.COST<1,TST> * 100) / (OPO.QTY<1,PTR>/100), 'MD0') * 100
+ 			    UNIT_COST = OCONV((OPO.EST.COST<1,TST> * 100) / (OPO.QTY<1,TST>/100), 'MD0') * 100
+			 *T2207 ^
+                     CASE 1
+			*T2207 v
+                       * UNIT_COST = OCONV((OPO.EST.COST<1,TST> * 100) / OPO.QTY<1,PTR>, "MD0") * 100
+ 			    UNIT_COST = OCONV((OPO.EST.COST<1,TST> * 100) / OPO.QTY<1,TST>, "MD0") * 100
+                     *T2207 ^
+                  END CASE
+               END
+            END
+         END
+      END ELSE
+         MATREAD DIV.REC FROM DIVISION,CONO:OPO.DVDPCC<1,1,PTR> ELSE MAT DIV.REC = ''
+         MATREAD DEPT.REC FROM DEPARTMENT,CONO:OPO.DVDPCC<1,2,PTR> ELSE MAT DEPT.REC = ''
+         IF DEPTCODE = "" THEN
+            DEPTCODE = OPO.DVDPCC<1,1,PTR>:VM:OPO.DVDPCC<1,2,PTR>:VM:OPO.DVDPCC<1,3,PTR>
+            CODEDESCS = DIV.DESC :VM :DEPT.DESC
+         END ELSE
+            DEPTCODE = DEPTCODE : "~" : OPO.DVDPCC<1,1,PTR>:VM:OPO.DVDPCC<1,2,PTR>:VM:OPO.DVDPCC<1,3,PTR>
+            CODEDESCS = DIV.DESC :VM :DEPT.DESC
+         END
+      END
+   NEXT PTR
+   WRITE UNIT_COST:@AM:UNIT_COST1:@AM:TST ON CONTROL,'01UNC'
+   STATUS = RBO.setProperty('','REF',REF)
+   STATUS = RBO.setProperty('','PONUM',PONUM)
+   STATUS = RBO.setProperty('','VENDNUM',VENDNUM)
+   STATUS = RBO.setProperty('','QTY',QTY)
+   STATUS = RBO.setProperty('','CATG',CATG)
+   STATUS = RBO.setProperty('','ESTCOST',ESTCOST)
+   STATUS = RBO.setProperty('','DATEREC',DATEREC)
+   STATUS = RBO.setProperty('','OPERCODE',OPERCODE)
+   STATUS = RBO.setProperty('','DEPTCODE',DEPTCODE)
+   STATUS = RBO.setProperty('','VPDS_REC_DATE',VPDS_REC_DATE)
+   STATUS = RBO.setProperty('','PODESC',PODESC)
+   STATUS = RBO.setProperty('','DEPT_DESC',CODEDESCS)
+*T2207 v
+   *STATUS = RBO.setProperty('','UNITCOST',UNIT_COST)
+   STATUS = RBO.setProperty('','UNITCOST',OCONV(UNIT_COST,'MD4'))
+*T2207 ^
+   STATUS = RBO.setProperty('','OPO_UOM',OPO_UOM)
+   STATUS = RBO.setProperty('','Out_Seq',DOS.PRD.SEQ);*T540
+   STATUS = RBO.setProperty('','OPER_CMB_DESC',COMBO.OPER.DESC:"#":COMBO.OPER.CODES);*T1608
+RETURN
+
+20000*
+
+   IF CO.APS.O.INTRF > 2 THEN
+      VPDS.KEY = CONO:DOS.VEND:'!O!':PO_NUM:'!':DOS_JOB:"!":DOS.PRD.LINE:"@":DOS.PRD.SEQ
+     MATREAD VPDS.REC FROM VEND.PROD.STATS,VPDS.KEY THEN
+       *T540 v
+         *VPDS_REC_DATE<1,PTR> = OCONV(VPDS.REC.DATE<1,PTR>,"D2/")
+	   VPDS_REC_DATE<1,PTR> = OCONV(VPDS.REC.DATE,"D2/")
+       *T540 ^
+         VPDS.PRESENT = 1
+      END ELSE
+         MAT VPDS.REC = ""
+         VPDS.PRESENT = 0
+      END
+   END
+RETURN
+
+91000
+STATUS = RBO.setProperty('','ServerStatus',1)
+STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+RETURN

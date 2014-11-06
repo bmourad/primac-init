@@ -1,0 +1,387 @@
+SUBROUTINE ORDM_JKT_NOTIFY_SUB(ACTION,CONO,FNAME,FID,TKTDEF,ASIZE,MAT CREC,FVAR,STATUS,PROMPTS,EST_INDX)
+********************************************************************************
+*   Program name :- ORDM_JKT_NOTIFY_SUB
+*   Created:- 3/17/2006
+*   Programmer :- Suhail Hussain S
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+
+$INCLUDE JIS.CPYLIB JKT_NOTIFY
+$INCLUDE JIS.CPYLIB SYS_SCN_DEF
+$INCLUDE JIS.CPYLIB SYS_FIELDS
+$INCLUDE JIS.CPYLIB SYS_TKT_DEF
+$INCLUDE JCS.CPYLIB JOB
+$INCLUDE CPYLIB PORT.CONTROL
+$INCLUDE CPYLIB CHAR
+*T22664 v
+$INCLUDE PMC.CPYLIB SALESMAN
+$INCLUDE PMC.CPYLIB CSR.CODE
+*T22664 ^
+*
+*---- DEFINE STORAGE AREA
+*
+      DIM CREC(ASIZE)
+      DIM MSGTBL(3,200)
+      ERR.NUM = ""
+*
+*---- PRE-INITIALIZATION
+*
+      BEGIN CASE
+      CASE ACTION = "1"
+      CASE ACTION = "2"
+      CASE ACTION = "3"
+      CASE 1
+         ACTION = "0"
+      END CASE
+      STATUS = "00000000"
+*
+      READ VREC FROM FVAR, CONO:FID ELSE VREC = ""
+      MODIFIED = 0
+      FOR VPTR = 1 TO ASIZE UNTIL MODIFIED
+         IF CREC(VPTR) # VREC<VPTR> THEN MODIFIED = 1
+      NEXT VPTR
+      IF NOT(MODIFIED) THEN GOTO 99999
+*
+*---- OPEN ALL FILES
+*
+      OPEN "","JKT_NOTIFY" TO JKT_NOTIFY ELSE
+         ERRMSG = "CANNOT OPEN JKT_NOTIFY FILE"
+         ERR.NUM = 1
+         GOTO 90000
+      END
+      OPEN "","SYS_SCN_DEF" TO SYS_SCN_DEF ELSE
+         ERRMSG = "CANNOT OPEN SYS_SCN_DEF FILE"
+         ERR.NUM = 2
+         GOTO 90000
+      END
+      OPEN "","SYS_FIELDS" TO SYS_FIELDS ELSE
+         ERRMSG = "CANNOT OPEN SYS_FIELDS FILE"
+         ERR.NUM = 3
+         GOTO 90000
+      END
+      OPEN "","USER.MAIL" TO USER.MAIL ELSE
+         ERRMSG = "CANNOT OPEN USER.MAIL FILE"
+         ERR.NUM = 4
+         GOTO 90000
+      END
+      OPEN "","SECURITY" TO SECURITY ELSE
+         ERRMSG = "CANNOT OPEN SECURITY FILE"
+         ERR.NUM = 5
+         GOTO 90000
+      END
+*T22664 v
+      OPEN "SALESMAN" TO SALESMAN ELSE 
+        ERRMSG = "CANNOT OPEN SALESMAN FILE"
+         ERR.NUM = 6
+         GOTO 90000
+      END
+      OPEN "CSR.CODE" TO CSR.CODE ELSE
+        ERRMSG = "CANNOT OPEN CSR.CODE FILE"
+         ERR.NUM = 7
+         GOTO 90000
+      END
+*T22664 ^*
+*---- INITIALIZATION
+*
+      STATUS = RBO.getProperty("","PMCProperty",PMCProperty)
+      PORT.NO = UPCASE(PMCProperty<1,3>)
+      *PORT.NO = "TTY"; CALL SYSVARS.SUB(PORT.NO)
+      MATREAD USER.REC FROM SECURITY, CONO:PORT.NO ELSE        ;*"R.":PORT.NO ELSE  ;* changed since not able to get the r.portno in security
+         ERRMSG = "Cannot locate the logged on user ID : " : PORT.NO : "!"
+         ERR.NUM = 8
+         GOTO 90000
+      END
+*T22664 v
+      JOB.ID.LIST = ""   ;* mv list of job ids
+                         ;* flag to indicate there is a valid job
+*                           for this ticket
+*T22664 ^
+*
+*---- MAIN PROCESSING
+*
+100 *
+      BEGIN CASE
+      CASE 1
+         MATREAD SSJN.REC FROM JKT_NOTIFY, CONO:FNAME:"!":FID THEN
+            OPEN "","SYS_TKT_DEF" TO SYS_TKT_DEF ELSE
+               ERRMSG = "CANNOT OPEN SYS_TKT_DEF FILE"
+               ERR.NUM = 9
+               GOTO 90000
+            END
+            OPEN "","JOB_TKT" TO JOB_TKT ELSE
+               ERRMSG = "CANNOT OPEN JOB_TKT FILE"
+               ERR.NUM = 10
+               GOTO 90000
+            END
+            OPEN "","JOB" TO JOB ELSE
+               ERRMSG = "CANNOT OPEN JOB FILE"
+               ERR.NUM = 11
+               GOTO 90000
+            END
+            OPEN "","JOB_JKT_IMG" TO JOB_JKT_IMG ELSE
+               ERRMSG = "CANNOT OPEN JOB_JKT_IMG FILE"
+               ERR.NUM = 12
+               GOTO 90000
+            END
+            TCNT = DCOUNT(SSJN_TICKET,VM)
+            FOR TPTR = 1 TO TCNT
+               TKT = SSJN_TICKET<1,TPTR>
+               READV JOB.NO FROM JOB_TKT, CONO:TKT,1 ELSE GOTO 290
+               MATREAD JOB.REC FROM JOB, CONO:JOB.NO ELSE GOTO 290
+               IF JOB.STATUS<1,1>+0 >= 4 THEN
+                  IF JOB.STATUS<1,1>+0 # 5 THEN GOTO 290
+               END
+               JOB.ID.LIST<1,-1> = JOB.NO
+               IMATCH = 1
+               TKTDEF = SSJN_TKTDEF<1,TPTR>
+               READ IMGDEF FROM SYS_TKT_DEF, TKTDEF:"*FLD" ELSE
+                  ERRMSG = "CANNOT LOCATE FIELD NAMES FOR JACKET DEFINITION ":TKTDEF
+                  P.MODE = 1;PMPT_NUM = "ERRJKT13-" : EST_INDX;P.TYPE = "M";P.RQD = "Y"
+                  CALL ORDM_PROCESS_PROMPTS_ARR(PROMPTS,P.MODE,PMPT_NUM,P.TYPE,P.RQD,ERRMSG,"","","")
+                  GOTO 290
+               END
+               READU IMGREC FROM JOB_JKT_IMG, CONO:TKT:"!1" ELSE
+                  READ IMGREC FROM JOB_JKT_IMG, CONO:TKT ELSE IMGREC=""
+               END
+               USRLIST = ""
+               MAT MSGTBL = ""
+               SCNT = DCOUNT(SSJN_SCREEN<1,TPTR>,SVM)
+               FOR SPTR = 1 TO SCNT
+                  SCN = SSJN_SCREEN<1,TPTR,SPTR>
+                  MATREAD SSD.REC FROM SYS_SCN_DEF, SCN ELSE GOTO 280
+                  PTR = 1
+                  LOOP
+                     LOCATE FNAME IN SSD_FLD_TABLE<1>,PTR SETTING FPTR ELSE FPTR=0
+                  WHILE FPTR > 0 DO
+                     ATTNO = SSD_FLD_ATTNO<1,FPTR>+0
+                     MVNO = SSD_FLD_MVNO<1,FPTR>
+                     IF NOT(NUM(MVNO)) THEN
+                        VV=FIELD(MVNO,",",2)+0; IF VV=0 THEN VV=1
+                        SS=FIELD(MVNO,",",3)+0; IF SS=0 THEN SS=1
+                        MVNO=FIELD(MVNO,",",1)
+                        LOCATE MVNO IN IMGDEF,1 SETTING VP THEN
+                           MVNO = CREC(VP)<1,VV,SS>
+                           BEGIN CASE
+                           CASE NUM(MVNO)
+                           CASE FIELD(SSD_FLD_MVNO<1,FPTR>,",",1) = "ESTJ_COMP" AND MVNO = "ALL"
+                              MVNO = SS
+                           CASE 1
+                              MVNO = 1
+                           END CASE
+                        END ELSE
+                           MVNO = 1
+                        END
+                     END
+                     SMVNO = SSD_FLD_SMVNO<1,FPTR>
+                     IF NOT(NUM(SMVNO)) THEN
+                        VV=FIELD(SMVNO,",",2)+0; IF VV=0 THEN VV=1
+                        SS=FIELD(SMVNO,",",3)+0; IF SS=0 THEN SS=1
+                        SMVNO=FIELD(SMVNO,",",1)
+                        LOCATE SMVNO IN IMGDEF,1 SETTING VP THEN
+                           SMVNO = CREC(VP)<1,VV,SS>
+                           IF NOT(NUM(SMVNO)) THEN
+                              SMVNO = 1
+                           END
+                        END ELSE
+                           SMVNO = 1
+                        END
+                     END
+                     GOSUB 200
+                     IF MISMATCH THEN
+                        STATUS[2,1] = "1"
+                        IF ACTION = 1 THEN GOSUB 300
+                        FLDNAME = SSD_FIELDS<1,FPTR>
+                        LOCATE FLDNAME IN IMGDEF,1 SETTING XPTR THEN
+                           PVAL = IMGREC<XPTR>
+                           CVAL = CREC(ATTNO)
+                           IF CVAL # PVAL THEN
+                              IMATCH = 0
+                              IMGREC<XPTR> = CREC(ATTNO)<1>
+                           END
+                        END
+                     END
+                     PTR = FPTR + 1
+                  REPEAT
+280            NEXT SPTR
+               IF ACTION > 0 THEN GOSUB 400
+               IF IMATCH THEN
+                  RELEASE JOB_JKT_IMG, CONO:TKT:"!1"
+               END ELSE
+                  WRITE IMGREC ON JOB_JKT_IMG, CONO:TKT:"!1"
+               END
+290         NEXT TPTR
+         END
+      END CASE
+      GOTO 99999
+*
+*---- COMPARE FOR FIELD MISMATCH
+*
+200 *
+      MISMATCH = 0
+      BEGIN CASE
+      CASE MVNO > 0 AND SMVNO > 0
+         PVAL = VREC<ATTNO,MVNO,SMVNO>
+         CVAL = CREC(ATTNO)<1,MVNO,SMVNO>
+         IF CVAL # PVAL THEN MISMATCH = 1
+      CASE MVNO > 0
+         PVAL = VREC<ATTNO,MVNO>
+         CVAL = CREC(ATTNO)<1,MVNO>
+         IF CVAL # PVAL THEN MISMATCH = 1
+      CASE 1
+         PVAL = VREC<ATTNO>
+         CVAL = CREC(ATTNO)
+         IF CVAL # PVAL THEN MISMATCH = 1
+      END CASE
+      RETURN
+*
+*---- BUILD DISTRIBUTION LIST
+*
+300 *
+      LCNT = DCOUNT(SSD_FLD_DSTLST<1,FPTR>,",")
+      FOR LPTR = 1 TO LCNT
+         DSTUSR = FIELD(SSD_FLD_DSTLST<1,FPTR>,",",LPTR)
+*T22664 v   Change from if test to case stmt below to allow for
+*            other possibilities.
+         BEGIN CASE
+	        CASE DSTUSR[1,3] = "L!" 
+*T22664                IF DSTUSR[1,2] = "L!" THEN
+            READ SLIST FROM USER.MAIL, DSTUSR ELSE SLIST=""
+            UCNT = DCOUNT(SLIST,AM)
+            FOR S = 1 TO UCNT
+               READ UREC FROM SECURITY, CONO:SLIST<S>[4,99] THEN
+                  LOCATE SLIST<S>[4,99] IN USRLIST,1 SETTING P ELSE
+                     USRLIST<P> = SLIST<S>[4,99]
+                  END
+                  FLD.NAME = SSD_FIELDS<1,FPTR>
+                  LOCATE FLD.NAME IN MSGTBL(1,P),1 SETTING FP ELSE
+                     GOSUB 500
+                     MSGTBL(1,P)<FP> = FLD.DESC
+                     IF SSD_FLD_CNV<1,FPTR> = "" THEN
+                        MSGTBL(2,P)<FP> = PVAL
+                        MSGTBL(3,P)<FP> = CVAL
+                     END ELSE
+                        CNV = SSD_FLD_CNV<1,FPTR>
+                        MSGTBL(2,P)<FP> = OCONV(PVAL,CNV)
+                        MSGTBL(3,P)<FP> = OCONV(CVAL,CNV)
+                     END
+                  END
+               END
+            NEXT S
+*T22664 v
+*         END ELSE
+*     this is the new feature look for the @ sign and get a referenced type of user
+*        CSR is the CSR from the job,  SLS is the salesperson from the job.
+*        the logic here will be built to handle multi-valued CSR or SLS or <future>
+*        so that if multi salesperson or CSR are set up on a job the system will mail
+*        all of them.
+*
+          CASE DSTUSR[1,1] = "@" AND JOB.ID.LIST # ""
+            NUM.IN.JOB.LIST = DCOUNT(JOB.ID.LIST,@VM)
+            FOR JOB.I = 1 TO NUM.IN.JOB.LIST
+              MATREAD JOB.REC FROM JOB,CONO:JOB.ID.LIST<1,JOB.I> THEN
+                DO.JOB.CONTINUE=1
+              END ELSE
+                DO.JOB.CONTINUE=0
+              END
+              WORK.LIST=""
+              BACKUPID = ""
+              BEGIN CASE
+                CASE DSTUSR = "@CSR"
+                  WORK.LIST = JOB.CSR
+                  MATREAD CSR.REC FROM CSR.CODE,CONO:JOB.CSR THEN
+                    BACKUPID = CSR.USER
+                  END
+                CASE DSTUSR = "@SLS"
+                  WORK.LIST = JOB.SLSMN
+                  MATREAD SALESMAN.REC FROM SALESMAN,CONO:JOB.SLSMN THEN
+                    BACKUPID = SALS.USER
+                  END
+                CASE 1
+                  WORK.LIST = ""
+              END CASE
+              NUM.IN.LIST = DCOUNT(WORK.LIST,@VM)
+              IF WORK.LIST # "" AND DO.JOB.CONTINUE THEN
+                FOR WORK.I = 1 TO NUM.IN.LIST
+                  WORKID = WORK.LIST<1,WORK.I>
+                  DOREADOK=0
+                  READ UREC FROM SECURITY, CONO:WORKID THEN
+                    DOREADOK=1
+                  END ELSE
+                    IF BACKUPID # "" THEN
+                      READ UREC FROM SECURITY, CONO:BACKUPID THEN
+                        DOREADOK=1
+                        WORKID=BACKUPID
+                      END
+                    END
+                  END
+                  IF DOREADOK THEN
+                    LOCATE WORKID IN USRLIST,1 SETTING P ELSE
+                      USRLIST<P> = WORKID
+                    END
+                    FLD.NAME = SSD_FIELDS<1,FPTR>
+                    LOCATE FLD.NAME IN MSGTBL(1,P),1 SETTING FP ELSE
+                      GOSUB 500
+                      MSGTBL(1,P)<FP> = FLD.DESC
+                      MSGTBL(2,P)<FP> = PVAL
+                      MSGTBL(3,P)<FP> = CVAL
+                    END
+                  END
+                NEXT WORK.I
+              END ;* IF WORK.LIST # ""
+            NEXT JOB.I
+          CASE 1
+*T22664 ^
+            READ UREC FROM SECURITY, CONO:DSTUSR THEN
+               LOCATE DSTUSR IN USRLIST,1 SETTING P ELSE
+                  USRLIST<P> = DSTUSR
+               END
+               FLD.NAME = SSD_FIELDS<1,FPTR>
+               LOCATE FLD.NAME IN MSGTBL(1,P),1 SETTING FP ELSE
+                  GOSUB 500
+                  MSGTBL(1,P)<FP> = FLD.DESC
+                  MSGTBL(2,P)<FP> = PVAL
+                  MSGTBL(3,P)<FP> = CVAL
+               END
+            END
+         END CASE   ;*T22664
+      NEXT LPTR
+      RETURN
+*
+*---- DISTRIBUTE MESSAGES
+*
+400 *
+      MCNT = DCOUNT(USRLIST,AM)
+      FOR MPTR = 1 TO MCNT
+         MLIST = USRLIST<MPTR>          ;* 1 USER AT A TIME
+         FLD.NAME = MSGTBL(1,MPTR)      ;* MULTIPLE FIELDS
+         PREV.VAL = MSGTBL(2,MPTR)      ;* PREVIOUS FIELD VALUES
+         CURR.VAL = MSGTBL(3,MPTR)      ;* CURRENT FIELD VALUES
+         CALL JKT_NOTIFY_SEND(CONO,USER.ID,MLIST,SECURITY,USER.MAIL,TKT,FLD.NAME,PREV.VAL,CURR.VAL,ERRMSG)
+         IF ERRMSG # "" THEN 
+            P.MODE = 1;PMPT_NUM = "ERRJKT14-" : EST_INDX;P.TYPE = "M";P.RQD = "Y"
+            CALL ORDM_PROCESS_PROMPTS_ARR(PROMPTS,P.MODE,PMPT_NUM,P.TYPE,P.RQD,ERRMSG,"","","")
+         END
+      NEXT MPTR
+      RETURN
+*
+*---- GET FIELD DESCRIPTION
+*
+500 *
+      MATREAD DFD.REC FROM SYS_FIELDS, FLD.NAME ELSE MAT DFD.REC = ""
+      IF DFD_DESC = "" THEN FLD.DESC = FLD.NAME ELSE FLD.DESC = DFD_DESC
+      RETURN
+*
+*---- ERROR ROUTINE
+*
+90000 *
+      P.MODE = 1;PMPT_NUM = "ERRJKT" : ERR.NUM : "-" : EST_INDX;P.TYPE = "M";P.RQD = "Y"
+      CALL ORDM_PROCESS_PROMPTS_ARR(PROMPTS,P.MODE,PMPT_NUM,P.TYPE,P.RQD,ERRMSG,"","","")
+      GOTO 99999
+RETURN
+*
+*---- END OF PROGRAM
+*
+99999 *
+      RETURN
+   END
+

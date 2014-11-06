@@ -1,0 +1,492 @@
+   SUBROUTINE RCV.MANIFEST.POST(CONO, PO.NO, MAN.NO, PROD.FLAG, MAT DSR.REC, RCV.MANIFEST, REPORT.FLAG, ERRMSG, REPORT.NO)
+*********************************************************************
+*
+* PROGRAM  - RCV.MANIFEST.POST
+*
+* AUTHOR   - Nick Amendola, NASTech, Inc.
+*
+* DATE     - 10/04/97
+*
+* DESCRIPTION
+*
+* This program controls the posting of roll stock receipts.
+* It calls update subroutine RS.STOCK.REC.UPDATE
+*
+*T25697 edvard 03/20/2001 * REWRITE OF THE PROGRAM
+*T26107 lanny 08/22/2001 * Shift Qty to align at decimal point.
+*T26120 lanny 08/29/2001 * Qty needs 2 more spaces.
+*T26496 lhelms 03/26/2002 * UPGRADE TO REV12 REMOVE ROLL.SKID REPLACE
+*                           WITH INV_SERIAL
+*T26556 cmykleb 05/08/2002 * Change pgm to get the rpt # from the proc.
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>CPYLIB>COM1
+*COPY>ICS.CPYLIB>COM.INV.MAIN  
+*COPY>ICS.CPYLIB>COM.INV.SERIAL
+*COPY>ICS.CPYLIB>COM.INV.LINK  
+*COPY>POS.CPYLIB>COM.PO.INTRF
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>PO
+*COPY>ICS.CPYLIB>SAVE.STOCK.REC
+*COPY>ICS.CPYLIB>INV_SERIAL
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>ICS.CPYLIB>CATEGORY
+*COPY>APS.CPYLIB>APS.FILE.VARS
+*COPY>RCV.CPYLIB>RCV.MANIFEST
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*
+*COPY>ICS.CPYLIB>ICS.ID         
+*COPY>ICS.CPYLIB>INV.WHSE.LOC   
+*COPY>ICS.CPYLIB>INV_RECEIPTS   
+*COPY>ICS.CPYLIB>INV_RECP_WHSE  
+*COPY>ICS.CPYLIB>INV_AUDIT_HIST 
+*COPY>ICS.CPYLIB>DAILY_STOCK
+*COPY>ICS.CPYLIB>PO.RSKI.XREF
+*COPY>ICS.CPYLIB>PO.MAN.XREF 
+*
+   DEFFUN DIVISION.POSITION(CONO,CONTROL.FILE,DIV.CODE)        
+   DEFFUN CURRENT.PERIOD(CONO,CONTROL.FILE,DIV.POS,FISCAL.FLAG)
+*
+*---- PRE-INITIALIZATION
+*
+   ERRMSG = ""
+   IF REPORT.FLAG = "Y" THEN
+      SUPPRESS.REPORT = 0
+      DSR.EDIT.DATE = DATE()
+   END ELSE
+      SUPPRESS.REPORT = 1
+   END
+*
+*---- OPEN ALL FILES
+*
+   OPEN "","INV_SERIAL" TO INV_SERIAL ELSE
+      ERRMSG = "INV_SERIAL FILE IS MISSING"; GOTO 99999
+   END
+   OPEN "","CATEGORY" TO CATEGORY ELSE
+      ERRMSG = "CATEGORY FILE IS MISSING"; GOTO 99999
+   END
+   OPEN "","DAILY_STOCK" TO DAILY_STOCK ELSE
+      ERMSG = "DAILY_STOCK FILE IS MISSING"; GOTO 99999
+   END
+   OPEN "","STOCK.REC" TO STOCK.REC ELSE
+      ERRMSG = "STOCK.REC FILE IS MISSING"; GOTO 99999 
+   END
+   OPEN "","INV.STATS" TO INV.STATS ELSE
+      ERRMSG = "INV.STATS FILE IS MISSING"; GOTO 99999 
+   END
+   OPEN "","INV.WHSE.LOC" TO INV.WHSE.LOC ELSE
+      ERRMSG = "INV.WHSE.LOC FILE IS MISSING"; GOTO 99999 
+   END
+   OPEN "","INV.HIST" TO INV.HIST ELSE
+      ERRMSG = "INV.HIST FILE IS MISSING"; GOTO 99999 
+   END
+   OPEN "","INV_AUDIT_HIST" TO INV_AUDIT_HIST ELSE
+      ERRMSG = "INV_AUDIT_HIST FILE IS MISSING"; GOTO 99999 
+   END
+   OPEN "","INV_AUDIT_TAG" TO INV_AUDIT_TAG ELSE
+      ERRMSG = "INV_AUDIT_TAG FILE IS MISSING"; GOTO 99999 
+   END
+   OPEN "","INV.JOB.STATS" TO INV.JOB.STATS ELSE
+      ERRMSG = "INV.JOB.STATS FILE IS MISSING"; GOTO 99999 
+   END
+   OPEN "","ACCRUED.LIAB.HIST" TO ACCRUED.LIAB.HIST ELSE
+      ERRMSG = "ACCRUED.LIAB.HIST FILE IS MISSING"; GOTO 99999
+   END
+   OPEN "","PO.RSKI.XREF" TO PO.RSKI.XREF ELSE
+      ERRMSG ="CANNOT OPEN PO.RSKI.XREF FILE";GOTO 99999
+   END
+   OPEN "","PO.MAN.XREF" TO PO.MAN.XREF ELSE
+      ERRMSG ="CANNOT OPEN PO.MAN.XREF FILE";GOTO 99999
+   END
+*
+*---- INITIALIZATION
+*
+   TODAY = DATE()
+   LINE.COUNT = 99
+   PAGE.NO = 0
+   SP1 = SPACE(1)
+   SP2=SPACE(2)
+   SP3=SPACE(3)
+   PREV.INV.NO = "!@#$%"
+   LINE.TOTAL = 0
+   PRINT.LINE = 0
+   ;*38056 v
+   LINE.QTY = ""
+   LINE.PQTY = ""
+   ISTK.STATUS = ""
+   RCVD.TOTAL = ""
+   TOT.PROCESS= ""
+   ;*38056 ^
+*
+*---- GET COMPANY DATA
+*
+   MATREAD COMP.REC FROM COMPANY, CONO ELSE
+      ERRMSG = "CANNOT LOCATE COMPANY RECORD - ":CONO; GOTO 99999
+   END
+   CNAME = CO.NAME
+   IF CO.APS.R.INTRF > 1 THEN
+      OPEN "","VEND" TO VEND ELSE
+         ERRMSG = "CANNOT OPEN VEND FILE"; GOTO 99999 
+      END
+      OPEN "","VEND.STATS" TO VEND.STATS ELSE
+         ERRMSG = "CANNOT OPEN VEND.STATS FILE"; GOTO 99999 
+      END
+      OPEN "","VEND.PO.STATS" TO VEND.PO.STATS ELSE
+         ERRMSG = "CANNOT OPEN VEND.PO.STATS FILE"; GOTO 99999 
+      END
+      OPEN "","VEND.PROD.STATS" TO VEND.PROD.STATS ELSE
+         ERRMSG = "CANNOT OPEN VEND.PROD.STATS FILE"; GOTO 99999 
+      END
+   END
+   READV IC.MONTH FROM CONTROL,CONO:"ICFISCAL",1 ELSE
+      ERRMSG = "CONTROL '":CONO:"ICFISCAL' RECORD IS MISSING"; GOTO 99999
+   END
+   READ DIVISION.REC FROM CONTROL, CONO:"DIVISIONS" ELSE
+      ERRMSG = "CANNOT LOCATE DIVISIONS CONTROL FILE RECORD"; GOTO 99999
+   END
+   READ SECURITY.REC FROM CONTROL, CONO:"DIV.SECURITY" ELSE
+      ERRMSG = "CANNOT LOCATE DIV.SECURITY CONTROL FILE RECORD:"; GOTO 99999
+   END
+   MAT EDIT.COM="" ; TYP=0 ; CALL EDIT.SUB    
+   GOSUB ENT.PERIOD
+   IF PERIOD="END" THEN GOTO 99999
+   DSR.PERIOD = PERIOD
+*
+*---- GET HEADING
+*
+*T26556 v
+*  REPORT.NAME = "RF SERIAL STOCK RECEIPTS POSTING"
+*  REPORT.NO = ""
+   REPORT.NAME = ""
+   CNAME = ""
+*T26556 ^
+   REPORT.DATE = ""
+   HD1=""
+   HD2 = ""
+   CALL GET.PROG.HEAD(CONO,CNAME,REPORT.NAME,REPORT.NO,REPORT.DATE,HD1,HD2)
+   SHEAD = "  Product ID                 Product Description           "
+   ULINE = "--------------- -------------------------------------------"
+   SHEAD = SHEAD:"    Serial     Mill Roll ID UOM     Qty     Whse Loc "
+   ULINE = ULINE:" --------- ---------------- --- ----------- ---- ----"
+   SHEAD = SHEAD:"       Status       "
+   ULINE = ULINE:" -------------------"
+*
+*---- MAIN PROCESSING
+*
+100 *
+   DSR.ID = CONO:PO.NO:"!":MAN.NO
+   RSMAN.ID = DSR.ID
+   RSXRF.ID = CONO:PO.NO
+   DSR.STATUS = ""
+   ERROR = 0
+   MATREADU PO.REC FROM PO, CONO:PO.NO ELSE
+      RELEASE PO, CONO:PO.NO
+      ERRMSG = "Cannot locate P/O record - ":CONO:PO.NO; GOTO 99999
+   END
+   DIV.CODE = PO.DIV.OWNER; USER.ID = UPCASE(@LOGNAME); ERRMSG = ""
+   CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)               
+   IF ERRMSG # '' THEN                                             
+      DSR.STATUS<1,-1>=ERRMSG
+   END ELSE                                                        
+      GOSUB 1000                                                    
+      IF ERRMSG#'' THEN
+         DSR.STATUS<1,-1>=ERRMSG
+         ERROR=1
+      END
+   END
+   MATREADU RSMAN.REC FROM PO.MAN.XREF,RSMAN.ID ELSE
+      DSR.STATUS<1,-1> = "Cannot locate manifest record - ":DSR.ID
+      ERROR=1
+   END
+   MATREADU RSXRF.REC FROM PO.RSKI.XREF,RSXRF.ID ELSE
+      DSR.STATUS<1,-1>='Cannot locate PO.RSKI.XREF record ': RSXRF.ID
+      ERROR=1
+   END
+*
+   IF NOT(SUPPRESS.REPORT) THEN PRINTER ON
+*
+   GOSUB UPDATE.DSR.REC
+   GOSUB LOAD.SSTK.REC
+   GOSUB PRINT.TOTAL
+   GOTO 99990
+*
+*
+***************
+UPDATE.DSR.REC: 
+***************
+   NUM.PROD = DCOUNT(DSR.PROD,VM)
+   FOR P = NUM.PROD TO 1 STEP -1
+      IF DSR.SERIAL<1,P,1> = "" THEN
+         DSR.PO.LINE = DELETE(DSR.PO.LINE,1,P,0)
+         DSR.LINE.STATUS = DELETE(DSR.LINE.STATUS,1,P,0)
+         DSR.PROD = DELETE(DSR.PROD,1,P,0)
+         DSR.WHSE = DELETE(DSR.WHSE,1,P,0)
+         DSR.UN.PRICE = DELETE(DSR.UN.PRICE,1,P,0)
+         DSR.DISCOUNT = DELETE(DSR.DISCOUNT,1,P,0)
+         DSR.JOB.ALC = DELETE(DSR.JOB.ALC,1,P,0)
+         DSR.JOB.REC = DELETE(DSR.JOB.REC,1,P,0)
+         DSR.UOM = DELETE(DSR.UOM,1,P,0)
+         DSR.COMPLETE = DELETE(DSR.COMPLETE,1,P,0)
+         DSR.LOC = DELETE(DSR.LOC,1,P,0)
+         DSR.SERIAL = DELETE(DSR.SERIAL,1,P,0)
+         DSR.QTY = DELETE(DSR.QTY,1,P,0)
+         DSR.DIAM = DELETE(DSR.DIAM,1,P,0)
+         DSR.STK.QTY = DELETE(DSR.STK.QTY,1,P,0)
+         DSR.MILL.ID = DELETE(DSR.MILL.ID,1,P,0)
+         DSR.LOC.STATUS = DELETE(DSR.LOC.STATUS,1,P,0)
+         DSR.NO.PIECES = DELETE(DSR.NO.PIECES,1,P,0)
+         DSR.JOB = DELETE(DSR.JOB,1,P,0)
+         DSR.JOB.QTY = DELETE(DSR.JOB.QTY,1,P,0)
+         DSR.JOB.STATUS = DELETE(DSR.JOB.STATUS,1,P,0)
+         DSR.POST.DATE = DELETE(DSR.POST.DATE,1,P,0)
+         DSR.SERIAL.STATUS = DELETE(DSR.SERIAL.STATUS,1,P,0)
+      END
+   NEXT P
+   RETURN
+*
+*
+**************
+LOAD.SSTK.REC: 
+**************
+*
+   MAT SAVE.STK.REC = ""
+   SSTK.PO.LINE=DSR.PO.LINE
+   SSTK.PROD = DSR.PROD
+   SSTK.WHSE=DSR.WHSE
+   SSTK.UNIT.PRICE= DSR.UN.PRICE
+   SSTK.DISCOUNT=DSR.DISCOUNT
+   SSTK.TOT.ONORD = PO.TOT.ONORD                            
+   SSTK.TOT.RECEVED = PO.TOT.RECEVED                        
+   SSTK.PREV.RECEVED = PO.PREV.RECEVED                      
+   SSTK.QTY.OPEN = PO.QTY.OPEN                              
+   SSTK.TOT.CANCEL = PO.TOT.CANCEL                          
+   SSTK.TOT.REC = 0                                         
+   SSTK.PROD.TYPE = PO.PROD.TYPE                            
+   SSTK.UNIT.FLG = PO.UNIT.FLG                              
+   SSTK.DEL.DATE = PO.DEL.DATE                              
+   SSTK.STATUS = DSR.LINE.STATUS
+   SSTK.LOC= DSR.LOC
+   SSTK.SERIAL = DSR.SERIAL
+   SSTK.QTY = DSR.QTY
+   SSTK.MILL.ID = DSR.MILL.ID
+   SSTK.SHEET = DSR.STK.QTY
+   SSTK.DIAM = DSR.DIAM
+   SSTK.LOC.STATUS = DSR.LOC.STATUS
+   SSTK.DATE = DSR.DATE
+   SSTK.PERIOD = RECP.PERIOD
+   SSTK.SHIP.NO = DSR.SHPMNT.NO
+   SSTK.SHIP.TOT = DSR.SHPMNT.TOT
+   SSTK.VEND = DSR.VEND                           
+   SSTK.UNIT.FLG = DSR.UOM
+   SSTK.JOB.ALC = DSR.JOB.ALC
+   SSTK.JOB.REC = DSR.JOB.REC
+   SSTK.COMPLETE = DSR.COMPLETE
+   SSTK.NO.PIECES = DSR.NO.PIECES
+   SSTK.JOB = DSR.JOB
+   SSTK.JOB.QTY = DSR.JOB.QTY
+   SSTK.JOB.STATUS = DSR.JOB.STATUS
+   CALL RS.STOCK.REC.UPDATE(CONO,PO.NO,MAT COMP.REC,MAT RSXRF.REC,MAT RSMAN.REC,ERROR,HERRMSG,CUR.PERIOD)
+   IF REPORT.FLAG = "Y" THEN
+      TOT.WGT = DSR.SHPMNT.TOT<1>
+      FOR PPTR = 1 TO DCOUNT(DSR.PROD,VM)
+         PO.LINE = DSR.PO.LINE<1,PPTR>
+         PROD.NO = DSR.PROD<1,PPTR>
+         UOM = DSR.UOM<1,PPTR>
+         RCNT = DCOUNT(DSR.SERIAL<1,PPTR>,SM)
+         FOR RPTR = RCNT TO 1 STEP -1
+            ROLL.ID = DSR.SERIAL<1,PPTR,RPTR>
+            MATREAD ISTK.REC FROM INV_SERIAL, CONO:ROLL.ID ELSE
+               MAT ISTK.REC = ""
+            END
+            GOSUB CONVERT.QTY
+            MILL.ID = DSR.MILL.ID<1,PPTR,RPTR>
+            RWHSE = DSR.WHSE<1,PPTR>
+            RWLOC = DSR.LOC<1,PPTR,RPTR>
+            STATUS = DSR.LINE.STATUS<1,PPTR,RPTR>
+            IF STATUS = "" THEN STATUS =  'Posted'
+            GOSUB PRINT.DET.LINE
+         NEXT RPTR
+         IF PRINT.LINE # 0 THEN GOSUB PRINT.LINE.TOTALS
+      NEXT PPTR
+   END
+*
+   IF ERROR THEN
+      DSR.LINE.STATUS=SSTK.STATUS
+      DSR.LOC.STATUS=SSTK.LOC.STATUS
+      DSR.JOB.STATUS=SSTK.JOB.STATUS
+      MATWRITE DSR.REC ON DAILY_STOCK,DSR.ID
+      ERRMSG = ERROR
+   END ELSE
+      DELETE DAILY_STOCK,DSR.ID
+      PO.CHG.FLG=""
+* T 25740 v
+      NO.PROD = DCOUNT(PO.PROD.NUM,VM)
+      FOR P = 1 TO NO.PROD
+         TEST.OPEN = PO.TOT.ONORD<1,P> - PO.TOT.RECEVED<1,P>
+         IF ABS(TEST.OPEN) <= 50 THEN
+            PO.TOT.CANCEL<1,P> += TEST.OPEN
+            PO.QTY.OPEN<1,P>  = 0
+         END
+      NEXT P
+* T 25740 ^
+      MATWRITE PO.REC ON PO,CONO:PO.NO
+      ERRMSG = ERROR
+   END
+*
+   MATWRITE RSXRF.REC ON PO.RSKI.XREF,RSXRF.ID
+   MATWRITE RSMAN.REC ON PO.MAN.XREF,RSMAN.ID 
+*
+   RETURN
+*
+*
+*******************
+CONVERT.QTY: 
+*******************
+*
+   IF UOM='LBS' OR UOM='MSI' THEN
+      LINE.QTY = ISTK.LBS.ENTERED
+      LINE.PQTY = OCONV(ISTK.LBS.ENTERED,"MD2")
+   END ELSE
+      LINE.QTY = ICONV(ISTK.LBS.ENTERED,"MD2")
+      LINE.PQTY = ISTK.LBS.ENTERED
+   END
+   RETURN
+*
+*
+*************
+ENT.PERIOD: 
+*************
+*
+   XX=0 ; YY=23
+   PROMPT.MSG = "Please enter period to post receipts to : "
+   FISCAL.FLAG="IC"
+   PERIOD=""
+   CALL PERIOD.PROMPT(CONO,DIV.CODE,FISCAL.FLAG,PROMPT.MSG,XX,YY,PERIOD)
+   IF PERIOD#"END" THEN
+      RECP.PERIOD = PERIOD
+   END
+   RETURN
+*
+***********
+1000: 
+***********
+*
+   DIV.POS=DIVISION.POSITION(CONO,CONTROL,WHS.DIV)         
+   BEGIN CASE                                              
+      CASE DIV.POS<1,1>=''                                  
+         DIV.POS=DIV.POS<1,2>                                
+         CUR.PERIOD=CURRENT.PERIOD(CONO,CONTROL,DIV.POS,"IC")
+         IF CUR.PERIOD<1,1>='' THEN                          
+            CUR.PERIOD=CUR.PERIOD<1,2>                        
+         END ELSE                                            
+            IF CUR.PERIOD<1,1>='-2' THEN                      
+               ERRMSG=CUR.PERIOD<1,2>                          
+               GOSUB 99999                                     
+            END                                               
+         END                                                 
+      CASE DIV.POS<1,1>='-1'                                
+         ERRMSG=DIV.POS<1,2>                                 
+         GOSUB 99999                                         
+         RELEASE PO, CONO:PO.NO                            
+      CASE DIV.POS<1,1>='-2'                                
+         ERRMSG=DIV.POS<1,2>                                 
+         GOSUB 99999                                         
+   END CASE                                                
+   RETURN                                                  
+***************
+PRINT.DET.LINE: 
+***************
+*
+   IF SUPPRESS.REPORT THEN RETURN
+   IF LINE.COUNT >= 55 THEN
+      GOSUB PRINT.HEADINGS
+      PREV.INV.NO = "!@#$%"
+   END
+   IF DSR.PROD<1,PPTR> = PREV.INV.NO THEN
+      LINE.ITEM.CNT += 1
+      D.LINE = SPACE(59)
+      D.LINE = D.LINE:SP1:ROLL.ID"L#8":SP2:MILL.ID"L#16":SPACE(4)
+      IF DSR.UOM # 'LBS' AND DSR.UOM # 'MSI' THEN LINE.PQTY=LINE.PQTY:SPACE(3) ;*T26107
+*T26120 D.LINE = D.LINE:SP1:LINE.PQTY"R#9":SP1:RWHSE"L#4"
+      D.LINE = D.LINE:SP1:LINE.PQTY"R#11":SP1:RWHSE"L#4"
+      D.LINE = D.LINE:SP1:RWLOC"L#4":SP1:STATUS"L#19"
+   END ELSE
+      LINE.ITEM.CNT = 1
+      D.LINE = PROD.NO"L#15":SP1:INV.FULL.DESC"L#43"
+      D.LINE = D.LINE:SP1:ROLL.ID"L#8":SP2:MILL.ID"L#16"
+      D.LINE = D.LINE:SP1:UOM"L#3"
+      IF UOM # 'LBS' AND UOM # 'MSI' THEN LINE.PQTY=LINE.PQTY:SPACE(3) ;*T26107
+*T26120 D.LINE = D.LINE:SP1:LINE.PQTY"R#9":SP1:RWHSE"L#4"
+      D.LINE = D.LINE:SP1:LINE.PQTY"R#11":SP1:RWHSE"L#4"
+      D.LINE = D.LINE:SP1:RWLOC"L#4":SP1:STATUS"L#19"
+   END 
+   PRINT D.LINE  
+   LINE.TOTAL += LINE.QTY
+   TOT.PROCESS +=LINE.QTY
+   LINE.COUNT +=1
+   PRINT.LINE = 1
+   PREV.INV.NO = PROD.NO
+   RETURN
+*
+******************
+PRINT.LINE.TOTALS: 
+******************
+*
+   IF SUPPRESS.REPORT THEN RETURN
+*T26120  T.LINE = SPACE(91): "---------"
+   T.LINE = SPACE(91): "-----------"
+   PRINT T.LINE
+*T26120  T.LINE=SPACE(70):"Total: ""R#21":OCONV(LINE.TOTAL,"MD2,")"R#9"
+   T.LINE=SPACE(70):"Total: ""R#21":OCONV(LINE.TOTAL,"MD2,")"R#11"
+   PRINT T.LINE
+   PRINT
+   LINE.COUNT +=2
+   LINE.TOTAL = 0
+   PREV.INV.NO = "!@#$%"
+   RETURN
+*
+****************
+PRINT.TOTAL: 
+****************
+*
+   IF SUPPRESS.REPORT THEN RETURN
+   RCVD.TOTAL += TOT.PROCESS
+   PRINT SPACE(84):"================"
+   T.LINE = " Manifest Total: ":OCONV(TOT.WGT,"MD2,")"L#15"
+   T.LINE :=  " Total Received: ":OCONV(RCVD.TOTAL,"MD2,")"L#15"
+   T.LINE := SPACE(21):OCONV(TOT.PROCESS,"MD2,")"R#15"
+   PRINT T.LINE
+   LINE.COUNT +=1
+   RETURN
+*
+***************
+PRINT.HEADINGS: 
+***************
+*
+   PRINT CHAR(12)
+   PAGE.NO += 1
+   PRINT HD1:PAGE.NO
+   PRINT HD2
+   PRINT
+   PRINT "Manifest # : ":MAN.NO
+   PRINT "P/O Number : ":PO.NO
+   PRINT
+   PRINT SHEAD
+   PRINT ULINE
+   PRINT
+   LINE.COUNT = 10
+   RETURN
+*
+99990 *
+   IF NOT(SUPPRESS.REPORT) THEN
+      PRINTER CLOSE
+      PRINTER OFF
+   END
+99999 *
+   RETURN
+END

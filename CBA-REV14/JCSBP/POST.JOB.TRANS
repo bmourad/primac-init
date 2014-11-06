@@ -1,0 +1,410 @@
+*********************************************************************
+* REVISION    - [08.1]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* PROGRAM  - POST.JOB.TRANS
+* AUTHOR   - WALID YAMOUT, COMPUTER BUSINESS ASSOCIATES
+* DATE     - 01/18/89
+* DESCRIPTION
+* This subroutine is used to update job scheduling/errors from
+* JOB.TRANS file.
+*
+*TASK 19041 REV10ABUG ENDLESS LOOP
+*
+*T21832 rick 05/27/1997 * FIX TO JOB.STATUS UPDATE FOR MULTI DAY RUNS
+*T24890 doug 02/29/2000 * DO NOT DELETE TRACKING EVEN IF PSS = "Y"
+*T26556 cmykleb 06/12/2002 * Rev12 changes
+*********************************************************************
+*
+*--- COPY STATEMENTS
+*
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>COST.CNTR
+*COPY>JCS.CPYLIB>OPERATION
+*COPY>JCS.CPYLIB>JOB.TRANS
+*COPY>JCS.CPYLIB>JOB.TRACKING
+*COPY>JCS.CPYLIB>JCS.FILE.VARS
+*COPY>PSS.CPYLIB>JOB.SCHED
+*COPY>PSS.CPYLIB>CCTR.SCHED
+*COPY>PSS.CPYLIB>PSS.FILE.VARS
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>CHAR
+*
+*--- SETUP ERRMSG ROUTINE
+*
+   SYS.TYPE = 1
+   CALL SYSCOM(MAT SYSCOM.REC)
+*
+*--- GET COMPANY
+*
+   PROCREAD BUFFER ELSE
+      ERRMSG = "MUST RUN FROM PROC"
+      GOSUB 91000
+      GOTO 99999
+   END
+   CONO = BUFFER<1>
+*
+*--- OPEN ALL FILES
+*
+   MAT FILE.VARS = ""
+   MAT PSS.FILE.VARS = ""
+   MAT JCS.FILE.VARS = ""
+   MAT COMP.REC = ""
+   OPEN "","COMPANY" TO COMPANY ELSE
+      ERRMSG = "COMPANY FILE MISSING"
+      GOTO 93000
+   END
+   OPEN "","CONTROL" TO CONTROL ELSE
+      ERRMSG = "CONTROL FILE MISSING"
+      GOTO 93000
+   END
+   MATREAD COMP.REC FROM COMPANY, CONO ELSE
+      ERRMSG = "COMPANY RECORD IS MISSING"
+      GOTO 93000
+   END
+*
+   IF CO.PSS = "" OR CO.PSS = "N" THEN GOTO 99999
+*
+   IF CO.PSS = "Y" OR CO.PSS = "T" THEN
+      OPEN "","JOB.TRANS" TO JOB.TRANS ELSE
+         ERRMSG = "CANNOT LOCATE JOB.TRANS FILE"
+         GOTO 93000
+      END
+      OPEN "","JOB.TRACKING" TO JOB.TRACKING ELSE
+         ERRMSG = "CANNOT LOCATE JOB.TRACKING FILE"
+         GOTO 93000
+      END
+   END
+   IF CO.PSS = "Y" THEN
+      OPEN "","JOB.SCHED" TO JOB.SCHED ELSE
+         ERRMSG = "CANNOT LOCATE JOB.SCHED FILE"
+         GOTO 93000
+      END
+      OPEN "","CCTR.SCHED" TO CCTR.SCHED ELSE
+         ERRMSG = "CANNOT LOCATE CCTR.SCHED FILE"
+         GOTO 93000
+      END
+      OPEN "","COST.CNTR" TO COST.CNTR ELSE
+         ERRMSG = "CANNOT LOCATE COST.CNTR FILE"
+         GOTO 93000
+      END
+      OPEN "","OPERATION" TO OPERATION ELSE
+         ERRMSG = "CANNOT LOCATE OPERATION FILE"
+         GOTO 93000
+      END
+   END
+*
+*--- MAIN PROCESSING
+*
+   SELECT JOB.TRANS
+   MORE = 1
+   LOOP
+      READNEXT ID ELSE MORE = 0
+   WHILE MORE DO
+      IF CONO # ID[1,3] THEN GOTO 199
+      JOB.NUM = ID[4,8]
+      MATREADU JTRN.REC FROM JOB.TRANS, ID ELSE
+         RELEASE JOB.TRANS, ID
+         GOTO 199
+      END
+      DCNT = DCOUNT(JTRN.DEPT,VM)
+      MATREADU JTRK.REC FROM JOB.TRACKING, ID ELSE
+         MAT JTRK.REC = ""
+      END
+      IF CO.PSS = "Y" THEN
+         FND.SCHED = 1
+         MATREADU JBS.REC FROM JOB.SCHED, ID ELSE
+            FND.SCHED = 0
+            RELEASE JOB.SCHED, ID
+         END
+      END ELSE
+         FND.SCHED = 0
+      END
+      LOOP
+         POST.FLAG = JTRN.POST.FLAG<1,1>
+      WHILE POST.FLAG = "Y" DO
+         TS = JTRN.TIME.STAMP<1,1>
+         TRAN = JTRN.TRANS<1,1>
+         DEPT = JTRN.DEPT<1,1>
+         CCTR = JTRN.CCTR<1,1>
+         MCCTR = CCTR
+         OPER = JTRN.OPER<1,1>
+         SOPER = OPER
+         OTYPE = ""
+         HRS = JTRN.HRS<1,1>
+         IMP = JTRN.IMP<1,1>
+         CMP.FLG = JTRN.CMP.FLG<1,1>
+         IF CO.PSS = "Y" AND FND.SCHED THEN
+            MATREAD CCTR.REC FROM COST.CNTR, CONO:CCTR ELSE
+               MAT CCTR.REC = ""
+               CCTR.DEPT = DEPT
+            END
+            DEPT = CCTR.DEPT
+            IF CCTR.MASTER # "" AND CCTR.MASTER # CCTR THEN
+               MCCTR = CCTR.MASTER
+               MATREAD CCTR.REC FROM COST.CNTR, CONO:MCCTR ELSE
+                  MAT CCTR.REC = ""
+                  CCTR.DEPT = DEPT
+                  MCCTR = CCTR
+               END
+               DEPT = CCTR.DEPT
+            END
+            MATREAD OPER.REC FROM OPERATION, CONO:OPER ELSE
+               MAT OPER.REC = ""
+            END
+            IF OPER.SCHED # "" THEN
+               SOPER = OPER.SCHED
+            END ELSE
+               SOPER = OPER
+            END
+            LOCATE OPER IN CCTR.OPER<1>,1 SETTING FND ELSE FND = 0
+            IF FND THEN
+               OTYPE = CCTR.OPER.TYPE<1,FND>
+            END ELSE
+               OTYPE = ""
+            END
+         END
+         SDATE = INT(TS/100000)
+         BEGIN CASE
+            CASE CO.PSS = "Y" AND FND.SCHED
+               GOSUB 1000
+               GOSUB 2000 ;* T24890
+*T26556 v
+*           CASE CO.PSS = "T"
+            CASE CO.PSS = "T" OR CO.PSS = "Y"
+*T26556 ^
+               GOSUB 2000
+         END CASE
+         GOSUB 1500
+      REPEAT
+*
+      IF FND.SCHED THEN
+         MATWRITE JBS.REC ON JOB.SCHED, ID
+      END
+*
+      IF JTRN.TRANS = "" THEN
+         DELETE JOB.TRANS, ID
+      END ELSE
+         MATWRITE JTRN.REC ON JOB.TRANS, ID
+      END
+*
+      IF JTRK.TIME.STAMP = "" THEN
+         RELEASE JOB.TRACKING, ID
+      END ELSE
+         MATWRITE JTRK.REC ON JOB.TRACKING, ID
+      END
+199 *
+   REPEAT
+   GOTO 99999
+*
+*-------------------*
+*--- SUBROUTINES ---*
+*-------------------*
+*
+*--- UPDATE JOB.SCHED
+*
+1000 *
+   DPTR = 0
+   OPTR = 0
+   DPX = 0
+   OPX = 0
+   DPS = 1
+   OPS = 1
+1100 *
+   LOOP
+   WHILE DPS > 0 DO
+      LOCATE DEPT IN JBS.DEPT<1>,DPS SETTING DPX ELSE DPX = 0
+      BEGIN CASE
+         CASE DPX = 0
+            DPS = 0
+         CASE CCTR # JBS.CCTR<1,DPX> AND MCCTR # JBS.CCTR<1,DPX>
+            DPS = DPX + 1
+            OPS = 1
+         CASE JBS.OPER<1,DPX> = "ALL" OR CO.PSS.OPER.LVL # "Y"
+            OPX = 1
+            DPS = 0
+         CASE 1
+            DPS = 0
+            LOCATE SOPER IN JBS.OPER<1,DPX>,OPS SETTING OPX ELSE
+               LOCATE OPER IN JBS.OPER<1,DPX>,OPS SETTING OPX ELSE
+                  DPS = DPX + 1
+                  OPS = 1
+               END
+            END
+      END CASE
+   REPEAT
+   BEGIN CASE
+      CASE DPX = 0 AND DPTR > 0 AND OPTR > 0
+         DPX = DPTR
+         OPX = OPTR
+      CASE DPX AND OPX
+         BEGIN CASE
+            CASE JBS.OPER.ACT.DATE<1,DPX,OPX> = ""
+*T21832 v
+*               CASE JBS.OPER.STATUS<1,DPX,OPX> = 'C' AND JBS.OPER<1,DPX> = 'ALL'
+*               CASE JBS.OPER.STATUS<1,DPX,OPX> = "C"
+**TASK19041
+**            DPS = DPX
+*                  DPS = DPX + 1
+**            OPS = OPX + 1
+*                  OPS = OPX
+****^
+*                  DPTR = DPX
+*                  OPTR = OPX
+*                  GOTO 1100
+*T21832 ^
+            CASE JBS.ACT.DATE<1,DPX> = ""
+            CASE JBS.CMP.DATE<1,DPX> = ""
+            CASE 1
+               DPS = DPX + 1
+               OPS = 1
+               DPTR = DPX
+               OPTR = OPX
+               GOTO 1100
+         END CASE
+      CASE 1
+*     GOSUB 2000 ;* T24890
+         GOTO 1999
+   END CASE
+   IF JBS.ACT.DATE<1,DPX> = "" THEN JBS.ACT.DATE<1,DPX> = SDATE
+   IF JBS.OPER.ACT.DATE<1,DPX,OPX> = "" THEN JBS.OPER.ACT.DATE<1,DPX,OPX> = SDATE
+   JBS.ACT.HRS<1,DPX> = JBS.ACT.HRS<1,DPX> + HRS
+   IF IMP+0 > 0 THEN JBS.ACT.IMP<1,DPX> = JBS.ACT.IMP<1,DPX> + IMP
+   JBS.OPER.ACT.HRS<1,DPX,OPX> = JBS.OPER.ACT.HRS<1,DPX,OPX> + HRS
+   IF JBS.OPER.STATUS<1,DPX,OPX> # "C" THEN
+      BEGIN CASE
+         CASE CMP.FLG = "Y" AND JBS.OPER<1,DPX,OPX> # "ALL" AND CO.PSS.OPER.LVL = "Y"
+            JBS.OPER.STATUS<1,DPX,OPX> = "C"
+**       CASE JBS.OPER.ACT.HRS<1,DPX,OPX> >= JBS.OPER.SCH.HRS<1,DPX,OPX>
+         CASE CMP.FLG = "Y" AND JBS.OPER<1,DPX,OPX> = "ALL"
+            JBS.OPER.STATUS<1,DPX,OPX> = "C"
+         CASE 1
+            JBS.OPER.STATUS<1,DPX,OPX> = "I"
+      END CASE
+   END
+   OCNT = DCOUNT(JBS.OPER<1,DPX>,SVM)
+   BLK = 0
+   FOR OPX = 1 TO OCNT UNTIL BLK
+      IF JBS.OPER.STATUS<1,DPX,OPX> # "C" THEN BLK = 1
+   NEXT OPX
+   IF BLK THEN
+      JBS.CCTR.STATUS<1,DPX> = "I"
+      JBS.DEPT.STATUS<1,DPX> = "I"
+   END ELSE
+      JBS.CCTR.STATUS<1,DPX> = "C"
+      JBS.DEPT.STATUS<1,DPX> = "C"
+      IF SDATE > JBS.CMP.DATE<1,DPX> THEN JBS.CMP.DATE<1,DPX> = SDATE
+   END
+   DCNT = DCOUNT(JBS.DEPT,VM)
+   BLK = 0
+   FOR II = 1 TO DCNT UNTIL BLK
+      IF JBS.DEPT.STATUS<1,II> # "C" THEN BLK = 1
+   NEXT II
+   IF BLK THEN
+      JBS.STATUS = "I"
+   END ELSE
+      JBS.STATUS = "C"
+      IF SDATE > JBS.COMPL.DATE THEN JBS.COMPL.DATE = SDATE
+   END
+*
+*--- UPDATE CCTR.SCHED
+*
+   XDATE = JBS.SCH.DATE<1,DPX>
+   EDATE = JBS.EXP.DATE<1,DPX>
+   IF XDATE = "" THEN XDATE = SDATE
+   IF EDATE = "" THEN EDATE = XDATE
+   FOR II = XDATE TO EDATE
+      MATREADU CCTR.SCHED.REC FROM CCTR.SCHED, CONO:JBS.CCTR<1,DPX>:"*":II ELSE
+         MAT CCTR.SCHED.REC = ""
+         RELEASE CCTR.SCHED, CONO:JBS.CCTR<1,DPX>:"*":II
+         GOTO 1990
+      END
+      PTR = 1
+      LOOP
+         LOCATE JOB.NUM IN CCS.JOB<1>,PTR SETTING JJ ELSE JJ = 0
+         BEGIN CASE
+            CASE JJ = 0
+               PTR = 0
+            CASE CCS.TRAN<1,JJ> # JBS.TRAN<1,DPX>
+               PTR = JJ + 1
+            CASE 1
+               CCS.OPER.STATUS<1,JJ> = JBS.CCTR.STATUS<1,DPX>
+               IF JBS.CCTR.STATUS<1,DPX> = "C" THEN
+                  SFT = CCS.JOB.SHIFT<1,JJ>
+                  EQP = CCS.JOB.EQUIP<1,JJ>
+                  HRS = CCS.JOB.HRS<1,JJ>
+                  CCS.SCH.HRS = CCS.SCH.HRS - HRS
+                  CCS.REM.HRS = CCS.REM.HRS + HRS
+                  CCS.SCH.SM.HRS<1,SFT,EQP> = CCS.SCH.SM.HRS<1,SFT,EQP> - HRS
+                  CCS.REM.SM.HRS<1,SFT,EQP> = CCS.REM.SM.HRS<1,SFT,EQP> + HRS
+                  CCS.JOB.HRS<1,JJ> = 0
+               END
+               PTR = JJ + 1
+         END CASE
+      WHILE PTR DO
+      REPEAT
+      MATWRITE CCTR.SCHED.REC ON CCTR.SCHED, CONO:JBS.CCTR<1,DPX>:"*":II
+1990 *
+   NEXT II
+1999 *
+   RETURN
+*
+*--- UPDATE JOB.TRANS
+*
+1500 *
+   JTRN.TIME.STAMP = DELETE(JTRN.TIME.STAMP,1,1,0)
+   JTRN.TRANS = DELETE(JTRN.TRANS,1,1,0)
+   JTRN.DEPT = DELETE(JTRN.DEPT,1,1,0)
+   JTRN.CCTR = DELETE(JTRN.CCTR,1,1,0)
+   JTRN.OPER = DELETE(JTRN.OPER,1,1,0)
+   JTRN.EMP = DELETE(JTRN.EMP,1,1,0)
+   JTRN.HRS = DELETE(JTRN.HRS,1,1,0)
+   JTRN.IMP = DELETE(JTRN.IMP,1,1,0)
+   JTRN.SHIFT = DELETE(JTRN.SHIFT,1,1,0)
+   JTRN.CMP.FLG = DELETE(JTRN.CMP.FLG,1,1,0)
+   JTRN.OPER.TYPE = DELETE(JTRN.OPER.TYPE,1,1,0)
+   JTRN.POST.FLAG = DELETE(JTRN.POST.FLAG,1,1,0)
+   RETURN
+*
+*--- UPDATE JOB.TRACKING
+*
+2000 *
+   LOCATE TS+1 IN JTRK.TIME.STAMP<1>,1 BY "AR" SETTING JTP ELSE NULL
+   NOMATCH = 1
+   BEGIN CASE
+      CASE JTP = 1
+      CASE JTRK.DEPT<1,JTP-1> # DEPT
+      CASE JTRK.CCTR<1,JTP-1> # CCTR
+      CASE JTRK.OPER<1,JTP-1> # OPER
+      CASE 1
+         NOMATCH = 0
+         JTP = JTP - 1
+   END CASE
+   IF NOMATCH THEN
+      JTRK.TIME.STAMP = INSERT(JTRK.TIME.STAMP,1,JTP,0,TS)
+      JTRK.DEPT = INSERT(JTRK.DEPT,1,JTP,0,DEPT)
+      JTRK.CCTR = INSERT(JTRK.CCTR,1,JTP,0,CCTR)
+      JTRK.OPER = INSERT(JTRK.OPER,1,JTP,0,OPER)
+      JTRK.HRS = INSERT(JTRK.HRS,1,JTP,0,"")
+      JTRK.IMP = INSERT(JTRK.IMP,1,JTP,0,"")
+   END
+   JTRK.TIME.STAMP<1,JTP> = TS
+   JTRK.HRS<1,JTP> = JTRK.HRS<1,JTP> + HRS
+   JTRK.IMP<1,JTP> = JTRK.IMP<1,JTP> + IMP
+   RETURN
+*
+*--- ERROR ROUTINE
+*
+* 90000 *
+*       PRINT @(0,23):CL:ERRMSG:
+*       INPUT REPLY,1:
+*       PRINT @(0,23):CL:
+91000 *
+   ERR.TYPE = 1;CALL SYSCOM(MAT SYSCOM.REC); RETURN
+92000 *
+   ERR.TYPE = 2;CALL SYSCOM(MAT SYSCOM.REC); RETURN
+93000 *
+   ERR.TYPE = 3;CALL SYSCOM(MAT SYSCOM.REC)
+*
+99999 *
+END

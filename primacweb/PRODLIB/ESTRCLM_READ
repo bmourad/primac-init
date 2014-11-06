@@ -1,0 +1,175 @@
+   SUBROUTINE ESTRCLM_READ
+*********************************************************************
+* REVISION    - [12.0]
+*
+* SYSTEM      - PRIMAC
+*
+* PROGRAM     - ESTRCLM_READ
+*
+* BY          - CHRIS MYKLEBUST
+*
+* DATE        - 11/06/2002
+*
+* DESCRIPTION - This program gets the information for Roll Label
+*               Cylinder Maintenance.
+*********************************************************************
+   $INCLUDE WWINSERT RBO.H
+   $INCLUDE JES.CPYLIB ESTIMATE.RES.CYLINDER
+   $INCLUDE JES.CPYLIB ESTIMATE.RES.GEARSET
+   $INCLUDE JES.CPYLIB EST.RES.FDIE.SPEEDS
+   $INCLUDE PMC.CPYLIB COST.CNTR
+   $INCLUDE CPYLIB SCREEN.COM
+   $INCLUDE CPYLIB FILE.VARS
+   $INCLUDE CPYLIB CHAR
+*
+*---- OPEN FILES
+*
+   IF FILEINFO(ESTIMATE.RES.CYLINDER,0) = 0 THEN
+      OPEN 'ESTIMATE.RES.CYLINDER' TO ESTIMATE.RES.CYLINDER ELSE
+         ERRMSG = 'CANNOT OPEN ESTIMATE.RES.CYLINDER FILE'
+         GOTO 93000
+      END
+   END
+   IF FILEINFO(ESTIMATE.RES.GEARSET,0) = 0 THEN
+      OPEN '','ESTIMATE.RES.GEARSET' TO ESTIMATE.RES.GEARSET ELSE
+         ERRMSG='CANNOT OPEN ESTIMATE.RES.GEARSET FILE'
+         GOTO 93000
+      END
+   END
+   IF FILEINFO(EST.RES.FDIE.SPEEDS,0) = 0 THEN
+      OPEN '','EST.RES.FDIE.SPEEDS' TO EST.RES.FDIE.SPEEDS ELSE
+         ERRMSG='Cannot open EST.RES.FDIE.SPEEDS'
+         GOSUB 93000
+      END
+   END
+   IF FILEINFO(EQUIPMENT,0) = 0 THEN
+      OPEN 'EQUIPMENT' TO EQUIPMENT ELSE
+         ERRMSG = 'CANNOT OPEN EQUIPMENT FILE'
+         GOTO 93000
+      END
+   END
+   IF FILEINFO(COST.CNTR,0) = 0 THEN
+      OPEN 'COST.CNTR' TO COST.CNTR ELSE
+         ERRMSG = 'CANNOT OPEN COST.CNTR FILE'
+         GOTO 93000
+      END
+   END
+*
+*---- INITIALIZATION
+*
+   CCTR = ""
+   DESC = ""
+   PCCTR = ""
+   PDESC = ""
+*
+*---- MAIN PROCESS
+*
+   ERRMSG = RBO.getProperty('','ID',RLCYNID)
+   CONO = RLCYNID[1,3]
+   RLKEY = RLCYNID[4,10]
+   IF LEN(RLKEY) < 3 THEN
+      ERRMSG='Key must be Gearset Code + Number of Teeth'
+      GOTO 93000
+   END
+   MATREAD ESTGS.REC FROM ESTIMATE.RES.GEARSET,CONO:RLKEY[1,2] ELSE
+      ESTGS.DESC = "** Invalid Gearset **"
+   END
+   IF NOT(NUM(RLKEY[3,3])) THEN
+      ERRMSG = "Number of Teeth must be numeric"
+      GOTO 93000
+   END
+   MATREADU RLCYN.REC FROM ESTIMATE.RES.CYLINDER,RLCYNID LOCKED
+      ERRMSG = 'CYLINDER record is locked by user - ':GETUSERNAME(STATUS())
+      GOTO 93000
+   END ELSE
+      MAT RLCYN.REC = ''
+      RLCYN.TEETH=RLCYNID[6,(LEN(RLCYNID)-5)]
+      NEW.REC = 1
+   END
+*
+*---- REPEAT
+*
+   RLCYN.REPEAT=RLCYN.TEETH*ESTGS.PITCH
+*
+*--- Update Maximum Speed For This Cylinder If Impressions
+*    Are Available for this CYLINDER (ie if Flatbed)
+*
+*  IF ESTGS.IMPRESS+0 > 0 THEN
+*     MAX.SPEED=INT((RLCYN.REPEAT/10000)*(ESTGS.IMPRESS/1000)*60)
+*     MAX.KEY=INT((RLCYN.REPEAT+5)/10000)
+*     WRITE MAX.SPEED ON EST.RES.FDIE.SPEEDS,RLKEY[1,5]:'*':MAX.KEY
+*  END
+*  RETURN
+*
+*---- GET COST CENTERS FOR ROTARY
+*
+   SELECTINDEX "GSROTARY",RLKEY[1,2] FROM EQUIPMENT
+   DATA = 1
+   LOOP
+      READNEXT ID ELSE DATA = 0
+   WHILE DATA DO
+      IF ID[1,3] = CONO THEN
+         ID = ID[4,99]
+         LOCATE ID IN CCTR<1>,1 BY "AR" SETTING PTR ELSE
+            CCTR = INSERT(CCTR,1,PTR,0,ID)
+         END
+      END
+   REPEAT
+   SELECTINDEX "GSFBED",RLKEY[1,2] FROM EQUIPMENT
+   DATA = 1
+   LOOP
+      READNEXT ID ELSE DATA = 0
+   WHILE DATA DO
+      IF ID[1,3] = CONO THEN
+         ID = ID[4,99]
+         LOCATE ID IN CCTR<1>,1 BY "AR" SETTING PTR ELSE
+            CCTR = INSERT(CCTR,1,PTR,0,ID)
+         END
+      END
+   REPEAT
+   CNT = DCOUNT(CCTR,VM)
+   FOR C = 1 TO CNT
+      MATREAD CCTR.REC FROM COST.CNTR,CONO:CCTR<1,C> ELSE
+         CCTR.DESC = STR("?",25)
+      END
+      DESC<1,C> = CCTR.DESC "L#28"
+   NEXT C
+*
+*---- GET COST CENTERS FOR PRINT
+*
+   SELECTINDEX "GSPRINT",RLKEY[1,2] FROM EQUIPMENT
+   DATA = 1
+   LOOP
+      READNEXT ID ELSE DATA = 0
+   WHILE DATA DO
+      IF ID[1,3] = CONO THEN
+         ID = ID[4,99]
+         LOCATE ID IN PCCTR<1>,1 BY "AR" SETTING PTR ELSE
+            PCCTR = INSERT(PCCTR,1,PTR,0,ID)
+         END
+      END
+   REPEAT
+   PCNT = DCOUNT(PCCTR,VM)
+   FOR C = 1 TO PCNT
+      MATREAD CCTR.REC FROM COST.CNTR,CONO:PCCTR<1,C> ELSE
+         CCTR.DESC = STR("?",25)
+      END
+      PDESC<1,C> = CCTR.DESC "L#28"
+   NEXT C
+*
+*---- SET RBO FIELDS
+*
+   STATUS = RBO.setProperty('','ESTGS_DESC',ESTGS.DESC)
+   STATUS = RBO.setProperty('','CCTR',CCTR)
+   STATUS = RBO.setProperty('','DESC',DESC)
+   STATUS = RBO.setProperty('','PCCTR',PCCTR)
+   STATUS = RBO.setProperty('','PDESC',PDESC)
+   STATUS = RBO.setProperty('','RLCYN_REPEAT',RLCYN.REPEAT)
+RETURN
+
+93000 *
+   STATUS = RBO.setProperty('','ServerStatus',1)
+   STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+RETURN
+
+

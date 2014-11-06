@@ -1,0 +1,186 @@
+SUBROUTINE JOBM_READ_QTY_COMP
+********************************************************************************
+*   Program name :- JOBM_READ_QTY_COMP
+*   Created:- 7/16/2003
+*------------------------------------------------------------------------------*
+* NEW OR EXISTING JOB
+*
+* In Properties:
+* --------------
+*  Cono,JOB_NO,JOB_EST,EST_PAR
+*
+* Out Properties:
+* ---------------
+*  JOB_RET_DETAILS
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE JCS.CPYLIB JOB
+$INCLUDE JES.CPYLIB ESTIMATE
+$INCLUDE CPYLIB CHAR
+ERRMSG = ""
+* Insert method code here
+OPEN '','ESTIMATE' TO F.EST ELSE
+	ERRMSG = "UNABLE TO OPEN FILE!"
+	GOTO 99999
+END
+OPEN "","JOB" TO JOB ELSE
+	ERRMSG = "CANNOT OPEN JOB FILE"
+       GOTO 99999
+END
+
+JOB_RET_INFO = ""
+VAL = RBO.getProperty('','Cono',CONO)
+VAL = RBO.getProperty('','JOB_NO',JOBNO)
+MATREAD JOB.REC FROM JOB,CONO:JOBNO ELSE MAT JOB.REC = ""
+VAL = RBO.getProperty('','JOB_EST',JOB.EST)
+VAL = RBO.getProperty('','EST_PAR',EST.PAR)
+IF JOB.EST = 0 THEN JOB.EST = ""
+
+EQU EST.PAR.QTY    TO EST.PAR<1,1>
+EQU EST.PAR.COMP   TO EST.PAR<1,2>
+EQU EST.PAR.DEPT   TO EST.PAR<1,3>
+EQU EST.PAR.UPDM   TO EST.PAR<1,4>
+EQU EST.PAR.MATL   TO EST.PAR<1,5>
+
+SAVE.COMP.CNT = 0
+
+MATREAD EST.REC FROM F.EST,CONO:JOB.EST ELSE
+	ERRMSG = "INVALID ESTIMATE ID TRY AGAIN!"
+	GOTO 99999
+END
+
+*---- GET ESTIMATE QUANTITY
+210 *
+
+*VALID.QTY.LIST = EST.QTY - DEFAULT QTY
+ECNT = DCOUNT(EST.QTY,VM)
+BEGIN CASE
+	CASE ECNT = 0
+       	ERRMSG = "No quantities present for specified estimate."
+         	GOTO 99999
+	CASE ECNT = 1
+       	EST.PAR.QTY = EST.QTY
+	CASE 1
+       	IF EST.BOOK.QTY+0 > 0 THEN
+            		O.R = "O"
+            		DEFAULT = EST.BOOK.QTY
+            		PMSG="Estimate Quantity (Default=":DEFAULT:") - "
+         	END
+END CASE
+
+VALID.QTY.LIST = ""
+K = 1
+FOR I = 1 TO ECNT
+	VALUE = EST.QTY<1,I>
+	IF VALUE # EST.BOOK.QTY THEN
+            JCNT = DCOUNT(EST.BOOK.JOB,VM)
+            FOR JP = 1 TO JCNT
+               IF EST.BOOK.JOB<1,JP> # JOBNO THEN
+                  GOTO 999
+               END
+            NEXT JP
+	END
+	VALID.QTY.LIST<1,K> = VALUE
+	K += 1
+999
+NEXT I
+
+JOB_RET_INFO = VALID.QTY.LIST : "-" : EST.BOOK.QTY
+
+*STATUS = RBO.setProperty('','ServerMessage','QUANTITY ' : JOB_RET_INFO)
+*RETURN
+
+
+*---- GET COMPONENT NUMBER
+*
+220 *
+VALID.COMP.LIST = ""
+K = 1
+* LIST - DEFAULT - BOOKED_JOB
+BEGIN CASE
+	CASE EST.COMPONENT.CNT+0 = 0
+       	EST.PAR.COMP = ""
+         	SAVE.COMP.CNT = 0
+		JOB_RET_INFO = JOB_RET_INFO : "_" : " " :"-": " " :"-": " "
+      	CASE 1
+		CDEFAULT = ""
+         	IF EST.PAR.COMP # "" THEN
+            		CDEFAULT = EST.PAR.COMP
+         	END ELSE
+            		LOCATE JOBNO IN EST.BOOK.JOB<1>,1 SETTING JP ELSE JP = 0
+            		IF JP > 0 THEN
+               		CDEFAULT = EST.BOOK.COMP<1,JP>
+            		END
+         	END
+		IF CDEFAULT = "" THEN
+            		DEFAULT = "ALL"
+         	END ELSE
+            		DEFAULT = CDEFAULT<1,1,1>
+            		CC = COUNT(CDEFAULT,SM)+1
+            		FOR CP = 2 TO CC
+               		DEFAULT = DEFAULT:",":CDEFAULT<1,1,CP>
+            		NEXT CP
+         	END
+		*JOB_RET_INFO = JOB_RET_INFO : "_" : EST.COMPONENT.CNT  :"-": DEFAULT : "-" :  EST.BOOK.JOB<1>
+		NUM.JOBS=DCOUNT(EST.BOOK.JOB,VM)	
+		
+		FOR I = 1 TO EST.COMPONENT.CNT + 1
+			IF I = EST.COMPONENT.CNT+1 THEN
+				VALUE = "ALL"
+			END ELSE
+				VALUE = I
+			END
+			IF VALUE = "ALL" THEN
+            			JFND=0
+            			FOR NJ = 1 TO NUM.JOBS WHILE JFND = 0
+               			IF EST.BOOK.JOB<1,NJ> # JOBNO THEN JFND = NJ
+	            		NEXT NJ
+       	     		IF JFND > 0 THEN
+              	 		GOTO 9999
+	            		END
+       	     		IF EST.COMPONENT.CNT = 1 THEN
+              	 		EST.PAR.COMP = 1
+               			SAVE.COMP.CNT = 1
+	            		END ELSE
+       	        		EST.PAR.COMP = "ALL"
+            			END
+	         	END ELSE
+				COMPS = ""
+             			CX = VALUE
+             			IF NOT(NUM(CX)) OR CX < "1" OR CX > EST.COMPONENT.CNT THEN
+      					GOTO 9999 
+             			END
+             			JFND=0
+             			FOR NJ = 1 TO NUM.JOBS WHILE JFND = 0
+      					IF EST.BOOK.JOB<1,NJ> # JOBNO THEN
+                     			LOCATE CX IN EST.BOOK.COMP<1,NJ>,1 SETTING JFND ELSE JFND = 0
+                  			END
+				NEXT NJ
+               		IF JFND THEN
+                  			GOTO 9999
+            			END
+			END
+			VALID.COMP.LIST<1,K> = VALUE
+			K += 1
+		9999
+		NEXT I
+
+END CASE
+
+IF VALID.COMP.LIST = "" THEN
+	JOB_RET_INFO = JOB_RET_INFO : "_" : VALID.COMP.LIST  :"-": "" : "-" :  EST.BOOK.JOB<1> :"_" : EST.PAR :"_" : SAVE.COMP.CNT
+END ELSE
+	JOB_RET_INFO = JOB_RET_INFO : "_" : VALID.COMP.LIST  :"-": DEFAULT : "-" :  EST.BOOK.JOB<1> :"_" : EST.PAR :"_" : SAVE.COMP.CNT
+END
+
+STATUS = RBO.setProperty('','JOB_RET_DETAILS',JOB_RET_INFO)
+
+99999
+  IF (TRIM(ERRMSG) # "") THEN
+       STATUS = RBO.setProperty('','ServerStatus','1')
+       STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+  END ELSE
+       STATUS = RBO.setProperty('','ServerStatus','')
+       STATUS = RBO.setProperty('','ServerMessage','')
+  END 
+RETURN

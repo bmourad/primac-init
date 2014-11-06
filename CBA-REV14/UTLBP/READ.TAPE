@@ -1,0 +1,25 @@
+* REVISION    - [08.0]
+10*
+      PRINT CHAR(12)
+11*
+      PRINT @(0,23):"ENTER RECORD SIZE ":
+      INPUT REC.SIZE
+      IF REC.SIZE = "END" THEN GOTO 99
+      IF NOT(NUM(REC.SIZE)) OR REC.SIZE = 0 THEN GOTO 10
+100*
+      READT X ELSE
+         PRINT @(0,23):"HIT <RETURN> TO CONTINUE OR (END)":
+         INPUT RESPOND
+         IF RESPOND = "END" THEN GOTO 99 ELSE GOTO 10
+      END
+      XX = ASCII(X)
+      NUM = INT(LEN(XX)/REC.SIZE)
+      PTR = 1
+      FOR I = 1 TO NUM
+         PRINT '*':XX[PTR,REC.SIZE]:'*'
+         PTR = PTR + REC.SIZE
+      NEXT I
+      PRINT "END OF RECORD"
+      GOTO 11
+99*
+   END

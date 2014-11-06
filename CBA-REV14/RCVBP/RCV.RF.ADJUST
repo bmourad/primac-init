@@ -1,0 +1,602 @@
+  SUBROUTINE RCV.RF.ADJUST (ACTION, CONO, EMPID, MAT RCV.FILE.VARS)
+*********************************************************************
+*
+* PROGRAM  - RCV.RF.ADJUST
+*
+* AUTHOR   - NICK AMENDOLA, NASTech, Inc.
+*
+* DATE     - 09/27/97
+*
+* DESCRIPTION
+*
+* This program is used to process the Roll Adjustment transaction
+* from the hand-held R-F units used in the warehouse.
+*
+*T25697 edvard 03/20/2001 * FIX UNINITIALIZED VARIBLE ERROR. (CSF# 38021)
+*T26132 cm 09/06/2001 * Change screen size from 21x16 to 20x15.
+*T26350 lhelms 12/17/2001 * CORRECT QTY TO DEFAULT TO STOCK QTY AND NOT
+*                           ALLWAYS DEFAULT TO LBS
+*T26496 lhelms 04/10/2002 * UPGRADE REV 12; COM COMMONS; REMOVE
+*                           ROLL.SKID.INFO INV_SERIAL
+*C40525 adelgado 08/07/2002 * Not updating PHYSICAL.INV rec. correctly.
+*T27369 adelgado 04/09/2003 * Fix unindentify variable.
+*T27705 lross 11/14/2003 * Expand Serial to 15 chars.
+*T29190 lross 05/05/2008 * Complete removal of transfer capability from
+*                          this function.
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>CPYLIB>COM1
+*COPY>ICS.CPYLIB>COM.INV.MAIN  
+*COPY>ICS.CPYLIB>COM.INV.SERIAL
+*COPY>ICS.CPYLIB>COM.INV.LINK  
+*COPY>RCV.CPYLIB>RCV.FILE.VARS
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>EMPLOYEE
+*COPY>PMC.CPYLIB>PO
+*COPY>ICS.CPYLIB>INV_SERIAL
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>ICS.CPYLIB>INV.WHSE.LOC
+*COPY>ICS.CPYLIB>INV.HIST
+*COPY>ICS.CPYLIB>RS.XFER
+*COPY>ICS.CPYLIB>TRANSFER
+*COPY>ICS.CPYLIB>DAILY_TRANSFER
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>ICS.CPYLIB>INV.STATS
+*COPY>ICS.CPYLIB>INV.TRAN.HIST
+*COPY>ICS.CPYLIB>CATEGORY
+*COPY>ICS.CPYLIB>INV.REC.ADJ
+*COPY>ICS.CPYLIB>INV.GLA.TRANS
+*COPY>ICS.CPYLIB>PHYSICAL.INV
+*COPY>JCS.CPYLIB>JOB
+*COPY>JCS.CPYLIB>JOB.STATS
+*COPY>APS.CPYLIB>VEND.STATS
+*COPY>APS.CPYLIB>VEND.PO.STATS
+*COPY>APS.CPYLIB>VEND.PROD.STATS
+*COPY>CPYLIB>SCREEN.COM
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*
+*
+  DEFFUN CALC.DIAM(COST.QTY,STK.QTY,MAT INV.REC)
+*
+*---- STORAGE AREA
+*
+  DIM SAVE.ADJ.REC(10)
+  EQU SAJ.TOT.QTY      TO SAVE.ADJ.REC(1)
+  EQU SAJ.QTY          TO SAVE.ADJ.REC(2)
+  EQU SAJ.SHT          TO SAVE.ADJ.REC(3)
+  EQU SAJ.DIAM         TO SAVE.ADJ.REC(4)
+  ERY = 15
+*
+*---- OPEN ALL FILES
+*
+  OPEN "","INV_SERIAL" TO INV_SERIAL ELSE ERRMSG = "FILE MISSING"; GOTO 93000
+  OPEN "","CATEGORY" TO CATEGORY ELSE ERRMSG = "FILE MISSING"; GOTO 93000
+  OPEN "","INVENTORY" TO INVENTORY ELSE ERRMSG = "FILE MISSING"; GOTO 93000
+  OPEN "","INV.WHSE" TO INV.WHSE ELSE ERRMSG = "FILE MISSING"; GOTO 93000
+  OPEN "","INV.WHSE.LOC" TO INV.WHSE.LOC ELSE ERRMSG = "FILE MISSING"; GOTO 93000
+  OPEN "","JOB" TO JOB ELSE ERRMSG = "FILE MISSING"; GOTO 93000
+  OPEN "","JOB.STATS" TO JOB.STATS ELSE ERRMSG = "FILE MISSING"; GOTO 93000
+  OPEN "","PHYSICAL.INV" TO PHYSICAL.INV ELSE ERRMSG = "FILE MISSING"; GOTO 93000
+*
+*---- INITIALIZATION
+*
+  DIAM = 0
+  REAL.TIME = 1
+  TEST.MODE = 0
+  IF LEN(ACTION) > 1 THEN
+    IF ACTION[LEN(ACTION),1] = "T" THEN
+      TEST.MODE = 1
+    END
+  END
+  SPX = ""
+  EMPNAME = "???????????????"
+  MATREAD EMP.REC FROM EMPLOYEE, CONO:EMPID THEN
+    EMPNAME = (EMP.FRST.NAME:" ":EMP.LAST.NAME)[1,20]
+  END
+  IF LEN(EMPNAME) < 20 THEN SPX = SPACE(INT((21-LEN(EMPNAME))/2))
+  TEMP.NAME = EMPNAME
+  EMPNAME = SPX:EMPNAME
+*
+*---- INITIALIZE SCREEN.COM
+*
+  MAT S$EDIT = ""
+  S$TYP = 0
+  CALL RF.INPUT
+  GOSUB 89990
+  S$MASK = "#"
+  GOSUB DISP.SCRN
+  MAN.NO = ""
+  PO.NO = ""
+  PROD.ID = ""
+  JOB.NO = ""
+  TOT.WGT = ""
+  WHSE = ""
+  WLOC = ""
+*
+*---- MAIN PROCESSING
+*
+  LOOP
+    RELEASE
+    PRINT @(00,02):EMPNAME:
+    PRINT @(05,04):@(-4):
+    PRINT @(05,05):@(-4):
+    PRINT @(05,06):@(-4):
+    PRINT @(05,07):@(-4):
+    GOSUB 89990
+*
+* enter roll number
+*
+*T27705 S$TYP=1; S$X=5; S$Y=4; S$MINL=8; S$MAXL=8; S$EX=0; S$EY=9; ERY=9
+    S$TYP=1; S$X=5; S$Y=4; S$MINL=0; S$MAXL=15; S$EX=0; S$EY=9; ERY=9
+    S$O.R="O"; S$DEFAULT=""
+    CALL RF.INPUT
+    GOSUB 89990
+    IF S$VALUE = "END" THEN GOTO 99999
+    IF S$VALUE = "" THEN GOTO 99999
+*T27705 v Should really look at CATG.BARCODE for below check.
+    VALID=1
+    IF LEN(S$VALUE) = 8 THEN
+      CALL CHECK.DIGIT("T", S$VALUE, "10RL", CKDIG, VALID)
+    END
+*T27705 ^
+    IF NOT(VALID) THEN
+      ERRMSG = "INVALID SERIAL"; GOSUB 91000; GOTO 1090
+    END
+    MATREADU ISTK.REC FROM INV_SERIAL, CONO:S$VALUE LOCKED
+      ERRMSG = "SERIAL LOCKED"; GOSUB 91000; GOTO 1090
+    END ELSE
+      RELEASE INV_SERIAL, CONO:S$VALUE
+      ERRMSG = "INVALID SERIAL"; GOSUB 91000; GOTO 1090
+    END
+    PRINT @(05,05):ISTK.MILL.ID[1,15]:
+    IF ISTK.POST.DATE = "" THEN
+      CURR.QTY.ON.HAND = ISTK.CUR.QTY                ;* 9999v999
+      PRINT @(05,06):OCONV(CURR.QTY.ON.HAND,"MD3,")"L#10":
+      ERRMSG = "SERIAL NOT RCVD"; GOSUB 91000; GOTO 1090
+    END ELSE
+      MATREAD INV.REC FROM INVENTORY, CONO:ISTK.PROD ELSE
+        RELEASE INV_SERIAL, CONO:S$VALUE
+        ERRMSG = "INVALID PRODUCT"; GOSUB 91000; GOTO 1090
+      END
+      MATREAD IWH.REC FROM INV.WHSE, CONO:ISTK.PROD:"!":ISTK.WHSE ELSE
+        ERRMSG = "NO INV.WHSE"         ;* "From Whse does not exist"
+        RETURN
+      END
+      MATREAD IWLO.REC FROM INV.WHSE.LOC, CONO:ISTK.PROD:"!":ISTK.WHSE:"!":ISTK.LOC ELSE
+        RELEASE INV_SERIAL, CONO:S$VALUE
+        ERRMSG = "NO INV.WHSE.LOC"; GOSUB 91000; GOTO 1090
+      END
+      LOCATE S$VALUE IN IWLO.SERIAL<1>,1 SETTING RSPTR ELSE
+        RELEASE INV_SERIAL, CONO:S$VALUE
+        ERRMSG = "NO SER # IN LOC"; GOSUB 91000; GOTO 1090
+      END
+*     IF ISTK.CUR.QTY = 0 THEN
+*       RELEASE INV_SERIAL, CONO:S$VALUE
+*       ERRMSG = "NO QTY"; GOSUB 91000; GOTO 1090
+*     END
+      MATREAD CATG.REC FROM CATEGORY,CONO:INV.LINE ELSE
+        RELEASE INV_SERIAL, CONO:S$VALUE
+        ERRMSG = "INVALID PROD LINE"; GOSUB 91000; GOTO 1090
+      END
+*38405 v
+*COPY>ICSBP>INV.UM.CNV
+      BEGIN CASE              
+        CASE CATG.TYPE="L"  
+          U.M="LBS"       
+        CASE CATG.TYPE="S"  
+          U.M="SHT"       
+        CASE CATG.TYPE="RL" 
+          U.M="PC "       
+        CASE CATG.TYPE="PC" 
+          U.M="FT "       
+        CASE 1              
+          NULL
+      END CASE
+*38405 ^
+* T 26350
+*        CURR.WT = IWLO.CURR.WT<1,RSPTR>           ;* 9999v999
+*        PRINT @(05,06):OCONV(CURR.WT,"MD3,")"L#10":
+      CURR.QTY.ON.HAND = ISTK.CUR.QTY
+      IF CURR.QTY.ON.HAND < 0 THEN ROND="-.5" ELSE ROND=".5"
+      PRINT @(05,06):OCONV(INT(((CURR.QTY.ON.HAND/ICR.DV1)*ICR.MT1)/ICR.DV2+ROND),ICR.CNV)"L#10":
+* T 26350 ^
+    END
+    IF ISTK.LOC = "" THEN
+      PRINT @(05,07):ISTK.WHSE"L#4":
+    END ELSE
+      PRINT @(05,07):(ISTK.WHSE:"-":ISTK.LOC)"L#9":
+    END
+    ROLL.ID = S$VALUE
+    PMILL.ID = ISTK.MILL.ID
+1020 *
+*
+* enter mill roll number
+*
+*T26132 v
+*     S$TYP=1; S$X=5; S$Y=5; S$MINL=1; S$MAXL=16; S$EX=0; S$EY=9; ERY=9
+    S$TYP=1; S$X=5; S$Y=5; S$MINL=1; S$MAXL=15; S$EX=0; S$EY=9; ERY=9
+*T26132 ^
+    S$O.R="O"; S$DEFAULT=ISTK.MILL.ID
+    CALL RF.INPUT
+    GOSUB 89990
+    IF S$VALUE = "END" THEN GOTO 99999
+    MILL.ID = S$VALUE
+1030 *
+*
+* enter new qty
+*
+    MAT PHS.INV.REC = ""
+    IF ISTK.POST.DATE # "" THEN
+      PRINT @(05,06):@(-4):
+* T 26350
+      S$TYP=ICR.TYPE; S$X=5; S$Y=6; S$MINL=1; S$MAXL=8; S$EX=0; S$EY=9; ERY=9
+      S$JUSTIFY="L"; S$SCALER=ICR.SCAL; S$MINV=0; S$MAXV=9999999
+      S$O.R="O"
+      IF CURR.QTY.ON.HAND < 0 THEN ROND="-.5" ELSE ROND=".5"
+*        S$DEFAULT = OCONV(INT(((CURR.QTY.ON.HAND/ICR.DV1)*ICR.MT1)/ICR.DV2+ROND),ICR.CNV)
+      S$DEFAULT = INT(((CURR.QTY.ON.HAND/ICR.DV1)*ICR.MT1)/ICR.DV2+ROND)
+      CALL RF.INPUT
+      GOSUB 89990
+      IF S$VALUE = "END" THEN GOTO 99999
+      IF S$VALUE = "" THEN
+        ERRMSG = "** REQUIRED **"; GOSUB 91000; GOTO 1030
+      END
+      RWEIGHT = S$VALUE
+      INPUT.QTY = S$VALUE
+      RAW.INPUT.QTY = INPUT.QTY
+*        WGHT=RWEIGHT 
+      IF INPUT.QTY < 0 THEN ROND="-.5" ELSE ROND=".5"
+      INPUT.QTY = INT(((INPUT.QTY/ICR.MT1)*ICR.DV1)*ICR.DV2+ROND)
+*38405 v
+      IF CURR.QTY.ON.HAND - RAW.INPUT.QTY < 0 THEN ROND="-.5" ELSE  ROND=".5"
+      NEW.SHEET = INT(((INPUT.QTY/ICR.DV1)*ICR.MT1/ICR.DV2+ROND))
+*38405 ^
+*        GOSUB CALC.DIAM; NEW.DIAM=DIAM
+* WGHT = RWEIGHT
+* GOSUB GET.DIAM; NEW.DIAM = DIAM
+    END
+1040 *
+*
+* enter location
+*
+    RWHSE = ISTK.WHSE
+*T29190 v
+*   PRINT @(05,07):ISTK.WHSE:"-":
+    PRINT @(05,07):ISTK.WHSE:"-":ISTK.LOC
+*   S$TYP=1; S$X=5+LEN(ISTK.WHSE)+1; S$Y=7; S$MAXL=4; S$EX=0; S$EY=9; ERY=9
+*   S$O.R="O"; S$DEFAULT=ISTK.LOC
+*   CALL RF.INPUT
+*   GOSUB 89990
+*   IF S$VALUE = "END" THEN GOTO 1090
+*   IF S$VALUE = "" THEN
+*     ERRMSG = "** REQUIRED **"; GOSUB 91000; GOTO 1040
+*   END
+*   RWLOC = S$VALUE
+    RWLOC = ISTK.LOC
+*
+    TODAY = DATE()
+    RDATE = TODAY
+    ERRMSG = ""
+*     IF ISTK.POST.DATE = "" THEN
+*        CALL RCV.ROLL.XREF.MAINT(CONO,PMILL.ID,MILL.ID,ROLL.ID,MAT RCV.FILE.VARS)
+*        ISTK.MILL.ID = MILL.ID
+*        ISTK.WHSE = RWHSE
+*        ISTK.LOC  = RWLOC
+*        MATWRITE RSKI.REC ON INV_SERIAL, CONO:ROLL.ID
+*     END ELSE
+    IF ISTK.POST.DATE # "" THEN
+*     IF RWLOC = ISTK.LOC AND RAW.INPUT.QTY = CURR.QTY.ON.HAND THEN
+*       ISTK.MILL.ID = MILL.ID
+*       ISTK.WHSE = RWHSE
+*       ISTK.LOC = RWLOC
+*       MATWRITE ISTK.REC ON INV_SERIAL, CONO:ROLL.ID
+*     END
+*     IF RWLOC # ISTK.LOC THEN
+*       MAT RS.XFER.REC = ""
+*       RS.XFER.DESC = "Barcode data - ":OCONV(RDATE,"D2/")
+*       RS.XFER.ENTRY.DATE = RDATE
+*       RS.XFER.ID = ROLL.ID
+*       RS.XFER.TO.WHSE = RWHSE
+*       RS.XFER.TO.LOC  = RWLOC
+*       GOSUB PROCESS.TRAN
+*       IF ERRMSG = "" THEN
+*         ISTK.MILL.ID = MILL.ID
+*         ISTK.WHSE = RWHSE
+*         ISTK.LOC = RWLOC
+*         MATWRITEU ISTK.REC ON INV_SERIAL, CONO:ROLL.ID
+*       END ELSE
+*         GOSUB 91000; GOTO 1090
+*       END
+*     END
+*T29190 ^
+      IF RAW.INPUT.QTY # CURR.QTY.ON.HAND THEN
+        GOSUB PROCESS.ADJ
+        IF ERRMSG = "" THEN
+          ISTK.MILL.ID = MILL.ID
+          ISTK.WHSE = RWHSE
+          ISTK.LOC = RWLOC
+          MATWRITEU ISTK.REC ON INV_SERIAL, CONO:ROLL.ID
+        END ELSE
+          GOSUB 91000; GOTO 1090
+        END
+      END
+    END
+*T27705 PRINT @(05,11):ROLL.ID"L#8":
+    PRINT @(05,11):ROLL.ID"L#15":
+*T26132 v
+*     PRINT @(05,12):MILL.ID"L#16":
+    PRINT @(05,12):MILL.ID"L#15":
+*T26132 ^
+* T 26350
+*     PRINT @(05,13):OCONV(RWEIGHT,"MD3,")"L#10":
+    IF RAW.INPUT.QTY < 0 THEN ROND="-.5" ELSE ROND=".5"
+    PRINT @(05,13):OCONV(INT(((INPUT.QTY/ICR.DV1)*ICR.MT1)/ICR.DV2+ROND),ICR.CNV)"L#10":
+    PRINT @(05,14):(RWHSE:"-":RWLOC)"L#9":
+1090 *
+  REPEAT
+  RETURN
+*
+**************************************************************************
+********* S U B R O U T I N E S ******************************************
+**************************************************************************
+*
+***********
+CALC.DIAM: 
+***********
+*
+  IF CATG.R.S.ID # "N" THEN RETURN
+  IF INV.FACTOR+0 > 0 AND INV.PAP.WIDTH+0 > 0 AND INV.CORE.DIA+0 > 0 THEN
+    BEGIN CASE
+      CASE INPUT.QTY+0=0
+        DIAM=0
+      CASE INV.PAP.TYPE="ROLL"
+        DIAM=INT(((RAW.INPUT.QTY/1000)/(INV.PAP.WIDTH/10000)*(100000/INV.FACTOR))+((INV.CORE.DIA/100)*(INV.CORE.DIA/100))+0.5)
+        DIAM=INT(SQRT(DIAM)*10+0.5)*10
+      CASE INV.PAP.TYPE="LROLL" OR INV.PAP.TYPE="PCOAT"
+        BEGIN CASE
+          CASE INV.UNIT<1,2>="FT"
+            QTY=NEW.SHEET*12
+          CASE INV.UNIT<1,2>="PC"
+            QTY=NEW.SHEET*10
+          CASE 1
+            QTY=INT(PHS.NEW.QTY<1,PPTR,RPTR>*1000/(INV.PAP.WIDTH/10000)+0.5)
+        END CASE
+        DIAM=INT((QTY*4/3.1416*(INV.FACTOR/10000)/10)+((INV.CORE.DIA/100)*(INV.CORE.DIA/100))+0.5)
+        DIAM=INT(SQRT(DIAM)*10+0.5)*10
+    END CASE
+  END
+  RETURN
+*
+************
+GET.DIAM: 
+***********
+*
+  DIAM=CALC.DIAM(WGHT,PHS.NEW.QTY<1,PPTR,RPTR>,MAT INV.REC)
+  RETURN
+*
+*
+*************
+PROCESS.TRAN: 
+*************
+*
+*  ERRMSG = ""
+*  IF RS.XFER.JOB.NO = "" THEN
+*     MAT JOB.REC = ""
+*  END ELSE
+*     MATREAD JOB.REC FROM JOB, CONO:RS.XFER.JOB.NO ELSE
+*        ERRMSG = "ERROR 5001"      ;* "Job does not exist on Job Stats file"
+*        RETURN
+*     END
+*     IF JOB.STATUS = "9" THEN
+*        ERRMSG = "ERROR 5002"      ;* "Job has been cancelled"
+*        RETURN
+*     END
+*     MATREAD JSTAT.REC FROM JOB.STATS, CONO:RS.XFER.JOB.NO ELSE
+*        ERRMSG = "ERROR 5003"      ;* "Job Stats does not exist"
+*        RETURN
+*     END
+*     IF JSTAT.SHP.PROD = "" THEN
+*        ERRMSG = "ERROR 5004"      ;* "No prod on Job Stats file"
+*        RETURN
+*     END
+*     LOCATE ROLL.ID IN JSTAT.SHP.R.S.ID<1>,1 SETTING FNGD ELSE
+*        ERRMSG = "ERROR 5005"      ;* "Roll/skid not on JSTATS file"
+*        RETURN
+*     END
+*  END
+*----*LOAD TRANSFER RECORD
+*  MAT TRAN.REC = ""
+*  TRAN.PROD.NO         = ISTK.PROD
+*  TRAN.TOT.WHT         = ISTK.CUR.QTY
+*  TRAN.FROM.WHSE       = ISTK.WHSE        
+*  TRAN.FROM.LOC        = ISTK.LOC         
+*  TRAN.TO.WHSE         = RS.XFER.TO.WHSE      
+*  TRAN.TO.LOC          = RS.XFER.TO.LOC        
+*  TRAN.RS.ID           = RS.XFER.ID        
+*  TRAN.WHT             = ISTK.CUR.QTY        
+*  TRAN.SHEET           = IWLO.CURR.SHEET<1,RSPTR>        
+*  TRAN.DIAM            = IWLO.CURR.DIAM<1,RSPTR>        
+*  TRAN.REASON.DESC     = RS.XFER.DESC
+*  TRAN.DATE.ENTER      = RS.XFER.ENTRY.DATE
+*  TRAN.JOB             = RS.XFER.JOB.NO
+*  TRAN.PCS             = 1
+*  TRAN.MLTP            = 1
+*  IF TRAN.JOB = "" THEN FNGD.MODE = 0 ELSE FNGD.MODE = 1
+*  READU TRAN.CODE FROM CONTROL, CONO:"TRANSFER" ELSE TRAN.NO = 10000
+*  FND = 1
+*  LOOP
+*  WHILE FND DO
+*     TRAN.NO = TRAN.CODE
+*     TRAN.CODE = TRAN.NO + 1
+*     READU REC FROM TRANSFER, CONO:TRAN.NO ELSE FND = 0
+*     REC = ""
+*     IF FND THEN RELEASE TRANSFER, CONO:TRAN.NO
+*  REPEAT
+*  WRITE TRAN.CODE ON CONTROL, CONO:"TRANSFER"
+*  CALL RS.TRAN.UPDATE(CONO,TRAN.NO,EMPID,FNGD.MODE,ERRMSG)
+*  IF ERRMSG = "" THEN
+*     MATWRITE TRAN.REC ON TRANSFER, CONO:TRAN.NO
+*  END ELSE
+*     ERRMSG = "ERROR 5201"         ;* "Update Error"
+*     RETURN
+*  END
+  RETURN
+*
+*---- PROCESS ROLL STOCK ADJUSTMENT
+*
+*************
+PROCESS.ADJ: 
+*************
+*
+  MATREAD IWLO.REC FROM INV.WHSE.LOC, CONO:ISTK.PROD:"!":ISTK.WHSE:"!":ISTK.LOC ELSE
+    RELEASE INV_SERIAL, CONO:S$VALUE
+    ERRMSG = "NO INV.WHSE.LOC"; GOSUB 91000; RETURN
+  END
+  LOCATE ROLL.ID IN IWLO.SERIAL<1>,1 SETTING RSPTR ELSE
+    RELEASE INV_SERIAL, CONO:S$VALUE
+    ERRMSG = "NO SER # IN LOC"; GOSUB 91000; RETURN
+  END
+  PHS.ID = CATG.TYPE:"!":INV.LINE:"!":RWHSE:"!":RWLOC
+  MATREADU PHS.INV.REC FROM PHYSICAL.INV, CONO:PHS.ID ELSE MAT PHS.INV.REC = ""
+  LOCATE ISTK.PROD IN PHS.INV.PROD<1>,1 SETTING PPTR ELSE NULL
+  LOCATE ROLL.ID IN PHS.R.S.ID<1,PPTR>,1 SETTING RPTR ELSE NULL
+*
+  PHS.INV.PROD<1,PPTR>       = ISTK.PROD
+  PHS.INV.DESC<1,PPTR>       = INV.DESC
+  PHS.R.S.ID<1,PPTR,RPTR>    = ROLL.ID
+  PHS.CUR.QTY<1,PPTR>        = IWLO.LOC.ON.HAND           ;* C40525
+  PHS.CUR.WGHT<1,PPTR,RPTR>  = ISTK.CUR.QTY
+  PHS.CUR.DIAM<1,PPTR,RPTR> = ISTK.CUR.DIAM
+  PHS.CUR.SHEET<1,PPTR,RPTR> = ISTK.CUR.STK.QTY
+  PHS.NEW.WGHT<1,PPTR,RPTR>  = INPUT.QTY
+  IF PHS.NEW.WGHT<1,PPTR> < 0 THEN ROND="-.5" ELSE ROND=".5"
+  PHS.NEW.SHEET<1,PPTR,RPTR> = NEW.SHEET
+  PHS.NEW.QTY<1,PPTR>        = PHS.CUR.QTY<1,PPTR> - (SUM(PHS.CUR.WGHT<1,PPTR>) - SUM(PHS.NEW.WGHT<1,PPTR>))        ;* C40525
+  WGHT = PHS.NEW.WGHT<1,PPTR,RPTR>
+  GOSUB GET.DIAM; NEW.DIAM = DIAM
+  PHS.NEW.DIAM<1,PPTR,RPTR>  = NEW.DIAM
+  PHS.M.WGHT<1,PPTR>         = INV.M.WT
+  PHS.NO.POST<1,PPTR>        = ""
+  PHS.ADJ.CODE<1,PPTR,RPTR>  = "PHS"
+  PHS.ADJ.TYPE<1,PPTR,RPTR>  = "R"
+*  PHS.OPER.ID<1,PPTR,RPTR>   = EMPID
+  PHS.OPER.ID<1,PPTR,RPTR>   = TEMP.NAME
+  PHS.DATE.ENT<1,PPTR,RPTR>  = TODAY
+  IF RAW.INPUT.QTY > CURR.QTY.ON.HAND THEN
+    PHS.UN.PRICE<1,PPTR>    = IWH.COST.FI<1,DCOUNT(IWH.COST.FI,VM)>
+  END
+  PHS.UN.MAG<1,PPTR>         = ""
+  PHS.PRT.DATE               = ""
+  MATWRITE PHS.INV.REC ON PHYSICAL.INV, CONO:PHS.ID
+  RETURN
+*
+***********
+DISP.SCRN: 
+***********
+*
+*T26132 v
+*  DIM SCRN(16)
+*  MAT SCRN = ""
+*  XXXXXXXX = " 123456789012345678901 "
+*  XXXXXXXX = "+---------------------+"
+*  SCRN(01) = "|     Adjust Stock    |"
+*  SCRN(02) = "|---------------------|"
+*  SCRN(03) = "|@@@@@@@@@@@@@@@@@@@@@|"
+*  SCRN(04) = "|---------------------|"
+*  SCRN(05) = "|BR#: ########        |"
+*  SCRN(06) = "|MR#: ################|"
+*  SCRN(07) = "|Qty: ######          |"
+*  SCRN(08) = "|Loc: #########       |"
+*  SCRN(09) = "|                     |"
+*  SCRN(10) = "|                     |"
+*  SCRN(11) = "|------- Prior -------|"
+*  SCRN(12) = "|BR#: ########        |"
+*  SCRN(13) = "|MR#: ################|"
+*  SCRN(14) = "|Qty: ######          |"
+*  SCRN(15) = "|Loc: #########       |"
+*  SCRN(16) = "|                     |"
+*  XXXXXXXX = "+---------------------+"
+*  XXXXXXXX = " 123456789012345678901 "
+  DIM SCRN(15)
+  MAT SCRN = ""
+  XXXXXXXX = " 12345678901234567890 "
+  XXXXXXXX = "+--------------------+"
+  SCRN(01) = "|    Adjust Stock    |"
+  SCRN(02) = "|--------------------|"
+  SCRN(03) = "|@@@@@@@@@@@@@@@@@@@@|"
+  SCRN(04) = "|--------------------|"
+  SCRN(05) = "|BR#: ########       |"
+  SCRN(06) = "|MR#: ###############|"
+  SCRN(07) = "|Qty: ######         |"
+  SCRN(08) = "|Loc: #########      |"
+  SCRN(09) = "|                    |"
+  SCRN(10) = "|                    |"
+  SCRN(11) = "|------ Prior -------|"
+  SCRN(12) = "|BR#: ########       |"
+  SCRN(13) = "|MR#: ###############|"
+  SCRN(14) = "|Qty: ######         |"
+  SCRN(15) = "|Loc: #########      |"
+  XXXXXXXX = "+--------------------+"
+  XXXXXXXX = " 12345678901234567890 "
+*T26132 ^
+*
+  SLINE = @(-1)
+*T26132 v
+*  FOR SL = 1 TO 16
+*     SDATA = SCRN(SL)[2,21]
+  FOR SL = 1 TO 15
+    SDATA = SCRN(SL)[2,20]
+*T26132 ^
+    CONVERT "#" TO " " IN SDATA
+    CONVERT "@" TO " " IN SDATA
+    SDATA = TRIMB(SDATA)
+    LDATA = LEN(SDATA)
+    LDONE = 0
+    FOR N = 1 TO LDATA UNTIL LDONE
+      IF SDATA[N,1] # " " THEN
+        SLINE = SLINE:@((N-1),(SL-1)):SDATA[N,99]
+        LDONE = 1
+      END
+    NEXT N
+  NEXT SL
+  PRINT SLINE:
+  GOSUB 89990
+  RETURN
+*
+*---- DRAW BORDER
+*
+89990 *
+  IF TEST.MODE THEN
+*T26132 v
+*     FOR SL = 1 TO 16
+*        PRINT @(21,(SL-1)):"|":
+*     NEXT SL
+*     PRINT @(0,16):"---------------------+":
+    FOR SL = 1 TO 15
+      PRINT @(20,(SL-1)):"|":
+    NEXT SL
+    PRINT @(0,15):"--------------------+":
+*T26132 ^
+  END
+  RETURN
+*
+*---- ERROR ROUTINE
+*
+91000 *
+  PRINT @(0,ERY):@(-4):BEL:BEL:ERRMSG[1,19]:
+  INPUT REPLY,1:
+  PRINT @(0,ERY):@(-4):
+  ERY = 15
+  RETURN
+93000 *
+  GOSUB 91000
+*
+*---- END OF PROGRAM
+*
+99999 *
+  RETURN
+END

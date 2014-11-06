@@ -1,0 +1,235 @@
+SUBROUTINE getSerialInfo
+********************************************************************************
+*   Program name :- getSerialInfo
+*   Created:- 9/1/2004
+*------------------------------------------------------------------------------*
+*   Created by Kauser Jahan
+* This code retreives the details on the basis of a Serial Number.  
+* In Properties:
+* --------------
+* SERIAL NUMBER,PERIOD,CONO,DIVISION
+* Out Properties:
+* ---------------
+* PRODUCT ID & DESC,WHSE,LOC,COSTS  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE ICS.CPYLIB INV_SERIAL
+$INCLUDE PMC.CPYLIB COMPANY
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB WAREHOUSE
+$INCLUDE ICS.CPYLIB CATEGORY
+$INCLUDE ICS.CPYLIB INV.WHSE
+$INCLUDE ICS.CPYLIB INV_RECEIPTS
+$INCLUDE ICS.CPYLIB INV_RECP_WHSE
+$INCLUDE ICS.CPYLIB INV.CNV
+$INCLUDE ICS.CPYLIB INV.WHSE.LOC
+$INCLUDE CPYLIB FILE.VARS
+$INCLUDE PMC.CPYLIB PO
+
+ERRMSG  = ""
+OPEN '','CATEGORY' TO CATEGORY ELSE
+   ERRMSG  = 'CATEGORY FILE IS MISSING'; GOTO 93000
+END
+OPEN '','COMPANY' TO COMPANY ELSE
+   ERRMSG  = 'COMPANY FILE IS MISSING'; GOTO 93000
+END
+OPEN '','INVENTORY' TO INVENTORY ELSE
+   ERRMSG  = 'INVENTORY FILE IS MISSING'; GOTO 93000
+END
+OPEN '','INV_SERIAL' TO INV_SERIAL ELSE
+   ERRMSG  = 'INV_SERIAL FILE IS MISSING'; GOTO 93000
+END
+OPEN '','INV_RECEIPTS' TO INV_RECEIPTS ELSE
+   ERRMSG  = 'INV_RECEIPTS FILE IS MISSING'; GOTO 93000
+END
+OPEN '','INV_RECP_WHSE' TO INV_RECP_WHSE ELSE
+   ERRMSG  = 'INV_RECP_WHSE FILE IS MISSING'; GOTO 93000
+END
+OPEN '','WAREHOUSE' TO WAREHOUSE ELSE
+   ERRMSG  = 'WAREHOUSE FILE IS MISSING'; GOTO 93000
+END
+OPEN '','INV.WHSE.LOC' TO INV.WHSE.LOC ELSE
+   ERRMSG  = 'INV.WHSE.LOC FILE IS MISSING'; GOTO 93000
+END
+OPEN '','INV.WHSE' TO INV.WHSE ELSE
+   ERRMSG  = 'INV.WHSE FILE IS MISSING'; GOTO 93000
+END
+OPEN '','PO' TO PO ELSE
+   ERRMSG = 'PO FILE IS MISSING'; GOTO 93000
+END
+* Insert method code here
+
+STATUS = RBO.getProperty('','CONO',CONO)
+STATUS = RBO.getProperty('','ID',SERIAL)
+STATUS = RBO.getProperty('','Period',PERIOD)
+STATUS = RBO.getProperty('','DIVISION',DIVISION)
+
+SLT.PERIOD = PERIOD
+SLT.DIVISION = DIVISION
+SLT.ENT.DATE = DATE()
+MATREAD COMP.REC FROM COMPANY,CONO ELSE MAT COMP.REC = ''
+
+ISTK.ID=CONO:SERIAL
+MATREAD ISTK.REC FROM INV_SERIAL,ISTK.ID THEN
+   IF CO.INTR.WHSE # '' AND ISTK.WHSE = CO.INTR.WHSE THEN
+      ERRMSG = 'CAN NOT APPLY,SERIAL USING AN INTER-DIVISIONAL WHSE'
+      GOTO 93000  
+   END
+   IF ISTK.RSVB.QTY LE 1 THEN
+      ERRMSG = 'SERIAL NUMBER HAS NO QUANTITY AVAILABLE TO SLIT'
+      GOTO 93000 
+   END
+   IF ISTK.POST.DATE='' THEN
+      ERRMSG='Serial has not been received into inventory'
+      GOTO 93000
+   END ELSE
+      IF ISTK.RECP.PERIOD>SLT.PERIOD THEN
+         ERRMSG='Serial received in period ':ISTK.RECP.PERIOD:' cannot be slitted'
+         ERRMSG:='in period ':SLT.PERIOD
+         GOTO 93000
+      END ELSE
+         IF ISTK.RSVB.QTY<ISTK.CUR.QTY THEN 
+            ERRMSG='This serial has quantity reserved and cannot be slitted.'
+            GOTO 93000
+         END ELSE
+            INV.ID=CONO:ISTK.PROD
+            MATREAD INV.REC FROM INVENTORY,INV.ID THEN
+               MATREAD WHSE.REC FROM WAREHOUSE, CONO:ISTK.WHSE ELSE MAT WHSE.REC = ''
+               IF WHS.DIV# SLT.DIVISION THEN
+                  ERRMSG='Serial belongs to division ':WHS.DIV
+               END
+               IF ERRMSG # '' THEN
+                  GOTO 93000
+               END ELSE
+                  CATG.ID=CONO:INV.LINE
+                  MATREAD CATG.REC FROM CATEGORY,CATG.ID ELSE MAT CATG.REC=''
+                  IF CATG.TRK.LVL # 'S' THEN
+                     ERRMSG = 'Only Serial tracked products are allowed.'
+                     GOTO 93000 
+                  END
+                  IF CATG.COST.TYPE='AC' THEN 
+                     DEPL.METHOD='AC'
+                  END ELSE
+                     DEPL.METHOD='FI'
+                  END
+                  IWH.ID=CONO:ISTK.PROD:"!":ISTK.WHSE
+                  MATREAD IWH.REC FROM INV.WHSE,IWH.ID THEN
+
+                     SLT.LOG.SERIAL = SERIAL
+
+                     INAH.PROD=ISTK.PROD
+                     INAH.WHSE=ISTK.WHSE
+                     INAH.LOC = IWH.LOC
+                     ACTION=1
+                     TMP.CNT='' ; LAST='' ; TMP.ARR=''
+                     PERIOD=SLT.PERIOD
+                     OPEN.FLAG = 1
+                  * MAT ORG.IWH.REC=''
+                                         * MAT ORG.IWH.REC = MAT IWH.REC
+*T27990                                CALL ICS_IWH_SUB (CONO,PERIOD,TMP.ARR,TMP.CNT,LAST,ACTION,OPEN.FLAG)
+                     CALL ICS_IWH_SUB (CONO,PERIOD,TMP.ARR,TMP.CNT,LAST,ACTION,OPEN.FLAG,ERRMSG)
+                     IF DEPL.METHOD='AC' THEN
+                        RECP.NO=ISTK.RECP
+                        INVR.ID = CONO:RECP.NO
+                        MATREAD INVR.REC FROM INV_RECEIPTS,INVR.ID THEN
+                           IRW.ID=CONO:ISTK.RECP:"!":ISTK.WHSE
+                           MATREAD IRW.REC FROM INV_RECP_WHSE,IRW.ID ELSE
+                              ERRMSG='INV_RECP_WHSE record ':IRW.ID:' is missing.'
+                              GOTO 93000
+                           END 
+                        END ELSE
+                           ERRMSG='INV_RECEIPTS record ':INVR.ID:' is missing.'
+                           GOTO 93000
+                        END
+                     END
+                  END ELSE
+                     MAT IWH.REC=''
+                  END
+                  GOSUB GET.INV.UM.CNV
+                  SLT.LOG.PROD = ISTK.PROD
+                  SLT.LOG.DESC = INV.FULL.DESC
+                  SLT.LOG.STK.UOM = INV.UNIT<1,2>
+                  SLT.LOG.CST.UOM = INV.UNIT<1,3>
+                  SLT.LOG.WHSE = ISTK.WHSE
+                  SLT.LOG.LOC = ISTK.LOC
+                  IWLO.ID=IWH.ID:"!":ISTK.LOC
+                  MATREAD IWLO.REC FROM INV.WHSE.LOC,IWLO.ID ELSE MAT IWLO.REC=''
+                  LOCATE SLT.LOG.SERIAL IN IWLO.SERIAL<1>,1 SETTING RSFND THEN
+                     ;* maybe +5 should not be added because
+                     ;* if it is converted back might show
+                     ;* more costing qty. than there really is.
+                     SER.STK.QTY=INT(((ISTK.CUR.QTY/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+                     SER.STK.QTY=OCONV(SER.STK.QTY,ICR.CNV)
+                     SLT.LOG.USED.STK.QTY=SER.STK.QTY
+                     IF ICR.CNV="MD0" THEN
+                        DQTY = OCONV(ICONV(SLT.LOG.USED.STK.QTY,"MD2"),"MD2")
+                     END ELSE
+                        DQTY = SLT.LOG.USED.STK.QTY 
+                     END
+                     SLT.LOG.USED.QTY=ISTK.CUR.QTY
+                     SLT.LOG.SLIT.STK.QTY = 0
+                     SLT.LOG.SLIT.AMT = 0
+                     SLT.LOG.SLIT.QTY = 0
+                     SLT.LOG.SLIT.QTY = OCONV(SLT.LOG.SLIT.QTY/10,"MD2")
+                     SLT.LOG.TRIM.QTY = ISTK.CUR.QTY
+                     LOG.INV.LINE = INV.LINE
+                     LOG.PAP.WIDTH = INV.PAP.WIDTH
+                     LOG.COLOR = INV.COLOR
+                     SLT.LOG.TRIM.QTY = OCONV(SLT.LOG.TRIM.QTY/10,"MD2")
+                     SPTR = 6
+                     EPS=1
+                  END ELSE
+                     ERRMSG='Serial is missing from INV.WHSE.LOC record.'
+                     GOTO 93000
+                  END
+               END
+            END ELSE
+               ERRMSG='Product ':ISTK.PROD:' is not on file.'
+               GOTO 93000
+            END
+         END
+      END
+   END
+END ELSE
+   ERRMSG = 'Serial ' : SERIAL : ' is not on file.'     
+   GOTO 93000
+END   
+
+SWAP '#' WITH ' ' IN SLT.LOG.DESC
+
+STATUS = RBO.setProperty('','SLT_LOG_PROD',SLT.LOG.PROD)
+STATUS = RBO.setProperty('','SLT_LOG_DESC',SLT.LOG.DESC)
+STATUS = RBO.setProperty('','SLT_LOG_STK_UOM',SLT.LOG.STK.UOM)
+STATUS = RBO.setProperty('','SLT_LOG_CST_UOM',SLT.LOG.CST.UOM)
+STATUS = RBO.setProperty('','SLT_LOG_WHSE',SLT.LOG.WHSE)
+STATUS = RBO.setProperty('','SLT_LOG_LOC',SLT.LOG.LOC)
+STATUS = RBO.setProperty('','SLT_LOG_USED_STK_QTY',SLT.LOG.USED.STK.QTY)
+STATUS = RBO.setProperty('','SLT_LOG_USED_QTY',SLT.LOG.USED.QTY)
+STATUS = RBO.setProperty('','SLT_LOG_SLIT_STK_QTY',SLT.LOG.SLIT.STK.QTY)
+STATUS = RBO.setProperty('','SLT_LOG_SLIT_AMT',SLT.LOG.SLIT.AMT)
+STATUS = RBO.setProperty('','SLT_LOG_SLIT_QTY',SLT.LOG.SLIT.QTY)
+STATUS = RBO.setProperty('','SLT_LOG_TRIM_QTY',SLT.LOG.TRIM.QTY)
+STATUS = RBO.setProperty('','SLT_LOG_USED_AMT',SLT.LOG.USED.AMT)
+STATUS = RBO.setProperty('','LOG_INV_LINE',LOG.INV.LINE)
+STATUS = RBO.setProperty('','LOG_PAP_WIDTH',LOG.PAP.WIDTH)
+STATUS = RBO.setProperty('','LOG_COLOR',LOG.COLOR)
+STATUS = RBO.setProperty('','INV_SERIAL_WHSE_LOC',INAH.LOC)
+
+RETURN
+
+*
+***************
+GET.INV.UM.CNV: 
+***************
+*
+$INCLUDE ICSBP INV.UM.CNV
+RETURN
+*
+* End of method code
+RETURN
+
+93000 *
+STATUS = RBO.setProperty('','ServerStatus',1)   
+STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+END
+

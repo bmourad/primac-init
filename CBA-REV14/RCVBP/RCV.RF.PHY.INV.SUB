@@ -1,0 +1,594 @@
+  SUBROUTINE RCV.RF.PHY.INV.SUB (ACTION, CONO, EMPID, MAT RCV.FILE.VARS, MAT PHYSI.REC,SEQ.NO,PHY.XREF)
+*********************************************************************
+*
+* PROGRAM  - RCV.RF.PHY.INV
+*
+* AUTHOR   - Alejandro Delgado
+*
+* DATE     - 06/21/2002
+*
+* DESCRIPTION
+*
+* This program is used to process physical inventory transactionss
+* from the hand-held R-F units used in the warehouse.
+*
+*T26674 adelgado 06/21/2002 * Original Code
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>CPYLIB>COM1
+*COPY>ICS.CPYLIB>COM.INV.MAIN  
+*COPY>ICS.CPYLIB>COM.INV.SERIAL
+*COPY>ICS.CPYLIB>COM.INV.LINK  
+*COPY>RCV.CPYLIB>RCV.FILE.VARS
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>EMPLOYEE
+*COPY>CPYLIB>SCREEN.COM
+*COPY>PMC.CPYLIB>DIVISION
+*COPY>ICS.CPYLIB>WAREHOUSE
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>ICS.CPYLIB>INV.WHSE.LOC
+*COPY>ICS.CPYLIB>INV_SERIAL
+*COPY>ICS.CPYLIB>INV_RECEIPTS
+*COPY>ICS.CPYLIB>CATEGORY
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>ICS.CPYLIB>PHY.INV
+*COPY>ICS.CPYLIB>DAILY_TRANSFER
+*COPY>ICS.CPYLIB>TRANSFER
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*
+  DEFFUN CALC.STK.QTY(COST.QTY,MAT INV.CNV.REC,ROND,POS)
+  DEFFUN CALC.COST.QTY(STK.QTY,MAT INV.CNV.REC,ROND,POS)
+  DEFFUN CALC.DIAM(COST.QTY,STK.QTY,MAT INV.REC)
+*
+  DIM SAVE.PHYSI.REC(PHYSI.REC.SIZE)
+  SPX = ""
+  EMPNAME = "???????????????"
+  MATREAD EMP.REC FROM EMPLOYEE, CONO:EMPID THEN
+    EMPNAME = (EMP.FRST.NAME:" ":EMP.LAST.NAME)[1,20]
+  END
+  IF LEN(EMPNAME) < 20 THEN SPX = SPACE(INT((21-LEN(EMPNAME))/2))
+  EMPNAME = SPX:EMPNAME
+*
+*---- INITIALIZE SCREEN.COM
+*
+  MAT S$EDIT = ""
+  S$TYP = 0
+  CALL RF.INPUT
+  S$MASK = "#"
+  ERY = 15
+*
+*---- DISPLAY SCREEN
+*
+  DIM SCRN(15)
+  MAT SCRN = ""
+  XXXXXXXX = " 01234567890123456789 "
+  XXXXXXXX = "+--------------------+"
+  SCRN(01) = "| PHYSICAL INVENTORY |"
+  SCRN(02) = "|--------------------|"
+  SCRN(03) = "|@@@@@@@@@@@@@@@@@@@@|"
+  SCRN(04) = "|--------------------|"
+  SCRN(05) = "|@@@@@@@@@@@@@@@@@@@@|"
+  SCRN(06) = "|                    |"
+  SCRN(07) = "|Prod/Serial/Receipt:|"
+  SCRN(08) = "|   ###############  |"
+  SCRN(09) = "|Qty   : ##########  |"
+  SCRN(10) = "|Diam  : #####       |"
+  SCRN(11) = "|Price : ##########  |"
+  SCRN(12) = "|--------------------|"
+  SCRN(13) = "|Prior :             |"
+  SCRN(14) = "|   ###############  |"
+  SCRN(15) = "|        ##########  |"
+  XXXXXXXX = "+--------------------+"
+  XXXXXXXX = " 01234567890123456789 "
+*
+  SLINE = @(-1)
+  FOR SL = 0 TO 14
+    SDATA = SCRN(SL+1)[2,20]
+    CONVERT "#" TO " " IN SDATA
+    CONVERT "@" TO " " IN SDATA
+    SDATA = TRIMB(SDATA)
+    LDATA = LEN(SDATA)
+    LDONE = 0
+    FOR N = 1 TO LDATA UNTIL LDONE
+      IF SDATA[N,1] # " " THEN
+        SLINE = SLINE:@((N-1),(SL)):SDATA[N,99]
+        LDONE = 1
+      END
+    NEXT N
+  NEXT SL
+  PRINT SLINE:
+  OLD.KEY = '' ; OLD.QTY = ''
+  GEN.DIV = '00'
+*
+*---- MAIN PROCESSING
+*
+  ALL.DONE = 0
+  LOOP
+    GOSUB INIT.VARS
+    GOSUB GET.PROD.SERIAL.RECEIPT
+    BEGIN CASE
+      CASE (ALL.DONE)
+      CASE 1
+        BEGIN CASE
+          CASE RECEIPT.ID # ''
+            LOCATE RECEIPT.ID IN PHYSI.RECP.NO<1>,1 SETTING POS ELSE POS = 0
+          CASE PROD.ID # ''
+            LOCATE PROD.ID IN PHYSI.PRODUCT<1>,1 SETTING POS ELSE POS = 0
+          CASE SERIAL.ID # ''
+            LOCATE SERIAL.ID IN PHYSI.SERIAL<1>,1 SETTING POS ELSE POS = 0
+          CASE 1
+            POS = 0
+        END CASE
+        IF POS = 0 THEN
+          POS = DCOUNT(PHYSI.PRODUCT,@VM)+1
+          MODE = 'A'
+        END ELSE
+          MODE = 'C'
+        END
+        GOSUB GET.MULTI.INPUT
+    END CASE
+  UNTIL (ALL.DONE) DO REPEAT
+  *
+  RETURN
+*
+INIT.VARS: 
+*
+  ;* CLEAR SCREEN FIRST
+  PRINT @(00,02):EMPNAME:
+  PRINT @(3,07):@(-4):
+  PRINT @(8,08):@(-4):
+  PRINT @(8,09):@(-4):
+  PRINT @(8,10):@(-4):
+  PRINT @(3,13):@(-4):
+  PRINT @(8,14):@(-4):
+  DPX = ''
+  DESC = 'Seq : ':SEQ.NO
+  IF LEN(DESC) < 20 THEN DPX = SPACE(INT((21-LEN(DESC))/2))
+  DESC = DPX:DESC
+  PRINT @(00,04):DESC
+  PRINT @(3,13):OLD.KEY'R#15'
+  PRINT @(8,14):OLD.QTY'R#10'
+  *
+  SERIAL.ID = '' ; PROD.ID = ''
+  RECEIPT.ID = ''
+  QTY = '' ; PRICE = '' ; DIAM = ''
+  TEMP.PROD = '' ; TEMP.SERIAL = '' ; TEMP.RECP.NO = ''
+  *
+  RETURN
+*
+GET.PROD.SERIAL.RECEIPT: 
+*
+  LOOP.DONE = 0
+  LOOP
+    S$TYP=1; S$X=3; S$Y=7; S$MINL=1; S$MAXL=15; S$EX=0; S$EY=15; ERY=15
+    S$O.R="O"; S$DEFAULT=""
+    CALL RF.INPUT
+    BEGIN CASE
+      CASE S$VALUE = 'END' OR S$VALUE = ''
+        LOOP.DONE = 1 ; ALL.DONE = 1
+      CASE 1
+        FOUND = 0
+        ;*   FIRST CHECK RECEIPT
+        MATREAD INVR.REC FROM INV_RECEIPTS, CONO:S$VALUE THEN
+          MATREAD INV.REC FROM INVENTORY, CONO:INVR.PROD THEN
+            MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE THEN
+              BEGIN CASE
+                CASE CATG.TRK.LVL = 'R'
+                  RECEIPT.ID = S$VALUE
+                  TEMP.PROD = INVR.PROD
+                  FOUND = 1
+                CASE CATG.TRK.LVL = 'G'
+                  PROD.ID = INVR.PROD
+                  TEMP.PROD = INVR.PROD
+                  FOUND = 1
+                  PRINT @(3,7):(-4)
+                  PRINT @(3,7):PROD.ID
+                CASE CATG.TRK.LVL = 'S'
+                  ERRMSG = 'SERIAL LEVEL ONLY'
+                  GOSUB 91000 ; CONTINUE
+              END CASE
+            END
+          END
+        END
+        ;*   CHECK PRODUCT
+        IF FOUND = 0 THEN
+          MATREAD INV.REC FROM INVENTORY, CONO:S$VALUE THEN
+            MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE THEN
+              BEGIN CASE
+                CASE CATG.TRK.LVL = 'R'
+                  ERRMSG = 'RECEIPT LVL ONLY'
+                  GOSUB 91000 ; CONTINUE
+                CASE CATG.TRK.LVL = 'S'
+                  ERRMSG = 'SERIAL LEVEL ONLY'
+                  GOSUB 91000 ; CONTINUE
+                CASE CATG.TRK.LVL = 'G'
+                  PROD.ID = S$VALUE
+                  FOUND = 1
+                  TEMP.PROD = PROD.ID
+              END CASE
+            END ELSE
+              ERRMSG = 'INVALID PRODUCT'
+              GOSUB 91000 ; CONTINUE
+            END
+          END
+        END
+        ;*   NEXT CHECK SERIAL
+        IF FOUND = 0 THEN
+          MATREAD ISTK.REC FROM INV_SERIAL, CONO:S$VALUE THEN
+            IF ISTK.POST.DATE = "" THEN
+              ERRMSG = "SERIAL NOT RCVD"; GOSUB 91000 ; CONTINUE
+            END ELSE
+              MATREAD INV.REC FROM INVENTORY, CONO:ISTK.PROD THEN
+                MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE THEN
+                  BEGIN CASE
+                    CASE CATG.TRK.LVL = 'R'
+                      ERRMSG = 'RECEIPT LVL ONLY'
+                      GOSUB 91000 ; CONTINUE
+                    CASE CATG.TRK.LVL = 'G'
+                      PROD.ID = ISTK.PROD
+                      TEMP.PROD = ISTK.PROD
+                      FOUND = 1
+                      PRINT @(3,7):(-4)
+                      PRINT @(3,7):PROD.ID
+                    CASE CATG.TRK.LVL = 'S'
+                      SERIAL.ID = S$VALUE
+                      FOUND = 1
+                      TEMP.PROD = ISTK.PROD
+                  END CASE
+                END
+              END
+            END
+          END
+        END
+        IF FOUND = 0 THEN
+          ERRMSG = 'INVALID KEY'
+          GOSUB 91000
+        END ELSE
+          LOOP.DONE = 1
+        END
+    END CASE
+  UNTIL (LOOP.DONE) DO REPEAT
+  *
+  RETURN
+*
+GET.MULTI.INPUT: 
+*
+*COPY>ICSBP>INV.UM.CNV
+  TMP.QTY = 0
+  BEGIN CASE
+    CASE CATG.TRK.LVL = 'S'
+      IF PHYSI.WHSE # ISTK.WHSE OR PHYSI.LOC # ISTK.LOC THEN
+        IF PHYSI.TRAN.TO # '' THEN
+          ERRMSG = 'SERIAL NOT FOUND' ; GOSUB 91000 ; RETURN
+        END
+        MATREAD WHSE.REC FROM WAREHOUSE,CONO:PHYSI.WHSE THEN
+          IF WHS.DIV='' THEN
+            FROM.DIV=GEN.DIV
+          END ELSE
+            FROM.DIV=WHS.DIV
+          END
+        END
+        MATREAD WHSE.REC FROM WAREHOUSE,CONO:ISTK.WHSE THEN
+          IF WHS.DIV='' THEN
+            TO.DIV=GEN.DIV
+          END ELSE
+            TO.DIV=WHS.DIV
+          END
+        END
+        ERRMSG = 'TRANSFER (Y/N) : '
+        GOSUB 91000
+        IF REPLY = "Y" THEN
+          IF FROM.DIV # TO.DIV THEN
+            ERRMSG = 'DIV MISMATCH'
+            GOSUB 91000 ; RETURN
+          END ELSE
+            ERRMSG = ''
+            GOSUB PROCESS.TRANSFER
+            IF ERRMSG # '' THEN RETURN
+          END
+        END ELSE
+          RETURN
+        END
+      END
+      TMP.QTY = ISTK.CUR.QTY+0
+      TEMP.SERIAL = SERIAL.ID
+      TEMP.RECP.NO = ISTK.RECP
+    CASE CATG.TRK.LVL = 'R'
+      TMP.QTY = PHYSI.PREV.QTY<1,POS> + 0
+      TEMP.RECP.NO = RECEIPT.ID
+    CASE 1
+      TMP.QTY = PHYSI.PREV.QTY<1,POS> + 0
+  END CASE
+  ROND = 0.5
+  IF TMP.QTY < 0 THEN ROND = -(0.5)
+  TMP.QTY = CALC.STK.QTY(TMP.QTY,MAT INV.CNV.REC,ROND,'')
+  GET.OUT=0
+  FOR FL=1 TO 3 UNTIL GET.OUT
+    ON FL GOSUB GET.QTY, GET.DIAM, GET.UNIT.COST
+  NEXT FL
+  IF (GET.OUT) THEN RETURN
+  *
+  PHYSI.STATUS<1,POS> = 'MAINT'
+  IF QTY < 0 THEN ROND="-.5" ELSE ROND=".5"
+  PHYSI.CURR.QTY<1,POS>=CALC.COST.QTY(QTY,MAT INV.CNV.REC,ROND,'')
+  PHYSI.CURR.SQTY<1,POS> = QTY
+  PHYSI.CURR.DIA<1,POS> = DIAM
+  PHYSI.UNIT.COST<1,POS> = PRICE
+  IF PHYSI.PREV.SQTY<1,POS> = "" THEN PHYSI.PREV.SQTY<1,POS> = 0
+  IF MODE = 'A' THEN
+    PHYSI.PRODUCT<1,POS> = TEMP.PROD
+    PHYSI.SERIAL<1,POS>=TEMP.SERIAL
+    PHYSI.RECP.NO<1,POS> = TEMP.RECP.NO
+    PHYSI.UNIT<1,POS> = INV.UNIT<1,2>
+    PHYSI.DESC<1,POS> = INV.DESC
+    IF CATG.TRK.LVL = 'S' THEN
+      PHYSI.PREV.QTY<1,POS> = ISTK.CUR.QTY     
+      PHYSI.PREV.DIA<1,POS> = ISTK.CUR.DIAM    
+      PHYSI.PREV.SQTY<1,POS> = ISTK.CUR.STK.QTY
+    END ELSE
+      PHYSI.PREV.QTY<1,POS> = 0
+    END
+  END
+  OLD.KEY = SERIAL.ID:RECEIPT.ID:PROD.ID
+  OLD.QTY = OCONV(QTY,ICR.CNV)
+  *
+  RETURN
+*
+GET.QTY: 
+*
+  LOOP2.DONE = 0
+  LOOP
+    S$TYP=7; S$X=8; S$Y=8; S$MINL=1; S$MAXL=10; S$EX=0; S$EY=15; ERY=15
+    S$O.R="R"; S$DEFAULT=""
+    IF INV.FACTOR+0 >0 AND INV.PAP.WIDTH+0 >0 AND INV.CORE.DIA+0 >0 THEN
+      IF INV.PAP.TYPE="ROLL" OR INV.PAP.TYPE="LROLL" OR INV.PAP.TYPE="PCOAT" THEN
+        S$O.R='O'
+      END
+    END
+    IF ICR.SCAL = 2 THEN
+      S$PATRN = "0N,0N.1N,0N.2N"
+    END ELSE
+      S$PATRN = "0N"
+    END
+    CALL RF.INPUT
+    RESP = S$VALUE
+    BEGIN CASE
+      CASE RESP = 'END'
+        LOOP2.DONE = 1 ; GET.OUT = 1
+      CASE NUM(RESP) 
+        IF ICR.SCAL = 2 THEN
+          RESP = ICONV(RESP,'MD2')
+        END ELSE
+          IF ICR.CNV = 'MD2' THEN RESP = RESP * 100
+        END
+        IF SERIAL.ID # '' THEN
+          MATREAD ISTK.REC FROM INV_SERIAL,CONO:SERIAL.ID ELSE MAT ISTK.REC=''
+          TMP=CALC.COST.QTY(RESP,MAT INV.CNV.REC,'.5','')
+          IF TMP<ISTK.CUR.QTY-ISTK.RSVB.QTY THEN
+            ERRMSG = 'CANNOT ADJUST'
+            GOSUB 91000 ; CONTINUE
+          END
+        END
+        QTY = RESP
+        LOOP2.DONE = 1
+      CASE 1
+        ERRMSG = 'INVALID RESPONSE'
+        GOSUB 91000
+    END CASE
+  UNTIL (LOOP2.DONE) DO REPEAT
+  *
+  RETURN
+*
+GET.DIAM: 
+*
+  IF INV.PAP.TYPE="ROLL" OR INV.PAP.TYPE="LROLL" OR INV.PAP.TYPE="PCOAT" THEN
+    BEGIN CASE
+      CASE QTY # '' AND QTY # 0
+        TMP.WGT=CALC.COST.QTY(QTY,MAT INV.CNV.REC,'.5','')
+        COST.QTY=TMP.WGT ; STK.QTY=QTY
+        DIAM=CALC.DIAM(COST.QTY,STK.QTY,MAT INV.REC)
+        PRINT @(8,9):OCONV(DIAM,'MD2')
+      CASE 1
+        LOOP.DONE = 0
+        LOOP
+          S$TYP=4; S$X=8; S$Y=9; S$MINL=1; S$MAXL=5; S$EX=0; S$EY=15; ERY=15
+          S$O.R="O"; S$DEFAULT=""; S$SCALER=2
+          CALL RF.INPUT
+          RESP = S$VALUE
+          BEGIN CASE
+            CASE RESP = 'END' OR RESP = ''
+              LOOP.DONE = 1 ; GET.OUT = 1
+            CASE NUM(RESP) 
+              BEGIN CASE
+                CASE INV.PAP.TYPE = "ROLL"
+                  QTY = (((RESP/100*RESP/100)-(INV.CORE.DIA/100*INV.CORE.DIA/100))*100)
+                  QTY = INT((QTY/100)*(INV.PAP.WIDTH/10000)*(INV.FACTOR/10000)/10*100+0.5)
+                CASE INV.PAP.TYPE = "LROLL" OR INV.PAP.TYPE = "PCOAT"
+                  QTY = (((RESP/100*RESP/100)-(INV.CORE.DIA/100*INV.CORE.DIA/100))*100)
+                  BEGIN CASE
+                    CASE INV.UNIT<1,2> = "FT"
+                      QTY = INT((QTY/100)*3.1416/4*(100000/INV.FACTOR)/12+0.5)
+                    CASE INV.UNIT<1,2> = "PC"
+                      QTY = INT((QTY/100)*3.1416/4*(100000/INV.FACTOR)/10+0.5)
+                  END CASE
+              END CASE
+              IF QTY < 0 THEN QTY = 0
+              PRINT @(8,8):OCONV(QTY,ICR.CNV)
+              DIAM = RESP
+              LOOP.DONE = 1
+            CASE 1
+              ERRMSG = 'INVALID RESPONSE'
+              GOSUB 91000
+          END CASE
+        UNTIL (LOOP.DONE) DO REPEAT
+    END CASE
+  END
+  *
+  RETURN
+*
+GET.UNIT.COST: 
+*
+  IF QTY > TMP.QTY THEN
+    BEGIN CASE
+      CASE INV.M.LINE = 'FNGD'
+        PRICE = PHYSI.UNIT.COST<1,POS>
+      CASE PHYSI.UNIT.COST<1,POS> = "" AND CATG.PHY.INV.METH # ""
+        IF QTY < 0 THEN ROND="-.5" ELSE ROND=".5"
+        TEMP.CURR=CALC.COST.QTY(QTY,MAT INV.CNV.REC,ROND,'')
+        GOSUB CALC.UNIT.COST
+        IF CATG.PHY.INV.ALLOW = "Y" THEN
+          S$TYP=4; S$X=8; S$Y=10; S$MINL=1; S$MAXL=10; S$EX=0; S$EY=15; ERY=15
+          S$O.R="O"; S$DEFAULT=CHECK.COST; S$SCALER=4
+          CALL RF.INPUT
+          IF S$VALUE = 'END' THEN
+            GET.OUT = 1
+          END ELSE
+            PRICE = S$VALUE
+          END
+        END
+      CASE 1
+        IF CATG.PHY.INV.ALLOW = "Y" THEN
+          S$TYP=4; S$X=8; S$Y=10; S$MINL=1; S$MAXL=10; S$EX=0; S$EY=15; ERY=15
+          S$O.R="R"; S$DEFAULT=""; S$SCALER=4
+          CALL RF.INPUT
+          IF S$VALUE#'END' THEN
+            PRICE = S$VALUE
+          END ELSE
+            GET.OUT = 1
+          END
+        END ELSE
+          PRICE = PHYSI.UNIT.COST<1,POS>
+        END
+    END CASE
+  END ELSE
+    PRICE = PHYSI.UNIT.COST<1,POS>
+  END
+  *
+  RETURN
+*
+CALC.UNIT.COST: 
+*
+  MATREAD IWH.REC FROM INV.WHSE, CONO:TEMP.PROD:'!':PHYSI.WHSE ELSE MAT IWH.REC = ''
+  BEGIN CASE
+    CASE CATG.PHY.INV.METH = 'LC'
+      CHECK.COST = 0
+      RECP.CNT=DCOUNT(IWH.RECP.NO,VM)
+      IF RECP.CNT>0 THEN
+        GOT.LAST=0 ; LAST.COST=0
+        ;* inventory received in a future period should not
+        ;* be considered for a last cost
+        FOR R=RECP.CNT TO 1 STEP -1 UNTIL  (GOT.LAST)
+          IF IWH.RECP.PERIOD<1,R> <= PHYSI.PERIOD THEN
+            RECP.NO=IWH.RECP.NO<1,R>
+            IRW.ID = CONO:RECP.NO:'!':PHYSI.WHSE
+            MATREAD IRW.REC FROM INV_RECP_WHSE,IRW.ID THEN
+              INVR.ID=CONO:RECP.NO
+              MATREAD INVR.REC FROM INV_RECEIPTS,INVR.ID THEN
+                LAST.COST = INVR.UNIT.COST
+                GOT.LAST = 1
+              END
+            END
+          END
+        NEXT R
+        CHECK.COST = LAST.COST
+      END
+    CASE CATG.PHY.INV.METH = 'SD'
+      CHECK.COST = IWH.STD.COST
+    CASE CATG.PHY.INV.METH = 'AV'
+      CHECK.COST = IWH.AVG.COST
+    CASE CATG.PHY.INV.METH = 'LT'
+      CHECK.COST = IWH.LIST.COST
+    CASE 1
+      CHECK.COST = 0
+  END CASE
+  RETURN
+*
+PROCESS.TRANSFER: 
+*
+  MAT TRAN.REC=''
+  MAT D.TRAN.REC=''
+  D.TRAN.PRT.DATE=DATE()
+  D.TRAN.EMP=@LOGNAME
+  D.TRAN.SERIAL = SERIAL.ID
+  D.TRAN.RECP = ISTK.RECP
+  D.TRAN.PROD.NO= ISTK.PROD
+  D.TRAN.FROM.WHSE = ISTK.WHSE
+  D.TRAN.FROM.LOC = ISTK.LOC
+  D.TRAN.TO.WHSE = PHYSI.WHSE
+  D.TRAN.TO.LOC = PHYSI.LOC
+  D.TRAN.QTY = ISTK.CUR.QTY
+  D.TRAN.DATE.ENTER=DATE()
+  D.TRAN.PERIOD=PHYSI.PERIOD
+  D.TRAN.TOT.QTY = ISTK.CUR.QTY
+  D.TRAN.REASON.DESC = "PHYSICAL"
+  D.TRAN.DATE.ENTER = DATE()
+  D.TRAN.CODE='N'
+*
+  PROCESS.FLAG='Y' ; MAT TRAN.REC='' ; NEW.ERRMSG=''
+  CALL TRAN.UPDATE(CONO,D.TRAN.CODE,MAT TRAN.REC,PROCESS.FLAG,CO.ICS.LOC.TRAN,NEW.ERRMSG)
+  IF NEW.ERRMSG='' THEN
+    ERRMSG = 'TRANSFER ERROR'
+    GOSUB 91000
+  END ELSE
+    ERRMSG=NEW.ERRMSG
+    GOSUB 91000
+    ERRMSG=''
+    MAT SAVE.PHYSI.REC = MAT PHYSI.REC
+    READU PHY.SEQ FROM PHY.XREF,CONO:D.TRAN.FROM.WHSE:"!":D.TRAN.FROM.LOC THEN
+      MATREADU PHYSI.REC FROM PHY.INV,CONO:PHY.SEQ THEN
+        SFND = 0
+        REC.CNT = DCOUNT(PHYSI.PRODUCT,VM)
+        FOR DD = 1 TO REC.CNT UNTIL (SFND)
+          IF PHYSI.PRODUCT<1,DD> = TEMP.PROD THEN
+            IF PHYSI.SERIAL<1,DD> = SERIAL.ID THEN
+              IF PHYSI.RECP.NO<1,DD> = ISTK.RECP THEN
+                SFND = DD
+              END
+            END
+          END
+        NEXT DD
+        IF SFND # 0 THEN
+          PHYSI.TRAN.FROM<1,SFND> = D.TRAN.FROM.WHSE:'!':D.TRAN.FROM.LOC
+          PHYSI.TRAN.TO<1,SFND> = D.TRAN.TO.WHSE:'!':D.TRAN.TO.LOC
+          MATWRITE PHYSI.REC ON PHY.INV,CONO:PHY.SEQ
+        END ELSE
+          RELEASE PHY.INV,CONO:PHY.SEQ
+        END
+      END ELSE
+        RELEASE PHY.INV,CONO:PHY.SEQ
+      END
+    END ELSE
+      RELEASE PHY.XREF,CONO:D.TRAN.FROM.WHSE:"!":D.TRAN.FROM.LOC
+    END
+    MAT PHYSI.REC = MAT SAVE.PHYSI.REC
+    PHYSI.PREV.QTY<1,POS> = ISTK.CUR.QTY
+    PHYSI.PREV.DIA<1,POS> = ISTK.CUR.DIAM
+    PHYSI.PREV.SQTY<1,POS> = ISTK.CUR.STK.QTY
+    PHYSI.PRODUCT<1,POS> = ISTK.PROD
+    PHYSI.SERIAL<1,POS> = SERIAL.ID
+    PHYSI.RECP.NO<1,POS> = ISTK.RECP
+    PHYSI.UNIT<1,POS> = INV.UNIT<1,2>
+    PHYSI.DESC<1,POS> = INV.DESC
+  END
+  RETURN
+*
+*---- ERROR ROUTINE
+*
+91000 *
+  PRINT @(0,ERY):@(-4):BEL:BEL:ERRMSG[1,19]:
+  INPUT REPLY,1:
+  PRINT @(0,ERY):@(-4):
+  ERY = 15
+  RETURN
+93000 *
+  GOSUB 91000
+*
+*---- END OF PROGRAM
+*
+99999 *
+  RETURN
+END

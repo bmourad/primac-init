@@ -1,0 +1,520 @@
+      SUBROUTINE POST.LB.RCLS.SUB(CONO)
+*COPY>CPYLIB>COM1
+*COPY>JCS.CPYLIB>COM.JOB.RCLS
+*********************************************************************
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - JCSBP
+* PROGRAM     - POST.LB.RCLS.SUB
+* BY          - ZIAD A. YAMOUT , C.B.A
+* DESCRIPTION -
+*T22659 cindy 08/20/1998 * gui prob with uninit variables
+*T24672 markt 12/17/1999 * Change two variable references from
+*                          NEW.HRS.STD to NEW.IMP.STD
+*T27930 szubair 05/25/2004 * ALLOW RECLASSIFICATION FROM REGULAR TYPE
+*T27930 szubair 06/04/2004 * TO CHECK
+*T28606 lross 06/30/2005 * SALE and WIP error on "S" reclassified
+*                          (T27930).
+*ENDDOC
+*********************************************************************
+*
+***** INSERT FILE EQUATE
+*
+*COPY>JCS.CPYLIB>JOB
+*COPY>JCS.CPYLIB>DAILY.RCLS
+*COPY>JCS.CPYLIB>JOB.RCLS
+*COPY>JCS.CPYLIB>JOB.TIME
+*COPY>JCS.CPYLIB>COST.CNTR.WIP
+*COPY>PMC.CPYLIB>COST.CNTR
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>JCS.CPYLIB>WIP.LEVEL ;*C44753
+*
+***** MAIN PROCESSING
+*
+*T28606 v
+MATREAD WIP.LEVEL.REC FROM CONTROL, CONO : "WIP.LEVEL" ELSE
+   MAT WIP.LEVEL.REC=""
+   WLR.SPL = 'N'
+END
+*T28606 ^
+      READU NEW.SEQ FROM CONTROL, CONO:"DAILY.TIME" ELSE NEW.SEQ = 10001
+      SEQ.CNT = COUNT(DRC.SEQ,VM) + (DRC.SEQ # "")
+1000  FOR MLP = SEQ.CNT TO 1 STEP -1
+         DEPT = DRC.DEPT<1,MLP>; CCTR = DRC.CCTR<1,MLP>
+         SEQ = DRC.SEQ<1,MLP>
+         LB.F.ID = CONO:DRC.F.JOB:"!":DEPT:"!":CCTR:"!"
+         LB.T.ID = CONO:DRC.T.JOB:"!":DEPT:"!":CCTR:"!"
+         MATREAD JLB.REC FROM JOB.TIME, LB.F.ID : SEQ ELSE
+            DRC.STATUS<1,MLP> = "CANNOT LOCATE JOB.TIME - ":LB.F.ID:SEQ
+            GOTO 1999
+         END
+         BEGIN CASE
+         CASE JLB.OPER # DRC.OPER<1,MLP>
+            DRC.STATUS<1,MLP> = "OPERATION MISMATCH"
+            GOTO 1999
+         CASE JLB.EMP # DRC.EMP<1,MLP>
+            DRC.STATUS<1,MLP> = "EMPLOYEE MISMATCH"
+            GOTO 1999
+         CASE (JLB.COST-JLB.RC.COST) = DRC.COST<1,MLP>
+            REV.ALL = 1
+         CASE (JLB.COST-JLB.RC.COST) > DRC.COST<1,MLP>
+            REV.ALL = 0
+         CASE 1
+            DRC.STATUS<1,MLP> = "COST MISMATCH"
+            GOTO 1999
+         END CASE
+         MATREAD CCTR.REC FROM COST.CNTR, CONO : CCTR ELSE
+            DRC.STATUS<1,MLP> = 'CCTR # ':CCTR:' IS MISSING'
+            GOTO 1999
+         END
+         LOCATE DRC.OPER<1,MLP> IN CCTR.OPER<1>,1 SETTING OLOC ELSE
+            DRC.STATUS<1,MLP> = 'OPER # ':DRC.OPER<1,MLP>:' IS NOT IN CCTR # ':CCTR
+            GOTO 1999
+         END
+         MAT JOB.REC = MAT FROM.JOB.REC
+         PTR = 1
+         LOOP
+            LOCATE DEPT IN JOB.LB.DEPT<1>,PTR SETTING DFND ELSE
+               DFND = 0; PTR = 0
+            END
+            IF DFND THEN
+               IF CCTR = JOB.LB.CCTR<1,DFND> THEN
+                  PTR = 0
+               END ELSE
+                  PTR = DFND + 1
+               END
+            END
+         WHILE PTR DO REPEAT
+         IF DFND = 0 THEN
+            DRC.STATUS<1,MLP> = "CANNOT LOCATE MAIN DEPT/CCTR/SEQ"
+            GOTO 1999
+         END
+         WCNT = COUNT(JLB.WIP,VM) + (JLB.WIP # "")
+         WPTR = 0; TOT.WIP = 0; INV.WIP = ""
+         DPTR = 0; TOT.DCOST = 0
+         FOR I = 1 TO 4
+            IF JLB.DCOST<1,I> + 0 <> 0 THEN
+               TOT.DCOST = TOT.DCOST + JLB.DCOST<1,I>
+               DPTR = I
+            END
+            IF JLB.WIP<1,1,I> + 0 <> 0 THEN
+               INV.WIP<1,1,I> = 0 - JLB.WIP<1,1,I>
+               TOT.WIP = TOT.WIP + JLB.WIP<1,1,I>
+               WPTR = I
+            END
+         NEXT I
+         IF TOT.DCOST <> JLB.COST THEN
+            DRC.STATUS<1,MLP> = "COST/DCOST MISMATCH"
+            GOTO 1999
+         END
+         FOR W = 2 TO WCNT
+            FOR I = 1 TO WPTR
+               INV.WIP<1,1,I> = INV.WIP<1,1,I> - JLB.WIP<1,W,I>
+            NEXT I
+         NEXT W
+         TOT.RC.DCOST = ""; TOT.RC.COST = 0; TOT.RC.SALE = 0
+         TOT.RC.HRS = 0; TOT.RC.IMP = 0; TOT.RC.WIP = 0
+         TOT.RC.CNCR = 0; REV.WIP = ""
+         IF JLB.RC.COST + 0 <> 0 THEN
+            FOR S = SEQ + 1 TO JOB.LB.SEQ<1,DFND>
+               MATREAD JLB.REC FROM JOB.TIME, LB.F.ID : S ELSE
+                  DRC.STATUS<1,MLP> = "CANNOT LOCATE JOB.TIME - ":LB.F.ID:S
+                  GOTO 1999
+               END
+               IF JLB.RC.TRAN = DRC.TRAN<1,MLP> THEN
+                  FOR I = 1 TO WPTR
+                     REV.WIP<1,1,I> = REV.WIP<1,1,I> - JLB.WIP<1,1,I>
+                     TOT.RC.WIP = TOT.RC.WIP - JLB.WIP<1,1,I>
+                  NEXT I
+                  FOR I = 1 TO DPTR
+                     TOT.RC.DCOST<1,I> = TOT.RC.DCOST<1,I> - JLB.DCOST<1,I>
+                  NEXT I
+                  TOT.RC.COST = TOT.RC.COST - JLB.COST
+                  TOT.RC.SALE = TOT.RC.SALE - JLB.SALE
+                  TOT.RC.HRS = TOT.RC.HRS - JLB.HRS
+                  TOT.RC.IMP = TOT.RC.IMP - JLB.IMP
+                  TOT.RC.CNCR = TOT.RC.CNCR - JLB.CNCR
+               END
+            NEXT S
+            MATREAD JLB.REC FROM JOB.TIME, LB.F.ID : SEQ ELSE
+               DRC.STATUS<1,MLP> = "CANNOT LOCATE JOB.TIME - ":LB.F.ID:SEQ
+               GOTO 1999
+            END
+            IF TOT.RC.COST <> JLB.RC.COST THEN
+               DRC.STATUS<1,MLP> = "RCLS COST MISMATCH ":OCONV(TOT.RC.COST,"MD2")
+               GOTO 1999
+            END
+         END
+         NEW.WIP = ""; NEW.DCOST = ""
+         IF REV.ALL THEN
+            NEW.SALE = TOT.RC.SALE - JLB.SALE
+            NEW.HRS = TOT.RC.HRS - JLB.HRS
+            NEW.IMP = TOT.RC.IMP - JLB.IMP
+            NEW.CNCR = TOT.RC.CNCR - JLB.CNCR
+            FOR I = 1 TO WPTR
+               NEW.WIP<1,1,I> = REV.WIP<1,1,I> - JLB.WIP<1,1,I>
+            NEXT I
+            FOR I = 1 TO DPTR
+               NEW.DCOST<1,I> = TOT.RC.DCOST<1,I> - JLB.DCOST<1,I>
+            NEXT I
+         END ELSE
+            PCT = DRC.COST<1,MLP> / (JLB.COST/1000)
+            IF JLB.SALE = JLB.COST THEN
+               NEW.SALE = 0 - DRC.COST<1,MLP>
+            END ELSE
+               NEW.SALE = 0 - INT(((JLB.SALE-JLB.COST)/(JLB.COST/1000)) * (DRC.COST<1,MLP>/1000) + DRC.COST<1,MLP> + .5)
+               IF TOT.RC.SALE - NEW.SALE > JLB.SALE THEN
+                  NEW.SALE = TOT.RC.SALE - JLB.SALE
+               END
+            END
+            NEW.HRS = 0 - INT((JLB.HRS /1000) * PCT + .5)
+            IF TOT.RC.HRS - NEW.HRS > JLB.HRS THEN
+               NEW.HRS = TOT.RC.HRS - JLB.HRS
+            END
+            NEW.IMP = 0 - INT((JLB.IMP/1000) * PCT + .5)
+            IF TOT.RC.IMP - NEW.IMP > JLB.IMP THEN
+               NEW.IMP = TOT.RC.IMP - JLB.IMP
+            END
+            IF JLB.HRS = JLB.CNCR THEN
+               NEW.CNCR = NEW.HRS
+            END ELSE
+               NEW.CNCR = TOT.RC.HRS - NEW.HRS - JLB.HRS + JLB.CNCR - TOT.RC.CNCR
+               IF NEW.CNCR > 0 THEN
+                  NEW.CNCR = 0 - NEW.CNCR
+                  IF TOT.RC.CNCR - NEW.CNCR > JLB.CNCR THEN
+                     NEW.CNCR = TOT.RC.CNCR - JLB.CNCR
+                  END
+               END ELSE
+                  NEW.CNCR = 0
+               END
+            END
+            TOT.DCOST = 0
+            FOR I = 1 TO DPTR
+               NEW.DCOST<1,I> = 0 - INT((JLB.DCOST<1,I>/1000) * PCT + .5)
+*CSF 24203 v
+               BEGIN CASE
+               CASE JLB.DCOST<1,I> > "0"
+                  IF TOT.RC.DCOST<1,I> - NEW.DCOST<1,I> > JLB.DCOST<1,I> THEN
+                     NEW.DCOST<1,I> = TOT.RC.DCOST<1,I> - JLB.DCOST<1,I>
+                  END
+               CASE 1
+                  IF TOT.RC.DCOST<1,I> - NEW.DCOST<1,I> < JLB.DCOST<1,I> THEN
+                     NEW.DCOST<1,I> = TOT.RC.DCOST<1,I> - JLB.DCOST<1,I>
+                  END
+               END CASE
+*CSF 24203 ^
+               TOT.DCOST = TOT.DCOST - NEW.DCOST<1,I>
+            NEXT I
+            DIFF = DRC.COST<1,MLP> - TOT.DCOST
+            BEGIN CASE
+            CASE DIFF = 0
+            CASE DIFF > 0
+               FOR I = DPTR TO 1 STEP -1 WHILE DIFF > 0
+                  IF NEW.DCOST<1,I> < 0 - DIFF THEN
+                     IF TOT.RC.DCOST<1,I>-NEW.DCOST<1,I>+DIFF <= JLB.DCOST<1,I> THEN
+                        NEW.DCOST<1,I> = NEW.DCOST<1,I> - DIFF
+                        TOT.DCOST = TOT.DCOST + DIFF
+                        DIFF = 0
+                     END
+                  END
+               NEXT I
+            CASE 1
+               FOR I = DPTR TO 1 STEP -1 WHILE DIFF < 0
+                  IF NEW.DCOST<1,I> < DIFF THEN
+                     NEW.DCOST<1,I> = NEW.DCOST<1,I> - DIFF
+                     TOT.DCOST = TOT.DCOST + DIFF
+                     DIFF = 0
+                  END
+               NEXT I
+            END CASE
+            IF DRC.COST<1,MLP> <> TOT.DCOST THEN
+               DRC.STATUS<1,MLP> = "DCOST MISMATCH " : OCONV(TOT.DCOST,"MD2")
+               GOTO 1999
+            END
+            FOR I = 1 TO WPTR
+               IF REV.WIP<1,1,I> - NEW.DCOST<1,I> > JLB.WIP<1,1,I> THEN
+                  NEW.WIP<1,1,I> = REV.WIP<1,1,I> - JLB.WIP<1,1,I>
+               END ELSE
+                  NEW.WIP<1,1,I> = NEW.DCOST<1,I>
+               END
+            NEXT I
+         END
+         ADD.MON = 0; WIP.CNTR = 0
+         FOR I = 1 TO WPTR
+            INV.WIP<1,1,I> = INV.WIP<1,1,I> + 0
+            BEGIN CASE
+            CASE INV.WIP<1,1,I> < NEW.WIP<1,1,I>
+               INV.WIP<1,1,I> = NEW.WIP<1,1,I>
+               ADD.MON = 1; WIP.CNTR = 3
+            CASE INV.WIP<1,1,I> <> 0
+               ADD.MON = 1; WIP.CNTR = 2
+            CASE NEW.WIP<1,1,I> <> 0
+               WIP.CNTR = 2
+            END CASE
+         NEXT I
+         IF ADD.MON THEN
+            IF JLB.MON<1,WCNT> > JRC.MON THEN
+               NEW.MON = JLB.MON<1,WCNT>
+            END ELSE
+               NEW.MON = JRC.MON
+            END
+            WCNT = WCNT + 1
+            JLB.MON<1,WCNT> = NEW.MON
+            JLB.WIP<1,WCNT> = INV.WIP
+            CCW.ID = CONO : JLB.DIV : DEPT : "!" : CCTR : NEW.MON
+            MATREADU CCW.REC FROM COST.CNTR.WIP, CCW.ID ELSE MAT CCW.REC = ""
+            FOR I = 1 TO WPTR
+               CCW.LB.O<1,I> = CCW.LB.O<1,I> - INV.WIP<1,1,I>
+            NEXT I
+         END ELSE
+            IF JLB.MON<1,1> > JRC.MON THEN
+               NEW.MON = JLB.MON<1,1>
+            END ELSE
+               NEW.MON = JRC.MON
+            END
+            CCW.ID = CONO : JLB.DIV : DEPT : "!" : CCTR : NEW.MON
+            MATREADU CCW.REC FROM COST.CNTR.WIP, CCW.ID ELSE MAT CCW.REC = ""
+         END
+         IF WIP.CNTR THEN
+            FOR I = 1 TO WPTR
+               NEW.WIP<1,2,I> = 0 - NEW.WIP<1,1,I>
+            NEXT I
+            NEW.MON<1,2> = NEW.MON<1,1>
+         END
+         JLB.RC.COST = JLB.RC.COST + DRC.COST<1,MLP>
+         BEGIN CASE
+         CASE CCTR.OPER.TYPE<1,OLOC> = "U"
+            BEGIN CASE
+            CASE CCTR.OPER.STD.HRS<1,OLOC> + 0 # 0
+               NEW.HRS.STD = INT(NEW.IMP * CCTR.OPER.STD.HRS<1,OLOC> / 100)
+               NEW.IMP.STD = INT(NEW.HRS / CCTR.OPER.STD.HRS<1,OLOC> * 100)
+            CASE CCTR.OPER.STD.IMP<1,OLOC> + 0 # 0
+               NEW.HRS.STD = INT(NEW.IMP / CCTR.OPER.STD.IMP<1,OLOC>)
+               NEW.IMP.STD = NEW.HRS * CCTR.OPER.STD.IMP<1,OLOC>
+            CASE 1
+               NEW.HRS.STD = 0
+* T24672 Changed following from NEW.HRS.STD to NEW.IMP.STD
+               NEW.IMP.STD = 0 
+            END CASE
+         CASE CCTR.OPER.TYPE<1,OLOC> = "V"
+            IF CCTR.OPER.STD.IMP<1,OLOC> + 0 # 0 THEN
+               NEW.HRS.STD = INT(NEW.IMP / CCTR.OPER.STD.IMP<1,OLOC>)
+               NEW.IMP.STD = NEW.HRS * CCTR.OPER.STD.IMP<1,OLOC>
+            END ELSE
+               NEW.HRS.STD = 0
+* T24672 Changed following from NEW.HRS.STD to NEW.IMP.STD
+               NEW.IMP.STD = 0
+            END
+         CASE 1
+            NEW.HRS.STD = CCTR.OPER.STD.HRS<1,OLOC> + 0
+            NEW.IMP.STD = 0
+         END CASE
+         MATWRITE JLB.REC ON JOB.TIME, LB.F.ID : SEQ
+         JLB.RC.COST = 0
+         JLB.HRS = NEW.HRS
+         JLB.IMP = NEW.IMP
+         JLB.CNCR = NEW.CNCR
+         JLB.COST = 0 - DRC.COST<1,MLP>
+         JLB.DCOST = NEW.DCOST
+         JLB.SALE = NEW.SALE
+         JLB.DATE = DRC.DATE
+         JLB.MON = NEW.MON
+         JLB.WIP = NEW.WIP
+         JLB.HRS.STD = NEW.HRS.STD
+         JLB.IMP.STD = NEW.IMP.STD
+         JLB.RC.TRAN = DRC.TRAN<1,MLP>
+         JLB.RC.JOB = DRC.T.JOB
+         JLB.RC.DESC = DRC.REASON<1,MLP>
+         GOSUB 2000
+         JLB.SEQ = NEW.SEQ
+         JLB.GLA.DATE = ""
+         MATWRITE JLB.REC ON JOB.TIME, LB.F.ID : JOB.LB.SEQ<1,DFND>
+         MAT FROM.JOB.REC = MAT JOB.REC
+*T27930 v
+*since update to a JOB is in POST.RCLS program and this is reclass.
+*on the same job, just from regular to a spoilage type this brings 
+*in sync TO and FROM record.
+         IF LB.F.ID = LB.T.ID THEN
+            MAT TO.JOB.REC = MAT FROM.JOB.REC
+         END
+*T27930^
+         JLB.HRS = 0 - NEW.HRS
+         JLB.IMP = 0 - NEW.IMP
+         JLB.CNCR = 0 - NEW.CNCR
+         JLB.COST = DRC.COST<1,MLP>
+         JLB.DCOST = ""
+         FOR I = 1 TO DPTR
+            JLB.DCOST<1,I> = 0 - NEW.DCOST<1,I>
+         NEXT I
+*T28606 v
+         IF DRC.SPOIL.RECLASS = "Y" THEN
+           NEW.SALE = 0
+           IF WLR.SPL = 'N' THEN NEW.WIP = ''; INV.WIP = ''
+         END
+*T28606 ^
+         JLB.SALE = 0 - NEW.SALE
+         JLB.DATE = DRC.DATE
+         JLB.MON = JRC.MON
+         JLB.WIP = NEW.WIP<1,2>
+         JLB.HRS.STD = 0 - NEW.HRS.STD
+         JLB.IMP.STD = 0 - NEW.IMP.STD
+         IF WIP.CNTR THEN
+            FOR I = 1 TO WPTR
+               CCW.LB.I<1,I> = CCW.LB.I<1,I> + JLB.WIP<1,1,I>
+               IF INV.WIP<1,1,I> <> NEW.WIP<1,1,I> THEN
+                  JLB.WIP<1,2,I> = NEW.WIP<1,1,I> - INV.WIP<1,1,I>
+                  CCW.LB.O<1,I> = CCW.LB.O<1,I> - JLB.WIP<1,2,I>
+               END
+               INV.WIP<1,1,I> = 0 - INV.WIP<1,1,I>
+            NEXT I
+            WIP.CNTR = 2
+            IF JLB.WIP<1,2> # "" THEN JLB.MON<1,2> = NEW.MON<1,1>
+         END
+         JLB.RC.TRAN = DRC.TRAN<1,MLP>
+         JLB.RC.JOB = DRC.F.JOB
+         JLB.RC.DESC = DRC.REASON<1,MLP>
+         PPTR = COUNT(JRC.TRAN,VM) + (JRC.TRAN # "") + 1
+         JRC.TRAN<1,PPTR> = DRC.TRAN<1,MLP>
+         JRC.SEQ<1,PPTR> = SEQ
+         JRC.F.TRAN<1,PPTR> = NEW.SEQ
+         JRC.F.SEQ<1,PPTR> = JOB.LB.SEQ<1,DFND>
+         MAT JOB.REC = MAT TO.JOB.REC
+         DFND = 1; MATCHED = 0
+         DCNT = COUNT(JOB.LB.DEPT,VM) + (JOB.LB.DEPT # "")
+         FOR D = 1 TO DCNT WHILE MATCHED = 0
+            BEGIN CASE
+            CASE DEPT = JOB.LB.DEPT<1,D>
+               IF CCTR = JOB.LB.CCTR<1,D> THEN
+                  DFND = D
+                  MATCHED = 1
+               END ELSE
+                  DFND = D + 1
+               END
+            CASE DEPT > JOB.LB.DEPT<1,D>
+               DFND = D + 1
+            END CASE
+         NEXT D
+         IF MATCHED = 0 THEN
+            IF DFND <= DCNT THEN
+               JOB.LB.SEQ = INSERT(JOB.LB.SEQ,1,DFND,0,"")
+               JOB.LB.DEPT = INSERT(JOB.LB.DEPT,1,DFND,0,"")
+               JOB.LB.CCTR = INSERT(JOB.LB.CCTR,1,DFND,0,"")
+               JOB.LB.OPER = INSERT(JOB.LB.OPER,1,DFND,0,"")
+               JOB.LB.HRS = INSERT(JOB.LB.HRS,1,DFND,0,"")
+               JOB.LB.IMP = INSERT(JOB.LB.IMP,1,DFND,0,"")
+               JOB.LB.DATE = INSERT(JOB.LB.DATE,1,DFND,0,"")
+               JOB.LB.TCOST = INSERT(JOB.LB.TCOST,1,DFND,0,"")
+               JOB.LB.DCOST = INSERT(JOB.LB.DCOST,1,DFND,0,"")
+               JOB.LB.COST = INSERT(JOB.LB.COST,1,DFND,0,"")
+               JOB.LB.SALE = INSERT(JOB.LB.SALE,1,DFND,0,"")
+            END
+            JOB.LB.DEPT<1,DFND> = DEPT
+            JOB.LB.CCTR<1,DFND> = CCTR
+            JOB.LB.OPER<1,DFND> = JLB.OPER
+            JOB.LB.DATE<1,DFND,1> = JLB.DATE
+         END
+         IF JOB.STATUS = "" THEN
+            JOB.STATUS = INSERT(JOB.STATUS,1,1,0,"1")
+            JOB.STAT.DATE = INSERT(JOB.STAT.DATE,1,1,0,DATE())
+         END
+         IF JOB.STATUS<1,1> # 1 THEN
+            JOB.STATUS = INSERT(JOB.STATUS,1,1,0,"5")
+            JOB.STAT.DATE = INSERT(JOB.STAT.DATE,1,1,0,DATE())
+         END
+*T27930 v
+         IF DRC.SPOIL.RECLASS = 'Y' THEN
+            JLB.TYPE = "S"
+            JLB.RC.TRAN := 'S'   ;*C
+         END
+*T27930 ^
+         GOSUB 2000
+         NEW.SEQ = NEW.SEQ + 1
+         JLB.SEQ = NEW.SEQ
+         JLB.GLA.DATE = ""
+         MATWRITE JLB.REC ON JOB.TIME, LB.T.ID : JOB.LB.SEQ<1,DFND>
+         MAT TO.JOB.REC = MAT JOB.REC
+*T27930 v
+         IF LB.F.ID = LB.T.ID THEN
+            MAT FROM.JOB.REC = MAT TO.JOB.REC
+         END
+*T27930 ^
+         MATWRITE CCW.REC ON COST.CNTR.WIP, CCW.ID
+         JRC.T.TRAN<1,PPTR> = NEW.SEQ
+         JRC.T.SEQ<1,PPTR> = JOB.LB.SEQ<1,DFND>
+         JRC.DEPT<1,PPTR> = DRC.DEPT<1,MLP>
+         JRC.CCTR<1,PPTR> = DRC.CCTR<1,MLP>
+         JRC.OPER<1,PPTR> = DRC.OPER<1,MLP>
+         JRC.EMP<1,PPTR> = DRC.EMP<1,MLP>
+         JRC.REASON<1,PPTR> = DRC.REASON<1,MLP>
+         JRC.COST<1,PPTR> = DRC.COST<1,MLP>
+         DRC.DEPT = DELETE(DRC.DEPT,1,MLP,0)
+         DRC.CCTR = DELETE(DRC.CCTR,1,MLP,0)
+         DRC.OPER = DELETE(DRC.OPER,1,MLP,0)
+         DRC.EMP = DELETE(DRC.EMP,1,MLP,0)
+         DRC.TRAN = DELETE(DRC.TRAN,1,MLP,0)
+         DRC.REASON = DELETE(DRC.REASON,1,MLP,0)
+         DRC.COST = DELETE(DRC.COST,1,MLP,0)
+         DRC.STATUS = DELETE(DRC.STATUS,1,MLP,0)
+         DRC.SEQ = DELETE(DRC.SEQ,1,MLP,0)
+         NEW.SEQ = NEW.SEQ + 1
+1999  NEXT MLP
+      WRITE NEW.SEQ ON CONTROL, CONO:"DAILY.TIME"
+      GOTO 99999
+2000  IF WIP.CNTR THEN
+         JOB.LB.WIP<1,1> = JOB.LB.WIP<1,1> + WIP.CNTR
+         JOB.WIP<1,1> = JOB.WIP<1,1> + WIP.CNTR
+         FOR I = 1 TO WPTR
+            JOB.LB.WIP<1,2,I> = JOB.LB.WIP<1,2,I> + INV.WIP<1,1,I>
+            JOB.LB.WIP<1,3,I> = JOB.LB.WIP<1,3,I> - INV.WIP<1,1,I> + JLB.WIP<1,1,I>
+            JOB.WIP<1,2,I> = JOB.WIP<1,2,I> + INV.WIP<1,1,I>
+            JOB.WIP<1,3,I> = JOB.WIP<1,3,I> - INV.WIP<1,1,I> + JLB.WIP<1,1,I>
+         NEXT I
+      END
+      IF JLB.MON<1,1> < JOB.LB.WIP<1,4> OR JOB.LB.WIP<1,4> = "" THEN
+         JOB.LB.WIP<1,4> = JLB.MON<1,1>
+         IF JLB.MON<1,1> < JOB.WIP<1,4> OR JOB.WIP<1,4> = "" THEN
+            JOB.WIP<1,4> = JLB.MON<1,1>
+         END
+      END
+      IF JLB.MON<1,1> > JOB.LB.WIP<1,5> THEN
+         JOB.LB.WIP<1,5> = JLB.MON<1,1>
+         IF JLB.MON<1,1> > JOB.WIP<1,5> THEN
+            JOB.WIP<1,5> = JLB.MON<1,1>
+         END
+      END
+      FOR I = 1 TO DPTR
+         JOB.LB.DCOST<1,DFND,I> = JOB.LB.DCOST<1,DFND,I> + JLB.DCOST<1,I>
+      NEXT I
+      JOB.LB.HRS<1,DFND> = JOB.LB.HRS<1,DFND> + JLB.HRS
+      JOB.LB.IMP<1,DFND> = JOB.LB.IMP<1,DFND> + JLB.IMP
+      JOB.LB.COST<1,DFND> = JOB.LB.COST<1,DFND> + JLB.COST
+      JOB.LB.SALE<1,DFND> = JOB.LB.SALE<1,DFND> + JLB.SALE
+      BEGIN CASE
+      CASE JLB.CNCR + 0 = 0
+      CASE JLB.HRS = JLB.CNCR
+         JOB.LB.TCOST<1,DFND,5> = JOB.LB.TCOST<1,DFND,5> + JLB.COST
+      CASE 1
+         PCT = JLB.CNCR / (JLB.HRS / 1000)
+         JOB.LB.TCOST<1,DFND,5> = JOB.LB.TCOST<1,DFND,5> + INT((JLB.COST /1000) * PCT + .5)
+         IF JOB.LB.TCOST<1,DFND,5> < 0 THEN JOB.LB.TCOST<1,DFND,5> = 0
+      END CASE
+      BEGIN CASE
+      CASE JLB.TYPE = "N"
+         PTR = 2
+      CASE JLB.TYPE = "C"
+         PTR = 3
+      CASE JLB.TYPE = "S"
+         PTR = 4
+      CASE 1
+         PTR = 1
+      END CASE
+      JOB.LB.TCOST<1,DFND,PTR> = JOB.LB.TCOST<1,DFND,PTR> + JLB.COST
+      JOB.TOT.DCOST = JOB.TOT.DCOST + JLB.DCOST<1,1>
+      JOB.TOT.COST = JOB.TOT.COST + JLB.COST
+      JOB.TOT.SALE = JOB.TOT.SALE + JLB.SALE
+      JOB.LB.SEQ<1,DFND> = JOB.LB.SEQ<1,DFND> + 1
+2999  RETURN
+99999 RETURN
+   END

@@ -1,0 +1,719 @@
+*COPY>CPYLIB>COM1
+*COPY>ICS.CPYLIB>COM.INV.MAIN  
+*COPY>ICS.CPYLIB>COM.INV.SERIAL
+*COPY>ICS.CPYLIB>COM.INV.LINK  
+*********************************************************************
+* REVISION- [10.0]
+* Copyright 1994 by Computer Business Associates (Vercom Software,Inc.)
+* SYSTEM- PRIMAC
+* SOURCE- ICSBP
+* PROGRAM - PAP.SLIT.POST
+* DATE- 09/21/94
+* DESCRIPTION - This program will process all paper slitting transactions
+* CSF 24762 - MODIFY TO DO PRE-POST EDITS FOR REJECT PRIOR TO ACTUAL POSTING. LMR 2/26/96.
+*T21844 lanny 04/24/1997 * Check to ensure enough qty on roll.
+*T21910 julie 05/16/1997 * Must not create duplicate roll numbers.
+*T22154 stefanie 08/18/1997 * Fix Rev10B - Rev11 match problems
+* C31358 gat 07/17/1998 * DO NOT ALLOW ZERO SLITTED PRODUCT.
+*T24891 aron 03/01/2000 * Fix REC.AMT for slits with 2 prod. no waste,2
+* prod prop. dist. waste,and 2 slits of same
+* product with no distributed waste. 
+*T25740 edvard 10/31/2001 * REV12
+*T26090 ajibaly 03/28/2002 * CONVERT TO R12 REPORT.SCRN
+*T26497 adelgado 04/04/2002 * Add validation rule for Inter-Divisional
+*                             Whse.
+*T26767 epitka 07/24/2002 * CHANGE OF ARGUMENTS FOR INV.AVG.COST.MAINT
+*C41690 cmykleb 03/21/2003 * Slitting cost problem.
+*T27653 lross 08/21/2003 * Mods made in REV11 T26427 and several other
+*                          errors in REV12 fixed.
+*T27990 lross 03/10/2004 * Mods for ICS.IWH (ERRMSG).
+*********************************************************************
+*
+*COPY>ICS.CPYLIB>SLIT.TRANS
+*COPY>ICS.CPYLIB>INV.ADJ.HIST
+*COPY>ICS.CPYLIB>INV_AUDIT_HIST
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>ICS.CPYLIB>INV.HIST
+*COPY>ICS.CPYLIB>INV.WHSE.LOC
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>ICS.CPYLIB>INV.STATS
+*COPY>ICS.CPYLIB>INV_SERIAL
+*COPY>ICS.CPYLIB>INV_RECP_WHSE
+*COPY>ICS.CPYLIB>INV_RECEIPTS
+*COPY>ICS.CPYLIB>ICS.ID 
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>ICS.CPYLIB>CATEGORY
+*COPY>ICS.CPYLIB>WAREHOUSE
+*COPY>CPYLIB>SYSCOM                  
+*COPY>PMC.CPYLIB>PO
+*COPY>PMC.CPYLIB>COMPANY       ;* T26497
+*                                                           
+DEFFUN DIVISION.POSITION(CONO,CONTROL.FILE,DIV.CODE)        
+DEFFUN CURRENT.PERIOD(CONO,CONTROL.FILE,DIV.POS,FISCAL.FLAG)
+*                                                           
+MAT PO.REC=''
+MAT SYSCOM.REC = ""; SYS.TYPE = 2
+MAT ORG.IWH.REC=''
+*
+OPEN '','INVENTORY' TO INVENTORY ELSE ERRMSG='INVENTORY FILE IS MISSING'; GOTO 93000
+OPEN '','INV.WHSE' TO INV.WHSE ELSE ERRMSG='INV.WHSE FILE IS MISSING'; GOTO 93000
+OPEN '','INV.WHSE.LOC' TO INV.WHSE.LOC ELSE ERRMSG='INV.WHSE.LOC FILE IS MISSING'; GOTO 93000
+OPEN '','CATEGORY' TO CATEGORY ELSE ERRMSG='CATEGORY FILE IS MISSING'; GOTO 93000
+OPEN '','SLIT.TRANS' TO SLIT.TRANS ELSE ERRMSG='SLIT.TRANS FILE IS MISSING'; GOTO 93000
+OPEN '','INV_AUDIT_HIST' TO INV_AUDIT_HIST ELSE ERRMSG='INV_AUDIT_HIST FILE IS MISSING'; GOTO 93000
+OPEN '','COMPANY' TO COMPANY ELSE ERRMSG='COMPANY FILE IS MISSING';GOTO 93000
+OPEN '','CONTROL' TO CONTROL ELSE ERRMSG='CONTROL FILE IS MISSING';GOTO 93000
+OPEN '','INV.HIST' TO INV.HIST ELSE ERRMSG='INV.HIST FILE IS MISSING';GOTO 93000
+OPEN '','INV.STATS' TO INV.STATS ELSE ERRMSG='INV.STATS FILE IS MISSING';GOTO 93000
+OPEN '','INV_SERIAL' TO INV_SERIAL ELSE ERRMSG='INV_SERIAL FILE IS MISSING';GOTO 93000
+OPEN '','WAREHOUSE' TO WAREHOUSE ELSE ERRMSG='WAREHOUSE FILE MISSING';GOTO 93000
+*
+OPEN '','INV_SERIAL_TEMP' TO INV_SERIAL_TEMP ELSE ERRMSG='INV_SERIAL_TEMP IS MISSING';GOTO 93000
+PROCREAD LINE ELSE ERRMSG='MUST RUN FROM A PROC'; GOTO 93000
+CONO=LINE<1>
+*T26090 CO.NAME=LINE<2>
+IF CONO='END' THEN GOTO 99999
+*
+OPEN.FLAG=1
+PAR.DIAM=''; PAR.SHEET=''
+GEN.DIV = "00";GEN.DEPT = "00";GEN.CCTR = "000"  
+MATREAD COMP.REC FROM COMPANY, CONO ELSE MAT COMP.REC = ''    ;* T26497
+;*
+;* Main Loop
+;*
+DONE=0
+LOOP
+   ERR=0
+   READNEXT SLT.ID ELSE DONE=1
+UNTIL (DONE) DO
+   RELEASE
+   MATREADU SLT.REC FROM SLIT.TRANS,SLT.ID THEN
+      SLT.STATUS = '' ;*T27653
+      IF SUM(SLT.SLIT.CST.QTY)=0 AND SUM(SLT.SLIT.STK.QTY)=0 THEN
+         SLT.STATUS="SLIT PRODUCT CANNOT BE 0 QUANTITY"
+      END ELSE
+         ;*
+         GOSUB CHECK.SLIT.PROD
+         ;*
+         IF NOT(ERR) THEN
+            GOSUB PROCESS.LOG.PROD
+            IF NOT(ERR) THEN
+               ACTION = 3
+*T27990 v      CALL ICS.IWH.SUB (CONO,PERIOD,TMP.ARR,TMP.CNT,LAST,ACTION,OPEN.FLAG)
+               CALL ICS.IWH.SUB (CONO,PERIOD,TMP.ARR,TMP.CNT,LAST,ACTION,OPEN.FLAG,ERRMSG)
+            END
+            IF ERRMSG # '' OR ERR THEN
+              SLT.STATUS = ERRMSG
+              ACTION=9
+              CALL ICS.IWH.SUB(CONO,PERIOD,TMP.ARR,TMP.CNT,LAST,ACTION,OPEN.FLAG,ERRMSG)
+            END ELSE
+              GOSUB PROCESS.SLIT.PROD
+              SLT.POST.DATE=DATE()
+            END
+*           END
+*T27990 ^
+         END
+      END
+      MATWRITE SLT.REC ON SLIT.TRANS,SLT.ID
+   END
+REPEAT
+GOTO 99999
+*
+**************************************************************************
+******** S U B R O U T I N E S *******************************************
+**************************************************************************
+*
+*****************
+PROCESS.LOG.PROD: 
+*****************
+*
+INV.ID=CONO:SLT.LOG.PROD
+MATREAD INV.REC FROM INVENTORY,INV.ID THEN
+   CATG.ID = CONO:INV.LINE 
+   MATREAD CATG.REC FROM CATEGORY,CATG.ID THEN 
+      IF CATG.COST.TYPE='AC' THEN 
+         DEPL.METHOD='AC'          
+      END ELSE                    
+         DEPL.METHOD='FI'          
+      END                         
+      WHSE.ID=CONO:SLT.LOG.WHSE
+      MATREAD WHSE.REC FROM WAREHOUSE,WHSE.ID ELSE
+         MAT WHSE.REC='' ; WHS.DIV='00'
+      END
+      IF WHS.DIV = "" THEN WHS.DIV = GEN.DIV                
+      DIV.POS=DIVISION.POSITION(CONO,CONTROL,WHS.DIV)         
+      BEGIN CASE                                              
+         CASE DIV.POS<1,1>=''                                  
+            DIV.POS=DIV.POS<1,2>                                
+            CUR.PERIOD=CURRENT.PERIOD(CONO,CONTROL,DIV.POS,"IC")
+            IF CUR.PERIOD<1,1>='' THEN                          
+               CUR.PERIOD=CUR.PERIOD<1,2>                        
+            END ELSE                                            
+               IF CUR.PERIOD<1,1>='-2' THEN                      
+                  SLT.STATUS=CUR.PERIOD<1,2> ; ERR=1
+               END                                               
+            END                                                 
+         CASE DIV.POS<1,1>='-1'                                
+            SLT.STATUS=DIV.POS<1,2> ; ERR=1
+         CASE DIV.POS<1,1>='-2'                                
+            SLT.STATUS=DIV.POS<1,2>; ERR=1
+      END CASE                                                
+* T26497 v
+      IF CO.INTR.WHSE # '' AND WHSE.ID = CO.INTR.WHSE THEN
+         SLT.STATUS = 'SLIT LOG WHSE IS AN INTER-DIVISIONAL WHSE'
+         ERR=1
+      END
+* T26497 ^
+*T27653 v
+      IF NOT(ERR) THEN
+         IF SLT.PERIOD < CUR.PERIOD THEN
+           SLT.STATUS='PERIOD in trans cannot be prior to current Fiscal Period'
+           ERR=1
+         END
+      END
+*T27653 ^
+      IF NOT(ERR) THEN
+         IWH.ID=CONO:SLT.LOG.PROD:'!':SLT.LOG.WHSE
+         MATREADU IWH.REC FROM INV.WHSE,IWH.ID THEN
+            GOSUB GET.UM.CNV
+            INAH.PROD = SLT.LOG.PROD 
+            INAH.WHSE = SLT.LOG.WHSE 
+            PERIOD=SLT.PERIOD
+            MAT ORG.IWH.REC = MAT IWH.REC
+            ACTION=1; * build INV.WHSE fifo buckets
+            TMP.CNT='' ; LAST='' ; TMP.ARR=''
+*T27990     CALL ICS.IWH.SUB (CONO,PERIOD,TMP.ARR,TMP.CNT,LAST,ACTION,OPEN.FLAG)
+            CALL ICS.IWH.SUB (CONO,PERIOD,TMP.ARR,TMP.CNT,LAST,ACTION,OPEN.FLAG,ERRMSG)
+            IH.ID=CONO:SLT.LOG.PROD
+            MATREADU IH.REC FROM INV.HIST,IH.ID ELSE
+               MAT IH.REC=''
+            END
+            LOCATE SLT.LOG.LOC IN IWH.LOC<1>,1 SETTING LLOC THEN
+               IWLO.ID=IWH.ID:'!':SLT.LOG.LOC
+               MATREADU IWLO.REC FROM INV.WHSE.LOC,IWLO.ID THEN
+                  SLT.STATUS=''; ADJ.QTY=""; ADJ.COST=''
+                  LOCATE SLT.LOG.SERIAL IN IWLO.SERIAL<1>,1 SETTING RLOC THEN
+                     ISTK.ID=CONO:SLT.LOG.SERIAL
+                     IF RECORDLOCKED(INV_SERIAL_TEMP,ISTK.ID)=0 THEN
+                        DELETE INV_SERIAL_TEMP,ISTK.ID
+                     END
+                     READU CHECK.REC FROM INV_SERIAL_TEMP,ISTK.ID ELSE
+                        MATREADU ISTK.REC FROM INV_SERIAL,ISTK.ID THEN
+                           IF ISTK.LOC=SLT.LOG.LOC AND ISTK.WHSE=SLT.LOG.WHSE THEN
+                              INVR.ID=CONO:ISTK.RECP
+                              READ CHECK.REC FROM INV_RECEIPTS,INVR.ID THEN
+                                 IRW.ID=CONO:ISTK.RECP:"!":ISTK.WHSE
+                                 READ CHECK.REC FROM INV_RECP_WHSE,IRW.ID THEN
+*T27653 v
+                                    BEGIN CASE
+                                    CASE INV.UNIT<1,2> = INV.UNIT<1,3>
+                                       DIFF.QTY = 0 - SLT.LOG.USED.QTY
+                                    CASE INV.UNIT<1,3> ='MSI' AND INV.UNIT<1,2> # 'MSI'
+                                       DIFF.QTY = 0 - (SLT.LOG.SLIT.QTY + SLT.LOG.TRIM.QTY)
+                                    CASE 1
+*                                      DIFF.QTY = 0 - INT(((OCONV(SLT.LOG.USED.QTY,'MD3')*ICR.DV1)/ICR.MT1)*ICR.DV2 - .5)
+                                       DIFF.QTY=0 - SLT.LOG.USED.QTY
+                                    END CASE
+*                                   DIFF.QTY=0 - SLT.LOG.USED.QTY
+*T27653 ^
+                                    GOSUB CHECK.QTY
+                                    IF NOT(ERR) THEN
+                                       RET.ARR='' ; ERRMSG=''
+                                       TYPE='A'
+                                       PO.VEND.NO=SLT.OPER.ID 
+                                       PO.CODE=SLT.ID[4,99] 
+                                       CALL QTY.CHANGE.SUB(CONO,PO.CODE,MAT IWH.REC,MAT INV.REC,MAT PO.REC,DEPL.METHOD,ISTK.RECP,SLT.ENT.DATE,PERIOD,DIFF.QTY,PRICE,TYPE,ERRMSG,RET.ARR)
+                                       IF ERRMSG # '' THEN
+                                          SLT.STATUS=ERRMSG
+                                       END ELSE
+                                          TOT.COST=RET.ARR<1> 
+                                          TOT.COST=ABS(TOT.COST)
+                                          SCNT=1
+                                          PROD=SLT.LOG.PROD
+                                          WHSE=SLT.LOG.WHSE
+                                          LOC=SLT.LOG.LOC
+                                          SERIAL.NO=SLT.LOG.SERIAL
+                                          OLD.QTY=ISTK.CUR.QTY
+                                          NEW.QTY=0
+                                          OLD.DIAM=ISTK.CUR.DIAM
+                                          NEW.DIAM=0
+                                          OLD.STK.QTY=ISTK.CUR.STK.QTY
+                                          NEW.STK.QTY=0
+                                          GOSUB PROCESS.SERIAL
+                                          SLT.LOG.USED.AMT=TOT.COST
+                                          IWH.ON.HAND=IWH.ON.HAND+DIFF.QTY
+                                       END
+                                    END
+                                 END ELSE
+                                    SLT.STATUS='INV_RECEIPTS record ':INVR.ID
+                                    SLT.STATUS:='is missing for serial ':SLT.LOG.SERIAL
+                                 END
+                              END ELSE
+                                 SLT.STATUS='INV_RECP_WHSE record ':IRW.ID
+                                 SLT.STATUS:='is missing for serial ':SLT.LOG.SERIAL 
+                              END
+                           END ELSE
+                              SLT.STATUS='Whse/Location ':SLT.LOG.LOC:'/':SLT.LOG.WHSE
+                              SLT.STATUS:=' not valid for serial ':SLT.LOG.SERIAL
+                           END
+                        END ELSE
+                           SLT.STATUS='Serial ':SLT.LOG.SERIAL:' is missing.'
+                        END
+                     END
+                  END ELSE
+                     SLT.STATUS='Serial ':SLT.LOG.SERIAL
+                     SLT.STATUS:='does not exist for product ':SLT.LOG.PROD
+                  END
+               END ELSE
+                  SLT.STATUS='Cannot read location ':SLT.LOG.LOC
+                  SLT.STATUS:=' record for parent serial.'
+               END
+            END ELSE
+               ERR=1
+               SLT.STATUS='Location ':SLT.LOG.LOC
+               SLT.STATUS:=' is invalid for parent serial.'
+            END
+         END ELSE
+            SLT.STATUS='INV.WHSE record ':IWH.ID:' is not on file.'
+            ERR=1
+         END
+      END ELSE
+         SLT.STATUS='CATEGORY ':INV.LINE:' IS MISSING.'
+         ERR=1
+      END 
+   END ELSE
+      SLT.STATUS='Product ':SLT.LOG.PROD:' is not on file.'
+      ERR=1
+   END
+END
+RETURN
+*
+******************
+PROCESS.SLIT.PROD: 
+******************
+*
+;* now that we have a total cost of
+;* the parent product, calculate
+;* cost of each slit prod
+LOG.UN.PRICE=(TOT.COST/(SLT.LOG.USED.QTY/10))
+LOG.UN.PRICE=ICONV(LOG.UN.PRICE,"MD4")
+GOSUB CALC.SLIT.AMT
+PCNT=DCOUNT(SLT.SLIT.PROD<1>,VM)
+FOR P=PCNT TO 1 STEP -1
+   INV.ID=CONO:SLT.SLIT.PROD<1,P>
+   MATREAD INV.REC FROM INVENTORY,INV.ID THEN
+      CATG.ID=CONO:INV.LINE
+      MATREAD CATG.REC FROM CATEGORY,CATG.ID THEN
+         IF CATG.COST.TYPE='AC' THEN 
+            DEPL.METHOD='AC'          
+         END ELSE                    
+            DEPL.METHOD='FI'          
+         END                         
+*T27653 v Moved to CHECK.SLIT.PROD Routine.
+*        MATREAD WHSE.REC FROM WAREHOUSE,WHSE.ID ELSE
+*           MAT WHSE.REC='' ; WHSE.DIV='00'
+*        END
+*        DIV.POS=DIVISION.POSITION(CONO,CONTROL,WHS.DIV)          
+*        BEGIN CASE                                               
+*           CASE DIV.POS<1,1>=''                                   
+*              DIV.POS=DIV.POS<1,2>                                 
+*              CUR.PERIOD=CURRENT.PERIOD(CONO,CONTROL,DIV.POS,"IC") 
+*              IF CUR.PERIOD<1,1>='' THEN                           
+*                 CUR.PERIOD=CUR.PERIOD<1,2>                         
+*              END ELSE                                             
+*                 IF CUR.PERIOD<1,2>='-2' THEN                       
+*                    SLT.STATUS<1,P>=ERRMSG
+*                 END                                                
+*              END                                                  
+*           CASE DIV.POS<1,1>='-1'                                 
+*              ERRMSG=DIV.POS<1,1>                                  
+*              SLT.STATUS<1,P>=ERRMSG
+*           CASE DIV.POS<1,1>='-2'                                 
+*              SLT.STATUS<1,P>=ERRMSG
+*        END CASE                                                 
+*T27653 ^
+         IF ERRMSG='' THEN
+            IWH.ID=CONO:SLT.SLIT.PROD<1,P>:'!':SLT.SLIT.WHSE<1,P>
+            MATREADU IWH.REC FROM INV.WHSE,IWH.ID THEN
+               IWLO.ID=IWH.ID:"!":SLT.SLIT.LOC<1,P>
+               MATREADU IWLO.REC FROM INV.WHSE.LOC,IWLO.ID ELSE
+                  MAT IWLO.REC=""
+                  IWLO.LOC.ON.HAND=0
+               END
+               GOSUB GET.UM.CNV
+               INAH.PROD=SLT.SLIT.PROD<1,P>
+               INAH.WHSE=SLT.SLIT.WHSE<1,P>
+               PERIOD = SLT.PERIOD
+               MAT ORG.IWH.REC = MAT IWH.REC
+               ACTION=1; * build INV.WHSE fifo buckets
+               TMP.CNT='' ; LAST='' ; TMP.ARR=''
+*T27990        CALL ICS.IWH.SUB (CONO,PERIOD,TMP.ARR,TMP.CNT,LAST,ACTION,OPEN.FLAG)
+               CALL ICS.IWH.SUB (CONO,PERIOD,TMP.ARR,TMP.CNT,LAST,ACTION,OPEN.FLAG,ERRMSG)
+               RECV.QTY=SLT.SLIT.CST.QTY<1,P>
+               REC.AMT=SLT.SLIT.AMT<1,P>
+               RECV.PRICE=((REC.AMT/100)/(RECV.QTY/1000)) * (INV.COST.WT/100)
+               RECV.PRICE=ICONV(RECV.PRICE,"MD4")
+               PO.VEND.NO=SLT.OPER.ID
+               PO.CODE=SLT.ID[4,99]
+               PRICE=RECV.PRICE
+               RET.ARR='' ; ERMSG=''    
+               RECP.NO='';DEPL.METHOD=''
+               TYPE='R'                 
+               CALL QTY.CHANGE.SUB(CONO,PO.CODE,MAT IWH.REC,MAT INV.REC,MAT PO.REC,DEPL.METHOD,RECP.NO,SLT.ENT.DATE,PERIOD,RECV.QTY,RECV.PRICE,TYPE,ERRMSG,RET.ARR)
+               IWH.ON.HAND=IWH.ON.HAND + RECV.QTY 
+               IF ERRMSG='' THEN
+                  TOT.COST=RET.ARR<1> 
+                  SCNT=DCOUNT(SLT.SLIT.SERIAL<1,P>,SVM)
+                  PROD=SLT.SLIT.PROD<1,P>
+                  WHSE=SLT.SLIT.WHSE<1,P>
+                  LOC=SLT.SLIT.LOC<1,P>
+*                 SERIAL.NO=SLT.SLIT.SERIAL<1,P>
+                  OLD.QTY=0
+*T27653 v
+*                 NEW.QTY=RECV.QTY/SLT.SLIT.CUTS<1,P>
+                  NEW.QTY=INT(RECV.QTY/SLT.SLIT.CUTS<1,P> + .5)
+                  OLD.STK.QTY=0
+                  NEW.STK.QTY=INT(((NEW.QTY/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+                  ;* slittiong transactin would not change diameter 
+*          CALL CALC.DIAM (MAT INV.REC,NEW.QTY,NEW.STK.QTY,DIAM)
+                  NEW.DIAM=OLD.DIAM;* log's old diam is slitt's new diam
+                  OLD.DIAM=0
+*T27653 v Merged from below
+                  IH.ID=CONO:SLT.SLIT.PROD<1,P>
+                  MATREADU IH.REC FROM INV.HIST,IH.ID ELSE
+                     MAT IH.REC=''
+                  END
+*T27653 ^
+                  FOR S=1 TO SCNT WHILE SLT.STATUS<1,P>=''  
+                     SERIAL.NO=SLT.SLIT.SERIAL<1,P,S>
+*T27653 v
+                     IF S # SCNT THEN
+                       RECV.QTY -= NEW.QTY
+                     END ELSE
+                       NEW.QTY = RECV.QTY
+                       NEW.STK.QTY=INT(((NEW.QTY/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+                     END
+*T27653 ^
+                     GOSUB PROCESS.SERIAL
+                  NEXT S
+                  IF SLT.STATUS#'' THEN
+                     ACTION=9;*delete tmp records                                 
+*T27990              CALL  ICS.IWH.SUB (CONO,PERIOD,SERIAL,SPTR,LAST,ACTION,OPEN.FLAG)
+                     CALL  ICS.IWH.SUB (CONO,PERIOD,SERIAL,SPTR,LAST,ACTION,OPEN.FLAG,ERRMSG)
+                  END ELSE
+*T27653 v Moved above
+*                    IH.ID=CONO:SLT.SLIT.PROD<1,P>
+*                    MATREADU IH.REC FROM INV.HIST,IH.ID ELSE
+*                       MAT IH.REC=''
+*                    END
+*T27653 ^
+                     LOCATE SLT.SLIT.LOC<1,P> IN IWH.LOC<1>,1 SETTING LLOC ELSE
+                        LLOC=DCOUNT(IWH.LOC,VM)+1
+                        IWH.LOC<1,LLOC>=SLT.SLIT.LOC<1,P>
+                     END
+                     IF NOT(ERR) THEN
+                        MATREADU INV.STAT.REC FROM INV.STATS,IWH.ID ELSE MAT INV.STAT.REC=""
+                        LOCATE PO.CODE IN ISTAT.PO<1>,1 SETTING PFND ELSE
+                           ISTAT.PO<1,PFND>=PO.CODE
+                           ISTAT.PO.VEND<1,PFND>=PO.VEND.NO
+                           ISTAT.PO.DATE<1,PFND>=SLT.ENT.DATE
+                           ISTAT.PO.QTY<1,PFND>=SLT.SLIT.CST.QTY<1,P>
+                           ISTAT.PO.JOB<1,PFND>=""
+                           ISTAT.PO.JOB.QTY<1,PFND>=""
+                           ISTAT.PO.JOB.AMT<1,PFND>=""
+                        END
+                        ISTAT.PO.QTY<1,PFND>=ISTAT.PO.QTY<1,PFND> - SLT.SLIT.CST.QTY<1,P>
+                        IF ISTAT.PO.QTY<1,PFND>=0 THEN
+                           ISTAT.PO=DELETE(ISTAT.PO,1,PFND,0)
+                           ISTAT.PO.VEND=DELETE(ISTAT.PO.VEND,1,PFND,0)
+                           ISTAT.PO.DATE=DELETE(ISTAT.PO.DATE,1,PFND,0)
+                           ISTAT.PO.QTY=DELETE(ISTAT.PO.QTY,1,PFND,0)
+                           ISTAT.PO.JOB=DELETE(ISTAT.PO.JOB,1,PFND,0)
+                           ISTAT.PO.JOB.QTY=DELETE(ISTAT.PO.JOB.QTY,1,PFND,0)
+                           ISTAT.PO.JOB.AMT=DELETE(ISTAT.PO.JOB.AMT,1,PFND,0)
+                        END
+                        IF ISTAT.PO='' AND ISTAT.JOB='' THEN
+                           DELETE INV.STATS,IWH.ID
+                        END ELSE
+                           MATWRITE INV.STAT.REC ON INV.STATS,IWH.ID
+                        END
+                        IF INAH.PERIOD=CUR.PERIOD THEN
+                           CALL INV.AVG.COST.MAINT(MAT IWH.REC,INV.COST.WT,CUR.PERIOD)
+                        END
+                        MATWRITE IH.REC ON INV.HIST,IH.ID
+                        ACTION = 3
+*T27990                 CALL ICS.IWH.SUB (CONO,PERIOD,TMP.ARR,TMP.CNT,LAST,ACTION,OPEN.FLAG)
+                        CALL ICS.IWH.SUB (CONO,PERIOD,TMP.ARR,TMP.CNT,LAST,ACTION,OPEN.FLAG,ERRMSG)
+                     END
+                  END
+               END
+            END ELSE
+               SLT.STATUS<1,P>='INV.WHSE record ':IWH.ID
+               SLT.STATUS<1,P>:=' is not on file.'
+            END
+         END ELSE                                         
+            SLT.STATUS='CATEGORY ':INV.LINE:' IS MISSING.' 
+            ERR=1                                          
+         END                                              
+      END ELSE
+         SLT.STATUS<1,P>='Product ':SLT.SLIT.PROD<1,P>
+         SLT.STATUS<1,P>:='is not on file.'
+      END
+   END
+NEXT P
+RETURN
+*
+***************
+CHECK.SLIT.PROD: 
+*****************
+*
+CNT=DCOUNT(SLT.SLIT.PROD,VM)
+FOR P=1 TO CNT UNTIL (ERR)
+   INV.ID=CONO:SLT.SLIT.PROD<1,P>
+   MATREAD INV.REC FROM INVENTORY,INV.ID THEN
+  * T26497 v
+      IF CO.INTR.WHSE # '' AND SLT.SLIT.WHSE<1,P> = CO.INTR.WHSE THEN
+         SLT.STATUS<1,P> = 'SLIT WHSE IS AN INTER-DIVISIONAL WHSE'
+         ERR=1
+         CONTINUE
+      END
+  * T26497 ^
+*T27653 v Merged from PROCESS.SLIT.PROD
+      MATREAD WHSE.REC FROM WAREHOUSE,CONO:SLT.SLIT.WHSE<1,P> ELSE
+         MAT WHSE.REC='' ; WHS.DIV='00'
+      END
+      IF WHS.DIV = "" THEN WHS.DIV = GEN.DIV                
+      DIV.POS=DIVISION.POSITION(CONO,CONTROL,WHS.DIV)          
+      BEGIN CASE                                               
+         CASE DIV.POS<1,1>=''                                   
+            DIV.POS=DIV.POS<1,2>                                 
+            CUR.PERIOD=CURRENT.PERIOD(CONO,CONTROL,DIV.POS,"IC") 
+            IF CUR.PERIOD<1,1>='' THEN                           
+               CUR.PERIOD=CUR.PERIOD<1,2>                         
+            END ELSE                                             
+               IF CUR.PERIOD<1,1>='-2' THEN                       
+                  SLT.STATUS<1,P>=CUR.PERIOD<1,2>
+               END                                                
+            END                                                  
+         CASE DIV.POS<1,1>='-1'                                 
+            SLT.STATUS<1,P>=DIV.POS<1,2>                                  
+         CASE DIV.POS<1,1>='-2'                                 
+            SLT.STATUS<1,P>=DIV.POS<1,2>                                  
+      END CASE                                                 
+      IF SLT.STATUS<1,P> # '' THEN ERR=1; CONTINUE
+      IF SLT.PERIOD < CUR.PERIOD THEN
+        SLT.STATUS<1,P>='PERIOD in trans cannot be prior to current Fiscal Period'
+        ERR=1
+        CONTINUE
+      END
+*T27653 ^
+      IWH.ID=INV.ID:'!':SLT.SLIT.WHSE<1,P>
+      MATREAD IWH.REC FROM INV.WHSE,IWH.ID THEN
+         RCNT=DCOUNT(SLT.SLIT.SERIAL<1,P>,SVM)
+         FOR R=1 TO RCNT UNTIL (ERR)
+            ISTK.ID=CONO:SLT.SLIT.SERIAL<1,P,R>
+            MATREAD ISTK.REC FROM INV_SERIAL,ISTK.ID THEN
+* T26497 v
+               IF CO.INTR.WHSE # '' AND ISTK.WHSE = CO.INTR.WHSE THEN
+                  SLT.STATUS<1,P> = 'SERIAL WHSE IS IN AN INTER-DIVISIONAL WHSE'
+                  ERR=1
+                  CONTINUE
+               END
+  * T26497 ^
+               IF ISTK.POST.DATE # "" THEN
+                  ERR=1
+                  SLT.STATUS<1,P>='Slit serial':SLT.SLIT.SERIAL<1,P,R>
+                  SLT.STAUTS<1,P>:=' already received.'
+               END
+            END ELSE
+               SLT.STATUS<1,P,-1>='INV_SERIAL record ':ISTK.ID:' is missing.'
+               ERR=1
+            END
+         NEXT R
+      END ELSE
+         ERR=1
+         SLT.STATUS<1,P>='INV.WHSE record ':IWH.ID:' is not on file.'
+      END
+   END ELSE
+      ERR=1
+      SLT.STATUS<1,P>='INVENTORY # '
+      SLT.STATUS<1,P>:=SLT.SLIT.PROD<1,P>:' IS NOT ON FILE'
+   END
+NEXT P
+RETURN
+*
+****************
+PROCESS.SERIAL: 
+****************
+*
+MAT INAH.REC=''
+INAH.SERIAL.NO=SERIAL.NO
+INAH.TYPE = "A"
+INAH.SRC = "IS"
+INAH.PROD=PROD
+INAH.WHSE=WHSE
+INAH.LOC=LOC
+INAH.DATE=SLT.ENT.DATE
+INAH.PERIOD=SLT.PERIOD
+INAH.CUR.QTY=OLD.QTY
+INAH.NEW.QTY=NEW.QTY
+INAH.QTY = INAH.NEW.QTY - INAH.CUR.QTY
+INAH.CUR.DIAM=OLD.DIAM
+INAH.NEW.DIAM=NEW.DIAM
+INAH.CUR.STK.QTY=OLD.STK.QTY
+INAH.NEW.STK.QTY=NEW.STK.QTY
+INAH.OPER.ID=SLT.OPER.ID
+INAH.TRAN=SLT.ID[4,99]
+INAH.ACCT = CATG.INV 
+INAH.ADJ.ACCT = CATG.ADJ 
+INAH.DV.DP.CC = WHS.DIV:"00000"
+TMP.ARR = SERIAL.NO
+ACTION=2 ;* build records
+*T27990 v CALL ICS.IWH.SUB (CONO,PERIOD,TMP.ARR,TMP.CNT,LAST,ACTION,OPEN.FLAG)
+CALL ICS.IWH.SUB (CONO,PERIOD,TMP.ARR,TMP.CNT,LAST,ACTION,OPEN.FLAG,ERRMSG)
+IF ERRMSG # '' THEN
+   SLT.STATUS=ERRMSG
+   ERR=1 ;*T27990
+END ELSE
+*
+  IH.CNT=DCOUNT(IH.DATE,VM)
+  IDATE=SLT.ENT.DATE
+  LOCATE IDATE IN IH.DATE<1> SETTING PP ELSE NULL
+  BEGIN CASE
+     CASE PP=IH.CNT
+*T27653 IH.AMOUNT<1,PP>=IH.AMOUNT<1,PP>+DIFF.QTY
+        IH.AMOUNT<1,PP>=IH.AMOUNT<1,PP>+INAH.QTY
+     CASE PP > IH.CNT
+*T27653 IH.AMOUNT<1,PP>=IH.AMOUNT<1,PP>+DIFF.QTY
+        IH.AMOUNT<1,PP>=IH.AMOUNT<1,PP>+INAH.QTY
+        IH.DATE<1,PP>=IDATE
+     CASE 1
+*T27653 IH.AMOUNT<1,PP>=IH.AMOUNT<1,PP>+DIFF.QTY
+        IH.AMOUNT<1,PP>=IH.AMOUNT<1,PP>+INAH.QTY
+  END CASE
+END
+*T27990 ^
+RETURN
+*
+****************
+CHECK.QTY: 
+****************
+*
+QTY = ABS(DIFF.QTY)
+BEGIN CASE
+   CASE ISTK.CUR.QTY# ISTK.RSVB.QTY
+      ERR=1
+      SLT.STATUS='THIS SERIAL IS RESERVED AND CANNOT BE SLITTED.'
+   CASE QTY > ISTK.CUR.QTY
+      ERR=1
+      SLT.STATUS='NOT ENOUGH QTY AVAILABLE ON SERIAL'
+   CASE 1
+      IF QTY>IWLO.LOC.ON.HAND THEN
+         ERR=1
+         SLT.STATUS='NOT ENOUGH QTY IN LOCATION '
+         SLT.STATUS:=IWLO.ID
+      END ELSE
+         IF QTY>(IWH.ON.HAND-IWH.RESV) THEN
+            ERR=1
+            SLT.STATUS='NOT ENOUGH QTY IN WAREHOUSE '
+            SLT.STATUS:=IWH.ID
+         END
+      END
+END CASE
+RETURN
+*
+**************
+GET.UM.CNV: 
+**************
+*
+**COPY>ICSBP>INV.UM.CNV
+* COST TO STOCK = INT(((COST.QTY/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+* STOCK TO COST = INT(((STOCK.QTY/ICR.MT1)*ICR.DV1)*ICR.DV2+.5)
+*
+MAT INV.CNV.REC = ""
+BEGIN CASE
+  CASE INV.UNIT<1,2> = "SHT" AND INV.UNIT<1,3> = "LBS"
+    ICR.CNV = "MD0"; ICR.CNV1 = "MD0,"
+    ICR.DV1 = INV.M.WT; ICR.MT1 = 1; ICR.DV2 = 1
+    ICR.TYPE = 3; ICR.SCAL = 0
+  CASE INV.UNIT<1,2> = "PC" AND INV.UNIT<1,3> = "MSI"
+    ICR.CNV = "MD0"; ICR.CNV1 = "MD0,"
+    ICR.DV1 = INV.PAP.WIDTH/100; ICR.MT1 = 10; ICR.DV2 = 1
+    ICR.TYPE = 3; ICR.SCAL = 0
+  CASE INV.UNIT<1,2> = "FT" AND INV.UNIT<1,3> = "MSI"
+    ICR.CNV = "MD0"; ICR.CNV1 = "MD0,"
+    ICR.DV1 = INV.PAP.WIDTH/100; ICR.MT1 = 100; ICR.DV2 = 12
+    ICR.TYPE = 3; ICR.SCAL = 0
+  CASE INV.M.LINE = "FNGD"
+    ICR.CNV = "MD0"; ICR.CNV1 = "MD0,"
+    ICR.DV1 = 1; ICR.MT1 = 1; ICR.DV2 = 1000
+    ICR.TYPE = 3; ICR.SCAL = 0
+  CASE 1
+    ICR.CNV = "MD2"; ICR.CNV1 = "MD2,"
+    ICR.DV1 = 10; ICR.MT1 = 1; ICR.DV2 = 1
+    ICR.TYPE = 4; ICR.SCAL = 2
+END CASE
+*
+IF INV.COST.WT + 0 = 0 THEN INV.COST.WT = 100 
+RETURN
+*
+****************
+CALC.SLIT.AMT: 
+****************
+*
+SP.CNT=DCOUNT(SLT.SLIT.PROD,VM)
+*C41690 v
+*  FOR SP=1 TO SP.CNT
+*     SLT.SLIT.AMT<1,SP>=(SLT.SLIT.CST.QTY<1,SP>/1000)*(LOG.UN.PRICE/10000)
+*     SLT.SLIT.AMT<1,SP>=ICONV(SLT.SLIT.AMT<1,SP>,"MD2")
+*  NEXT SP
+*C41690 ^
+*T27653 v Use quantity for allocation - cost may have changed since SLIT
+*         TRAN record created.
+*  TOT.SLT = SUM(SLT.SLIT.AMT)
+   TOT.SLT = SUM(SLT.SLIT.CST.QTY) ;*base ratio on costing qtys
+   IF TOT.SLT = 0 THEN TOT.SLT = 1
+   BAL.ALLOC = SLT.LOG.USED.AMT
+   IF SLT.PRO.CODE = "Y" THEN
+     DENOM = SLT.LOG.SLIT.QTY
+   END ELSE
+     DENOM = SLT.LOG.SLIT.QTY + SLT.LOG.TRIM.QTY
+   END
+   FOR P = CNT TO 1 STEP -1
+      SLIT.PER = SLT.SLIT.CST.QTY<1,P> / DENOM
+      SLIT.PER = INT(SLIT.PER * 100 + .5)
+      RECV.ALLOC = SLT.LOG.USED.AMT * SLIT.PER
+      RECV.ALLOC = INT(RECV.ALLOC/100)
+*T27653 v
+      IF P # 1 THEN
+        BAL.ALLOC -= RECV.ALLOC
+      END ELSE RECV.ALLOC = BAL.ALLOC
+*T27653 ^
+      SLT.SLIT.AMT<1,P> = RECV.ALLOC
+   NEXT P
+;*
+;* if cost should be distributed proportionaly
+;* distrubution is based on cost percentage in the parent roll.
+;*
+*IF SLT.PRO.CODE="Y" THEN
+*   FOR SP=1 TO SP.CNT
+*      SLIT.PER=SLT.SLIT.AMT<1,SP>/TOT.SLT
+*      SLIT.PER=INT(SLIT.PER * 100 + .5)
+*      NEW.COST=SLT.LOG.USED.AMT * SLIT.PER
+*      NEW.COST=INT(NEW.COST/100)
+*      SLT.SLIT.AMT<1,SP>=NEW.COST
+*    NEW.QTY=SLT.LOG.USED.QTY * SLIT.PER
+*    NEW.QTY=INT(NEW.QTY/100)
+*    SLT.SLIT.CST.QTY<1,SP>=NEW.QTY
+*    SLT.SLIT.SKT.QTY=INT(((NEW.QTY/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+*   NEXT P
+*END
+*T27653 ^
+RETURN
+*
+91000 ERR.TYPE=1 ; CALL SYSCOM(MAT SYSCOM.REC) ; RETURN 
+92000 ERR.TYPE=2 ; CALL SYSCOM(MAT SYSCOM.REC) ; RETURN 
+93000 ERR.TYPE=3 ; CALL SYSCOM(MAT SYSCOM.REC)          
+99999 END

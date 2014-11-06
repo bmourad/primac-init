@@ -1,0 +1,672 @@
+   SUBROUTINE BOM.SUB(CONO,BOMNO,PDNO)
+*COPY>CPYLIB>COM1
+*COPY>ICS.CPYLIB>COM.INVENTORY
+*********************************************************************
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - ICSBP
+* PROGRAM     - BOM.SUB
+* BY          - JULIANNE RIVERA, C.B.A
+* DATE        - 08/12/91
+* DESCRIPTION
+* This program is use to maintain bill of materials for a
+* given product.
+* TASK MODS
+*     18606 01/06/95 LLH ADD BILL OF MATERIAL TYPE, P OR K FOR KITTING
+*T25740 edvard 07/23/2001 * Added CATG.TRK.LVL    
+*T26126 adelgado 03/01/2002 * Implement the LOCKED clause for READU.
+*
+*T27239 thompson 01/21/2003 * Fix issue with Fixed or Percentage on type
+*                             of BOM. 
+*T27385 lhelms 04/16/2003 * P TYPE BOM NOT ALLOWING FNGD ITEMS WITH RAW
+*                           MATERIALS
+*T28522 lross 04/13/2005 * Qty scaler problem on "F" types for "K"itted
+*                          BOM.
+*T28522 lross 08/15/2005 * Original fix incorrect.
+*********************************************************************
+*
+*--- INSERT FILES EQUATES
+*
+*COPY>PMC.CPYLIB>DEPARTMENT
+*COPY>ICS.CPYLIB>CATEGORY
+*COPY>PMC.CPYLIB>COST.CNTR
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>FNGD.BOM
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>GEN.XREF.SUB
+*COPY>CPYLIB>FILE.VARS
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+   MAT SYSCOM.REC =  ""; SYS.TYPE = 2
+*
+*--- INITIALIZATION
+*
+   ESN = ECD.SCRN.NO
+*
+   LINE.SPACE = 2
+   BEGIN.PAGE = 7
+   PAGE.SIZE = 6
+*
+*---- SET-UP FOR GEN.XREF
+*
+   MAT GEN.XREF.REC = ""
+   GXR.CO = CONO
+*
+*--- PRINT SCREEN
+*
+   FOR X = 1 TO SCV.REC.SIZE
+      SCV.REC(X)<ESN> = ""
+   NEXT X
+   ECD.ACTION = 2; CALL SCRN.EDIT
+*
+* READ CHECK CATEGORY OF FNGD IF THERE IS PDNO 
+*
+   IF PDNO # "" THEN
+      MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE ELSE
+         MAT CATG.REC = ""
+      END
+   END
+   GOTO 10
+5 *
+   FOR X = 1 TO SCV.REC.SIZE
+      SCV.REC(X)<ESN> = ""
+   NEXT X
+   ECD.ACTION = 6; CALL SCRN.EDIT
+*
+*--- PRINT BOM AND DESCRIPTION
+10 *
+   OLD.DESC = ""
+   OLD.START = 0; BOM.CCTR.DESC = ""; BOM.PROD.DESC = ""
+   ECD.NUM = 1; ECD.ACTION = 4; CALL SCRN.EDIT
+   BEGIN CASE
+      CASE ECD.RET.VALUE = "END"
+         GOTO 99999
+      CASE ECD.RET.VALUE = "N"
+         BOMNO = ECD.RET.VALUE
+         NEW.REC = 1; MAT BOM.REC = ""
+      CASE ECD.RET.VALUE = ""
+         GOSUB 1100
+         IF ECD.RET.VALUE = "" OR ECD.RET.VALUE = "END" THEN GOTO 10
+
+         GXR.NAME = "FNGD.BOM"
+         GXR.FILE = FNGD.BOM
+         GXR.XREF = FNGD.BOM.XREF
+         GXR.SRCH.ID = ECD.RET.VALUE
+         CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+         ECD.ACTION = 2; CALL SCRN.EDIT
+         IF GXR.ID = "" THEN GOTO 10
+      * T26126 v
+         MATREADU BOM.REC FROM FNGD.BOM, CONO:GXR.ID LOCKED
+            ERRMSG = 'BILL OF MATERIAL record is locked by user - ':GETUSERNAME(STATUS())
+            GOSUB 91000;GOTO 10 
+         END ELSE
+      * T26126 ^
+            RELEASE FNGD.BOM, CONO:GXR.ID
+            ERRMSG = "Cannot locate Bill Of Material # ":GXR.ID
+            GOSUB 91000; GOTO 10
+         END
+         ECD.RET.VALUE = GXR.ID
+         BOMNO = GXR.ID
+         ECD.NUM = 1; SCV.REC(ECD.NUM)<ESN> = BOMNO
+         ECD.ACTION = 5; CALL SCRN.EDIT
+         NEW.REC = 0
+      CASE 1
+         BOMNO = ECD.RET.VALUE
+      * T26126 v
+         MATREADU BOM.REC FROM FNGD.BOM, CONO:BOMNO LOCKED
+            ERRMSG = 'BILL OF MATERIAL record is locked by user - ':GETUSERNAME(STATUS())
+            GOSUB 91000;GOTO 10 
+         END THEN
+      * T26126 ^
+            NEW.REC = 0
+         END ELSE
+            ECD.NUM = 33; ECD.ACTION = 4; CALL SCRN.EDIT
+            IF ECD.RET.VALUE = "N" THEN
+               RELEASE FNGD.BOM, CONO:BOMNO
+               GOTO 10
+            END
+            NEW.REC = 1; MAT BOM.REC = ""
+         END
+   END CASE
+   IF NEW.REC THEN
+      GOSUB 1100
+      IF ECD.RET.VALUE = "" OR ECD.RET.VALUE = "END" THEN
+         GOTO 10
+      END
+      GOSUB 1200
+      IF ECD.RET.VALUE = "" OR ECD.RET.VALUE = "END" THEN
+         GOTO 10
+      END
+      LINES = 0
+      OPTION = "A"
+      LOOP
+         LN = LINES + 1
+         OLD.LINES = LINES
+         GOSUB 2000
+      WHILE LINES > OLD.LINES DO
+         GOSUB 2910
+      REPEAT
+      LN = LINES
+   END ELSE
+      IF PDNO # "" THEN
+         IF BOM.TYPE = "K" THEN
+*25892               IF CATG.R.S.ID = "N" THEN
+         END
+      END
+      OLD.DESC = BOM.DESC
+      ECD.NUM = 2; SCV.REC(ECD.NUM)<ESN> = BOM.DESC
+      ECD.ACTION = 5; CALL SCRN.EDIT
+      ECD.NUM = 3; SCV.REC(ECD.NUM)<ESN> = BOM.TYPE
+      ECD.ACTION = 5; CALL SCRN.EDIT
+      LN = 1; LINES = DCOUNT(BOM.PROD,VM)
+   END
+   GOSUB 2900; GOSUB 2950
+*
+*--- ENTER OPTION
+*
+   MORE = 1
+   LOOP
+      ECD.NUM = 31; SCV.REC(ECD.NUM)<ESN> = ""
+      ECD.ACTION = 4; CALL SCRN.EDIT
+      OPTION = ECD.RET.VALUE
+      BEGIN CASE
+         CASE OPTION = "E" OR OPTION = "END"
+            RELEASE FNGD.BOM, CONO:GXR.ID
+            MORE = 0
+         CASE OPTION = "F"
+            OK.TYPE = 1
+            IF BOM.TYPE = "K" THEN
+               NUM.PRODS = DCOUNT(BOM.PROD<1>,VM)
+               FOR I = 1 TO NUM.PRODS
+                  PROD = BOM.PROD<1,I>
+                  MATREAD INV.REC FROM INVENTORY, CONO:PROD ELSE
+                     MAT INV.REC = ""
+                  END
+                  IF INV.M.LINE # "FNGD" THEN
+                     OK.TYPE = 0
+                  END
+               NEXT I
+            END 
+            IF OK.TYPE = 1 THEN
+               IF BOMNO = "N" THEN
+                  READU BOMNO FROM CONTROL, CONO:"BOM" ELSE
+                     BOMNO = 1000
+                  END
+                  NOT.ON.FILE = 1
+                  LOOP
+                     IF BOMNO > 9999999999 THEN
+                        BOMNO = 1000
+                     END
+                     BOMNO = BOMNO + 1
+                     READU REC FROM FNGD.BOM, CONO:BOMNO THEN
+                        RELEASE FNGD.BOM, CONO:BOMNO
+                     END ELSE
+                        NOT.ON.FILE = 0
+                     END
+                  WHILE NOT.ON.FILE DO REPEAT
+                  ECD.NUM = 1; SCV.REC(ECD.NUM)<ESN> = BOMNO
+                  ECD.ACTION = 5; CALL SCRN.EDIT
+                  ERRMSG = "Please note the new Bill Of Material number "
+                  GOSUB 91000
+                  WRITE BOMNO ON CONTROL, CONO:"BOM"
+               END
+               CALL GEN.XREF.MAINT(GXR.CO,BOMNO,OLD.DESC,BOM.DESC,FNGD.BOM.XREF,PREFIX)
+
+               MATWRITE BOM.REC ON FNGD.BOM, CONO:BOMNO
+               MORE = 0
+            END ELSE
+               ERRMSG = "A (K)it type BOM only allows Finished Goods Products"
+               GOSUB 91000
+            END
+         CASE OPTION = "A"
+            LOOP
+               LN = LINES + 1
+               OLD.LINES = LINES
+               GOSUB 2000
+            WHILE LINES > OLD.LINES DO
+               GOSUB 2910
+            REPEAT
+            LN = LINES; GOSUB 2900; GOSUB 2950
+         CASE OPTION = "C"
+            GOSUB 2800
+            IF LNO THEN
+               LN = LNO
+               SLN = BEGIN.PAGE + LINE.SPACE * MOD(LN-1,PAGE.SIZE)
+               GOSUB 2100
+            END
+         CASE OPTION = "I" AND LINES > 0
+            GOSUB 2800
+            IF LNO THEN
+               BOM.DEPT = INSERT(BOM.DEPT,1,LNO,0,"")
+               BOM.CCTR = INSERT(BOM.CCTR,1,LNO,0,"")
+               BOM.CCTR.DESC = INSERT(BOM.CCTR.DESC,LNO,0,0,"")
+               BOM.PROD = INSERT(BOM.PROD,1,LNO,0,"")
+               BOM.WHSE = INSERT(BOM.WHSE,1,LNO,0,"")
+               BOM.PROD.DESC = INSERT(BOM.PROD.DESC,LNO,0,0,"")
+               BOM.Q.TYPE = INSERT(BOM.Q.TYPE,1,LNO,0,"")
+               BOM.Q.RATIO = INSERT(BOM.Q.RATIO,1,LNO,0,"")
+               LINES = DCOUNT(BOM.DEPT,VM)
+               OLD.START = 0
+               GOSUB 2900
+               LN = LNO
+               SLN = BEGIN.PAGE + LINE.SPACE * MOD(LN-1,PAGE.SIZE)
+               GOSUB 2100
+               IF VALUE = "END" THEN
+                  GOSUB 3000
+               END 
+            END
+         CASE OPTION = "D"
+            GOSUB 2800
+            GOSUB 3000
+         CASE OPTION = "S" OR OPTION = "SF"
+            LN = 1 + INT((LN-1)/PAGE.SIZE) * PAGE.SIZE + PAGE.SIZE
+            IF LN > LINES THEN LN = 1
+            GOSUB 2900
+         CASE OPTION = "SR"
+            LN = 1 + INT((LN-1)/PAGE.SIZE) * PAGE.SIZE - PAGE.SIZE
+            IF LN < 1 THEN LN = 1
+            GOSUB 2900
+         CASE OPTION = "ST"
+            LN = 1
+            GOSUB 2900
+         CASE OPTION = "SB"
+            LN = LINES
+            GOSUB 2900
+         CASE OPTION[1,1] = "S" AND NUM(OPTION[2,99])
+            LN.NO = OPTION[2,99] + 0
+            IF LN.NO < 1 OR LN.NO > LINES THEN
+               ERRMSG = "** Invalid selection **"
+               GOSUB 91000
+            END ELSE
+               LN = LN.NO
+               GOSUB 2900
+            END
+         CASE NOT(NUM(OPTION))
+            ERRMSG = "Invalid entry, please re-enter"
+            GOSUB 91000
+         CASE OPTION < 1 OR OPTION > 2
+            ERRMSG = "Out of range, please re-enter"
+            GOSUB 91000
+         CASE 1
+            ON OPTION GOSUB 1100,1200
+      END CASE
+   WHILE MORE DO REPEAT
+   GOTO 5
+*-----------------------*
+*---   SUBROUTINES   ---*
+*-----------------------*
+*
+*---- Description
+1100 *
+   ECD.NUM = 2; ECD.ACTION = 4; CALL SCRN.EDIT
+   IF ECD.RET.VALUE # "" AND ECD.RET.VALUE # "END" THEN
+      BOM.DESC = ECD.RET.VALUE
+   END
+   RETURN
+*
+*--- BOM TYPE (P)RODUCTION, (K)ITTING
+1200 *
+   ECD.NUM = 3; ECD.ACTION = 4; CALL SCRN.EDIT
+   IF ECD.RET.VALUE # "" AND ECD.RET.VALUE # "END" THEN
+      BOM.TYPE = ECD.RET.VALUE
+   END
+   RETURN
+*
+*--- LINE ENTRY
+*
+2000 *
+   GOSUB 2900
+   SLN = BEGIN.PAGE + LINE.SPACE * MOD(LN-1,PAGE.SIZE)
+   P_X  = 0 ; P_Y = SLN ; P_VALUE = LN "R#3" ; P_OPT = "CL"
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+2100 *
+   X = 4; Y = SLN; TYP = 1; MAXL = 5; O.R = "O"
+   IF BOM.DEPT<1,LN> # "" THEN
+      DEFAULT = BOM.DEPT<1,LN>
+   END
+   HMSG = "Enter Department number in the sequence it occurs"
+   CALL EDIT.SUB
+   BEGIN CASE
+      CASE VALUE = "END" 
+         IF OPTION = "A" THEN
+            BOM.DEPT = DELETE(BOM.DEPT,1,LN,0)
+            BOM.CCTR = DELETE(BOM.CCTR,1,LN,0)
+            BOM.CCTR.DESC = DELETE(BOM.CCTR.DESC,LN,0,0)
+            BOM.PROD = DELETE(BOM.PROD,1,LN,0)
+            BOM.WHSE = DELETE(BOM.WHSE,1,LN,0)
+            BOM.PROD.DESC = DELETE(BOM.PROD.DESC,LN,0,0)
+            BOM.Q.TYPE = DELETE(BOM.Q.TYPE,1,LN,0)
+            BOM.Q.RATIO = DELETE(BOM.Q.RATIO,1,LN,0)
+            P_X  = 0 ; P_Y = SLN ; P_VALUE = "" ; P_OPT = "CL"
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            P_X  = 0 ; P_Y = SLN+1 ; P_VALUE = "" ; P_OPT = "CL"
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         END ELSE
+            P_X  = 0 ; P_Y = SLN ; P_VALUE = LN "R#3" ; P_OPT = "CL"
+            P_X  := AM:4 ; P_Y := AM:SLN ; P_VALUE := AM:BOM.DEPT<1,LN> "L#5"
+            P_X  := AM:10 ; P_Y := AM:SLN ; P_VALUE := AM:BOM.CCTR<1,LN> "L#3"
+            P_X  := AM:34 ; P_Y := AM:SLN ; P_VALUE := AM:BOM.PROD<1,LN> "L#15"
+            P_X  := AM:50 ; P_Y := AM:SLN ; P_VALUE := AM:BOM.WHSE<1,LN> "L#4"
+            P_X  := AM:56 ; P_Y := AM:SLN ; P_VALUE := AM:BOM.Q.TYPE<1,LN> "L#1"
+            P_X  := AM:61 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(BOM.Q.RATIO<1,LN>,"MD4") "R#8"
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            P_X  = 0 ; P_Y = SLN+1 ; P_VALUE = "" ; P_OPT = "CL"
+            P_X  := AM:3 ; P_Y := AM:SLN+1 ; P_VALUE := AM:BOM.CCTR.DESC<LN> "L#30"
+            P_X  := AM:34 ; P_Y := AM:SLN+1 ; P_VALUE := AM:BOM.PROD.DESC<LN> "L#45"
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         END
+         GOTO 2799
+      CASE VALUE = ""
+         DEPT.DESC = ""
+      CASE 1
+         MATREAD DEPT.REC FROM DEPARTMENT, CONO:VALUE ELSE
+            ERRMSG = "Cannot locate Department # ":VALUE
+            GOSUB 91000; GOTO 2100
+         END
+   END CASE
+   BOM.DEPT<1,LN> = VALUE
+   BOM.CCTR.DESC<LN> = DEPT.DESC
+   P_X  = 3 ; P_Y = SLN+1 ; P_VALUE = BOM.CCTR.DESC<LN> "L#30" ; P_OPT = ""
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+2200 *
+   X = 10; Y = SLN; TYP = 1; MAXL = 3; O.R = "O"
+   IF BOM.CCTR<1,LN> # "" THEN
+      DEFAULT = BOM.CCTR<1,LN>
+   END
+   CALL EDIT.SUB
+   BEGIN CASE
+      CASE VALUE = "END"
+         GOTO 2100
+      CASE VALUE = ""
+      CASE INDEX(VALUE,"X",1) 
+         BOM.CCTR.DESC<LN> = DEPT.DESC
+      CASE 1
+         MATREAD CCTR.REC FROM COST.CNTR, CONO:VALUE ELSE
+            ERRMSG = "Cannot locate Cost Center # ":VALUE
+            GOSUB 91000; GOTO 2200
+         END
+* CSF 23233
+         IF BOM.DEPT<1,LN> = '' THEN
+            MATREAD DEPT.REC FROM DEPARTMENT, CONO:CCTR.DEPT ELSE
+               ERRMSG = "Cannot locate Department # ":CCTR.DEPT
+               GOSUB 91000; GOTO 2200
+            END
+            BOM.DEPT<1,LN> = CCTR.DEPT
+            P_X  = 4 ; P_Y = SLN ; P_VALUE = BOM.DEPT<1,LN> "L#5" ; P_OPT = ""
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         END
+*
+         LOCATE VALUE IN DEPT.CCTRS<1>,1 SETTING FND ELSE
+            ERRMSG = "Invalid Cost Center For Department ":BOM.DEPT<1,LN>
+            GOSUB 91000
+            GOTO 2200
+         END
+         BOM.CCTR.DESC<LN> = CCTR.DESC
+   END CASE
+   BOM.CCTR<1,LN> = VALUE
+   P_X  = 3 ; P_Y = SLN+1 ; P_VALUE = BOM.CCTR.DESC<LN> "L#30" ; P_OPT = ""
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+2300 *
+   X = 34; Y = SLN; TYP = 1; MAXL = 15; O.R = "O"
+   DEFAULT = BOM.PROD<1,LN>
+   HMSG = "Enter paper or regular product number"
+   CALL EDIT.SUB
+   BEGIN CASE
+      CASE VALUE = "END"
+         GOTO 2100
+      CASE VALUE = ""
+         X = 34; Y = SLN+1; TYP = 1; MAXL = 45; O.R = "O"
+         DEFAULT = BOM.PROD.DESC<LN>
+         HMSG = "Enter product description for cross reference"
+         CALL EDIT.SUB
+         GXR.NAME = "INVENTORY"
+         GXR.XREF = INVENTORY.XREF
+         GXR.FILE = INVENTORY
+         GXR.SRCH.ID = VALUE
+         CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+         ECD.ACTION = 2; CALL SCRN.EDIT
+         ECD.ACTION = 3; CALL SCRN.EDIT
+         OLD.START = 0
+         GOSUB 2900
+         P_X  = 0 ; P_Y = SLN ; P_VALUE = LN "R#3" ; P_OPT = "CL"
+         P_X  := AM:4 ; P_Y := AM:SLN ; P_VALUE := AM:BOM.DEPT<1,LN> "L#5"
+         P_X  := AM:10 ; P_Y := AM:SLN ; P_VALUE := AM:BOM.CCTR<1,LN> "L#3"
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         P_X  = 0 ; P_Y = SLN+1 ; P_VALUE = "" ; P_OPT = "CL"
+         P_X  := AM:3 ; P_Y := AM:SLN+1 ; P_VALUE := AM:BOM.CCTR.DESC<LN> "L#30"
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         IF GXR.ID = "" THEN
+            P_X  = 34 ; P_Y = SLN+1 ; P_VALUE = "" ; P_OPT = "CL"
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            GOTO 2300
+         END ELSE
+            MATREAD INV.REC FROM INVENTORY, CONO:GXR.ID ELSE
+               ERRMSG = "Cannot locate Inventory product # ":GXR.ID
+               GOSUB 91000; GOTO 2300
+            END
+            VALUE = GXR.ID
+         END
+      CASE 1
+         MATREAD INV.REC FROM INVENTORY, CONO:VALUE ELSE
+            ERRMSG = "Cannot locate Inventory product # ":VALUE
+            GOSUB 91000; GOTO 2300
+         END
+   END CASE
+   IF BOM.TYPE = "K" THEN
+      IF INV.M.LINE # "FNGD" THEN
+         ERRMSG = "A (K)it type BOM only allows Finished Goods Products"
+         GOSUB 91000; GOTO 2300
+      END
+      MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE ELSE
+         MAT CATG.REC = ""
+      END
+*25892         IF CATG.R.S.ID = "N" THEN
+      IF CATG.TRK.LVL#"R" THEN
+         ERRMSG='FNGD item  must be a receipt tracked item.'
+         GOSUB 91000; GOTO 2300
+      END
+   END
+* 27385
+   IF BOM.TYPE # "K" THEN
+      IF INV.M.LINE = "FNGD" THEN
+*     ERRMSG = "Finished Goods Products only allowed on (K)it type BOM"
+         ERRMSG = "Finished Goods Products"
+*     GOSUB 91000; GOTO 2300
+         GOSUB 91000
+      END
+   END
+   LOCATE VALUE IN BOM.PROD<1>,1 SETTING FND ELSE FND = LN
+   IF LN # FND THEN
+      ERRMSG = "Inventory product already exists on line # ":FND
+      GOSUB 91000; GOTO 2300
+   END
+   GOSUB 9000
+   BOM.PROD<1,LN> = VALUE
+   BOM.WHSE<1,LN> = ""
+   P_X  = 34 ; P_Y = SLN ; P_VALUE = BOM.PROD<1,LN> "L#15" ; P_OPT = ""
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   BOM.PROD.DESC<LN> = INV.FULL.DESC
+   P_X  = 34 ; P_Y = SLN+1 ; P_VALUE = INV.FULL.DESC "L#45" ; P_OPT = ""
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+2400 *
+   X = 56; Y = SLN; TYP = 1; MAXL = 1
+   VALDAT = "PýF"
+*      HMSG = "Enter (P)ercent, (F)ixed Quantity, or (T)able."
+   HMSG = "Enter (P)ercent, (F)ixed Quantity."
+   IF BOM.Q.TYPE<1,LN> # "" THEN
+      O.R = "O"; DEFAULT = BOM.Q.TYPE<1,LN>
+   END
+   IF BOM.TYPE = "K" THEN
+*T27239    O.R = "O"; DEFAULT = "P"
+      O.R = "O"; DEFAULT = "F"
+   END
+   CALL EDIT.SUB
+   IF VALUE = "END" THEN GOTO 2100
+   IF BOM.TYPE = "K" THEN
+*T27239    IF VALUE # "P" THEN
+      IF VALUE # "F" THEN ;* T27239
+         ERRMSG = "For Kit type BOM Q.RATIO must be 'F'" ;* T27239
+         GOSUB 91000
+         GOTO 2400
+      END
+   END
+   BOM.Q.TYPE<1,LN> = VALUE
+2500 *
+   X = 61; Y = SLN; MAXL = 8; TYP = 4
+   IF BOM.TYPE = "K" THEN
+      SCALER = 0
+      TYP = 3
+   END ELSE
+      IF BOM.Q.TYPE<1,LN> = "P" THEN
+         SCALER = 4
+      END ELSE
+         SCALER = ICR.CNV[3,1]
+         IF SCALER = "0" THEN TYP = 3
+      END
+   END
+   IF BOM.Q.RATIO<1,LN> # "" THEN
+      IF BOM.Q.TYPE<1,LN> = "P" THEN
+         DEFAULT = OCONV(BOM.Q.RATIO<1,LN>,"MD4")
+      END ELSE
+         DEFAULT = OCONV(INT(((BOM.Q.RATIO<1,LN> / ICR.DV1) * ICR.MT1) / ICR.DV2 + .5),ICR.CNV)
+         IF BOM.TYPE = 'K' THEN DEFAULT=INT(DEFAULT/10+.5) ;*T28522
+      END
+      O.R = "O"
+   END
+   CALL EDIT.SUB
+   IF VALUE = "END" THEN GOTO 2100
+*T28522 v Un-comment out next 3 lines 08/15/05
+   IF BOM.TYPE = "K" THEN
+      BOM.Q.RATIO<1,LN> = VALUE * 10000
+   END ELSE
+      IF BOM.Q.TYPE<1,LN> = "P" THEN
+         BOM.Q.RATIO<1,LN> = VALUE 
+      END ELSE
+         BOM.Q.RATIO<1,LN> = INT(((VALUE / ICR.MT1) * ICR.DV1) * ICR.DV2 + .5)
+      END
+   END
+*T28522 ^ Un-comment out above line 08/15/05
+2799 *
+   LINES = DCOUNT(BOM.PROD,VM)
+   RETURN
+*
+*--- GET LINE NUMBER
+*
+2800 *
+   GOSUB 2900
+   ECD.MINV = START.LINE
+   ECD.MAXV = LAST.LINE
+   ECD.NUM = 32
+   ECD.ACTION = 4; CALL SCRN.EDIT
+   IF ECD.RET.VALUE = "END" THEN LNO = 0 ELSE LNO = ECD.RET.VALUE
+   RETURN
+*
+*--- SCROLL
+*
+2900 *
+   START.LINE = 1 + INT((LN-1)/PAGE.SIZE) * PAGE.SIZE
+   LAST.LINE = START.LINE + PAGE.SIZE -1
+   IF LAST.LINE > LINES THEN LAST.LINE = LINES
+   IF START.LINE = OLD.START THEN RETURN
+   OLD.START = START.LINE
+   ECD.NUM = 28
+   SCV.REC(ECD.NUM)<ESN> = INT(LAST.LINE / PAGE.SIZE + .9) "R%2"
+   ECD.ACTION = 5; CALL SCRN.EDIT
+   CNT = 1
+   FOR N = START.LINE TO LAST.LINE
+      SSLN = BEGIN.PAGE + LINE.SPACE * MOD(N-1,PAGE.SIZE)
+      P_X  = 0 ; P_Y = SSLN ; P_VALUE = N "R#3" ; P_OPT = "CL"
+      P_X  := AM:4 ; P_Y := AM:SSLN ; P_VALUE := AM:BOM.DEPT<1,N> "L#5"
+      P_X  := AM:10 ; P_Y := AM:SSLN ; P_VALUE := AM:BOM.CCTR<1,N> "L#3"
+      P_X  := AM:34 ; P_Y := AM:SSLN ; P_VALUE := AM:BOM.PROD<1,N> "L#15"
+      P_X  := AM:50 ; P_Y := AM:SSLN ; P_VALUE := AM:BOM.WHSE<1,N> "L#4"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      MATREAD INV.REC FROM INVENTORY, CONO:BOM.PROD<1,N> ELSE
+         MAT INV.REC = ""
+         INV.FULL.DESC = STR("?",40)
+      END
+      GOSUB 9000
+      P_X  = 56 ; P_Y = SSLN ; P_VALUE = BOM.Q.TYPE<1,N> "L#1" ; P_OPT = ""
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      IF BOM.Q.TYPE<1,N> = "P" THEN
+         P_X  = 61 ; P_Y = SSLN ; P_VALUE = OCONV(BOM.Q.RATIO<1,N>,"MD4") "R#8" ; P_OPT = ""
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      END ELSE
+         IF BOM.TYPE = 'K' THEN BOM.Q.RATIO<1,N>=INT(BOM.Q.RATIO<1,N>/10+.5) ;*T28522
+         P_X  = 61 ; P_Y = SSLN ; P_VALUE = OCONV(INT(((BOM.Q.RATIO<1,N> / ICR.DV1) * ICR.MT1) / ICR.DV2 + .5),ICR.CNV1) "R#8" ; P_OPT = ""
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         IF BOM.TYPE = 'K' THEN BOM.Q.RATIO<1,N> *= 10 ;*T28522
+      END
+      IF BOM.CCTR<1,N> # "" AND BOM.CCTR.DESC<N> = "" THEN
+         MATREAD CCTR.REC FROM COST.CNTR, CONO:BOM.CCTR<1,N> ELSE
+            MATREAD DEPT.REC FROM DEPARTMENT, CONO:BOM.DEPT<1,N> THEN
+               CCTR.DESC = DEPT.DESC
+            END ELSE
+               CCTR.DESC = STR("?",30)
+            END
+         END
+         BOM.CCTR.DESC<N> = CCTR.DESC
+      END
+      P_X  = 3 ; P_Y = SSLN+1 ; P_VALUE = BOM.CCTR.DESC<N> "L#30" ; P_OPT = ""
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      BOM.PROD.DESC<N> = INV.FULL.DESC
+      P_X  = 34 ; P_Y = SSLN+1 ; P_VALUE = BOM.PROD.DESC<N> "L#45" ; P_OPT = ""
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      CNT = CNT + 1
+   NEXT N
+   FOR N = CNT TO PAGE.SIZE
+      SSLN = BEGIN.PAGE + LINE.SPACE * MOD(N-1,PAGE.SIZE)
+      P_X  = 0 ; P_Y = SSLN ; P_VALUE = "" ; P_OPT = "CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      P_X  = 0 ; P_Y = SSLN+1 ; P_VALUE = "" ; P_OPT = "CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   NEXT N
+   RETURN
+*
+*---- Page numbers
+2910 *
+   ECD.NUM = 28
+   SCV.REC(ECD.NUM)<ESN> = INT(LN / PAGE.SIZE + .9) "R%2"
+   ECD.ACTION = 5; CALL SCRN.EDIT
+2950 *
+   ECD.NUM = 29
+   SCV.REC(ECD.NUM)<ESN> = INT(LINES / PAGE.SIZE + .9) "R%2"
+   ECD.ACTION = 5; CALL SCRN.EDIT
+   RETURN
+*
+*---- DELETE LINE
+3000 *
+   IF LNO # "" THEN
+      BOM.DEPT = DELETE(BOM.DEPT,1,LNO,0)
+      BOM.CCTR = DELETE(BOM.CCTR,1,LNO,0)
+      BOM.CCTR.DESC = DELETE(BOM.CCTR.DESC,LNO,0,0)
+      BOM.PROD = DELETE(BOM.PROD,1,LNO,0)
+      BOM.WHSE = DELETE(BOM.WHSE,1,LNO,0)
+      BOM.PROD.DESC = DELETE(BOM.PROD.DESC,LNO,0,0)
+      BOM.Q.TYPE = DELETE(BOM.Q.TYPE,1,LNO,0)
+      BOM.Q.RATIO = DELETE(BOM.Q.RATIO,1,LNO,0)
+      LINES = DCOUNT(BOM.PROD,VM)
+      IF LN > LINES THEN LN = LN - 1
+      OLD.START = 0; GOSUB 2900; GOSUB 2950
+   END
+   RETURN
+*
+*---- INVENTORY CONVERSION
+9000 *
+*COPY>ICSBP>INV.UM.CNV
+   RETURN
+*
+*--- ERROR ROUTINE
+91000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+* 91000 *
+*       PRINT @(0,23) : ERRMSG : CL :
+*       INPUT REPLY :
+*       PRINT @(0,23) : CL :
+*       RETURN
+99999 *
+   ECD.ACTION=99;CALL SCRN.EDIT
+   RETURN
+END

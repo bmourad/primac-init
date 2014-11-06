@@ -1,0 +1,231 @@
+PROGRAM TCL.HOST.TO.PC
+*
+** SBClient Host 3GL API
+** Copyright (C) Ardent Software Inc. 1998
+** Copyright (C) UniData, Inc. 1996, 1997
+** Copyright (C) System Builder Corporation. 1995
+**
+**      This software is the proprietary property and contains
+**      trade secrets of Ardent Software, Inc. Any unauthorized use,
+**      disclosure or duplication is strictly prohibited.
+**      All rights reserved.
+*
+*
+********************************************************************
+*-*  TCL file conversion parser
+*
+*
+*-* SYNTAX:
+*   CMD hostfile selection [FIELDS xx xx ] TO dosfile [TYPE xxx ] [(opts]
+*
+*
+*-* hostfile:
+*   HOST file name
+*-* selection:
+*   itemid(s):               xxx xxx xxx
+*   selection criterion:     '= "ABC]" with xxx > "xyz"  etc...'
+*-* FIELDS:
+*   Dictionary item(s) to format the fields
+*-* TO:
+*   Pick / DOS line delimiter
+*-* dosfile:
+*   (full target DOS path)
+*-* TYPE xxx
+*   where xxx is the name of the DATA/C file conversion object
+*-* opts:
+*   options required
+*   'O' overwrite
+*   'A' append
+*   'Z' no status
+*   'D' debug mode
+*   NOTE: X and B options not req'd as they depend on the 'TYPE' specified
+*
+********************************************************************
+*
+ INCLUDE TUBP SPECIAL.H
+ INCLUDE TUBP CASE.INVERT.OFF.H
+ INCLUDE TUBP TU.API.H
+ INCLUDE TUBP ROC.MAIN.H
+ INCLUDE TUBP TU.ERRORCODES.H
+ INCLUDE TUBP TRANSFER.OPTIONS.H
+ INCLUDE TUBP DOS.PATH.H
+ INCLUDE TUBP USER.INCLUDE.H
+*
+DEFAULT.CONVTYPE = 'ASCII'
+DOSDIR = DEFT.DOS.PATH; * Temp file storage directory
+PICK.FILE = ''; DOSFILE = ''; CONV.HANDLE = ''
+OPTIONS = ''; CONVTYPE = ''
+SELECTION = ''; FIELDLIST = ''
+STATUS = ''
+*
+ INCLUDE TUBP GET.COMMAND.LINE.H
+*
+TCL.LINE = TRIM(TCL)
+IF TCL.LINE = "" THEN
+GOTO 10; * Useage
+END
+*
+FIELDS.USED = INDEX(TCL.LINE,' FIELDS ',1)
+TO.USED = INDEX(TCL.LINE,' TO ',1)
+TYPE.USED = INDEX(TCL.LINE,' TYPE ',1)
+OPTS.USED = INDEX(TCL.LINE,' (',1)
+*
+IF TO.USED THEN
+CALL TU.CHANGE(' TO ', AM, TCL.LINE)
+END ELSE
+CRT "No Destination File"
+GOTO 10; * Useage
+END
+PICKLINE = TRIM(TCL.LINE<1>)
+*
+*-* Parse out and dict fileds
+*
+DOSLINE = TRIM(TCL.LINE<2>)
+IF FIELDS.USED THEN
+CALL TU.CHANGE(' FIELDS ',AM, PICKLINE)
+FIELDLIST = PICKLINE<2>
+PICKLINE = PICKLINE<1>
+END
+*
+*-* Parse out the pick file
+*
+FND = INDEX(PICKLINE,' ',1)
+IF FND THEN
+PICK.FILE = PICKLINE[1,FND-1]
+SELECTION = PICKLINE[FND+1,LEN(PICKLINE)]
+END ELSE
+CRT "No Host File Specified"
+GOTO 10; * Useage
+END
+*
+*-* Parse out the options and type
+*
+IF OPTS.USED THEN
+CALL TU.CHANGE(' (',AM, DOSLINE)
+OPTIONS = DOSLINE<2>
+DOSLINE = DOSLINE<1>
+END
+IF TYPE.USED THEN
+CALL TU.CHANGE(' TYPE ',AM, DOSLINE)
+CONVTYPE = DOSLINE<2>
+DOSLINE = DOSLINE<1>
+END
+DOSFILE = DOSLINE
+*
+IF CONVTYPE = '' THEN CONVTYPE = DEFAULT.CONVTYPE
+IF SELECTION = '' THEN SELECTION = '*'
+*
+*-* Show the parsed result if DEBUG options used
+*
+IF INDEX(OPTIONS,DEBUGOPT,1) THEN
+CRT 'PICK.FILE  ':PICK.FILE
+CRT 'SELECTION  ':SELECTION
+CRT 'CONVTYPE   ':ICONV(CONVTYPE,'MCU')
+CRT 'FIELDS     ':FIELDLIST
+CRT 'DOSFILE    ':DOSFILE
+CRT 'OPTIONS    ':OPTIONS
+END
+USEAGE.ERROR = TRUE
+BEGIN CASE
+CASE PICK.FILE = ''; CRT 'No Host File'
+CASE SELECTION = ''; CRT 'No Selection'
+CASE DOSFILE = ''; CRT 'No Dos File'
+CASE 1; USEAGE.ERROR = FALSE
+END CASE
+IF USEAGE.ERROR THEN GOTO 10; * Useage
+OPEN PICK.FILE TO PICKFL ELSE
+MSG = 'unable to open ':PICK.FILE
+GOTO 20; * Error
+END
+*
+*-* check for usgae of BY-EXP as this isn't supported.
+*
+IF INDEX(SELECTION, 'BY-EXP', 1) OR INDEX(SELECTION, 'BY.EXP', 1) THEN
+MSG = 'Invalid BY-EXP usage for output destination.'
+GOTO 20; * Error
+END
+*
+*-* Create the definition for the RPC transfer srt
+*
+CONVCLASS = ICONV(TRIM(CONVTYPE):'CLASS','MCL')
+DEFN = ''
+DEFN<1> = 'HOSTPCDEFN'; * Direction control for class
+DEFN<2> = PICK.FILE; * Pick host file name
+DEFN<3> = DOSFILE; * DOS file name
+DEFN<6> = FIELDLIST; * dict item(s) (if any)
+DEFN<5> = SELECTION; * selection crit or item(s)
+DEFN<4> = ''; * Selection suffix
+DEFN<8> = 1; * Indicates Pick to DOS (flag)
+DEFN<9> = OPTIONS; * TCL Transfer options
+DEFN<10> = -1; * this is the MV pos in the TXDEFN rec
+DEFN<15> = ''; * Description  (not used)
+DEFN<17> = DOSDIR; * sbopath need to get this from SB api
+DEFN<18> = 'SBFTP.TMP'; * Temp file name in sbopath
+DEFN<22> = CONVTYPE; * File conversion object name
+DEFN<24> = 'HOST'; * Client Handle for the class (N/A)
+*
+*-* Initialise the rpc server
+*
+VALS = NUL
+STATUS = 0
+CALL RPC.TU.PC.DOWNLOAD(DEFN, VALS, STATUS)
+IF STATUS THEN
+MSG = 'Unable to initialise file transfer STATUS =':STATUS
+GOTO 20; * Error
+END
+*
+*-* Initialise the ROC object handler
+*
+CALL TU.INIT(STATUS)
+IF STATUS THEN
+MSG = 'Unable to initialise ROC class'; GOTO 20; * Error
+END
+*
+*-* Create the file transfer object in DATA/c
+*
+CONV.HANDLE = 0; STATUS = 0
+ATTR = "parent"; VALS = "this"
+CALL ROC.CREATE(CONVCLASS, ATTR, VALS, CONV.HANDLE, STATUS)
+IF STATUS THEN
+MSG = 'Error creating ':CONVCLASS:' status ':STATUS
+GOTO 20; * Error
+END
+*
+*-* Pass the DEFN record to the file conversion object
+*
+CALL ROC.SET(CONV.HANDLE, "defn_rec", DEFN, STATUS)
+IF STATUS THEN
+MSG = 'Unable to set defn_rec attribute in ':CONVCLASS; GOTO 20; * Error
+END
+*
+*-* Execute the conversion object
+*
+RVAL = NUL
+CALL ROC.GET(CONV.HANDLE, "execute", RVAL, STATUS)
+IF STATUS THEN
+MSG = 'File conversion error in ':CONVCLASS; GOTO 20; * Error
+END
+IF RVAL#FTE.CONVERSION.COMPLETE THEN
+MSG = 'File conversion error in ':CONVCLASS:' [':RVAL:']'
+GOTO 20; * Error
+END
+MSG = 'Completed'; GOTO 20; * Display msg
+STOP
+*
+10 * USEAGE:*
+MSG = 'HOST.TO.PC hostfile selection [FIELDS xx] TO dosfile [TYPE xx] [(opts]'
+MSG = 'Useage :':MSG
+*
+20 * ERROR:*
+*-* Destroy the created object(s)
+IF CONV.HANDLE THEN
+RVAL = NUL; STATUS = NUL
+CALL ROC.DESTROY(CONV.HANDLE, STATUS)
+IF STATUS THEN MSG = 'Error destroying ':CONVCLASS
+END
+SLEEP 2
+CRT MSG
+IF PTERM THEN EXECUTE "PTERM CASE INVERT"
+STOP
+*****************************************************************
+END

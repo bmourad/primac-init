@@ -1,0 +1,155 @@
+SUBROUTINE ICSRSRE_WRITE_QTY
+********************************************************************************
+*   Program name :- ICSRSRE_WRITE_QTY
+*   Created:- 5/17/2004 RAZI MOHIUDDIN
+*------------------------------------------------------------------------------*
+* In Properties:
+* --------------
+* Out Properties:
+* ---------------
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB INV_SERIAL
+$INCLUDE ICS.CPYLIB INV.CNV
+$INCLUDE PMC.CPYLIB PO
+* Insert method code here
+STATUS = RBO.getProperty('','Qty',Qty)
+STATUS = RBO.getProperty('','UOM',UOM)
+STATUS = RBO.getProperty('','GRIDCNT',GRIDCNT)
+
+STATUS = RBO.getProperty('','ID',ID)
+STATUS = RBO.getProperty('','PostDate',PostDate)
+STATUS = RBO.getProperty('','PoLine',PoLine)
+STATUS = RBO.getProperty('','Whse',Whse)
+
+POS = INDEX(ID,"!",1)
+PO_NO = ID[1,POS-1]
+MAN_NO =ID[POS+1,99]
+CONO = ID[1,3]
+S.POST.DATE=PostDate
+S.PO.LINE.NO=PoLine
+S.WHSE=Whse
+TEMP.STK.QTY = ''
+TEMP.ROLL.WEIGHT = ''
+ERRMSG =''
+OPEN "","PO" TO PO ELSE
+  ERRMSG = "CANNOT OPEN PO FILE"; GOTO 93000
+END
+
+S.QTY.ENTERED=Qty
+S.UNIT=UOM
+GRIDCOUNT=GRIDCNT
+DIFF.UM=''
+STOREQTY=""
+NEW.OPEN=""
+NEW.ALLOC=""
+FOR I=1 TO GRIDCOUNT
+	
+TEMP.QTY.ENTERED=0
+IF S.UNIT<1,I> = "LBS" OR S.UNIT<1,I> = "MSI" THEN 
+  	
+	TEMP.QTY.ENTERED = S.QTY.ENTERED<1,I>
+*  IF DIFF.UM<I> = "Y" THEN
+  IF ICR.DV1<I,2> # '' THEN
+  		TEMP.ROLL.WEIGHT = S.QTY.ENTERED<1,I>
+  		IF ICR.CNV<I,2> = "MD0" THEN
+    			S.QTY.ENTERED<1,I> = INT(((S.QTY.ENTERED<1,I>/ICR.MT1<I,2>)*ICR.DV1<I,2>)*ICR.DV2<I,2> + .5)
+  		END
+  	IF ICR.CNV<I,1> = "MD0" THEN
+    		IF ICR.CNV<I,2> # "MD0" THEN
+      			S.QTY.ENTERED<1,I> = S.QTY.ENTERED<1,I> * 10
+    		END
+    		S.QTY.ENTERED<1,I> = INT(((S.QTY.ENTERED<1,I>/ICR.DV1<I,1>)*ICR.MT1<I,1>)/ICR.DV2<I,1> + .5)
+    		TEMP.STK.QTY = S.QTY.ENTERED<1,I> 
+    		S.QTY.ENTERED<1,I> = INT(((S.QTY.ENTERED<1,I>/ICR.MT1<I,1>)*ICR.DV1<I,1>)*ICR.DV2<I,1> + .5)
+  	END ELSE
+    		S.QTY.ENTERED<1,I> = S.QTY.ENTERED<1,I> * ICR.MT1<I,1> * 10
+    		TEMP.STK.QTY = ""
+  	END
+  END ELSE
+  	IF ICR.CNV<I,1> = "MD0" THEN
+    		TEMP.STK.QTY = S.QTY.ENTERED<1,I> 
+    		S.QTY.ENTERED<1,I> = INT(((S.QTY.ENTERED<1,I>/ICR.MT1<I,1>)*ICR.DV1<I,1>)*ICR.DV2<I,1> + .5)
+  	END ELSE
+    		S.QTY.ENTERED<1,I> = S.QTY.ENTERED<1,I> * 10
+    		TEMP.STK.QTY = ""
+  	END
+  END
+  TEMP.ROLL.WEIGHT = S.QTY.ENTERED<1,I>
+  STOREQTY<1,I> =S.QTY.ENTERED<1,I>
+END ELSE
+
+
+ STOREQTY<1,I> =S.QTY.ENTERED<1,I>
+END
+NEXT I
+
+STATUS = RBO.setProperty('','CALCQTY',STOREQTY)
+
+*************WARNING MSGS**********************
+WARNMSG=''
+MATREAD PO.REC FROM PO,PO_NO ELSE
+    ERRMSG = "P/O record cannot be found"
+    GOTO 93000
+END
+   PROB = 0
+   TOT = ""; SUM = ""
+   S.QTY=STOREQTY
+   LINE.CNT = GRIDCOUNT 
+   FOR LPTR = 1 TO LINE.CNT
+      IF S.POST.DATE<1,LPTR> = "" THEN
+        POLINE = S.PO.LINE.NO<1,LPTR>
+*STATUS=RBO.setProperty('','temp',POLINE)
+        TOT<1,POLINE> = TOT<1,POLINE> + S.QTY<1,LPTR>
+
+        IF S.WHSE<1,LPTR> = PO.WHSE<1,POLINE> THEN 
+          SUM<1,POLINE> = SUM<1,POLINE> + S.QTY<1,LPTR>
+        END
+      END
+    NEXT LPTR
+
+    PLCNT = DCOUNT(PO.PROD.NUM,@VM)
+STATUS = RBO.setProperty('','MTEST',PO.PROD.NUM)
+STATUS = RBO.setProperty('','MTEST2',TOT)
+
+    FOR I = 1 TO PLCNT
+*STATUS=RBO.setProperty('','temp',PO.QTY.OPEN:"--":TOT)
+
+      IF PO.QTY.OPEN<1,I> <> "" THEN
+        NEW.OPEN<1,I> = PO.QTY.OPEN<1,I> - TOT<1,I>
+      
+*  T28054 v
+*      IF NEW.OPEN < 0 AND PO.QTY.OPEN<1,I> > 0 THEN
+*        IF INT(NEW.OPEN / PO.QTY.OPEN<1,I>) = 0 THEN
+*          NEW.OPEN = 0
+*        END
+*      END
+* T28054 ^
+      IF NEW.OPEN<1,I> < 0 THEN
+        NEW.OPEN<1,I> = 0
+       WARNMSG<1,I> = "Warning! Received more than ordered for P/O line #":I
+	* WARNMSG = "Warning! Received more than ordered for P/O line #":I
+      END
+      END
+       NEW.ALLOC = SUM(PO.JB.OPEN<1,I>) - SUM<1,I>
+      IF NEW.ALLOC < 0 THEN NEW.ALLOC = 0
+      IF NEW.OPEN < NEW.ALLOC THEN
+        ERRMSG = "Remaining allocation exceeds P/O open for P/O line #":I
+	 LINE.STATUS<1,I> = ERRMSG
+        ERRMSG=""
+	 GOTO 93000
+      END 
+    NEXT I
+
+ STATUS = RBO.setProperty('','WarnMsg',WARNMSG)
+***********************************************
+RETURN
+
+93000
+STATUS = RBO.setProperty('','ServerStatus',1)
+STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+RETURN
+
+
+

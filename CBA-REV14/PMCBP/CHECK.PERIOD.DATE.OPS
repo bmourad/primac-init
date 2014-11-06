@@ -1,0 +1,256 @@
+   SUBROUTINE CHECK.PERIOD.DATE.OPS(CONO,DATE,PERIOD,DIVISION,ERR.FLG,ERR,COMPANY,CONTROL)
+*************************************************************
+* REVISION    - [10.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - ICSBP
+* PROGRAM     - CHECK.PERIOD.DATE
+* BY          - JULIANNE RIVERA, VERCOM SOFTWARE, INC
+* DATE        - 02/18/97
+* DESCRIPTION
+*T25740 epitka 04/03/2002 * REV12
+*T26685 cmykleb 08/15/2002 * Give user a warning if fiscal record is not
+*                            set up for multiple divisions.
+*T26906 lross 10/09/2002 * Error in determination of date problem.
+*T27905 lross 01/28/2004 * Use PRODUCTION.WEEKS CONTROL record first.
+*T28152 lross 06/02/2004 * Version for OPS copied from CHECK.PERIOD.DATE.
+*ENDDOC
+*************************************************************
+*
+*---- FILE EQUATES
+*
+*COPY>PMC.CPYLIB>SALESDATES
+*COPY>PMC.CPYLIB>FISCAL
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>CPYLIB>CHAR
+*
+   DEFFUN DIVISION.POSITION(COMP.NO,CONTROL.FILE,DIV.NO)
+   ERR.FLG='' ; ERR=''
+*
+   MATREAD FISCAL.REC FROM CONTROL, CONO:"OPFISCAL" ELSE
+      ERR.FLG = 2
+      ERR = "OPS Control Fiscal record is missing"
+      GOTO 99999
+   END
+   MATREAD SALESDATES.REC FROM CONTROL, CONO:"SALESDATES" ELSE
+      ERR.FLG = 2
+      ERR = "Salesdates Control Record Is Missing"
+      GOTO 99999
+   END
+   READ OREC FROM CONTROL, CONO:"OPENDATES" ELSE
+      ERR.FLG = 2
+      ERR = "Opendates Control Record Is Missing"
+      GOTO 99999
+   END
+   MATREAD COMP.REC FROM COMPANY, CONO ELSE
+      ERR.FLG = 2
+      ERR = "Company Record Is Missing"
+      GOTO 99999
+   END
+   READV JCS.YR4 FROM CONTROL, CONO:"JCFISCAL",1 ELSE
+      ERR.FLG = 2
+      ERR = "JCFISCAL Control Record Is Missing"
+      GOTO 99999
+   END
+*T26906 v
+   READ NUM.PERIODS FROM CONTROL, CONO:'ACCT.PERIODS' ELSE
+     NUM.PERIODS = 12
+   END
+   READ DIV.SEC.REC FROM CONTROL, CONO:'DIV.SECURITY' ELSE
+     DIV.SEC.REC='N'; DIV.SEC.REC<2>='N'
+   END
+*T26906 ^
+*
+*T26906 IF DIVISION='ALL' THEN
+   FOUND=0
+   IF DIVISION='ALL' AND DIV.SEC.REC<2>='Y' THEN
+*T28152 v CNT=DCOUNT(FR.CURR.PER<1>,VM)
+      LOCATE MINIMUM(FR.CURR.PER) IN FR.CURR.PER<1>,1 SETTING CNT ELSE CNT=1
+   END ELSE
+      CNT=1
+      DIV.POS=DIVISION.POSITION(CONO,CONTROL,DIVISION)
+      BEGIN CASE
+         CASE DIV.POS<1,1>=''
+            DIV.POS=DIV.POS<1,2>
+         CASE DIV.POS<1,1>='-2' 
+            ERR=DIV.POS<1,2>
+            ERR.FLG=2
+            GOTO 99999
+      END CASE
+   END
+   IF NOT(ERR.FLG) THEN
+      FOR CC=1 TO CNT UNTIL (ERR.FLG)
+         IF CNT#1 THEN DIV.POS=CNT
+*T26906  NUM.PERIODS = DCOUNT(OREC,AM)
+         CURRENT.PERIOD=FR.CURR.PER<1,DIV.POS>
+*T26685 v
+         IF CURRENT.PERIOD = "" THEN
+            ERR.FLG = 2
+            ERR = "OPFISCAL Control Record is not set up for this division"
+            GOTO 99999
+         END
+*T26685 ^
+         CUR.MON=CURRENT.PERIOD[5,2]
+         CUR.YEAR = CURRENT.PERIOD[1,4]
+         CURR.YR = CURRENT.PERIOD[1,4]
+         BEGIN CASE
+            CASE PERIOD # ""
+               GOSUB CHECK.PERIOD
+            CASE DATE # ""
+               GOSUB CHECK.DATE
+         END CASE
+      NEXT CC
+   END
+*
+   GOTO 99999
+*
+**************************************************************************
+******* S U B R O U T I N E S ********************************************
+**************************************************************************
+*
+************
+CHECK.DATE: 
+************
+*
+   PERIOD = "";ERR.FLG = 0
+*T27905 v First test PRODUCTION.WEEKS
+   BEGIN CASE
+   CASE CUR.MON < (NUM.PERIODS - 1)
+     MAX.PERIOD = CUR.YEAR:CUR.MON+2'R%2'
+   CASE CUR.MON < NUM.PERIODS
+     MAX.PERIOD = CUR.YEAR+1:'01'
+   CASE 1
+     MAX.PERIOD = CUR.YEAR+1:'02'
+   END CASE
+   READ PRODUCTION.REC FROM CONTROL, CONO:CUR.YEAR:"PRODUCTION.WEEKS" ELSE
+     PRODUCTION.REC = ""
+   END
+   IF PRODUCTION.REC # "" THEN
+     LOCATE DATE IN PRODUCTION.REC<1>,1 BY 'AR' SETTING PW ELSE NULL
+     IF PW <= DCOUNT(PRODUCTION.REC<1>,VM) THEN
+       PERIOD = CUR.YEAR:PRODUCTION.REC<2,PW>'R%2'
+       IF PERIOD < CURRENT.PERIOD THEN
+         ERR = 'WARNING, Date is prior to Current Period!'
+         PERIOD = CURRENT.PERIOD
+       END
+       IF PERIOD > MAX.PERIOD THEN
+         ERR='WARNING, Date is outside of the range of two periods in the future.'
+         PERIOD = MAX.PERIOD
+       END
+     END ELSE
+       READ PRODUCTION.REC FROM CONTROL, CONO:CUR.YEAR+1:"PRODUCTION.WEEKS" ELSE PRODUCTION.REC = ''
+       IF PRODUCTION.REC # "" THEN
+         LOCATE DATE IN PRODUCTION.REC<1>,1 BY 'AR' SETTING PW ELSE NULL
+         IF PW <= DCOUNT(PRODUCTION.REC<1>,VM) THEN
+           PERIOD = CUR.YEAR+1:PRODUCTION.REC<2,PW>'R%2'
+           IF PERIOD > MAX.PERIOD THEN
+             ERR='WARNING, Date is outside of the range of two periods in the future.'
+             PERIOD = MAX.PERIOD
+           END
+         END
+       END
+     END
+   END
+*  IF ERR # '' THEN ERR.FLG = 1
+   IF LEN(PERIOD) = 6 THEN FOUND=1; RETURN
+   PERIOD = ''
+*T27905 ^ If above fails then use below
+   JCS.YR4 = JCS.YR4[1,4]    
+   IF CUR.YEAR > JCS.YR4 THEN MULT = 1 ELSE MULT = 0
+   IF CUR.YEAR < JCS.YR4 THEN MULT = -1 
+*T26906 v
+   CAL.END.DATE=FR.CURR.DATE<1,DIV.POS>
+   CAL.YEAR = FIELD(OCONV(CAL.END.DATE,'D4/'),'/',3) ;*T26906
+   IC.YE.DATE = OCONV(SALESDATES.REC(NUM.PERIODS+1)<1,1>,'D2/')[1,6]:CUR.YEAR
+   IF ICONV('02/29/':CUR.YEAR,'D') > 0 THEN LPYR = 1 ELSE LPYR = 0
+   IC.BEGYR.DATE = ICONV(IC.YE.DATE,'D4/') -364 -LPYR
+*T26906 ^
+   FOUND=0
+   BEGIN CASE
+*T26906 CASE DATE < ICONV("01/01/":CUR.YEAR,"D4/") 
+      CASE DATE < IC.BEGYR.DATE
+         ERR.FLG = 1
+         ERR = "DATE IS LESS THAN BEGINNING DATE FOR CURRENT PERIOD"
+*T26906 CASE DATE <= SALESDATES.REC(CUR.MON)<1,1> + (365*MULT) AND CUR.MON#1
+      CASE DATE <= SALESDATES.REC(CUR.MON)<1,1> + ((365+LPYR)*MULT) AND CUR.MON#1
+         ERR.FLG = 1
+         ERR = "DATE IS LESS THAN BEGINNING DATE FOR CURRENT PERIOD"
+      CASE 1
+         ;* find default period based on days variance
+         NEW.DATE=DATE-CO.ICS.DAYS.VAR
+         BEGIN CASE
+*T26906     CASE NEW.DATE <= SALESDATES.REC(CUR.MON+1)<1,1> + (365*MULT)
+            CASE NEW.DATE <= SALESDATES.REC(CUR.MON+1)<1,1> + ((365+LPYR)*MULT)
+               PERIOD = CUR.YEAR:STR('0',2-LEN(CUR.MON)):CUR.MON
+               FOUND = 1
+            CASE 1
+               NEW.MON = CUR.MON;NEW.YEAR = CUR.YEAR
+               FOUND = 0
+               FOR XXX = 1 TO 2 UNTIL FOUND
+                  IF CUR.MON + XXX > NUM.PERIODS THEN
+                     MULT = 1
+                     NEW.YEAR = CUR.YEAR + 1
+                     NEW.MON = CUR.MON - NUM.PERIODS
+                  END
+                  DATE.POS=NEW.MON+XXX+1
+*T26906           IF DATE <= (SALESDATES.REC(DATE.POS)<1,1> + (365*MULT)) THEN
+                  IF DATE <= (SALESDATES.REC(DATE.POS)<1,1> + ((365+LPYR)*MULT)) THEN
+                     NEW.MON = NEW.MON + XXX
+                     FOUND = 1
+                  END
+               NEXT XXX
+               IF NOT(FOUND) THEN
+                  ;* get the second period in the future
+                  NEW.MON+=XXX-1
+               END
+               PERIOD = NEW.YEAR:STR('0',2-LEN(NEW.MON)):NEW.MON
+         END CASE
+   END CASE
+   IF NOT(FOUND) AND ERR = '' THEN
+      ERR.FLG = 0
+      ERR='WARNING, Date is outside of the range of two periods in the future.'
+   END
+   RETURN
+*
+***************
+CHECK.PERIOD: 
+***************
+*
+   ERR.FLG = 0
+   MON = PERIOD[5,2];YEAR = PERIOD[1,4]
+   BEGIN CASE
+      CASE LEN(PERIOD) # 6
+         ERR = "INVALID PERIOD (MUST BE 6 DIGITS)"
+         ERR.FLG = 1
+      CASE PERIOD < FR.CURR.PER<1,DIV.POS>
+         ERR = "PERIOD MUST BE EQUAL TO OR GREATER THAN CURRENT PERIOD ":FR.CURR.PER<1,DIV.POS>
+         ERR.FLG = 1
+      CASE MON > 0 AND MON < NUM.PERIODS + 1
+         BEGIN CASE
+            CASE NUM.PERIODS - CUR.MON = 1 AND MON < 2
+               CURR.YR = CURR.YR + 1
+            CASE NUM.PERIODS - CUR.MON = 0 AND MON < 3
+               CURR.YR = CURR.YR + 1
+         END CASE
+         IF CURR.YR # YEAR THEN ERR.FLG = 1
+         IF CUR.MON + 2 < MON THEN ERR.FLG = 1
+      CASE 1
+         ERR.FLG = 1
+   END CASE
+   IF ERR.FLG AND ERR = "" THEN
+      ERR = "PERIOD CAN BE UP TO TWO PERIODS GREATER THAN CURRENT PERIOD OF ":FR.CURR.PER<1,DIV.POS>
+   END
+   IF ERR = "" AND DATE # "" THEN
+      SAVE.PERIOD = PERIOD;PERIOD = ""
+      GOSUB CHECK.DATE
+      ERR.FLG = 0;ERR = ""
+      IF (PERIOD # "" AND PERIOD # SAVE.PERIOD) OR FOUND=0 THEN
+         ERR.FLG = 0;ERR = "WARNING, This Period Does Not Match Date Entered"
+      END
+      PERIOD = SAVE.PERIOD
+   END
+   RETURN
+99999 *
+   RETURN
+   END
+

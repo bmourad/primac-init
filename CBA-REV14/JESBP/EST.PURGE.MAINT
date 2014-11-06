@@ -1,0 +1,308 @@
+***************************************************************************
+*
+* REVISION - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+*
+* PROGRAM  - EST.PURGE.MAINT
+*
+* AUTHOR   - NICK AMENDOLA, COMPUTER BUSINESS ASSOCIATES
+*
+* DATE     - 07/25/86
+*
+* DESCRIPTION
+*
+* This program is used to identify the estimates to be purged during the
+* purge process.
+*
+*T23278 markt 11/19/1998 * Add check for divisional security.
+***************************************************************************
+*
+*---- FILE COPY STATEMENTS
+*
+*COPY>CPYLIB>SCOMMON1
+*COPY>JES.CPYLIB>ESTIMATE.PURGE
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>CPYLIB>SCREEN.COM
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+  MAT SYSCOM.REC =  ""; SYS.TYPE = 2
+*
+*---- OPEN ALL FILES
+*
+  OPEN "","COMPANY" TO COMPANY ELSE
+      ERRMSG = "CANNOT OPEN COMPANY FILE"
+      GOSUB 90000
+      STOP
+  END
+  OPEN "","CONTROL" TO CONTROL ELSE
+      ERRMSG = "CANNOT OPEN CONTROL FILE"
+      GOSUB 90000
+      STOP
+  END
+  OPEN "","JES.SCREENS" TO M.SCREENS ELSE
+      ERRMSG = "CANNOT OPEN JES.SCREENS FILE"
+      GOSUB 90000
+      STOP
+  END
+*
+*---- INITIALIZATION
+*
+  CONO = ""
+  CALL GET.CONO1(CONO,MAT COMP.REC,COMPANY,CONTROL)
+  SCREEN INIT;#
+  S$SCR = 1
+  SCREEN DEFINE;EST.PURGE.MAINT
+  SCREEN FORMAT
+  SCREEN COUNT;EST.PURGE.MAINT;11
+  LINE.COUNT = S$LCNT
+  LINE.SPACE = S$LSPC
+  UPDATE.FLAG = 0
+*
+*---- MAIN PROCESSING
+*
+100*
+  S$DATA(1)<S$SCR> = DATE()
+  SCREEN DISPLAY;EST.PURGE.MAINT;1
+  NEW.REC = 0
+  MATREADU ESTP.REC FROM CONTROL, CONO:"MANUAL.PURGE" ELSE
+      MAT ESTP.REC = ""
+      NEW.REC = 1
+  END
+  IF NEW.REC THEN
+      CNT = 0
+      CURR.REF.NO = ""
+      OPT = "A"
+      GOTO 510
+  END ELSE
+      CNT = COUNT(ESTP.FROM.EST,VM) + (ESTP.FROM.EST # "")
+      S$DATA(12)<S$SCR> = ESTP.FROM.EST
+      S$DATA(13)<S$SCR> = ESTP.TO.EST
+      S$DATA(14)<S$SCR> = ESTP.DIV;* T23278
+      REF.NO = 1
+      CURR.REF.NO = ""
+      GOSUB 50000
+  END
+*
+*---- GET OPERATOR REPLY
+*
+500*
+  SCREEN FIELD;EST.PURGE.MAINT;21
+  SCREEN INPUT;EST.PURGE.MAINT;21
+  OPT = S$VALUE
+510*
+  BEGIN CASE
+      CASE OPT = "E" OR OPT = "END"
+          IF UPDATE.FLAG THEN
+              SCREEN FIELD;EST.PURGE.MAINT;23
+              SCREEN INPUT;EST.PURGE.MAINT;23
+              IF S$VALUE # "Y" THEN GOTO 500
+          END
+          GOTO 99999
+      CASE OPT = "A" AND CNT < 999
+          DONE = 0
+          FOR REF.NO = CNT + 1 TO 999 UNTIL DONE
+              GOSUB 50000
+              GOSUB 10000
+              IF S$VALUE = "END" THEN
+                  DONE = 1
+                  GOSUB 600
+              END ELSE
+                  CNT = CNT + 1
+              END
+          NEXT REF.NO
+          REF.NO = CNT
+          CURR.REF.NO = ""
+          GOSUB 50000
+      CASE OPT = "C" AND CNT > 0
+          GOSUB 30000
+          IF S$VALUE # "" AND S$VALUE # "END" THEN
+              REF.NO = S$VALUE
+*T23278 v
+              DIV.CODE = ESTP.DIV<1,REF.NO>; USER.ID = UPCASE(@LOGNAME); ERRMSG = ''
+              CALL SI.CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+              IF ERRMSG # '' THEN
+                  GOSUB 90000; GOTO 500
+              END
+*T23278 ^
+              GOSUB 10000
+              IF S$VALUE = "END" THEN
+                  CURR.REF.NO = ""
+                  GOSUB 50000
+              END
+          END
+      CASE OPT = "I" AND CNT > 0
+          GOSUB 30000
+          IF S$VALUE # "" AND S$VALUE # "END" THEN
+              REF.NO = S$VALUE
+              GOSUB 700
+              CNT = CNT + 1
+              CURR.REF.NO = ""
+              GOSUB 50000
+              GOSUB 10000
+              IF S$VALUE = "END" THEN
+                  GOSUB 600
+                  CNT = CNT - 1
+              END
+              CURR.REF.NO = ""
+              GOSUB 50000
+          END
+      CASE OPT = "D" AND CNT > 0
+          GOSUB 30000
+          IF S$VALUE # "" AND S$VALUE # "END" THEN
+              REF.NO = S$VALUE
+*T23278 v
+              DIV.CODE = ESTP.DIV<1,REF.NO>; USER.ID = UPCASE(@LOGNAME); ERRMSG = ''
+              CALL SI.CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+              IF ERRMSG # '' THEN
+                  GOSUB 90000; GOTO 500
+              END
+*T23278 ^
+              GOSUB 600
+              UPDATE.FLAG = 1
+              CNT = CNT - 1
+              IF REF.NO > CNT THEN REF.NO = REF.NO - 1
+              CURR.REF.NO = ""
+              GOSUB 50000
+          END
+      CASE OPT = "S" OR OPT = "SF"
+          REF.NO = CURR.REF.NO + LINE.COUNT
+          IF REF.NO > CNT THEN REF.NO = 1
+          GOSUB 50000
+      CASE OPT = "SR"
+          REF.NO = CURR.REF.NO - LINE.COUNT
+          IF REF.NO < 1 THEN REF.NO = 1
+          GOSUB 50000
+      CASE OPT = "ST"
+          REF.NO = 1
+          GOSUB 50000
+      CASE OPT = "SB"
+          REF.NO = CNT
+          IF REF.NO = 0 THEN REF.NO = 1
+          GOSUB 50000
+      CASE OPT = "F"
+          MATWRITE ESTP.REC ON CONTROL,CONO:"MANUAL.PURGE"
+          GOTO 99999
+  END CASE
+  GOTO 500
+*
+*---- DELETE MULTI-LINE DATA
+*
+600*
+  S$DATA(12) = DELETE(S$DATA(12),S$SCR,REF.NO,0)
+  S$DATA(13) = DELETE(S$DATA(13),S$SCR,REF.NO,0)
+  S$DATA(14) = DELETE(S$DATA(14),S$SCR,REF.NO,0);* T23278
+  ESTP.FROM.EST = DELETE(ESTP.FROM.EST,1,REF.NO,0)
+  ESTP.TO.EST = DELETE(ESTP.TO.EST,1,REF.NO,0)
+  ESTP.DIV = DELETE(ESTP.DIV,1,REF.NO,0);* T23278
+  RETURN
+*
+*---- INSERT MULTI-LINE DATA
+*
+700*
+  S$DATA(12) = INSERT(S$DATA(12),S$SCR,REF.NO,0,"")
+  S$DATA(13) = INSERT(S$DATA(13),S$SCR,REF.NO,0,"")
+  S$DATA(14) = INSERT(S$DATA(14),S$SCR,REF.NO,0,"");* T23278
+  ESTP.FROM.EST = INSERT(ESTP.FROM.EST,1,REF.NO,0,"")
+  ESTP.TO.EST = INSERT(ESTP.TO.EST,1,REF.NO,0,"")
+  ESTP.DIV = INSERT(ESTP.DIV,1,REF.NO,0,"");* T23278
+  RETURN
+*
+*---- GET MULTI-LINE DATA
+*
+10000*
+  S$VAL = REF.NO
+  SCREEN DISPLAY;EST.PURGE.MAINT;11
+10100*
+  S$DATA(12)<S$SCR,REF.NO> = ESTP.FROM.EST<1,REF.NO>
+  S$VAL = REF.NO
+  SCREEN FIELD;EST.PURGE.MAINT;12
+  SCREEN INPUT;EST.PURGE.MAINT;12;GOTO 10990
+  FROM.EST = S$VALUE
+  FROM.NUM = FIELD(FROM.EST,"-",1)
+  FROM.SFX = FIELD(FROM.EST,"-",2)
+10200*
+  S$DATA(13)<S$SCR,REF.NO> = ESTP.TO.EST<1,REF.NO>
+  IF FROM.SFX # "" THEN
+      TO.EST = ""
+  END ELSE
+      S$VAL = REF.NO
+      SCREEN FIELD;EST.PURGE.MAINT;13
+      IF FROM.NUM # "0" THEN
+          S$O.R = "O"
+      END
+      SCREEN INPUT;EST.PURGE.MAINT;13;GOTO 10990
+      TO.EST = S$VALUE
+      TO.NUM = FIELD(TO.EST,"-",1)
+      TO.SFX = FIELD(TO.EST,"-",2)
+      IF TO.NUM < FROM.NUM THEN
+          ERRMSG = "Estimate number can not be less than from-estimate."
+          GOSUB 90000
+          GOTO 10200
+      END
+  END
+***** T23278 v
+10300*
+  S$DATA(14)<S$SCR,REF.NO> = ESTP.DIV<1,REF.NO>
+  S$VAL = REF.NO
+  SCREEN FIELD;EST.PURGE.MAINT;14
+  SCREEN INPUT; EST.PURE.MAINT;14;GOTO 10990
+  DIV.CODE = S$VALUE; USER.ID = UPCASE(@LOGNAME); ERRMSG = ''
+  CALL SI.CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+  IF ERRMSG # '' THEN
+      GOSUB 90000; GOTO 10300
+  END
+*****T23278 ^
+*
+  ESTP.FROM.EST<1,REF.NO> = FROM.EST
+  ESTP.TO.EST<1,REF.NO> = TO.EST
+  ESTP.DIV<1,REF.NO> = DIV.CODE;* T23278
+  UPDATE.FLAG = 1
+  RETURN
+10990*
+  S$DATA(12)<S$SCR,REF.NO> = ESTP.FROM.EST<1,REF.NO>
+  S$DATA(13)<S$SCR,REF.NO> = ESTP.TO.EST<1,REF.NO>
+  S$DATA(14)<S$SCR,REF.NO> = ESTP.DIV<1,REF.NO>;* T23278
+  RETURN
+*
+*---- GET LINE REFERENCE NUMBER
+*
+30000*
+  SCREEN FIELD;EST.PURGE.MAINT;22
+  S$MINV = CURR.REF.NO
+  S$MAXV = S$MINV + LINE.COUNT - 1
+  IF S$MAXV > CNT THEN S$MAXV = CNT
+  SCREEN INPUT;EST.PURGE.MAINT;22
+  RETURN
+*
+*---- DISPLAY MULTI-LINE DATA
+*
+50000*
+  START.REF.NO = 1 + INT((REF.NO - 1) / LINE.COUNT) * LINE.COUNT
+  IF START.REF.NO = CURR.REF.NO THEN RETURN
+  CURR.REF.NO = START.REF.NO
+  S$VAL = START.REF.NO
+  S$CNT = COUNT(S$DATA(12)<S$SCR>,VM) + (S$DATA(12)<S$SCR> # "")
+***** T23278 v
+*   SCREEN MULTI;EST.PURGE.MAINT;C;11;12;13
+  SCREEN MULTI;EST.PURGE.MAINT;C;11;12;13;14
+***** T23278 ^
+  RETURN
+*
+*---- ERROR ROUTINE
+*
+90000 ERR.TYPE=1;CALL SI_SYSCOM(MAT SYSCOM.REC);RETURN
+* 90000*
+*       PRINT @(0,23):CL:ERRMSG:
+*       INPUT REPLY:
+*       PRINT @(0,23):CL:
+*       RETURN
+*
+*---- END OF PROGRAM
+*
+99999*
+*       PRINT @(-1):
+*T22567 v
+  SCREEN CLOSE
+*T22567 ^
+END

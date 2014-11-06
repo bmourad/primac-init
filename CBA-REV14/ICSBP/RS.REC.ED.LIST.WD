@@ -1,0 +1,498 @@
+*********************************************************************
+* PROGRAM  - RS.REC.ED.LIST.WD
+* AUTHOR   - Scott McHargue     
+* DATE      - 08/10/90
+* DESCRIPTION
+* This program prints roll/skid stock receipt edit listings.   
+*
+* TASK 19942 -TN- 01/10/96 Correct Sort Criteria For WHSE.DIV
+*T20927 doug 08/30/1996 * Exclude manifests with no receipts
+*********************************************************************
+*
+*------------------------ COPY STATEMENTS ---------------------------
+*
+*COPY>PMC.CPYLIB>PO 
+*COPY>ICS.CPYLIB>INVENTORY 
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>ICS.CPYLIB>PO.RSKI.XREF 
+*COPY>ICS.CPYLIB>PO.MAN.XREF 
+*COPY>ICS.CPYLIB>ROLL.SKID.INFO
+*COPY>ICS.CPYLIB>SAVE.STOCK.REC
+*COPY>ICS.CPYLIB>INV.WHSE 
+*COPY>ICS.CPYLIB>CATEGORY
+*COPY>CPYLIB>SYSCOM
+*
+*---------------------------- READ PROC -----------------------------
+*
+PROCREAD X ELSE
+  ERRMSG = "THIS REPORT MUST RUN FROM A PROC"
+  GOTO 93000
+END
+CONO = X<1>
+CNAME = X<2>
+*T19942v      
+PORD = X<3>
+PO.ST.NO = X<4>
+MAN.NO = X<5>
+BEG.DATE = X<6>
+END.DATE = X<7>
+DIV   = X<8>
+*T19942^
+*
+*------------------- SETUP FOR SYSTEM ERRMSGS ----------------------
+*
+SYS.TYPE = 1
+CALL SYSCOM(MAT SYSCOM.REC)
+*
+*------------------------- OPEN FILES -------------------------------
+*
+*      OPEN "","PO" TO PO ELSE
+*         ERRMSG ="PO FILE IS MISSING"
+*         GOTO 93000
+*      END
+OPEN "","INVENTORY" TO INVENTORY ELSE
+  ERRMSG = "INVENTORY FILE IS MISSING"
+  GOTO 93000
+END
+OPEN "","ROLL.SKID.INFO" TO ROLL.SKID.INFO ELSE
+  ERRMSG ="ROLL.SKID.INFO FILE IS MISSING"
+  GOTO 93000
+END
+OPEN "","PO.RSKI.XREF" TO PO.RSKI.XREF ELSE
+  ERRMSG ="PO.RSKI.XREF FILE IS MISSING"
+  GOTO 93000
+END
+OPEN "","PO.MAN.XREF" TO PO.MAN.XREF ELSE
+  ERRMSG ="PO.MAN.XREF FILE IS MISSING"
+  GOTO 93000
+END
+OPEN "","CONTROL" TO CONTROL ELSE
+  ERRMSG ="CONTROL FILE IS MISSING"
+  GOTO 93000
+END
+OPEN "","INV.WHSE" TO INV.WHSE ELSE
+  ERRMSG = "INV.WHSE FILE IS MISSING"
+  GOTO 93000
+END
+OPEN "","CATEGORY" TO CATEGORY ELSE ERRMSG = "CATEGORY FILE IS MISSING"; GOTO 93000
+*T19942 v
+VERB='SSELECT PO.MAN.XREF WITH CONO = "':CONO:'"'
+IF PO.ST.NO # "ALL" THEN
+  VERB=VERB:' AND WITH PO.NO = "':PO.ST.NO:'"'
+END
+IF MAN.NO # "ALL" THEN
+  VERB=VERB:' AND WITH MAN.NO = "':MAN.NO:'"'
+END
+IF BEG.DATE # "ALL" THEN
+  VERB=VERB:' AND WITH RSMAN.ENTRY.DATE >= "':BEG.DATE:'" AND WITH '
+  VERB=VERB:'RSMAN.ENTRY.DATE <= "':END.DATE:'"'
+END
+IF DIV # "ALL" THEN
+  VERB=VERB:' BY-EXP WHSE.DIV WHEN WHSE.DIV = "':DIV:'"'
+END
+IF PO.ST.NO = "ALL" THEN
+  VERB=VERB:' BY PO.NO'
+END
+IF MAN.NO = "ALL" THEN
+  VERB=VERB:' BY MAN.NO'
+END
+IF DIV = "ALL" THEN
+  VERB=VERB:" BY WHSE.DIV"
+END
+* PRINT VERB
+* INPUT XXX
+*
+UDTEXECUTE VERB CAPTURING ERROR
+*T19942^
+*
+*------------------------ INITIALIZATION --------------------------
+*
+LINE.COUNT = 99
+END.DATE = ""
+PAGE.NO = 0
+LINE.ITEM.CNT = 1 
+SP1 = " "
+SP2 = "  "
+SP5 = "     "
+SP9 = SPACE(9)
+SP12 = SPACE(12)
+SP62 = SPACE(62)
+SP67 = SPACE(67)
+SP39 = SPACE(39)
+SP81 = SPACE(81)
+TLV1 = "Manifest number: " 
+TLV2 = " Manifest total: "
+TLV3 = "R/S Total   "
+TLV4 = "Prior Posting Total = "
+TLV5 = "Variance    "
+TLV6 = "PO TOTAL    "
+TLV7 = "GRAND TOTAL "
+OLD.PO.NO = ""
+OLD.INV.NO = "!@#$%"
+OLD.MAN.NO = ""   ; *T19942
+LINE.TOTAL = 0
+PO.TOTAL = 0
+GRAND.TOTAL = 0
+PRIOR.POST.TOTAL = 0
+VARIANCE = 0
+*     PRINT.LINE = 0  ; *T19942
+PRINT.PO.TOTAL = 0
+PRINT.GRAND.TOTAL = 0
+PRINTER ON
+*
+*------------------------ GET HEADING -------------------------------
+*
+REPORT.NAME = "ROLL/SKID.EDIT.LISTING"
+RNUM = ""
+HD1 = ""
+HD2 = ""
+HD3 = "Division : ":DIV
+CALL GET.PROG.HEAD(CONO,CNAME,REPORT.NAME,RNUM,END.DATE,HD1,HD2)
+*
+*------------------ READ AND PROCESS ALL RECORDS --------------------
+*
+100 *
+DATA = 1
+ONE.REC = 0    ;* T19942
+LOOP
+  IF DIV # "ALL" THEN
+    READNEXT KEY,OFFSET ELSE DATA = 0
+  END ELSE
+    READNEXT KEY ELSE DATA = 0
+  END
+WHILE DATA DO
+  ONE.REC = 1                  ;*T19942
+*****        LINE.TOTAL = 0           ;*T19942
+  PRIOR.POST.TOTAL = 0
+  VARIANCE = 0
+*        PRINT.LINE = 0   ; *T19942
+*T19942v
+  MATREADU RSMAN.REC FROM PO.MAN.XREF, KEY THEN
+    IF DIV # "ALL" THEN
+      ST.RANGE = OFFSET
+      EN.RANGE = OFFSET
+*             SEQ.CNT = 1
+    END ELSE
+      ST.RANGE = 1
+      EN.RANGE = DCOUNT(RSMAN.RS.NO,@VM)
+    END
+    FOR CNT = ST.RANGE TO EN.RANGE
+      RSKI.KEY = CONO:RSMAN.RS.NO<1,CNT>
+*T19942^
+      RSMAN.STATUS<1,CNT> = 1
+      MAT INV.REC = ""
+      MAT IWH.REC = ""
+      MAT RSKI.REC = ""
+      MATREADU RSKI.REC FROM ROLL.SKID.INFO, RSKI.KEY ELSE
+        RSKI.STATUS = "R/S Missing"
+        GOTO 190
+      END
+*           IF RSKI.POST.DATE # "" OR RSKI.ENTRY.DATE = "" THEN GOTO 190
+      IF RSKI.POST.DATE # "" THEN
+        IF RSKI.UNIT = "LBS" OR RSKI.UNIT = "MSI" THEN
+          PRIOR.POST.TOTAL = PRIOR.POST.TOTAL + RSKI.LBS.ENTERED
+        END ELSE
+          PRIOR.POST.TOTAL = PRIOR.POST.TOTAL + (RSKI.SHEET*100)
+        END
+        GOTO 190
+      END
+      IF RSKI.ENTRY.DATE = "" THEN GOTO 190
+* Re-check Status - if error condition cleared, Status will be cleared.
+*            IF RSKI.STATUS # "" THEN GOTO 180
+      RSKI.STATUS = ""
+      MATREAD INV.REC FROM INVENTORY, CONO:RSKI.INV.NO ELSE
+        RSKI.STATUS = "Invalid prod"
+        GOTO 180
+      END
+      MATREAD IWH.REC FROM INV.WHSE, CONO: RSKI.INV.NO: "!": RSKI.WHSE ELSE
+        RSKI.STATUS = "Invalid whse"
+        GOTO 180
+      END
+      MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE ELSE
+*
+*   Task 17919
+*
+        RSKI.STATUS = "Product Line '":INV.LINE:"' Missing"; GO 180
+      END
+      IF CATG.INV="" OR CATG.ACCRU.LIAB="" OR CATG.AP.ACCT="" THEN
+        RSKI.STATUS = "Acct Details Missing for Prod Line '":INV.LINE:"'"; GO 180
+      END
+      IF RSKI.LBS.ENTERED = 0 THEN RSKI.STATUS = "Deleted"
+180 *
+      GOSUB 1000
+      RSKI.EDIT.DATE = DATE()
+      MATWRITE RSKI.REC ON ROLL.SKID.INFO, RSKI.KEY
+190 *
+      RELEASE ROLL.SKID.INFO, RSKI.KEY
+    NEXT CNT
+    GOSUB 1500
+******        IF PRINT.LINE THEN GOSUB 2000 ; *T19942
+    MATWRITE RSMAN.REC ON PO.MAN.XREF, KEY       
+  END ELSE
+    RELEASE PO.MAN.XREF, KEY         
+  END
+REPEAT
+*T19942v
+IF ONE.REC THEN
+  GOSUB 2000
+  PRINT.PO.TOTAL = 1
+*T19942^
+  GOSUB 4000
+  GOSUB 5000
+END
+GOTO 99999
+*
+*---------------------- PRINT DETAIL LINE ---------------------------
+*
+1000 *
+BEGIN CASE
+CASE OLD.PO.NO = ''
+  GOSUB 9000
+  OLD.INV.NO = "!@#$%"
+  OLD.PO.NO = RSKI.PO.NO
+  OLD.MAN.NO = RSKI.MANIFEST.NO ; *T19942
+CASE OLD.PO.NO # RSKI.PO.NO
+  GOSUB 2000     ; *T19942
+  PRINT.PO.TOTAL = 1  ; *T19942
+  GOSUB 4000
+  GOSUB 9000
+  OLD.INV.NO = "!@#$%"
+  OLD.PO.NO = RSKI.PO.NO
+  OLD.MAN.NO = RSKI.MANIFEST.NO  ; *T19942
+*T19942v
+CASE OLD.MAN.NO # RSKI.MANIFEST.NO
+  GOSUB 2000
+  OLD.PO.NO = RSKI.PO.NO
+  OLD.MAN.NO = RSKI.MANIFEST.NO
+*T19942^         
+CASE LINE.COUNT > 55
+  GOSUB 9000
+  OLD.INV.NO = "!@#$%"
+END CASE
+GOSUB 3000
+IF RSKI.INV.NO = OLD.INV.NO THEN
+  LINE.ITEM.CNT = LINE.ITEM.CNT + 1
+  D.LINE = SP62:RSMAN.RS.NO<1,CNT>"L#8":SP1:RSKI.WHSE"L#4"
+  D.LINE = D.LINE:SP1:RSKI.LOC"L#4":SP1:LINE.PQTY"R#9":SP1 
+  D.LINE = D.LINE:RSKI.MILL.ROLL.ID"L#25":SP1:RSKI.STATUS"L#14"
+END ELSE
+  LINE.ITEM.CNT = 1
+  D.LINE = RSKI.INV.NO"L#15":SP1:INV.FULL.DESC"L#45":SP1
+  D.LINE = D.LINE:RSMAN.RS.NO<1,CNT>"L#8":SP1:RSKI.WHSE"L#4"
+  D.LINE = D.LINE:SP1:RSKI.LOC"L#4":SP1:LINE.PQTY"R#9" 
+  D.LINE = D.LINE:SP1:RSKI.MILL.ROLL.ID"L#25":SP1:RSKI.STATUS"L#14"
+END 
+PRINT
+PRINT D.LINE  
+LINE.COUNT = LINE.COUNT + 2
+IF LEN(RSKI.STATUS) > 14 THEN
+  WRK.STAT=RSKI.STATUS[15,99]
+  FOR P = 1 TO P+1 WHILE LEN(WRK.STAT) > 0
+    PRINT SPACE(117):WRK.STAT[1,14]
+    WRK.STAT=WRK.STAT[15,99]
+    LINE.COUNT=LINE.COUNT+1
+  NEXT P
+END
+OLD.INV.NO = RSKI.INV.NO
+OLD.PO.NO = RSKI.PO.NO
+OLD.MAN.NO = RSKI.MANIFEST.NO  ; *T19942
+LINE.TOTAL = LINE.TOTAL + LINE.QTY
+*T19942v
+*     PRINT.PO.TOTAL = 1
+*     PRINT.LINE = 1
+*T19942
+PRINT.GRAND.TOTAL = 1
+RETURN
+*
+*--------------------- CHECK WEIGHT VARIANCE ------------------------
+*
+1500 *
+IF RSMAN.MAN.TOT.WGT # "" THEN 
+  VARIANCE = ABS(RSMAN.MAN.TOT.WGT - (LINE.TOTAL + PRIOR.POST.TOTAL))
+  IF VARIANCE # 0 THEN
+    RSMAN.STATUS<1,CNT> = 2
+*T19942v
+*           FOR A = 1 TO SEQ.CNT
+*              MATREADU RSKI.REC FROM ROLL.SKID.INFO, CONO: RSMAN.RS.NO<1,A> ELSE
+*                 RELEASE ROLL.SKID.INFO, CONO: RSMAN.RS.NO<1,A>
+*                 GOTO 1590
+*              END
+*              IF RSKI.STATUS = "" THEN RSKI.STATUS = "Manifest var."
+*              MATWRITE RSKI.REC ON ROLL.SKID.INFO, CONO: RSMAN.RS.NO<1,A>
+*1590       NEXT A
+    MATREADU RSKI.REC FROM ROLL.SKID.INFO, RSKI.KEY ELSE
+      RELEASE ROLL.SKID.INFO, RSKI.KEY
+      GOTO 1590
+    END
+*T19942^
+    IF RSKI.STATUS = "" THEN RSKI.STATUS = "Manifest var."
+*T19942v
+    MATWRITE RSKI.REC ON ROLL.SKID.INFO, RSKI.KEY
+*T19942^
+  END
+END
+*T19942v
+1590*
+*T19942^
+RETURN
+*
+*-------------------- PRINT LINE TOTALS -----------------------------
+*
+2000 *
+IF LINE.TOTAL THEN;* T20927
+  T.LINE = SP81: "========="
+  PRINT T.LINE
+*     T.LINE = SP67:"Total""L#12":OCONV(LINE.TOTAL,"MD2") "R#11"
+*T19942v
+*     T.LINE = TLV1:RSKI.MANIFEST.NO "L#20":' ':TLV2: OCONV(RSMAN.MAN.TOT.WGT,"MD2") "L#12"
+  T.LINE = TLV1:OLD.MAN.NO "L#20":' ':TLV2: OCONV(RSMAN.MAN.TOT.WGT,"MD2") "L#12"
+*T19942^
+  T.LINE = T.LINE:TLV3:OCONV(LINE.TOTAL,"MD2") "R#11"
+  IF PRIOR.POST.TOTAL # 0 THEN
+    T.LINE = T.LINE:SP5:TLV4:OCONV(PRIOR.POST.TOTAL,"MD2") "R#11"
+  END
+  PRINT T.LINE
+  IF VARIANCE # 0 THEN
+    T.LINE = SP67:TLV5:OCONV(VARIANCE,"MD2")"R#11"
+    T.LINE = T.LINE:SP5:"*********** VARIANCE ***********"
+    PRINT T.LINE
+  END
+  IF RSMAN.MAN.TOT.WGT + 0 = 0 THEN
+*        PO.TOTAL = PO.TOTAL + LINE.TOTAL + PRIOR.POST.TOTAL
+    PO.TOTAL = PO.TOTAL + LINE.TOTAL
+  END ELSE
+    PO.TOTAL = PO.TOTAL + RSMAN.MAN.TOT.WGT
+  END
+END;* 20927
+OLD.INV.NO = "!@#$%"
+LINE.TOTAL = 0  ; *T19942
+RETURN
+*
+*------------- GET WEIGHT CONVERSIONS ------------------------------
+*
+3000 *
+IF RSKI.UNIT = "LBS" OR RSKI.UNIT = "MSI" THEN
+  LINE.QTY = RSKI.LBS.ENTERED
+  LINE.PQTY = OCONV(LINE.QTY,"MD2")
+END ELSE
+*        LINE.QTY = RSKI.SHEET*100
+*        LINE.PQTY = RSKI.SHEET:"   "
+  LINE.QTY = RSKI.LBS.ENTERED*100
+  LINE.PQTY = RSKI.LBS.ENTERED:"   "
+END
+*      BEGIN CASE
+*      CASE INV.UNIT<1,2> = "SHT" AND INV.UNIT<1,3> = "LBS"
+*         ICR.CNV<1> = "MD0"; ICR.DV2<1> = 1
+*         ICR.DV1<1> = INV.M.WT<1>; ICR.MT1<1> = 1
+*      CASE INV.UNIT<1,2> = "FT" AND INV.UNIT<1,3> = "MSI"
+*         ICR.CNV<1> = "MD0"; ICR.DV2<1> = 12
+*         ICR.DV1<1> = INV.PAP.WIDTH/100; ICR.MT1<1> = 100
+*      CASE 1
+*         ICR.CNV<1> = "MD2"; ICR.DV2<1> = 1
+*         ICR.DV1<1> = 10; ICR.MT1<1> = INV.SBR
+*      END CASE
+*      BEGIN CASE
+*      CASE RSKI.UNIT ="SHT" AND INV.UNIT<1,3>="LBS"
+*         ICR.CNV<2> = "MD0"; ICR.DV2<2> = 1
+*         ICR.DV1<2> = INV.M.WT<1>; ICR.MT1<2> = 1
+*      CASE 1
+*         ICR.CNV<2> = "MD2"; ICR.DV2<2> = 1
+*         ICR.DV1<2> = 10; ICR.MT1<2> = 1
+*      END CASE
+*      IF RSKI.UNIT # INV.UNIT<1,2> THEN 
+*         DIFF.UM = "Y" 
+*      END ELSE
+*         DIFF.UM = "N"
+*      END
+*      IF DIFF.UM = "Y" THEN
+*         IF ICR.CNV<2> = "MD0" THEN
+*            LINE.QTY = INT(((RSKI.ROLL.WEIGHT/ICR.DV1<2>)*ICR.MT1<2>)/ICR.DV2<2> + .5)
+*            LINE.QTY = OCONV(INT(((LINE.QTY/ICR.MT1<REF.NO,1>)*ICR.DV1<REF.NO,1>)*ICR.DV2<REF.NO,1> + .5),"MD2")
+*         END ELSE
+*            IF ICR.CNV<1> = "MD0" THEN
+*               LINE.QTY = OCONV(INT(RSKI.ROLL.WEIGHT/10),"MD2") 
+*            END ELSE
+*               LINE.QTY = OCONV(INT((RSKI.ROLL.WEIGHT/10)/ICR.MT1<1>), "MD2") 
+*            END
+*         END
+*      END ELSE
+*         LINE.QTY = OCONV(INT(RSKI.ROLL.WEIGHT/10),"MD2")
+*      END         
+RETURN
+*
+*-------------------- PRINT PO TOTALS -----------------------------
+*
+4000 *
+IF PRINT.PO.TOTAL THEN
+  PRINT
+  T.LINE = ''
+  T.LINE = SP39:TLV6:OCONV(PO.TOTAL,"MD2") "R#11"
+  PRINT T.LINE
+  PRINT
+  PRINT.PO.TOTAL = 0
+END
+GRAND.TOTAL = GRAND.TOTAL + PO.TOTAL
+PO.TOTAL = 0
+RETURN
+*
+*-------------------- PRINT GRAND TOTALS ---------------------------
+*
+5000 *
+IF PRINT.GRAND.TOTAL THEN
+  T.LINE = ''
+  T.LINE = SP39:TLV7:OCONV(GRAND.TOTAL,"MD2") "R#11"
+  PRINT T.LINE
+END
+RETURN
+*
+*--------------------- PRINT HEADINGS ------------------------------
+*
+9000 *
+PRINT CHAR(12)
+PAGE.NO = PAGE.NO + 1
+H.LINE = ""
+H.LINE = HD1:PAGE.NO
+PRINT H.LINE
+H.LINE = ""
+H.LINE = HD2
+PRINT H.LINE
+H.LINE = ""
+PRINT HD3
+PRINT
+SHD3 = "PO Number : "
+TLV1 = "Manifest number: " 
+TLV2 = " Manifest total: "
+SHD7 = "Product Number               Product Description               R/S ID  Whse Loc   Quantity       Mill Roll ID            Status    "
+UL =   "--------------- --------------------------------------------- -------- ---- ---- --------- ------------------------- --------------"
+SH.LINE = ""
+SH.LINE = SHD3:FIELD(KEY,"!",1)[4,99]
+PRINT SH.LINE
+PRINT
+SH.LINE = ""
+SH.LINE = SHD7 
+PRINT SH.LINE
+SH.LINE = ""
+SH.LINE = UL 
+PRINT SH.LINE
+LINE.COUNT = 9 
+RETURN
+*
+*---------------------- CALLS FOR SYSCOM ----------------------------
+*
+91000 ERR.TYPE = 1; CALL SYSCOM(MAT SYSCOM.REC)
+RETURN
+92000 ERR.TYPE = 2; CALL SYSCOM(MAT SYSCOM.REC)
+RETURN
+93000 ERR.TYPE = 3; CALL SYSCOM(MAT SYSCOM.REC)
+*
+99990 *
+PROCWRITE "END"
+*
+*----------------------- END OF JOB ---------------------------------
+*
+99999 *
+PRINTER CLOSE 
+PRINTER OFF
+STOP
+END

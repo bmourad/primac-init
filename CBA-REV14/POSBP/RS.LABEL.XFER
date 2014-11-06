@@ -1,0 +1,150 @@
+*********************************************************************
+* REVISION - [08.2B]
+* PROGRAM  - RS.LABEL.XFER
+* AUTHOR   - W.R. MCKENZIE, COMPUTER BUSINESS ASSOCIATES
+* DATE     - 06/18/90
+* DESCRIPTION
+* This program is used to transfer the data created by  the
+* RS.LABEL.CREATE to the PC for label printing.
+*T24622 edvard 12/01/1999 * Fix download in gui mode
+*T25024 diane 05/02/2000 * Update with version
+*C36992 diane 08/23/2000 * Fix text to not have record id.
+*T26332 adelgado 12/07/2001 * Sort transfer when uploading through
+*                             SBClient.
+*T28547 thompson 05/12/2005 * Fix problem with SBClient initalize.
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>TCC
+*
+*-----PROCREAD
+*
+  PROCREAD BUFFER ELSE
+    ERRMSG= "MUST RUN FROM A PROC"
+    GOSUB 90000
+    GOTO 99999
+  END
+  LABEL.NAME = BUFFER<3>
+  XTYPE = BUFFER<8>
+  LABEL.FILE.NAME = LABEL.NAME:".TXT"
+  PC.FILE.NAME = "C:\LABEL\WORK\":LABEL.FILE.NAME
+*
+*---- OPEN ALL FILES
+*
+  OPEN "","COMPANY" TO COMPANY ELSE
+    ERRMSG = "CANNOT OPEN COMPANY FILE"
+    GOSUB 90000
+    STOP
+  END
+  OPEN "","CONTROL" TO CONTROL ELSE
+    ERRMSG = "CANNOT OPEN CONTROL FILE"
+    GOSUB 90000
+    STOP
+  END
+  OPEN '', LABEL.FILE.NAME TO FNAME ELSE STOP
+*
+*---- INITIALIZATION
+*
+  CONO = ""
+  CALL GET.CONO1(CONO, MAT COMP.REC, COMPANY, CONTROL)
+  PORT.NO = "TTY"; CALL SYSVARS.SUB(PORT.NO)
+*
+*-----MAIN PROCESSING
+*
+  BEGIN CASE
+    CASE XTYPE = "S"     ;* SBClient
+      CALL START.SBC ; *T28547
+      HOSTFILE = LABEL.FILE.NAME
+*C36992    ITMLIST  = ""
+      ITMLIST  = "ID.SUP"   ;*C36992
+      SELCMDX  = '"'
+      PCFILE = "C:\LABEL\WORK\":LABEL.FILE.NAME
+*C37671    SEPS     = ""
+      SEPS     = "4"
+      OPTSX    = "OHT"
+      DESCRIPT = "Label File Transfer"
+      TSTATUS  = ""
+*T25024 v
+      TU_VERNO_ID = "T_":@LOGNAME
+      IF NOT(FILEINFO(TCC,0)) THEN
+        OPEN "","TCC" TO TCC THEN
+          READ TU_VERNO FROM TCC, TU_VERNO_ID ELSE TU_VERNO = ""
+        END ELSE
+          TU_VERNO = ""
+        END
+      END ELSE
+        READ TU_VERNO FROM TCC, TU_VERNO_ID ELSE TU_VERNO = ""
+      END
+      * T26332 v
+      CMD = 'SSELECT ':LABEL.FILE.NAME:' BY PO.NO BY PO.LINE.NO BY ROLL.ID'
+      PERFORM CMD CAPTURING TMSG
+      * T26332 ^
+IF @LOGNAME = 'thompson' THEN DEBUG
+      TU_FUNC = "TU.PC.DOWNLOAD":TU_VERNO     ;*T25024
+      CALL @TU_FUNC(HOSTFILE,ITMLIST,SELCMDX,PCFILE,SEPS,OPTSX,DESCRIPT,TSTATUS)     ;*T25024
+*T25024 ^
+20*
+    CASE XTYPE = "W"
+      PC.FILE = "C:\LABEL\WORK\":LABEL.FILE.NAME
+      FILE = LABEL.FILE.NAME
+      ITEMS = 'SSELECT ':LABEL.FILE.NAME:' BY PO.NO BY PO.LINE.NO BY ROLL.ID'
+      FIELDS = "*"
+    OPTS = ""
+*      OPTS = "ASCII"
+      OPTS<3> = "capture"
+      OPTS<4> = "yes"
+      OPTS<7> = "\255,\r\n,\254,\r\n"
+      STATUS = ""
+      CALL WIN.IMPORT(PC.FILE,FILE,ITEMS,FIELDS,OPTS,STATUS)
+    CASE XTYPE = "V"
+      XLINE = CHAR(27) : CHAR(8)
+      XLINE = XLINE : "KEY /P <ALT+T>I"
+      XLINE = XLINE : LABEL.FILE.NAME : "<TAB>"
+      XLINE = XLINE : "SSELECT " : LABEL.FILE.NAME : " BY PO.NO BY PO.LINE.NO BY ROLL.ID<TAB>"
+      XLINE = XLINE : "*<TAB>"
+      XLINE = XLINE : PC.FILE.NAME : "<TAB>"
+      XLINE = XLINE : "I O R13,10 B<TAB>"
+      XLINE = XLINE : "<TAB>"
+      XLINE = XLINE : "<ALT>"
+      XLINE = XLINE : CHAR(0)
+      PRINT XLINE:
+      PERFORM "PCCTRL"
+    CASE XTYPE = "P"
+      SLECT.LIST = "SSELECT ":LABEL.FILE.NAME:" BY PO.NO BY PO.LINE.NO BY ROLL.ID"
+      PERFORM SLECT.LIST RTNLIST LBL.LIST CAPTURING ERRMSG 
+      IF ERRMSG<1,1>[1,3] # "404" THEN
+        ERRMSG = ERRMSG: '*************1'
+        GOTO 93000
+      END
+      LBL.PROC = "PICK-PC ":LABEL.FILE.NAME:" TO ":SQUOTE(PC.FILE.NAME):" 1"
+      LBL.PROC = LBL.PROC:" ID-SUPP COL-HDR-SUPP "
+      PERFORM LBL.PROC PASSLIST LBL.LIST CAPTURING ERRMSG
+      IF ERRMSG# "" THEN
+        ERRMSG = ERRMSG: '*************2'
+        GOTO 93000
+      END
+  END CASE
+  CLEARFILE FNAME
+  UDTEXECUTE "CLEARSELECT"
+  GOTO 99999
+*
+*---- ERROR ROUTINE
+*
+90000 *
+  PRINT @(0,23):CL:ERRMSG:
+  INPUT REPLY:
+  PRINT @(0,23):CL:
+  RETURN
+93000 *
+  PRINT @(0,23):CL:ERRMSG:
+  INPUT REPLY:
+  PRINT @(0,23):CL:
+*
+*---- END OF PROGRAM
+*
+99999 *
+  PRINT @(-1)
+END

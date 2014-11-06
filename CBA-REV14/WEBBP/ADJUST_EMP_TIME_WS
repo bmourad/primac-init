@@ -1,0 +1,170 @@
+SUBROUTINE ADJUST_EMP_TIME_WS(MAT DTM.REC)
+*********************************************************************
+* REVISION - [08.1]
+* Copyright 1982 by Vercom Software, Inc.
+* SYSTEM   - PRIMAC
+* SOURCE   - JCSBP
+* PROGRAM  - ADJUST.EMP.TIME
+* AUTHOR   - STRAKA, VERCOM SOFTWARE
+* DATE     - 01/07/87
+* DESCRIPTION
+* This subroutine adjusts rounding errors on time entry.
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+$INCLUDE JCS.CPYLIB DAILY.TIME.MATL
+$INCLUDE CPYLIB CHAR
+*
+*---- INITIALIZATION
+*
+      PTIME = ""
+      TIMEX = ""
+      TIMEV = ""
+      STIME = ""
+      ETIME = ""
+      PTIME = ""
+      TOT.TIME = 0
+      OVERLAP = 0
+*
+*---- MAKE ALL TIME ENTRIES RELATIVE TO START TIME
+*
+      STIME = DTM.TIME.ST
+      ETIME = DTM.TIME
+      CNT = DCOUNT(DTM.TYPE,VM)
+      ET = STIME<1,1>
+      FOR TP = 1 TO CNT
+         IF STIME<1,TP> # "" AND DTM.TYPE<1,TP> # "M" THEN
+            ST = STIME<1,TP>
+            PET = ET
+            IF ST < ET AND (PET-ST) > 1600 THEN
+               ST = ST + 2400
+               STIME<1,TP> = ST
+            END
+            IF ST < PET THEN OVERLAP = 1
+            ET = ETIME<1,TP>
+            IF ET < ST THEN
+               ET = ET + 2400
+               ETIME<1,TP> = ET
+            END
+            LAP.TIME = (INT(ET/100)*60+MOD(ET,100)) - (INT(ST/100)*60+MOD(ST,100))
+            PTIME<1,TP> = INT(LAP.TIME*100/60+0.5)
+* CORRECT LOCATE ON UNIDATA - LMR 9/24/93
+            STX = ST+1
+            STX = STR('0',4-LEN(STX)):STX
+*           LOCATE (ST+1) IN TIMEX,1 BY "AR" SETTING P ELSE NULL
+            LOCATE STX IN TIMEX,1 BY "AR" SETTING P ELSE NULL
+*
+            ST=STR('0',4-LEN(ST)):ST
+            TIMEX = INSERT(TIMEX,P,0,0,ST)
+            TIMEV = INSERT(TIMEV,P,0,0,TP)
+* CORRECT LOCATE ON UNIDATA - LMR 9/24/93
+            ETX = ET+1
+            ETX = STR('0',4-LEN(ETX)):ETX
+*           LOCATE (ET+1) IN TIMEX,1 BY "AR" SETTING P ELSE NULL
+            LOCATE ETX IN TIMEX,1 BY "AR" SETTING P ELSE NULL
+*
+            ET=STR('0',4-LEN(ET)):ET
+            TIMEX = INSERT(TIMEX,P,0,0,ET)
+            TIMEV = INSERT(TIMEV,P,0,0,TP)
+         END
+      NEXT TP
+*
+*---- MAIN PROCESSING
+*
+      HSTIME = STIME
+      HETIME = ETIME
+      TCNT = DCOUNT(TIMEX,AM)
+      STIME = TIMEX<1>; ETIME = ""
+      IF NOT(OVERLAP) THEN
+         ETIME<TCNT> = TIMEX<TCNT>
+         GOTO 2000
+      END
+      MAST.NO = TIMEV<1>; CNC.NO = MAST.NO
+      FOR I = 2 TO TCNT
+         TNO = TIMEV<I>
+         NEW = 0
+         LOCATE TNO IN MAST.NO<1>,1 SETTING MFND ELSE
+            MAST.NO<1,MFND> = TNO
+            NEW = 1
+         END
+         IF NOT(NEW) THEN MAST.NO = DELETE(MAST.NO,1,MFND,0)
+         CNC.NO<I> = MAST.NO
+         ETIME<I-1> = TIMEX<I>
+         STIME<I> = TIMEX<I>
+      NEXT I
+      ETIME<TCNT> = TIMEX<TCNT>
+      PTIME = ""
+      FOR I = 1 TO TCNT
+         IF STIME<I> = ETIME<I> THEN GOTO 1999
+         IF CNC.NO<I> = "" THEN GOTO 1999
+         LAP.TIME = (INT(ETIME<I>/100)*60+MOD(ETIME<I>,100)) - (INT(STIME<I>/100)*60+MOD(STIME<I>,100))
+******* SFC LINE
+LAP.TIME=INT(LAP.TIME*100/60 + 0.5)
+******* SFC LINE
+         PTIME<1,CNC.NO<I,1>> = PTIME<1,CNC.NO<I,1>> + LAP.TIME
+1999 *
+      NEXT I
+*
+*---- ADJUST ROUNDING ERROR
+*
+2000 *
+      TEMP = DTM.LAPS.TIME
+      LAP.TIME = (INT(ETIME<TCNT>/100)*60+MOD(ETIME<TCNT>,100)) - (INT(STIME<1>/100)*60+MOD(STIME<1>,100))
+*CSF 26075 v
+      IDLE=0
+      STIME = HSTIME
+      ETIME = HETIME
+      IF NOT(OVERLAP) THEN
+        IF CNT > 1 THEN
+          FOR I = CNT TO 1 STEP -1
+            IF STIME<1,I> = "" OR DTM.TYPE<1,I> = "M" THEN
+              DEL STIME<1,I>
+              DEL ETIME<1,I>
+              CNT = CNT -1
+            END
+          NEXT I
+        END
+        IF CNT > 1 THEN
+*         FOR I = 2 TO CNT
+*           IF STIME<1,I> < ETIME<1,I-1> THEN
+*             FOR II = I TO CNT
+*               STIME<1,I> = STIME<1,I> + 2400
+*               ETIME<1,I> = ETIME<1,I> + 2400
+*             NEXT II
+*           END
+*         NEXT I
+          FOR I = 2 TO CNT
+            IF STIME<1,I> > ETIME<1,I-1> THEN
+              IDLE = IDLE + (INT(STIME<1,I>/100)*60+MOD(STIME<1,I>,100)) - (INT(ETIME<1,I-1>/100)*60+MOD(ETIME<1,I-1>,100))
+            END
+          NEXT I
+        END
+        IF IDLE # 0 THEN IDLE = INT((IDLE*100/60)+.5)
+      END
+*     DIFF = INT(LAP.TIME*100/60+0.5) - SUM(PTIME<1>)
+      DIFF = INT(LAP.TIME*100/60+0.5) - SUM(PTIME<1>) - IDLE
+*CSF 26075 ^
+      IF DIFF > 0 THEN ADJ = 1 ELSE ADJ = (-1)
+      FOR I = 1 TO CNT; TEMP<1,I> = TEMP<1,I> + 0; NEXT I
+      FOR I = 1 TO ABS(DIFF) UNTIL SUM(TEMP<1>) = 0
+         LOCATE MAXIMUM(TEMP) IN DTM.LAPS.TIME<1>,1 SETTING POS ELSE NULL
+         IF (DTM.LAPS.TIME<1,POS> + ADJ) > 0 THEN
+            DTM.LAPS.TIME<1,POS> = DTM.LAPS.TIME<1,POS> + ADJ
+            BEGIN CASE
+            CASE DTM.REG.TIME<1,POS> # ""
+               DTM.REG.TIME<1,POS> = DTM.REG.TIME<1,POS> + ADJ
+            CASE DTM.OVR.TIME<1,POS> # ""
+               DTM.OVR.TIME<1,POS> = DTM.OVR.TIME<1,POS> + ADJ
+            CASE DTM.DUB.TIME<1,POS> # ""
+               DTM.DUB.TIME<1,POS> = DTM.DUB.TIME<1,POS> + ADJ
+            END CASE
+         END
+         TEMP<1,POS> = 0
+      NEXT I
+*
+*---- RETURN TO CALLING PROGRAM
+*
+99999 *
+      RETURN
+      END

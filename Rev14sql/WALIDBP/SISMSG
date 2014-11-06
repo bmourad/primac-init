@@ -1,0 +1,208 @@
+NOTUSED
+END
+*********************************************************************
+*
+* PROGRAM  - SISMSG
+*
+*********************************************************************
+*
+   EQU BEL TO CHAR(7)
+*
+   DIM SIS_REC(11)
+   EQU SIS_CONO      TO SIS_REC(1) ;* Company Number
+   EQU SIS_SERVER    TO SIS_REC(2) ;* Server ID
+   EQU SIS_CLIENT    TO SIS_REC(3) ;* Client ID
+   EQU SIS_RECEIVED  TO SIS_REC(4) ;* Time Stamp
+   EQU SIS_FILE      TO SIS_REC(5) ;* File Name
+   EQU SIS_ITEM      TO SIS_REC(6) ;* Item ID
+   EQU SIS_CHECKSUM  TO SIS_REC(7) ;* CheckSum
+   EQU SIS_MESSAGE   TO SIS_REC(8) ;* Message
+   EQU SIS_PROCESSED TO SIS_REC(9) ;* Time Stamp
+   EQU SIS_ORGID     TO SIS_REC(10);* Original ID
+   EQU SIS_ERROR     TO SIS_REC(11);* Error Message
+*
+*---- PRE-INITIALIZATION
+*
+   PROMPT ""
+   PROCREAD PARAM ELSE PARAM = ""
+   BEGIN CASE
+      CASE PARAM<1> = "T"
+         RMODE = "T"
+      CASE PARAM<1> = "B"
+         RMODE = "B"
+      CASE @USER.TYPE = 1
+         RMODE = "P"
+      CASE 1
+         STOP
+   END CASE
+*
+*---- OPEN ALL FILES
+*
+   OPEN "","SIS_CONTROL" TO SIS_CONTROL ELSE
+      ERRMSG = "CANNOT OPEN SIS_CONTROL FILE"
+      GOSUB 90000
+      STOP
+   END
+   OPEN "","SIS_INPUT" TO SIS_INPUT ELSE
+      ERRMSG = "CANNOT OPEN SIS_INPUT FILE"
+      GOSUB 90000
+      STOP
+   END
+   OPEN "","SIS_OUTPUT" TO SIS_OUTPUT ELSE
+      ERRMSG = "CANNOT OPEN SIS_OUTPUT FILE"
+      GOSUB 90000
+      STOP
+   END
+*
+*---- INITIALIZATION
+*
+   DASHES = STR("-",80)
+   KILL_PROCESS = 0
+   REC_COUNT = -1
+*
+   KILL_PROCESS = 1
+   FOR I = 1 TO 5 WHILE KILL_PROCESS
+      READU TREC FROM SIS_CONTROL, "MSG_LOCK" THEN
+         KILL_PROCESS = 0
+      END LOCKED
+         KILL_PROCESS = 1
+      END ELSE
+         KILL_PROCESS = 0
+      END
+   NEXT I
+   IF KILL_PROCESS THEN GOTO 99999
+   KILL_PROCESS = 0
+   CDATE = DATE()
+   CTIME = TIME()
+   IF CTIME < 10 THEN CDATE = DATE()
+   TREC = "LAST STARTED ON ":OCONV(CDATE,"D2/"):" AT ":OCONV(CTIME,"MTS")
+   WRITEU TREC ON SIS_CONTROL, "MSG_LOCK"
+*
+   READU TREC FROM SIS_CONTROL, "MSG_CNTL" ELSE TREC = ""
+   TREC = ""
+   TREC<2> = "STARTED ON ":OCONV(CDATE,"D2/"):" AT ":OCONV(CTIME,"MTS")
+   TREC<3> = RMODE
+   WRITE TREC ON SIS_CONTROL, "MSG_CNTL"
+*
+   IF RMODE # "P" THEN
+      SLINE = @(-1)
+      SLINE = SLINE:@(0,0):"PRIMAC"
+      SLINE = SLINE:@(20,0):"Shop Floor Information System Message Server"
+      SLINE = SLINE:@(72,0):OCONV(CDATE,"D2/")
+      SLINE = SLINE:@(0,1):DASHES
+      SLINE = SLINE:@(0,20):DASHES
+      SLINE = SLINE:@(0,22):DASHES
+      CRT SLINE:
+   END
+*
+*---- PROCESSING
+*
+   LOOP
+      CRT @(0,10):@(-4):
+      IF REC_COUNT = 0 THEN
+         SLEEP 5
+      END ELSE
+         REC_COUNT = 0
+      END
+      GOSUB 1000
+   UNTIL KILL_PROCESS DO
+      IF RMODE # "P" THEN
+         CRT @(0,10):@(-4):"SELECTING SIS_INPUT FILE":
+      END
+      SELECT SIS_INPUT
+      DONE = 0
+      LOOP
+         GOSUB 1000
+         IF KILL_PROCESS THEN
+            DONE = 1
+         END ELSE
+            READNEXT ID ELSE DONE = 1
+         END
+      UNTIL DONE DO
+         REC_COUNT += 1
+         IF RMODE # "P" THEN
+            CRT @(0,10):@(-4):"PROCESSING MESSAGE ":ID
+         END
+         MATREADU SIS_REC FROM SIS_INPUT, ID THEN
+* PROCESS FOUND RECORD
+            GOSUB 2000
+            DELETE SIS_INPUT, ID
+         END LOCKED
+* SKIP LOCKED RECORD (Multi SISMSG Process ???!!!)
+         END ELSE
+* Record Not Found
+            MAT SIS_REC = ""
+            SIS_SERVER = FIELD(ID,"!",1)
+            SIS_MESSAGE = ID
+            SIS_ERROR = "LOST"
+            GOSUB 2000
+            RELEASE SIS_INPUT, ID
+         END
+      REPEAT
+      IF KILL_PROCESS THEN GOTO 199
+199*
+   REPEAT
+   CDATE = DATE()
+   CTIME = TIME()
+   IF CTIME < 10 THEN CDATE = DATE()
+   READU TREC FROM SIS_CONTROL, "MSG_CNTL" ELSE TREC = ""
+   TREC = ""
+   TREC<2> = "STOPPED ON ":OCONV(CDATE,"D2/"):" AT ":OCONV(CTIME,"MTS")
+   WRITE TREC ON SIS_CONTROL, "MSG_CNTL"
+   GOTO 99999
+*
+*---- CHECK AND SETUP KILL_PROCESS
+*
+1000*
+   IF KILL_PROCESS THEN RETURN
+   READ TREC FROM SIS_CONTROL, "MSG_CNTL" ELSE TREC = ""
+   IF TREC<1> = "STOP" THEN KILL_PROCESS = 1
+   RETURN
+*
+*---- WRITE SIS_OUTPUT
+*
+2000*
+   CDATE = DATE()
+   CTIME = TIME()
+   IF CTIME < 10 THEN CDATE = DATE()
+   SIS_PROCESSED = OCONV(CDATE, "D2/") "L#8 " : OCONV(CTIME, "MTS:")
+   SIS_ORGID = ID
+   IF SIS_RECEIVED = "" THEN SIS_RECEIVED = SIS_PROCESSED
+   READU SEQ_REC FROM SIS_CONTROL, "SIS_":SIS_SERVER ELSE SEQ_REC = ""
+   IF CDATE > SEQ_REC<1> THEN
+      SEQ_REC = CDATE
+      SEQ_REC<2> = 0
+   END
+   NEWID = ""
+   LOOP
+      SEQ_REC<2> = SEQ_REC<2> + 1
+      NEWID = SIS_SERVER :"!": CDATE :"!": SEQ_REC<2>
+      READU DUMMY FROM SIS_OUTPUT, NEWID THEN
+         RELEASE SIS_OUTPUT, NEWID
+         NEWID = ""
+      END LOCKED
+         NEWID = ""
+      END ELSE
+         MATWRITE SIS_REC ON SIS_OUTPUT, NEWID
+      END
+   WHILE NEWID = "" DO
+   REPEAT
+   WRITE SEQ_REC ON SIS_CONTROL, "SIS_":SIS_SERVER
+   DUMMY = ""
+   RETURN
+*
+*---- ERROR ROUTINE
+*
+90000*
+   IF RMODE # "P" THEN
+      CRT @(0,23):@(-4):ERRMSG:
+      INPUT REPLY,1:
+      CRT @(0,23):@(-4):
+   END
+   RETURN
+*
+*---- END OF PROGRAM
+*
+99999*
+   STOP
+END

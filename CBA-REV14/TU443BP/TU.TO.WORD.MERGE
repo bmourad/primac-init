@@ -1,0 +1,247 @@
+SUBROUTINE TU.TO.WORD.MERGE(HOSTFILENAME, FIELDLIST, SELECTION, OPTIONS, DOCUMENTNAME, STATUS)
+*
+** SBClient Host 3GL API
+** Copyright (C) Ardent Software Inc. 1998
+** Copyright (C) UniData, Inc. 1996, 1997
+** Copyright (C) System Builder Corporation. 1995
+**
+**      This software is the proprietary property and contains
+**      trade secrets of Ardent Software, Inc. Any unauthorized use,
+**      disclosure or duplication is strictly prohibited.
+**      All rights reserved.
+***************************************************************************
+*-* TU.TO.WORD.MERGE(Pickfilename, Fieldlist, Selection, Options, Documentname,
+*-* Status)
+*-*
+*-* This function will download formatted pick data into a WINWORD
+*-* mailmerge document using a combination of file transfer and OLE or DDE.
+*-* The word document must be created before this function is called.
+*-* The document must define a merge data source which will be another word
+*-* document called "merge.doc". The merge document will be created along
+*-* side the target document.
+*-*
+*-* [P] Pickfilename      The name of the pick file to be downloaded.
+*-*
+*-* [P] Fieldlist         List of dictionary definitions of fields to be
+*-*                       downloaded.
+*-*
+*-* [P] Selection         Selection criteria to locate items to be
+*-*                       downloaded.
+*-*
+*-* [P] Options           This is an array of characters to indicate
+*-*                       minor details of the transfer. Possible values:-
+*-*
+*-*                       I, Do OEM To ANSI conversion
+*-*                       P, print to default printer
+*-*                       R, restore app after transfer
+*-*                       S, save document
+*-*                       X, exit word
+*-*                       0, add duplicate data for correlative
+*-*
+*-* [P] Documentname      This the name of the merge document.
+*-*
+*-* [R] Status            This is an indication of the success or failure
+*-*                       of the subroutine. A successful call will return
+*-*                       with zero Status and failure will return with a
+*-*                       non-zero value.
+***************************************************************************
+*
+ INCLUDE TUBP TU.API.H
+ INCLUDE TUBP SPECIAL.H
+ INCLUDE TUBP USER.INCLUDE.H
+ INCLUDE TUBP HEADER.H
+ INCLUDE TUBP TU.ERRORCODES.H
+ INCLUDE TUBP ROC.H
+*
+DEBUGFLAG = FALSE
+*
+PCFILEPATH = DOCUMENTNAME[1, INDEX(DOCUMENTNAME, "\", COUNT(DOCUMENTNAME, "\"))-1]
+IF PCFILEPATH[LEN(PCFILEPATH), 1] # "\" THEN PCFILEPATH = PCFILEPATH:"\"
+PCFILENAME = PCFILEPATH:"MERGE.DOC"
+*
+IF DEBUGFLAG THEN CRT "Creating Merge Document"
+DOWN.OPTIONS = "CHSX"
+IF INDEX(OPTIONS, "I", 1) THEN DOWN.OPTIONS = DOWN.OPTIONS:"I"
+IF INDEX(OPTIONS, "0", 1) THEN DOWN.OPTIONS = DOWN.OPTIONS:"0"
+CALL TU.TO.WORD(HOSTFILENAME, FIELDLIST, SELECTION, DOWN.OPTIONS, PCFILENAME, STATUS)
+IF STATUS THEN RETURN
+*
+*-* Create Word.Application object to find out who we are talking too.
+*
+OFFICE95 = FALSE; * boolean Office95 on client
+HROC = 0; * handle to ROC object
+HWA = 0; * handle to Word.Application object
+*
+GOSUB 100; * OLE Init
+IF STATUS THEN RETURN
+OFFICE95 = TRUE
+IF OFFICE95 THEN GOSUB 300 ELSE GOSUB 200
+GOSUB 900
+*
+RETURN
+*
+*-* OLE Init
+*
+100 *
+*
+CALL TU.INIT(STATUS)
+IF STATUS THEN RETURN
+*
+*-* create Word.Application object
+*
+CALL ROC.GETHANDLE("this", HROC, STATUS); 
+IF STATUS AND NOT(HROC) THEN RETURN
+OBJNAME = "Word.Application"; ATTR = "parent"; VALS = HROC
+IF DEBUGFLAG THEN CRT "Creating Word.Application object"
+CALL ROC.CREATE(OBJNAME, ATTR, VALS, HWA, STATUS)
+IF STATUS AND NOT(HWA) THEN
+OFFICE95 = TRUE ; STATUS = FALSE
+RETURN
+END
+*
+*-* query the "Version" attribute to get the Word release
+*
+ATTR = "Version"; VALS = ""
+IF DEBUGFLAG THEN CRT "Getting Winword version"
+CALL ROC.GET(HWA, ATTR, VALS, STATUS)
+IF STATUS THEN RETURN
+IF VALS[1,1] = '7' THEN OFFICE95 = TRUE
+RETURN
+*
+*-* Merge through OLE Automation
+*
+200 *
+*
+ATTR = "Documents"; HDOCUMENT = 0
+CALL ROC.GET(HWA, ATTR, HDOCUMENT, STATUS)
+IF STATUS AND NOT(HDOCUMENT) THEN RETURN
+*
+STRING = 'Open,':DOCUMENTNAME:',,,,,,,,,'; VALS = ""
+OLD = ","; NEW = VM
+ INCLUDE TUBP SWAP.STRINGS.H
+ATTR = STRING; HDOC = 0
+IF DEBUGFLAG THEN CRT "Opening file ":DOCUMENTNAME
+CALL ROC.GET(HDOCUMENT, ATTR, HDOC, STATUS)
+IF STATUS THEN RETURN
+*
+*-* Set Word document visible and minimized
+*
+ATTR = "Visible":ROC.US:"WindowState"; VALS = TRUE:ROC.US:2
+IF DEBUGFLAG THEN CRT "Setting Visible, and WindowState"
+CALL ROC.SET(HWA, ATTR, VALS, STATUS)
+IF STATUS THEN RETURN
+*
+*-* get handle to active document
+*
+ATTR = "ActiveDocument"; HACTIVEDOC = 0
+IF DEBUGFLAG THEN CRT "Getting ActiveDocument Handle"
+CALL ROC.GET(HWA, ATTR, HACTIVEDOC, STATUS)
+IF STATUS AND NOT(HACTIVEDOC) THEN RETURN
+*
+*-* get handle to MailMerge Object
+*
+ATTR = "MailMerge"; HMERGE = 0
+IF DEBUGFLAG THEN CRT "Getting MailMerge Handle"
+CALL ROC.GET(HACTIVEDOC, ATTR, HMERGE, STATUS)
+IF STATUS AND NOT(HMERGE) THEN RETURN
+*
+*-* Check Merge State
+*
+ATTR = "State"; STATE = 0
+IF DEBUGFLAG THEN CRT "Checking MailMerge State"
+CALL ROC.GET(HMERGE, ATTR, STATE, STATUS)
+IF STATUS THEN RETURN
+IF NOT(STATE) THEN STATUS = OLE.INVALID.MERGE.DOC ; RETURN
+*
+*-* Check merge document
+*
+ATTR = "Check" ; VALS = ""
+IF DEBUGFLAG THEN CRT "Checking Mail Merge Document"
+CALL ROC.GET(HMERGE, ATTR, VALS, STATUS)
+IF STATUS THEN RETURN
+IF VALS # "" THEN STATUS = OLE.INVALID.MERGE.DOC ; RETURN
+*
+*-* Set Merge destination and Execute Merge
+*
+ATTR = "Destination" ; VALS = 0
+IF DEBUGFLAG THEN CRT "Setting Mail Merge Destination"
+CALL ROC.SET(HMERGE, ATTR, VALS, STATUS)
+IF STATUS THEN RETURN
+ATTR = "Execute,1" ; VALS = ""
+IF DEBUGFLAG THEN CRT "Executing Mail Merge"
+CALL ROC.GET(HMERGE, ATTR, VALS, STATUS)
+RETURN
+*
+*-* Merge through Word Basic
+*
+300 *
+*
+TIMEOUT = 60; HANDLE = 0; SYSTEMHANDLE = 0
+*
+*-* first establish a link with the SYSTEM topic
+*
+IF DEBUGFLAG THEN CRT "DDE Connect to Winword"
+CALL TU.DDE.CONNECT('WINWORD', 'System', SYSTEMHANDLE, STATUS)
+IF STATUS THEN
+WINWORD = 'WINWORD.EXE'; STATUS = 0
+IF DEBUGFLAG THEN CRT "Launching Winword"
+CALL TU.LAUNCH.APP(WINWORD, APP.SHOWMINIMIZED, STATUS)
+IF STATUS THEN RETURN
+CALL TU.CHECK.APP(WINWORD, STATUS)
+IF STATUS THEN RETURN
+IF DEBUGFLAG THEN CRT "DDE Connect to Winword"
+CALL TU.DDE.CONNECT('WINWORD', 'System', SYSTEMHANDLE, STATUS)
+IF STATUS THEN RETURN
+END
+*
+*-* open document
+*
+IF DEBUGFLAG THEN CRT "Opening document"
+CALL TU.DDE.EXEC.MACRO(SYSTEMHANDLE, TIMEOUT, '[FileOpen .Name="':DOCUMENTNAME:'", .ConfirmConversions=0]', STATUS)
+IF STATUS THEN RETURN
+IF DEBUGFLAG THEN CRT "DDE Connect to Document"
+CALL TU.DDE.CONNECT('WINWORD', DOCUMENTNAME, HANDLE, STATUS)
+IF STATUS THEN RETURN
+*
+*-* Merge Stuff
+*
+MACRO = '[MailMerge .CheckErrors = 1, .Destination = 0, .MailMerge]'
+IF INDEX(OPTIONS, 'R', 1) THEN
+MACRO = MACRO:AM:'[AppRestore]'
+END
+IF INDEX(OPTIONS, 'P', 1) THEN
+MACRO = MACRO:AM:'[FilePrint .Background = 1]'
+END
+IF INDEX(OPTIONS, 'S', 1) THEN
+MACRO = MACRO:AM:'[FileSaveAll 1, 0]'
+END
+IF INDEX(OPTIONS, 'X', 1) THEN
+MACRO = MACRO:AM:'[FileQuit]'
+END
+MACRO.COUNT = COUNT(MACRO, AM) + (MACRO # '')
+*
+*-* now do the macro business
+*
+FOR I = 1 TO MACRO.COUNT
+IF DEBUGFLAG THEN CRT "Executing Macro => ":MACRO<I>
+CALL TU.DDE.EXEC.MACRO(HANDLE, TIMEOUT, MACRO<I>, STATUS)
+IF STATUS THEN RETURN
+NEXT I
+RETURN
+*
+*-* Shutdown
+*
+900 *
+*
+IF HWA THEN CALL ROC.DESTROY(HWA, STATUS); * destroy Word.Application object
+IF OFFICE95 THEN
+CALL TU.DDE.DISCONNECT(HANDLE, STATUS)
+CALL TU.DDE.DISCONNECT(SYSTEMHANDLE, STATUS)
+END
+RETURN
+*
+***********************************************************************
+* the End
+***********************************************************************
+END
+

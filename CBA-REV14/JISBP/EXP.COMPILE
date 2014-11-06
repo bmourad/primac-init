@@ -1,0 +1,486 @@
+      SUBROUTINE EXP.COMPILE(EXPRESSION, EXPSTACK, TYPSTACK, SEPARATOR, ERRMSG, ERRPTR)
+*********************************************************************
+*
+* PROGRAM - EXP.COMPILE
+*
+* AUTHOR  - NICK AMENDOLA, COMPUTER BUSINESS ASSOCIATES
+*
+* DATE    - 11/19/90
+*
+* DESCRIPTION
+*
+* This subroutine accepts a BASIC expression and returns two stacks
+* EXPSTACK and TYPSTACK.
+*
+*  EXPSTACK is a dynamic array (multi-attr) in reverse polish format.
+*
+*  TYPSTACK is a corresponding dynamic which contains a type code for
+*         each element in EXPSTACK.
+*
+*  Example: Expression is   A + INT(B / 5) * 9
+*
+*   EXPSTACK = A ^ B ^ 5 ^ / ^ INT ^ 9 ^ * ^ +
+*   TYPSTACK = V ^ V ^ N ^ A ^ F1 ^  N ^ A ^ A
+*
+*  Valid type codes are:  V  =  variable
+*                         C  =  null
+*                         N  =  numeric constant
+*                         X  =  alphanumeric constant
+*                         A  =  arithmetic operator
+*                         R  =  relational operator
+*                         L  =  logical operator
+*                         Fn =  function (n = # of parameters)
+*
+*  If an ERRMSG is returned, the translation is invalid and should
+*  not be used.  ERRPTR is a pointer to the position within the
+*  EXPRESSION where the failure ocurred.
+*
+*********************************************************************
+*
+*---- DEFINE EQUATES
+*
+      EQU AM TO CHAR(254)
+*
+*---- INITIALIZATION
+*
+      IF SEPARATOR = "" THEN SEPARATOR = AM
+      SAVE.EXPRESSION = EXPRESSION
+      EXPLEN = LEN(EXPRESSION)
+      SCNT = 1
+      LOOP
+         MP = INDEX(EXPRESSION,"<",SCNT)
+      UNTIL MP = 0 DO
+         PX = MP
+         CHX = "<"
+         CHY = ">"
+         GOSUB 2100
+         BEGIN CASE
+         CASE PX = 0
+            SCNT = SCNT + 1
+         CASE 1
+            SUBEXP = EXPRESSION[MP+1,PX-MP-1]
+            BEGIN CASE
+            CASE INDEX(SUBEXP," AND ",1) > 0
+               SCNT = SCNT + 1
+            CASE INDEX(SUBEXP," OR ",1) > 0
+               SCNT = SCNT + 1
+            CASE 1
+               EXPRESSION = EXPRESSION[1,MP-1]:"{":SUBEXP:"}":EXPRESSION[PX+1,999]
+            END CASE
+         END CASE
+      REPEAT
+      LOOP
+         MP = INDEX(EXPRESSION," AND ",1)
+      UNTIL MP = 0 DO
+         EXPRESSION = EXPRESSION[1,MP-1]:"&":EXPRESSION[MP+5,999]
+      REPEAT
+      LOOP
+         MP = INDEX(EXPRESSION," OR ",1)
+      UNTIL MP = 0 DO
+         EXPRESSION = EXPRESSION[1,MP-1]:"|":EXPRESSION[MP+4,999]
+      REPEAT
+      EXPLEN = LEN(EXPRESSION)
+      OPRVALSTACK = ""
+      OPRLVLSTACK = ""
+      OPRTYPSTACK = ""
+      EXPSTACK = ""
+      TYPSTACK = ""
+      ERRMSG = ""
+      ERRPTR = 1
+      P1 = 0
+      PREV.ELEMVAL = ""
+      PREV.OPRVAL  = ""
+      PREV.OPRTYP  = ""
+*
+*---- DEFINE SUPPORTED OPERATORS AND FUNCTIONS
+*
+      OPERATORS = ""          ; OPERLEVEL = "" ;  OPERTYPE = ""
+*
+      OPERATORS<-1>="("       ; OPERLEVEL<-1>=90 ; OPERTYPE<-1>="LD"
+      OPERATORS<-1>=")"       ; OPERLEVEL<-1>=90 ; OPERTYPE<-1>="RD"
+      OPERATORS<-1>="["       ; OPERLEVEL<-1>=80 ; OPERTYPE<-1>="LD"
+      OPERATORS<-1>="]"       ; OPERLEVEL<-1>=80 ; OPERTYPE<-1>="RD"
+      OPERATORS<-1>="{"       ; OPERLEVEL<-1>=80 ; OPERTYPE<-1>="LD"
+      OPERATORS<-1>="}"       ; OPERLEVEL<-1>=80 ; OPERTYPE<-1>="RD"
+      OPERATORS<-1>=","       ; OPERLEVEL<-1>=70 ; OPERTYPE<-1>="D"
+*
+      OPERATORS<-1>="|"       ; OPERLEVEL<-1>=65 ; OPERTYPE<-1>="L"
+      OPERATORS<-1>="&"       ; OPERLEVEL<-1>=60 ; OPERTYPE<-1>="L"
+*
+      OPERATORS<-1>="="       ; OPERLEVEL<-1>=50 ; OPERTYPE<-1>="R"
+      OPERATORS<-1>="#"       ; OPERLEVEL<-1>=50 ; OPERTYPE<-1>="R"
+      OPERATORS<-1>="<>"      ; OPERLEVEL<-1>=50 ; OPERTYPE<-1>="R"
+      OPERATORS<-1>="><"      ; OPERLEVEL<-1>=50 ; OPERTYPE<-1>="R"
+      OPERATORS<-1>="<"       ; OPERLEVEL<-1>=50 ; OPERTYPE<-1>="R"
+      OPERATORS<-1>="<="      ; OPERLEVEL<-1>=50 ; OPERTYPE<-1>="R"
+      OPERATORS<-1>="=<"      ; OPERLEVEL<-1>=50 ; OPERTYPE<-1>="R"
+      OPERATORS<-1>=">"       ; OPERLEVEL<-1>=50 ; OPERTYPE<-1>="R"
+      OPERATORS<-1>=">="      ; OPERLEVEL<-1>=50 ; OPERTYPE<-1>="R"
+      OPERATORS<-1>="=>"      ; OPERLEVEL<-1>=50 ; OPERTYPE<-1>="R"
+*
+      OPERATORS<-1>="+"       ; OPERLEVEL<-1>=45 ; OPERTYPE<-1>="A"
+      OPERATORS<-1>="-"       ; OPERLEVEL<-1>=45 ; OPERTYPE<-1>="A"
+      OPERATORS<-1>="*"       ; OPERLEVEL<-1>=40 ; OPERTYPE<-1>="A"
+      OPERATORS<-1>="/"       ; OPERLEVEL<-1>=40 ; OPERTYPE<-1>="A"
+*
+      OPERATORS<-1>=":"       ; OPERLEVEL<-1>=30 ; OPERTYPE<-1>="F2"
+*
+      OPERATORS<-1>="~"       ; OPERLEVEL<-1>=20 ; OPERTYPE<-1>="A"
+*
+      OPERATORS<-1>="^"       ; OPERLEVEL<-1>=10 ; OPERTYPE<-1>="A"
+      OPERATORS<-1>="**"      ; OPERLEVEL<-1>=10 ; OPERTYPE<-1>="A"
+*
+      OPERATORS<-1>="ABS"     ; OPERLEVEL<-1>= 1 ; OPERTYPE<-1>="F1"
+      OPERATORS<-1>="ALPHA"   ; OPERLEVEL<-1>= 1 ; OPERTYPE<-1>="F1"
+      OPERATORS<-1>="CONCAT"  ; OPERLEVEL<-1>= 1 ; OPERTYPE<-1>="F2"
+      OPERATORS<-1>="COUNT"   ; OPERLEVEL<-1>= 1 ; OPERTYPE<-1>="F2"
+      OPERATORS<-1>="DATE"    ; OPERLEVEL<-1>= 1 ; OPERTYPE<-1>="F0"
+      OPERATORS<-1>="DCOUNT"  ; OPERLEVEL<-1>= 1 ; OPERTYPE<-1>="F2"
+      OPERATORS<-1>="EXTRACT" ; OPERLEVEL<-1>= 1 ; OPERTYPE<-1>="F2,4"
+      OPERATORS<-1>="FIELD"   ; OPERLEVEL<-1>= 1 ; OPERTYPE<-1>="F3"
+      OPERATORS<-1>="ICONV"   ; OPERLEVEL<-1>= 1 ; OPERTYPE<-1>="F2"
+      OPERATORS<-1>="IF"      ; OPERLEVEL<-1>= 1 ; OPERTYPE<-1>="F3"
+      OPERATORS<-1>="INDEX"   ; OPERLEVEL<-1>= 1 ; OPERTYPE<-1>="F3"
+      OPERATORS<-1>="INT"     ; OPERLEVEL<-1>= 1 ; OPERTYPE<-1>="F1"
+      OPERATORS<-1>="LOCVAL"  ; OPERLEVEL<-1>= 1 ; OPERTYPE<-1>="F2"
+      OPERATORS<-1>="MOD"     ; OPERLEVEL<-1>= 1 ; OPERTYPE<-1>="F2"
+      OPERATORS<-1>="NOT"     ; OPERLEVEL<-1>= 1 ; OPERTYPE<-1>="F1"
+      OPERATORS<-1>="NUM"     ; OPERLEVEL<-1>= 1 ; OPERTYPE<-1>="F1"
+      OPERATORS<-1>="OCONV"   ; OPERLEVEL<-1>= 1 ; OPERTYPE<-1>="F2"
+      OPERATORS<-1>="PWR"     ; OPERLEVEL<-1>= 1 ; OPERTYPE<-1>="F2"
+      OPERATORS<-1>="READ"    ; OPERLEVEL<-1>= 1 ; OPERTYPE<-1>="F3"
+      OPERATORS<-1>="ROUND"   ; OPERLEVEL<-1>= 1 ; OPERTYPE<-1>="F1"
+      OPERATORS<-1>="RNDUP"   ; OPERLEVEL<-1>= 1 ; OPERTYPE<-1>="F1"
+      OPERATORS<-1>="RNDDN"   ; OPERLEVEL<-1>= 1 ; OPERTYPE<-1>="F1"
+      OPERATORS<-1>="SPACE"   ; OPERLEVEL<-1>= 1 ; OPERTYPE<-1>="F1"
+      OPERATORS<-1>="SQRT"    ; OPERLEVEL<-1>= 1 ; OPERTYPE<-1>="F1"
+      OPERATORS<-1>="STR"     ; OPERLEVEL<-1>= 1 ; OPERTYPE<-1>="F2"
+      OPERATORS<-1>="SUBSTR"  ; OPERLEVEL<-1>= 1 ; OPERTYPE<-1>="F3"
+      OPERATORS<-1>="SUM"     ; OPERLEVEL<-1>= 1 ; OPERTYPE<-1>="F1"
+      OPERATORS<-1>="TIME"    ; OPERLEVEL<-1>= 1 ; OPERTYPE<-1>="F0"
+      OPERATORS<-1>="TRIM"    ; OPERLEVEL<-1>= 1 ; OPERTYPE<-1>="F1"
+*
+*---- MAIN PROCESSING
+*
+      EPTR = 0
+      LOOP
+         GOSUB 500
+         IF ELEMTYP # "" THEN
+            EPTR = EPTR + 1
+            IF EPTR = 1 THEN
+               EXPSTACK = ELEMVAL
+               TYPSTACK = ELEMTYP
+            END ELSE
+               EXPSTACK = EXPSTACK : SEPARATOR : ELEMVAL
+               TYPSTACK = TYPSTACK : SEPARATOR : ELEMTYP
+            END
+         END
+         PCNT = 1
+         MORE = 1
+         LOOP
+            BEGIN CASE
+            CASE ERRMSG # ""
+               MORE = 0
+            CASE OPRLVLSTACK = ""
+               IF OPRTYP = "RD" THEN
+                  ERRMSG = "MISSING MATCHING DELIMITER"
+                  ERRPTR = P1
+               END
+               MORE = 0
+            CASE OPRTYP = "LD"
+               MORE = 0
+            CASE OPRTYP = "D" AND OPRTYPSTACK<1> = "D"
+               MORE = 0
+            CASE OPRLVLSTACK<1> > OPRLVL
+               MORE = 0
+            CASE OPRVALSTACK<1> = "(" AND OPRVAL = ")"
+               GOSUB 300            ;* DELETE "(" FROM OPERATOR STACK
+               IF OPRTYPSTACK<1>[1,1] = "F" THEN
+                  OPRTYPSTACK<1> = "F":PCNT
+                  GOSUB 200         ;* MOVE FUNCT TO EXPRESSION STACK
+                  PCNT = 0
+               END
+               MORE = 0
+            CASE OPRVALSTACK<1> = "[" AND OPRVAL = "]"
+               OPRVALSTACK<1> = "SUBSTR"
+               OPRTYPSTACK<1> = "F":PCNT+1
+               GOSUB 200           ;* MOVE FUNCT TO EXPRESSION STACK
+               PCNT = 0
+               MORE = 0
+            CASE OPRVALSTACK<1> = "{" AND OPRVAL = "}"
+               OPRVALSTACK<1> = "EXTRACT"
+               OPRTYPSTACK<1> = "F":PCNT+1
+               GOSUB 200           ;* MOVE FUNCT TO EXPRESSION STACK
+               PCNT = 0
+               MORE = 0
+            CASE OPRVALSTACK<1> = ","
+               PCNT = PCNT + 1
+               GOSUB 300
+            CASE OPRTYPSTACK<1> = "LD"
+               ERRMSG = "MISSING MATCHING DELIMITER"
+               ERRPTR = P1
+            CASE 1
+               GOSUB 200
+            END CASE
+         WHILE MORE DO
+         REPEAT
+         IF PCNT > 1 THEN
+            ERRMSG = "INVALID EXPRESSION"
+         END
+         BEGIN CASE
+         CASE ERRMSG # ""
+         CASE OPRVAL = ""
+         CASE OPRTYP = "RD"
+         CASE OPRVAL = "END"
+         CASE 1
+            OPRVALSTACK = INSERT(OPRVALSTACK,1,0,0,OPRVAL)
+            OPRLVLSTACK = INSERT(OPRLVLSTACK,1,0,0,OPRLVL)
+            OPRTYPSTACK = INSERT(OPRTYPSTACK,1,0,0,OPRTYP)
+         END CASE
+      UNTIL OPRVAL = "END" DO
+      REPEAT
+      GOTO 99999
+*
+*---- MOVE AND DELETE ENTRY FROM OPERATOR STACK TO EXPRESSION STACK
+*
+200 *
+      EPTR = EPTR + 1
+      IF EPTR = 1 THEN
+         EXPSTACK = OPRVALSTACK<1>
+         TYPSTACK = OPRTYPSTACK<1>
+      END ELSE
+         EXPSTACK = EXPSTACK : SEPARATOR : OPRVALSTACK<1>
+         TYPSTACK = TYPSTACK : SEPARATOR : OPRTYPSTACK<1>
+      END
+*
+*---- DELETE CURRENT ENTRY FROM OPERATOR STACK
+*
+300 *
+      OPRVALSTACK = DELETE(OPRVALSTACK,1,0,0)
+      OPRLVLSTACK = DELETE(OPRLVLSTACK,1,0,0)
+      OPRTYPSTACK = DELETE(OPRTYPSTACK,1,0,0)
+      RETURN
+*
+*---- LOCATE NEXT EXPRESSION VALUE AND OPERATOR
+*
+500 *
+      ELEMVAL = ""
+      ELEMTYP = ""
+      OPRVAL = ""
+      OPRLVL = 0
+      OPRTYP = ""
+      IF P1 = EXPLEN THEN
+         OPRVAL = "END"
+         OPRLVL = 999
+         RETURN
+      END
+      P1 = P1 + 1
+      P2 = 0
+      PP = P1
+      DONE = 0
+      LOOP
+         CH = EXPRESSION[PP,1]
+         LOCATE CH IN OPERATORS,1 SETTING OPTR ELSE OPTR = 0
+         BEGIN CASE
+         CASE CH = '"' OR CH = "'"
+            PX = PP
+            CHX = CH
+            CHY = CH
+            GOSUB 2100
+            IF PX = 0 THEN
+               ERRMSG = "UNEVEN NUMBER OF QUOTATION MARKS"
+               ERRPTR = PP
+            END ELSE
+               PP = PX
+            END
+         CASE OPTR > 0 AND CH = "("
+            PX = PP
+            CHX = CH
+            CHY = ")"
+            GOSUB 2100
+            IF PX = 0 THEN
+               ERRMSG = "MISSING RIGHT PARENTHESIS"
+               ERRPTR = PP
+            END ELSE
+               CHX = TRIM(EXPRESSION[P1,PP-P1])
+               IF CHX = "" THEN
+                  P2 = PP
+               END ELSE
+                  LOCATE CHX IN OPERATORS,1 SETTING OPX ELSE OPX = 0
+                  IF OPX > 0 THEN
+                     OPTR = OPX
+                     GOSUB 2000
+                     IF ERRMSG = "" THEN
+                        P2 = P1
+                        PP = PP - 1
+                     END
+                  END ELSE
+                     ERRMSG = "INVALID FUNCTION"
+                     ERRPTR = PP
+                  END
+               END
+               DONE = 1
+            END
+         CASE OPTR > 0
+            IF OPERTYPE<OPTR> = "LD" THEN
+               PX = PP
+               CHX = CH
+               CHY = OPERATORS<OPTR+1>
+               GOSUB 2100
+               IF PX = 0 THEN
+                  ERRMSG = "MISSING MATCHING DELIMITER"
+                  ERRPTR = PP
+               END
+            END
+            IF ERRMSG = "" THEN
+               P2 = PP
+               IF PP < EXPLEN THEN
+                  CHX = EXPRESSION[PP,2]
+                  LOCATE CHX IN OPERATORS,1 SETTING OPX ELSE OPX = 0
+                  IF OPX > 0 THEN
+                     OPTR = OPX
+                     PP = PP + 1
+                  END
+               END
+               DONE = 1
+            END
+         END CASE
+      UNTIL PP = EXPLEN OR DONE OR ERRMSG # "" DO
+         PP = PP + 1
+      REPEAT
+      IF P2 = 0 THEN P2 = PP + 1
+      ELEMVAL = TRIM(EXPRESSION[P1,P2-P1])
+      P1 = PP
+      BEGIN CASE
+      CASE OPTR = 0
+         OPRVAL = ""
+         OPRLVL = 0
+         OPRTYP = ""
+      CASE 1
+         IF OPERATORS<OPTR> = "-" AND ELEMVAL = "" THEN
+            IF PREV.OPRTYP="A" OR PREV.OPRTYP="LD" OR PREV.OPRTYP="D" THEN
+               IF PREV.OPRVAL # "^" AND PREV.OPRVAL # "**" THEN
+                  LOCATE "~" IN OPERATORS,1 SETTING OPTR ELSE NULL
+               END
+            END
+         END
+         OPRVAL = OPERATORS<OPTR>
+         OPRLVL = OPERLEVEL<OPTR>
+         OPRTYP = OPERTYPE<OPTR>
+      END CASE
+*
+      ELEN = LEN(ELEMVAL)
+      BEGIN CASE
+      CASE ELEMVAL = ""
+         NULL
+      CASE ELEMVAL[1,1] = '"' AND ELEMVAL[ELEN,1] = '"'
+         ELEMVAL = ELEMVAL[2,ELEN-2]
+         ELEMTYP = "C"
+      CASE ELEMVAL[1,1] = "'" AND ELEMVAL[ELEN,1] = "'"
+         ELEMVAL = ELEMVAL[2,ELEN-2]
+         ELEMTYP = "C"
+      END CASE
+      BEGIN CASE
+      CASE ELEMVAL = ""
+         NULL
+      CASE ELEMTYP = "" AND INDEX(ELEMVAL," ",1) > 0
+         ERRMSG = "INVALID EXPRESSION"
+         ERRPTR = P1
+      CASE ELEMTYP = "" AND NUM(ELEMVAL[1,1]) AND NOT(NUM(ELEMVAL[2,99]))
+         ERRMSG = "INVALID EXPRESSION"
+         ERRPTR = P1
+      CASE NUM(ELEMVAL)
+         ELEMTYP = "N"
+      CASE ELEMTYP = "C"
+         ELEMTYP = "X"
+      CASE 1
+         ELEMTYP = "V"
+      END CASE
+      PREV.ELEMVAL = ELEMVAL
+      PREV.OPRVAL = OPRVAL
+      PREV.OPRTYP = OPRTYP
+      RETURN
+*
+*---- EDIT FUNCTION FOR NUMBER OF PARAMETERS
+*
+2000 *
+      SDONE = 0
+      PC = PP
+      PCNT = 0
+      P = PP
+      LOOP
+         P = P + 1
+      UNTIL P > EXPLEN OR SDONE OR ERRMSG # "" DO
+         CHX = EXPRESSION[P,1]
+         BEGIN CASE
+         CASE CHX = '"' OR CHX = "'"
+            CHY = CHX
+            GOSUB 2050
+         CASE CHX = "("
+            CHY = ")"
+            GOSUB 2050
+         CASE CHX = "["
+            CHY = "]"
+            GOSUB 2050
+         CASE CHX = "<"
+            CHY = ">"
+            GOSUB 2050
+         CASE CHX = ")"
+            IF TRIM(EXPRESSION[PC,P-PC-1]) # "" THEN PCNT = PCNT + 1
+            SDONE = 1
+         CASE CHX = ","
+            IF TRIM(EXPRESSION[PC,P-PC-1]) # "" THEN PCNT = PCNT + 1
+         END CASE
+      REPEAT
+      IF ERRMSG # "" THEN
+         MINMAX = OPERTYPE<OPTR>[2,99]
+         MINPAR = FIELD(MINMAX,",",1)
+         MAXPAR = FIELD(MINMAX,",",2)
+         IF MAXPAR = "" THEN MAXPAR = MINPAR
+         IF NOT(SDONE) OR PCNT < MINPAR OR PCNT > MAXPAR THEN
+            ERRMSG = "INCORRECT NUMBER OF PARAMETERS FOR FUNCTION"
+            ERRPTR = PP
+         END
+      END
+      RETURN
+*
+*---- EDIT FOR MATCHING DELIMITER
+*
+2050 *
+      PX = P
+      GOSUB 2100
+      IF PX = 0 THEN
+         ERRMSG = "MISSING MATCHING DELIMITER"
+         ERRPTR = P
+      END ELSE
+         P = PX
+      END
+      RETURN
+*
+*---- FIND MATCHING CHARACTER
+*
+2100 *
+      MCNT = 0
+      PY1 = PX+1
+      PX = 0
+      FOR PY = PY1 TO EXPLEN WHILE PX = 0
+         CHZ = EXPRESSION[PY,1]
+         BEGIN CASE
+         CASE CHX = CHY
+            IF CHZ = CHX THEN PX = PY
+         CASE CHZ = CHX
+            MCNT = MCNT + 1
+         CASE CHZ = CHY AND MCNT > 0
+            MCNT = MCNT - 1
+         CASE CHZ = CHY
+            PX = PY
+         END CASE
+      NEXT PY
+      RETURN
+*
+*---- END OF PROGRAM
+*
+99999 *
+      EXPRESSION = SAVE.EXPRESSION
+      RETURN
+      END

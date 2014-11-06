@@ -1,0 +1,267 @@
+  PROGRAM CPYLIB2DICT
+********************************************************************
+* REVISION - [12.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM   - PRIMAC
+* SOURCE   - PMCBP
+* PROGRAM  - CPYLIB2DICT
+* BY       - Abdullah Jibaly, COMPUTER BUSINESS ASSOCIATES
+* DATE     - 08/28/02
+*
+* DESCRIPTION
+*
+* Create dictionary items for files that are missing a dictionary item
+* for a cpylib field
+*
+*********************************************************************
+  ;*
+  ;* Initialization
+  ;*
+  IGNORE.FILE.ERROR = 0
+  PAGE.FEED = CHAR(12)
+  LOG.FILE.NAME = "cpylib2dict.log"
+  ;*
+  ;* Setup email
+  ;*
+  DEFFUN PMC_SEND_MAIL(MAIL.ADDRESS.LIST,MAIL.SUBJECT,MAIL.TEXT,MAIL.ATTACH)
+  MAIL.ADDR = ''
+  OPEN "SECURITY" TO SECURITY THEN
+    READV MAIL.ADDR FROM SECURITY, "001" : UPCASE(@LOGNAME), 29 ELSE NULL
+  END
+  OPEN "VOC" TO VOC ELSE STOP "Cannot open VOC file."
+  ;*
+  ;* Get the cpylib directory
+  ;*
+  PROMPT ""
+  CRT "Enter the cpylib directory to process: " :
+  INPUT CPYLIB.DIR
+  IF TRIM(CPYLIB.DIR) = "" OR CPYLIB.DIR = "END" THEN RETURN
+  OPEN CPYLIB.DIR TO CPYLIB.FILE ELSE
+    CRT "That directory does not exist."
+    RETURN
+  END
+  ;*
+  ;* Get the cpylib record if needed
+  ;*
+  FILES.LIST = ''
+  CRT "Enter the cpylib record to process or (ALL): " :
+  INPUT CPYLIB.REC.NAME
+  IF CPYLIB.REC.NAME = 'END' THEN RETURN
+  IF CPYLIB.REC.NAME # '' OR CPYLIB.REC.NAME # 'ALL' THEN
+    FILES.LIST = CPYLIB.REC.NAME
+  END
+  ;*
+  ;* Activate write mode if needed
+  ;*
+  CRT "Commit changes or test (C/[T]): " :
+  INPUT ANSWER
+  IF ANSWER = 'END' THEN RETURN
+  IF UPCASE(ANSWER) = "C" THEN
+    CRT "Running in commit mode."
+    RUN.MODE = "COMMIT"
+  END ELSE
+    CRT "Running in TEST mode."
+    RUN.MODE = "TEST"
+  END
+  ;*
+  ;* Clear the log file if needed
+  ;*
+  CRT "Reset log file before proceeding ([Y]/N): " :
+  INPUT ANSWER
+  IF ANSWER = 'END' THEN RETURN
+  IF UPCASE(ANSWER) # 'N' THEN
+    CMD = "DELETE " : CPYLIB.DIR : " " : LOG.FILE.NAME
+    UDTEXECUTE CMD CAPTURING JUNK RETURNING JUNK
+  END
+  ;*
+  ;* Start logging
+  ;*
+  READV CPYLIB.DIR FROM VOC, CPYLIB.DIR, 2 ELSE NULL
+  LOG.PATH = CPYLIB.DIR : '/' : LOG.FILE.NAME
+  LOG.STR  = "Date: " : OCONV(DATE(),'D2/')
+  LOG.STR := " Time: " : OCONV(TIME(),'MT:')
+  LOG.STR := " User: " : @LOGNAME
+  LOG.STR := " Run mode: " : RUN.MODE
+  GOSUB LOGGER
+  LOG.STR  = "Starting process on " : CPYLIB.DIR : " directory."
+  GOSUB LOGGER
+  ;*
+  ;* Get the list of files if not already set to a single file
+  ;*
+  IF FILES.LIST = '' THEN
+    GOSUB GET_FILES_LIST
+  END
+  ;*
+  ;* Loop through all the files in the cpylib directory
+  ;*
+  FOR FILE.IDX = 1 TO DCOUNT(FILES.LIST,@AM)
+    FILE.ID = FILES.LIST<FILE.IDX>
+    READ CPYLIB.REC FROM CPYLIB.FILE, FILE.ID ELSE
+      LOG.STR = "ERROR: Could not read copylib record <" : FILE.ID : ">."
+      GOSUB LOGGER
+      CONTINUE
+    END
+    ;*
+    ;* Parse the cpylib rec and extract name, loc, and multi/single value
+    ;*
+    CPYLIB.CNT = 1
+    NEW.CPYLIB.REC = ''
+    FOR CPYLIB.IDX = 1 TO DCOUNT(CPYLIB.REC,@AM)
+      CPYLIB.LINE = TRIM(CPYLIB.REC<CPYLIB.IDX>)
+      IF CPYLIB.LINE[1,3] # "EQU" THEN CONTINUE
+      CPYLIB.LINE.NAME = FIELD(CPYLIB.LINE," ",2)
+      CPYLIB.LINE.NUM  = FIELD(CPYLIB.LINE," ",4)
+      CPYLIB.LINE.NUM  = FIELD(CPYLIB.LINE.NUM,"(",2)
+      CPYLIB.LINE.NUM  = FIELD(CPYLIB.LINE.NUM,")",1)
+      CPYLIB.LINE.MV   = FIELD(CPYLIB.LINE,";*",2)
+      FINDSTR 'MV' IN CPYLIB.LINE.MV SETTING LOC THEN
+        CPYLIB.LINE.MV = 'MV'
+      END ELSE
+        CPYLIB.LINE.MV = 'S'
+      END
+      IF CPYLIB.LINE.NUM GE CPYLIB.CNT THEN
+        CPYLIB.CNT = CPYLIB.LINE.NUM
+      END
+      IF CPYLIB.LINE.NUM # CPYLIB.CNT THEN CONTINUE
+      CPYLIB.LINE = CPYLIB.LINE.NUM
+      CPYLIB.LINE<1,2> = CHANGE(CPYLIB.LINE.NAME,".","_")
+      CPYLIB.LINE<1,3> = CPYLIB.LINE.MV
+      NEW.CPYLIB.REC<-1> = CPYLIB.LINE
+      CPYLIB.CNT = CPYLIB.CNT + 1
+    NEXT CPYLIB.IDX
+    CPYLIB.REC = NEW.CPYLIB.REC
+    ;*
+    ;* Attempt to open file dict
+    ;*
+    FILE.OPEN.ERROR = 0
+    OLD.FILE.ID = FILE.ID
+    OPEN 'DICT',FILE.ID TO DICT.FILE ELSE
+      ;*LOG.STR = "ERROR: Could not open dictionary for <" : FILE.ID : ">."
+      ;*GOSUB LOGGER
+      FILE.ID = CHANGE(FILE.ID,".","_")
+      OPEN 'DICT',FILE.ID TO DICT.FILE ELSE
+        ;*LOG.STR = "ERROR: Could not open dictionary for <" : FILE.ID : ">."
+        ;*GOSUB LOGGER
+        FILE.ID = CHANGE(FILE.ID,"_",".")
+        OPEN 'DICT',FILE.ID TO DICT.FILE ELSE
+          ;*LOG.STR = "ERROR: Could not open dictionary for <" : FILE.ID : ">."
+          ;*GOSUB LOGGER
+          FILE.OPEN.ERROR = 1
+          LOOP
+            IF IGNORE.FILE.ERROR THEN EXIT
+            CRT "Cannot locate file " : QUOTE(OLD.FILE.ID) : ","
+            CRT "   do you want to specify the file name (Y/[N]/Ignore all): " :
+            INPUT ANSWER
+            IF UPCASE(ANSWER) # 'Y' THEN
+              IF UPCASE(ANSWER) = 'I' THEN IGNORE.FILE.ERROR = 1
+              EXIT
+            END
+            CRT "Filename: " :
+            INPUT FILE.ID
+            OPEN 'DICT',FILE.ID TO DICT.FILE THEN
+              LOG.STR = "Dictionary found. File name is <" : FILE.ID : ">."
+              GOSUB LOGGER
+              FILE.OPEN.ERROR = 0
+            END
+          WHILE FILE.OPEN.ERROR DO REPEAT
+        END
+      END
+    END
+    IF FILE.OPEN.ERROR THEN
+      LOG.STR = "ERROR: Skipping dictionary for <" : OLD.FILE.ID : ">."
+      GOSUB LOGGER
+      CONTINUE
+    END
+    ;*
+    ;* Add any missing fields to the file dictionary
+    ;*
+    FOR CPYLIB.IDX = 1 TO DCOUNT(CPYLIB.REC,@AM)
+      CPYLIB.FIELD = CPYLIB.REC<CPYLIB.IDX,1>
+      CPYLIB.NAME  = CPYLIB.REC<CPYLIB.IDX,2>
+      CPYLIB.MV    = CPYLIB.REC<CPYLIB.IDX,3>
+      READU REC FROM DICT.FILE, CPYLIB.NAME LOCKED
+        LOG.STR = "ERROR: Skipping " : FILE.ID : " dict item <"
+        LOG.STR:= CPYLIB.NAME : "> because of lock."
+        GOSUB LOGGER
+        CONTINUE
+      END THEN
+        IF REC<1> = 'D' AND REC<2> = CPYLIB.FIELD THEN
+          RELEASE DICT.FILE, CPYLIB.NAME
+          CONTINUE
+        END ELSE IF REC<1> # 'D' THEN
+          ;* If dict item exists but has the wrong type then replace it
+          IF RUN.MODE = "COMMIT" THEN
+            WRITE REC ON DICT.FILE, CPYLIB.NAME : "_invalid_type"
+          END
+          LOG.STR = "ERROR: Replacing " : FILE.ID : " dict item <"
+          LOG.STR:= CPYLIB.NAME : "> because of invalid type."
+          GOSUB LOGGER
+        END ELSE
+          ;* If dict item exists but points to wrong item then replace it
+          IF RUN.MODE = "COMMIT" THEN
+            WRITE REC ON DICT.FILE, CPYLIB.NAME : "_invalid_loc"
+          END
+          LOG.STR = "ERROR: Replacing " : FILE.ID : " dict item <"
+          LOG.STR:= CPYLIB.NAME : "> because of invalid location."
+          GOSUB LOGGER
+        END
+      END
+      ;*
+      ;* Create the missing dictionary record
+      ;*
+      DICT.REC = ''
+      DICT.REC<1> = 'D'
+      DICT.REC<2> = CPYLIB.FIELD
+      DICT.REC<3> = ''
+      DICT.REC<4> = CHANGE(CPYLIB.NAME,"_"," ")
+      DICT.REC<5> = "10L"
+      DICT.REC<6> = CPYLIB.MV
+      IF RUN.MODE = "COMMIT" THEN
+        WRITE DICT.REC ON DICT.FILE, CPYLIB.NAME
+      END ELSE
+        RELEASE DICT.FILE, CPYLIB.NAME
+      END
+      LOG.STR = "Wrote record " : CPYLIB.NAME
+      LOG.STR:= ", referencing location " : CPYLIB.FIELD
+      LOG.STR:= " (" : CPYLIB.MV : ")"
+      LOG.STR:= " on dictionary for " : FILE.ID : "."
+      GOSUB LOGGER
+    NEXT CPYLIB.IDX
+  NEXT FILE.IDX
+  CRT "Completed. Please check the " : LOG.PATH : " log file."
+  ;*
+  ;* Send out log by email
+  ;*
+  IF MAIL.ADDR = '' THEN
+    CRT "Enter an email address for the log file: " :
+    INPUT MAIL.ADDR
+  END
+  IF MAIL.ADDR # '' THEN
+    MAIL.ATTACH = "ASCII"
+    MAIL.ATTACH<-1> = LOG.PATH
+    STATUS = PMC_SEND_MAIL(MAIL.ADDR,LOG.PATH,LOG.PATH,MAIL.ATTACH)
+    CRT "Log file sent."
+  END ELSE
+    CRT "No mail sent."
+  END
+  RETURN
+*
+GET_FILES_LIST:
+  ;*
+  ;* Retreive all file names in the cpylib directory
+  ;*
+  SELECT CPYLIB.FILE
+  LOOP
+    READNEXT FILE.ID ELSE
+      LOG.STR = "Read " : DCOUNT(FILES.LIST,@AM) : " copylib records."
+      GOSUB LOGGER
+      EXIT
+    END
+    IF FILE.ID # LOG.FILE.NAME THEN FILES.LIST<-1> = FILE.ID
+  REPEAT
+RETURN
+*
+LOGGER:
+  LOG.CMD = "!echo " : QUOTE(LOG.STR) : " >> " : LOG.PATH
+  UDTEXECUTE LOG.CMD CAPTURING JUNK RETURNING JUNK
+RETURN

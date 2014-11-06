@@ -1,0 +1,212 @@
+SUBROUTINE ICSSRE_PRE_PROCESS
+********************************************************************************
+*   Program name :- ICSSRE_PRE_PROCESS
+*   Created:- 7/12/2006
+*   Programmer :- Suhail Hussain S
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE PMC.CPYLIB PO
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB INV.CNV
+$INCLUDE ICS.CPYLIB INV.WHSE
+$INCLUDE ICS.CPYLIB WAREHOUSE
+$INCLUDE ICS.CPYLIB CATEGORY
+$INCLUDE CPYLIB CHAR
+
+   OPEN '','PO' TO PO ELSE ERRMSG = 'CANNOT OPEN PO'; GOTO 91000
+   OPEN '','INVENTORY' TO INVENTORY ELSE ERRMSG = 'CANNOT OPEN INVENTORY'; GOTO 91000
+   OPEN '','INV.WHSE' TO INV.WHSE ELSE ERRMSG = 'CANNOT OPEN INV.WHSE'; GOTO 91000
+   OPEN '','CATEGORY' TO CATEGORY ELSE ERRMSG = 'CANNOT OPEN CATEGORY'; GOTO 91000
+   OPEN '','WAREHOUSE' TO WAREHOUSE ELSE ERRMSG = 'CANNOT OPEN WAREHOUSE'; GOTO 91000
+
+   STATUS = RBO.getProperty("","PMCProperty",PMCProperty)
+   STATUS = RBO.getProperty("","ID",ID)
+   STATUS = RBO.getProperty("","TEMP",ISNEW)
+   
+   CONO = PMCProperty<1,4>
+   IF CONO = "" THEN ERRMSG = "INVALID CONO";GOTO 91000
+   IF ISNEW = 0 THEN
+      MATREAD PO.REC FROM PO,ID ELSE ERRMSG = "CANNOT LOCATE PO  " : ID;GOTO 91000
+   END ELSE
+      MAT PO.REC = ""
+      PO.PROD.NUM = ID<1,1>
+      PO.WHSE = ID<1,2>
+      PO.UNIT.FLG = ID<1,3>
+      SWAP SVM WITH VM IN PO.PROD.NUM
+      SWAP SVM WITH VM IN PO.WHSE
+      SWAP SVM WITH VM IN PO.UNIT.FLG
+   END
+
+   VLOC = ""
+   GET_INPUT = ""
+   ERRMSG = ""
+   MAIN.HEAD = ""
+
+   FOR N = 1 TO DCOUNT(PO.PROD.NUM,VM)
+      MATREAD INV.REC FROM INVENTORY, CONO : PO.PROD.NUM<1,N> THEN
+         $INCLUDE ICSBP INV.UM.CNV
+         MATREAD CATG.REC FROM CATEGORY,CONO:INV.LINE THEN
+            IF CATG.TRK.LVL = 'S' THEN
+               ERRMSG<1,N,-1> ="Must use Serial stock receipts for this line item. "
+               GOTO 1001
+            END ELSE
+               INV.WHSE.KEY=CONO:PO.PROD.NUM<1,N>:'!':PO.WHSE<1,N>
+               MATREAD IWH.REC FROM INV.WHSE , INV.WHSE.KEY THEN
+                  GOSUB STOCK_WHLO_IN
+               END ELSE
+                  ERRMSG<1,N,-1> ='CANNOT LOCATE INV.WHSE # ' : INV.WHSE.KEY
+                  GOTO 1001
+               END
+            END
+         END ELSE
+            ERRMSG<1,N,-1> = 'CANNOT LOCATE CATEGORY ':INV.LINE
+         END
+      END ELSE
+         ERRMSG<1,-1> = 'CANNOT LOCATE INVENTORY # ' : PO.PROD.NUM<1,N>
+      END
+   1001*
+   NEXT N
+   STATUS = RBO.setProperty("","ServerMessage",ERRMSG)
+   STATUS = RBO.setProperty("","TEMPVAL",MAIN.HEAD)
+   STATUS = RBO.setProperty("","FILE_NAME",GET_INPUT)
+RETURN
+
+
+STOCK_WHLO_IN:
+   MATREAD WHSE.REC FROM WAREHOUSE , CONO:PO.WHSE<1,N> ELSE
+      ERRMSG<1,N,-1>='WAREHOUSE (':PO.WHSE<1,N>:') NOT ON FILE'
+      GOTO 2001
+   END
+
+   VLOC<1,N>=WHS.LOC<1,1>
+   L.CNT=COUNT(WHS.LOC,VM) + (WHS.LOC # '')
+   I=1
+   FOR L=2 TO L.CNT
+      VLOC<1,N,-1> = WHS.LOC<1,L>
+   NEXT L
+   CHECK.LOC=''; LLOC.CNT=''; CHECK.R.S.ID=''
+   PROD.CNT=COUNT(PO.PROD.NUM,VM) + 1
+   SAME.PROD=''
+   POS=0; PTR=1
+   LOOP
+      LOCATE PO.PROD.NUM<1,N> IN PO.PROD.NUM<1>,PTR SETTING PFND ELSE PFND=0
+   WHILE PFND DO
+      IF PFND <> N THEN
+         POS=POS + 1
+         SAME.PROD<POS>=PFND
+      END
+      PTR=PFND + 1
+   REPEAT
+   SAME.PROD.CNT=POS
+   GOSUB DETERMINE.QTY.TYPE
+   IF RQX=0 THEN
+      ERRMSG<1,N,-1>="CANNOT DETERMINE QUANTITY TYPE";GOTO 2001
+   END
+   MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE ELSE
+      ERRMSG<1,N,-1>="PRODUCT LINE '":INV.LINE:"' DOES NOT EXIST";GOTO 2001
+   END
+   IF CATG.INV="" OR CATG.ACCRU.LIAB="" OR CATG.AP.ACCT="" THEN
+      ERRMSG<1,N,-1> = "ACCOUNT DETAILS NOT SET UP FOR PRODUCT LINE '":INV.LINE:"'";GOTO 2001
+   END
+   
+   GOSUB ENT.QTY
+2001*
+   RETURN
+
+*
+ENT.QTY: 
+   BEGIN CASE
+      CASE OQX AND ICR.DV1<2>=''
+         GET_INPUT<1,N,1> = OQX
+      CASE OQX
+         GET_INPUT<1,N,1> = OQX
+      CASE RQX
+         GET_INPUT<1,N,1> = RQX
+   END CASE
+   GET_INPUT<1,N,2> = DQX
+   TMP.HEAD = ""
+   IF GET_INPUT<1,N,1> = 2 THEN
+      TMP.HEAD = MAIN.HEAD
+      FOR F = 3 TO DCOUNT(TMP.HEAD<1,N>,SVM)
+         NX = F + 1
+         MAIN.HEAD<1,N,NX> = TMP.HEAD<1,N,F>
+      NEXT F
+      MAIN.HEAD<1,N,3> = ""
+      GET_INPUT<1,N,1> = 3
+   END
+
+RETURN
+*
+
+DETERMINE.QTY.TYPE: 
+*
+   MAIN.HEAD<1,N> = 'Ln':SVM:'Loc'
+   REC.QTY.HEAD = 'Rec Qty ':INV.UNIT<1,2>
+   RSX=0; DQX=0; OQX=0; RQX=0
+   BEGIN CASE
+      CASE INV.UNIT<1,2>='SHT' AND INV.UNIT<1,3>='LBS'
+         ICR.DV1=INV.M.WT; ICR.MT1=1; ICR.DV2=1; ICR.CNV="MD0"
+         MAIN.HEAD<1,N> := SVM:'Skid Number'
+         RSX=2
+         BEGIN CASE
+            CASE PO.UNIT.FLG<1,N>=INV.UNIT<1,2>
+               RQX=3
+            CASE PO.UNIT.FLG<1,N>='LBS'
+               OQX=3; RQX=4
+               MAIN.HEAD<1,N> := SVM:'Rec Qty LBS'
+         END CASE
+         MAIN.HEAD<1,N> := SVM:REC.QTY.HEAD
+      CASE INV.UNIT<1,2>='PC' AND INV.UNIT<1,3>='MSI'
+         ICR.DV1=INV.PAP.WIDTH/100; ICR.MT1=10; ICR.DV2=1; ICR.CNV="MD0"
+         MAIN.HEAD<1,N> := SVM:'Roll Number'
+         RSX=2
+         BEGIN CASE
+            CASE PO.UNIT.FLG<1,N>='PC'
+               RQX=3
+            CASE PO.UNIT.FLG<1,N>='MSI'
+               OQX=3; RQX=4
+               MAIN.HEAD := SVM:'Rec Qty MSI'
+            CASE PO.UNIT.FLG<1,N>='FT'
+               ICR.DV1<2>=INV.PAP.WIDTH/100; ICR.MT1<2>=100; ICR.DV2<2>=12
+               OQX=3; RQX=4
+               MAIN.HEAD<1,N> := SVM:'Rec Qty FT'
+         END CASE
+         MAIN.HEAD<1,N> := SVM:REC.QTY.HEAD
+      CASE INV.UNIT<1,2>='FT' AND INV.UNIT<1,3>='MSI'
+         ICR.DV1=INV.PAP.WIDTH/100; ICR.MT1=100; ICR.DV2=12; ICR.CNV="MD0"
+         MAIN.HEAD<1,N> := SVM:'Roll Number'
+         RSX=2
+         BEGIN CASE
+            CASE PO.UNIT.FLG<1,N>='FT'
+               RQX=3
+            CASE PO.UNIT.FLG<1,N>='MSI'
+               OQX=3; RQX=4
+               MAIN.HEAD<1,N> := SVM:'Rec Qty MSI'
+            CASE PO.UNIT.FLG<1,N>='PC'
+               ICR.DV1<2>=INV.PAP.WIDTH/100; ICR.MT1<2>=10; ICR.DV2<2>=1
+               OQX=3; RQX=4
+               MAIN.HEAD<1,N> := SVM:'Rec Qty PC'
+         END CASE
+         MAIN.HEAD<1,N> := SVM:REC.QTY.HEAD
+      CASE 1
+         ICR.DV1=10; ICR.MT1=1; ICR.DV2=1; ICR.CNV="MD2"	
+         BEGIN CASE
+            CASE INV.PAP.TYPE="ROLL" OR INV.PAP.TYPE="LROLL" OR INV.PAP.TYPE="PCOAT"
+               RSX=2; RQX=3; DQX=4
+               MAIN.HEAD<1,N> := SVM:'Roll Number':SVM:REC.QTY.HEAD:SVM:SVM:'Diameter'
+            CASE PO.UNIT.FLG<1,N> # INV.UNIT<1,2>
+               OQX=2; RQX=3
+               MAIN.HEAD<1,N> := SVM :'Rec Qty ':PO.UNIT.FLG<1,N> : SVM : REC.QTY.HEAD
+            CASE 1
+               RQX=2
+               MAIN.HEAD<1,N> := SVM:REC.QTY.HEAD
+         END CASE
+   END CASE
+RETURN
+
+91000*
+   STATUS = RBO.setProperty("","ServerStatus",1)
+   STATUS = RBO.setProperty("","ServerMessage",ERRMSG)
+RETURN
+
+

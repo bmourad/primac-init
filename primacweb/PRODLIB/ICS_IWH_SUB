@@ -1,0 +1,1713 @@
+SUBROUTINE ICS_IWH_SUB(CONO,PERIOD,TMP.ARR,TMP.CNT,LAST,ACTION,OPEN.FLAG,ERRMSG)
+*********************************************************************
+* Copyright 1998 by Primac Systems India
+* SYSTEM       - EPRIMAC
+* PROGRAM      - ICS_IWH_SUB
+*********************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE CPYLIB COMMON1
+$INCLUDE ICS.CPYLIB COM.INV.MAIN 
+$INCLUDE ICS.CPYLIB COM.INV.SERIAL
+$INCLUDE ICS.CPYLIB COM.INV.LINK  
+$DEFINE INVENTORY
+$INCLUDE ICS.CPYLIB INVENTORY
+$DEFINE INVWHSE
+$INCLUDE ICS.CPYLIB INV.WHSE
+$DEFINE SSTK
+$INCLUDE ICS.CPYLIB SAVE.STOCK.REC
+$DEFINE INVWHSELOC
+$INCLUDE ICS.CPYLIB INV.WHSE.LOC
+$DEFINE INVRECEIPTS
+$INCLUDE ICS.CPYLIB INV_RECEIPTS
+$DEFINE INVRECPWHSE
+$INCLUDE ICS.CPYLIB INV_RECP_WHSE
+$DEFINE INVSERIAL
+$INCLUDE ICS.CPYLIB INV_SERIAL
+$DEFINE INVAUDITHIST
+$INCLUDE ICS.CPYLIB INV_AUDIT_HIST
+$DEFINE ICSID
+$INCLUDE ICS.CPYLIB ICS.ID
+$DEFINE PO
+$INCLUDE PMC.CPYLIB PO
+$DEFINE CATEGORY
+$INCLUDE ICS.CPYLIB CATEGORY
+$INCLUDE ICS.CPYLIB INV.CNV
+$DEFINE FILEVARS
+$INCLUDE CPYLIB FILE.VARS
+$INCLUDE CPYLIB CHAR
+
+  DEFFUN CALC_STK_QTY(COST.QTY,MAT INV.CNV.REC,ROND,LN)
+  DEFFUN CALC_DIAM(COST.QTY,STK.QTY,MAT INV.REC)
+  DEFFUN GET_RECP_ID(CONO,CONTROL.FILE,DATE)
+  DEFFUN GET_INAH_SEQ(CONO,CONTROL.FILE,INV_AUDIT_HIST.FILE)
+
+OPEN '','INVENTORY' TO INVENTORY ELSE
+  ERRMSG='INVENTORY FILE IS MISSING'; GOTO 93000
+END
+OPEN '','INV.WHSE' TO INV.WHSE ELSE
+  ERRMSG='INV.WHSE FILE IS MISSING'; GOTO 93000
+END
+OPEN '','INV.HIST' TO INV.HIST ELSE
+  ERRMSG='INV.HIST FILE IS MISSING'; GOTO 93000
+END
+OPEN '','INV.WHSE.LOC' TO INV.WHSE.LOC ELSE
+  ERRMSG='INV.WHSE.LOC FILE IS MISSING'; GOTO 93000
+END
+OPEN '','PHYSICAL.INV' TO PHYSICAL.INV ELSE
+  ERRMSG='PHYSICAL.INV FILE IS MISSING'; GOTO 93000
+END
+OPEN '','COMPANY' TO COMPANY ELSE
+  ERRMSG='COMPANY FILE IS MISSING';GOTO 93000
+END
+OPEN '','CONTROL' TO CONTROL ELSE
+  ERRMSG='CONTROL FILE IS MISSING';GOTO 93000
+END
+OPEN '','WAREHOUSE' TO WAREHOUSE ELSE
+  ERRMSG='WAREHOUSE FILE IS MISSING';GOTO 93000
+END
+OPEN '','JOB.STATS' TO JOB.STATS ELSE
+  ERRMSG='JOB.STATS FILE IS MISSING';GOTO 93000
+END
+OPEN '','JOB' TO JOB ELSE
+  ERRMSG='JOB FILE IS MISSING';GOTO 93000
+END
+OPEN '','INV_AUDIT_HIST' TO INV_AUDIT_HIST ELSE
+  ERRMSG='INV_AUDIT_HIST FILE IS MISSING';GOTO 93000
+END
+OPEN '','INV_AUDIT_TAG' TO INV_AUDIT_TAG ELSE
+  ERRMSG='INV_AUDIT_TAG FILE IS MISSING';GOTO 93000
+END
+OPEN '','CATEGORY' TO CATEGORY ELSE
+  ERRMSG='CATEGORY FILE IS MISSING';GOTO 93000
+END
+OPEN '','INV_RECEIPTS_TEMP' TO INV_RECEIPTS_TEMP ELSE
+  ERRMSG='INV_RECEIPTS_TEMP FILE IS MISSING';GOTO 93000
+END
+
+OPEN '','INV_RECEIPTS' TO INV_RECEIPTS ELSE
+  ERRMSG='INV_RECEIPTS FILE IS MISSING';GOTO 93000
+END
+*
+
+TEMP="";TEMPVAL=""
+
+   IF ACTION='1' THEN
+      IF (OPEN.FLAG) THEN
+         GOSUB OPEN.FILES
+      END
+      IF INV.LINE='' THEN
+         INV.ID = CONO:INAH.PROD
+         MATREAD INV.REC FROM INVENTORY,INV.ID THEN
+            IF INV.COST.WT+0=0 THEN INV.COST.WT=100 
+            IF INV.SBR+0=0 THEN INV.SBR=1           
+         END ELSE
+            MAT INV.REC=''
+         END
+      END
+      CATG.ID = CONO:INV.LINE
+     141 MATREAD CATG.REC FROM CATEGORY,CATG.ID THEN   NULL
+  END
+TEMPARR='' 
+SRCVAL=''; NULL.REC=''
+*ORG.QTY=""
+*CUR.QTY=""
+*RESV.QTY=""
+
+   RECP.ARR=""
+   RECP.ARR<1> = IWH.RECP.NO
+   RECP.ARR<2>= IWH.RECP.PERIOD
+   RECP.ARR<3>=IWH.RECP.ENT.DATE
+TEMPARR=IWH.RECV.FI
+   F.RECP.NO='' ; F.RECP.PERIOD='' ; F.RECP.ENT.DATE='';   ERRMSG=''
+
+   TOT.PRICE=0
+   IWH.ID = CONO:INAH.PROD:"!":INAH.WHSE 
+   SRCVAL=INAH.SRC
+*
+   EQU ORIG.IWH.RSV.FI TO ORG.IWH.REC(41)
+   EQU ORIG.IWH.ORG.FI  TO ORG.IWH.REC(40)
+   EQU ORIG.IWH.QTY.FI TO ORG.IWH.REC(42)
+   EQU ORIG.IWH.COST.FI TO ORG.IWH.REC(43)
+*
+   DIM HOLD.IWH.REC(IWH.REC.SIZE) ; MAT HOLD.IWH.REC = ""
+   DIM HOLD.INAH.REC(INAH.REC.SIZE) ; MAT HOLD.INAH.REC = ""   ;* T27384
+   DIM WORK.INAH.REC(INAH.REC.SIZE) ; MAT WORK.INAH.REC = ""
+   EQU WK.INAH.TYPE TO WORK.INAH.REC(1)
+   EQU WK.INAH.WHSE TO WORK.INAH.REC(4)
+   EQU WK.INAH.QTY  TO WORK.INAH.REC(11)
+   EQU WK.INAH.TRAN TO WORK.INAH.REC(32)
+
+   IF CATG.TRK.LVL='G' THEN
+      MAT HOLD.IWH.REC = MAT IWH.REC
+      MAT IWH.REC = MAT ORG.IWH.REC
+      ORIG.IWH.RSV.FI = IWH.RSV.FI
+      ORIG.IWH.ORG.FI = IWH.ORG.FI
+      ORIG.IWH.QTY.FI = IWH.QTY.FI
+      ORIG.IWH.COST.FI = IWH.COST.FI
+      MAT IWH.REC = MAT HOLD.IWH.REC
+   END
+
+*TEMPARR=IWH.RECV.FI
+
+   BEGIN CASE
+      CASE ACTION = 1
+         GOSUB BUILD.IWH.REC
+         MAT IID.REC=""
+      CASE ACTION = 2
+         GOSUB BUILD.REC
+      CASE ACTION = 3
+         GOSUB UPDATE.REC
+      CASE ACTION = 4
+         GOSUB BUILD.REC
+         IF ERRMSG = '' THEN
+            GOSUB UPDATE.REC
+         END
+      CASE ACTION = 9
+         GOSUB DELETE.TMP.REC
+   END CASE
+   GOTO 99999
+*
+******************
+BUILD.REC: 
+******************
+   INAH.OPER.ID = @LOGNAME
+   INAH.SYS.DATE=DATE()
+   INAH.SYS.TIME=TIME()
+   IF CATG.COST.TYPE = 'AC' THEN
+      DEPL.METHOD='AC'
+   END ELSE
+      DEPL.METHOD='FI'
+   END
+   GOSUB GET.INV.UM.CNV ;* 40365
+
+   BEGIN CASE
+      CASE CATG.TRK.LVL='G'
+        FI.CNT=DCOUNT(TEMPARR,@VM)
+
+
+     
+         IF FI.CNT > DCOUNT(RECP.ARR<1>,@VM) THEN
+         
+            GOSUB GET.INAH.SEQ
+            LOC.ARR=TMP.ARR
+            IF TMP.CNT="" THEN TMP.CNT=1
+            LOC=TMP.CNT
+           
+            IF LOC=1 THEN
+               GOSUB CREATE.INVR
+               IF ERRMSG THEN GOTO BUILD.REC.EXIT ;*T27801
+            END
+            IF IID.INVR#'' THEN
+               LAST.RECP=DCOUNT(IID.INVR<1>,@VM)
+               RECP.NO=IID.INVR<1,LAST.RECP>
+               RECP.NO=RECP.NO[4,99]
+               RECP.ID=IID.INVR<1,LAST.RECP>
+            END
+
+            IF INAH.QTY # "" THEN    ;*receipt
+               ORG.QTY = INAH.QTY
+               CUR.QTY = INAH.QTY
+               RESV.QTY= INAH.QTY
+            END ELSE                 ;*adjustment
+               ORG.QTY = IWH.ORG.FI<1,FI.CNT>
+               CUR.QTY = IWH.QTY.FI<1,FI.CNT>
+               RESV.QTY = IWH.RSV.FI<1,FI.CNT>
+            END
+  
+
+            INAH.QTY = CUR.QTY
+            INAH.CUR.STK.QTY=CALC_STK_QTY(INAH.QTY,MAT INV.CNV.REC,'','')
+            GOSUB CREATE.SERIAL
+
+            ;*
+
+            IF ERRMSG#"" THEN GOTO BUILD.REC.EXIT ;*T27801
+            GOSUB SET.IRW;*
+            INVR.SERIAL.NO<1,-1>=ISTK.ID[4,99]
+            INVR.AUDIT.NO<1,-1> = INAH.SEQ
+            IF (INAH.SRC='IR' OR INAH.SRC='IS' OR INAH.ADJ.CODE='PHY' OR INAH.SRC='IQ' OR INAH.ADJ.CODE='PHS') THEN
+               INVR.DEPL.QTY += INAH.QTY
+            END
+ 
+            IWLO.ID=CONO:INAH.PROD:"!":INAH.WHSE:"!":LOC.ARR<1,LOC>
+            GOSUB UPD.IWLO.TEMP
+            INAH.RECP.NO = RECP.NO
+            INAH.SERIAL = ISTK.ID[4,99]
+            INAH.EXT.COST=INT((IWH.COST.FI<1,FI.CNT>/10000) * ((INAH.QTY/10)/ (INV.COST.WT/100)) + .5)
+            INAH.ID = CONO:INAH.SEQ
+            GOSUB WRITE.INAH.TEMP
+ 
+            IF LAST = "Y" THEN
+               MATWRITEU INVR.REC ON INV_RECEIPTS_TEMP,RECP.ID
+               RECP.ARR<1,-1> = RECP.NO
+               RECP.ARR<2,-1> = INAH.PERIOD
+               RECP.ARR<3,-1>=INVR.ENT.DATE
+               IWH.RECP.NO = RECP.ARR<1>
+               IWH.RECP.PERIOD = RECP.ARR<2>
+               IWH.RECP.ENT.DATE=RECP.ARR<3>
+               IRW.ID=CONO:RECP.NO:"!":INAH.WHSE
+               IID.IRW<1,-1> = IRW.ID
+
+               MATWRITEU IRW.REC ON INV_RECP_WHSE_TEMP,IRW.ID
+            END
+         END ELSE
+            
+            BEGIN CASE
+               CASE INAH.SRC='IQ' AND INAH.QTY<0
+                  GOSUB GET.INAH.SEQ
+                  SER.ARR=INAH.SERIAL
+                  CUR.QTY.DIFF=INAH.QTY
+                  GOSUB ADJUST.SERIAL
+                  IF ERRMSG#"" THEN GOTO BUILD.REC.EXIT ;*T27801
+                  DEPL.METHOD='AC'
+                  GOSUB ADJUST.INV.RECP.WHSE
+                  IF ERRMSG#"" THEN GOTO BUILD.REC.EXIT ;*T27801
+                  IWLO.ID = IWH.ID:"!":ISTK.LOC                         
+                  GOSUB UPD.IWLO.TEMP
+                  INAH.ID=CONO:INAH.SEQ
+                  GOSUB WRITE.INAH.TEMP
+               CASE INAH.SRC='IA'
+                  CUR.QTY.DIFF=INAH.QTY
+                  GOSUB IRW.FIFO.DEPLETE
+                  IWLO.ID=IWH.ID:"!":INAH.LOC
+                  ISTK.ID=''
+                  GOSUB UPD.IWLO.TEMP 
+                  PHY.DEPL.RECP=INAH.DEPL.RECP
+                  PHY.DEPL.QTY=INAH.DEPL.QTY
+                  PHY.DEPL.COST=INAH.DEPL.COST
+                  SCNT=DCOUNT(IWLO.SERIAL,@VM)
+                  FOR SR=1 TO SCNT UNTIL CUR.QTY.DIFF=0
+                     INAH.CUR.STK.QTY='' ; INAH.NEW.STK.QTY=''
+                     INAH.CUR.DIAM='' ; INAH.NEW.DIAM=''
+                     INAH.EXT.COST=''
+                     SER.ARR=IWLO.SERIAL<1,SR>
+                     IF SER.ARR#'' THEN
+                        GOSUB GET.INAH.SEQ
+                        GOSUB ADJUST.SERIAL
+                        IF ERRMSG#"" THEN GOTO BUILD.REC.EXIT ;*T27801
+                        IF IRWDIFF#0 THEN
+                           CUR.QTY.DIFF-=IRWDIFF
+                           INAH.QTY=IRWDIFF
+                           INAH.CUR.STK.QTY=CALC_STK_QTY(INAH.QTY,MAT INV.CNV.REC,'','')
+                           INAH.NEW.QTY=INAH.CUR.QTY+INAH.QTY
+                           INAH.NEW.STK.QTY=CALC_STK_QTY(INAH.NEW.QTY,MAT INV.CNV.REC,'','')
+                           IF CATG.TYPE='L' OR CATG.TYPE='LR' OR CATG.TYPE='PC' THEN 
+                              INAH.NEW.DIAM=CALC_DIAM(INAH.CUR.QTY,INAH.CUR.STK.QTY,MAT INV.REC)
+                           END
+                           DPLCNT=DCOUNT(PHY.DEPL.RECP,@VM)
+                           INAH.EXT.COST=''
+                           INAH.DEPL.QTY='' ; INAH.DEPL.COST='' ; INAH.DEPL.RECP=''
+                           DPC=0
+                           FOR DP=1 TO DPLCNT UNTIL IRWDIFF=0
+                              IF PHY.DEPL.QTY<1,DP>#0 THEN
+                                 DPC+=1
+                                 BEGIN CASE
+                                    CASE ABS(IRWDIFF) < ABS(PHY.DEPL.QTY<1,DP>)
+                                       INAH.DEPL.QTY<1,DPC>=IRWDIFF
+                                       PHY.DEPL.QTY<1,DP>-=IRWDIFF
+                                       IRWDIFF=0
+                                       INAH.DEPL.RECP<1,DPC>=PHY.DEPL.RECP<1,DP>
+                                       INAH.DEPL.COST<1,DPC>=PHY.DEPL.COST<1,DP>
+                                    CASE ABS(IRWDIFF) >= ABS(PHY.DEPL.QTY<1,DP>)
+                                       INAH.DEPL.QTY<1,DPC>=PHY.DEPL.QTY<1,DP>
+                                       PHY.DEPL.QTY<1,DP> = 0
+                                       IRWDIFF-=INAH.DEPL.QTY<1,DPC>
+                                       INAH.DEPL.RECP<1,DPC>=PHY.DEPL.RECP<1,DP>
+                                       INAH.DEPL.COST<1,DPC>=PHY.DEPL.COST<1,DP>
+                                 END CASE
+                                 INAH.EXT.COST+=(INAH.DEPL.COST<1,DPC>/10000)*((INAH.DEPL.QTY<1,DPC>/10)/(INV.COST.WT/100))
+                              END
+                           NEXT DP
+                           IRWDIFF=0
+                           INAH.EXT.COST=INT(INAH.EXT.COST-.5)
+                           INAH.UNIT.COST=INT((ABS(INAH.EXT.COST)*1000*INV.COST.WT)/ABS(INAH.QTY)+.5)
+                           INAH.SERIAL=IWLO.SERIAL<1,SR>
+                           INAH.RECP.NO=ISTK.RECP
+                           RECP.ID=CONO:ISTK.RECP
+                           IF RECORDLOCKED(INV_RECEIPTS_TEMP,RECP.ID)=0 THEN  
+                              DELETE INV_RECEIPTS_TEMP,RECP.ID                 
+                           END                                                
+                           MATREADU INVR.REC FROM INV_RECEIPTS_TEMP,RECP.ID ELSE
+                              MATREADU INVR.REC FROM INV_RECEIPTS,RECP.ID ELSE
+                                 ERRMSG='Cannot locate INV_RECEIPTS ':RECP.ID
+                                 GOTO BUILD.REC.EXIT
+                              END
+                           END
+                             INVR.AUDIT.NO<1,-1> = INAH.SEQ 
+                              LOCATE RECP.ID IN IID.INVR<1> SETTING JUNK ELSE
+                                 IID.INVR<1,-1> = RECP.ID
+                              END
+                              MATWRITEU INVR.REC ON INV_RECEIPTS_TEMP,RECP.ID
+                           INAH.ID=CONO:INAH.SEQ
+                           GOSUB WRITE.INAH.TEMP
+                        END
+                     END
+                  NEXT SR
+               CASE 1
+                  RECP.CNT = DCOUNT(RECP.ARR<1>,@VM)
+                  FOR RIDX = 1 TO RECP.CNT
+                     IWH.FI.CHANGED=0
+                     BEGIN CASE
+                        CASE ORIG.IWH.QTY.FI<1,RIDX> # IWH.QTY.FI<1,RIDX>
+                           IWH.FI.CHANGED=1
+                           CUR.QTY.DIFF=IWH.QTY.FI<1,RIDX>-ORIG.IWH.QTY.FI<1,RIDX>
+                        CASE ORIG.IWH.RSV.FI<1,RIDX> # IWH.RSV.FI<1,RIDX>
+                           IWH.FI.CHANGED=1
+                           RSV.QTY.DIFF=IWH.RSV.FI<1,RIDX>-ORIG.IWH.RSV.FI<1,RIDX>
+                     END CASE
+                     IF (IWH.FI.CHANGED) THEN
+                        GOSUB GET.INAH.SEQ
+                        RECP.NO=RECP.ARR<1,RIDX>
+                        RECP.ID=CONO:RECP.NO
+                        IF RECORDLOCKED(INV_RECEIPTS_TEMP,RECP.ID)=0 THEN  
+                           DELETE INV_RECEIPTS_TEMP,RECP.ID                 
+                        END                                                
+                        MATREADU INVR.REC FROM INV_RECEIPTS_TEMP,RECP.ID ELSE
+                           MATREADU INVR.REC FROM INV_RECEIPTS,RECP.ID ELSE
+                              ERRMSG='Cannot locate INV_RECEIPTS ':RECP.ID
+                              GOTO BUILD.REC.EXIT
+                           END
+                        END
+                           INVR.AUDIT.NO<1,-1> = INAH.SEQ 
+                           INVR.DEPL.QTY += CUR.QTY.DIFF
+
+                        IF INAH.SRC = 'IQ' THEN INVR.ORG.QTY += CUR.QTY.DIFF ;*T27801
+                        LOCATE RECP.ID IN IID.INVR<1> SETTING IFND ELSE
+                           IID.INVR<1,-1> = RECP.ID
+                        END 
+                           MATWRITEU INVR.REC ON INV_RECEIPTS_TEMP,RECP.ID
+                        IRW.ID=CONO:RECP.NO:"!":INAH.WHSE
+                        IF RECORDLOCKED(INV_RECP_WHSE_TEMP,IRW.ID)=0 THEN  
+                           DELETE INV_RECP_WHSE_TEMP,IRW.ID                 
+                        END                                                
+                        MATREADU IRW.REC FROM INV_RECP_WHSE_TEMP,IRW.ID ELSE
+                           MATREADU IRW.REC FROM INV_RECP_WHSE,IRW.ID ELSE
+                              IF CUR.QTY.DIFF > 0 THEN
+                                 MAT IRW.REC = ''
+                              END ELSE
+                                 ERRMSG='Cannot locate INV_RECP_WHSE ':IRW.ID
+                                 GOTO BUILD.REC.EXIT
+                              END
+                           END
+                        END
+                        IRW.ORG.QTY = IWH.ORG.FI<1,RIDX>
+                        IRW.RSVB.QTY =IWH.RSV.FI<1,RIDX>
+                        IRW.CUR.QTY=IWH.QTY.FI<1,RIDX>
+                        IID.IRW<1,-1> = IRW.ID
+                        MATWRITEU IRW.REC ON INV_RECP_WHSE_TEMP,IRW.ID
+                        SNO = "R":RECP.NO:"!":INAH.WHSE:"!":INAH.LOC
+                        IF INAH.SRC='IR' THEN
+                           LOCATE SNO IN IRW.SERIAL.NO SETTING POS THEN
+                              SER.ARR=IRW.SERIAL.NO
+                              GOSUB ADJUST.SERIAL
+                              IF ERRMSG#"" THEN GOTO BUILD.REC.EXIT ;*T27801
+                              INVR.ORG.QTY+=CUR.QTY.DIFF
+                              MATWRITEU INVR.REC ON INV_RECEIPTS_TEMP,RECP.ID
+                           END ELSE
+                              ORG.QTY=CUR.QTY.DIFF
+                              CUR.QTY=CUR.QTY.DIFF
+                              RESV.QTY=CUR.QTY.DIFF
+
+                              GOSUB CREATE.SERIAL
+                              IF ERRMSG#"" THEN GOTO BUILD.REC.EXIT ;*T27801
+                              IRW.SERIAL.NO<1,-1> = ISTK.ID[3,99]
+                              MATWRITEU IRW.REC ON INV_RECP_WHSE_TEMP,IRW.ID
+                              INVR.SERIAL.NO<1,-1>=ISTK.ID[4,99]
+                              INVR.ORG.QTY+=CUR.QTY.DIFF
+                              MATWRITEU INVR.REC ON INV_RECEIPTS_TEMP,RECP.ID
+                           END
+                        END ELSE
+                           SER.ARR=SNO
+                           GOSUB ADJUST.SERIAL
+                           IF ERRMSG#"" THEN GOTO BUILD.REC.EXIT ;*T27801
+                        END
+                        INAH.RECP.NO = RECP.ARR<1,RIDX>
+                        INAH.SERIAL = ISTK.ID[4,99]
+                        INAH.UNIT.COST=ORIG.IWH.COST.FI<1,RIDX>
+                        ROND= .5
+                        IF CUR.QTY.DIFF<0 THEN  ROND=-.5
+                        INAH.EXT.COST=INT((INAH.UNIT.COST/10000) * ((CUR.QTY.DIFF/10)/ (INV.COST.WT/100)) + ROND)
+                        IF CUR.QTY.DIFF<0 THEN
+                           INAH.DEPL.RECP<1,-1> = RECP.ARR<1,RIDX>
+                           INAH.DEPL.QTY<1,-1> = CUR.QTY.DIFF
+                           INAH.DEPL.COST<1,-1>=INAH.UNIT.COST
+                        END
+                        INAH.QTY = CUR.QTY.DIFF
+                        INAH.CUR.STK.QTY=CALC_STK_QTY(INAH.CUR.QTY,MAT INV.CNV.REC,'','')
+                        INAH.NEW.QTY =INAH.CUR.QTY+CUR.QTY.DIFF 
+                        INAH.ID = CONO:INAH.SEQ
+                        GOSUB WRITE.INAH.TEMP
+                        INAH.CUR.QTY = INAH.NEW.QTY
+                        IWLO.ID = IWH.ID:"!":ISTK.LOC                   
+                        GOSUB UPD.IWLO.TEMP
+                     END
+                  NEXT RIDX
+                  GOSUB SET.ORIG.IWH.FI ;*T27990
+            END CASE
+         END
+      CASE CATG.TRK.LVL='S' OR CATG.TRK.LVL="R"
+         SER.ARR=TMP.ARR                          
+         GOSUB GET.INAH.SEQ
+         CUR.QTY.DIFF = INAH.NEW.QTY-INAH.CUR.QTY
+         FI.CNT = DCOUNT(IWH.RECV.FI,@VM)    
+	 WRITE FI.CNT ON CONTROL,"FI"
+	 WRITE DCOUNT(RECP.ARR<1>,@VM) ON CONTROL,"DI"
+         IF FI.CNT > DCOUNT(RECP.ARR<1>,@VM) AND (INAH.SRC='IR' OR INAH.SRC='IS' OR ((INAH.ADJ.CODE='PHY' OR INAH.ADJ.CODE='PHS') AND ISTK.POST.DATE='')) THEN
+            GOSUB CREATE.INVR
+            IF ERRMSG#"" THEN GOTO BUILD.REC.EXIT ;*T27801
+            INVR.SERIAL.NO<1,-1> = SER.ARR
+            MATWRITEU INVR.REC ON INV_RECEIPTS_TEMP,RECP.ID
+            RECP.ARR<1,-1> = RECP.NO                       
+            RECP.ARR<2,-1> = INAH.PERIOD                   
+            RECP.ARR<3,-1>=INVR.ENT.DATE
+            IWH.RECP.NO = RECP.ARR<1>                      
+            IWH.RECP.PERIOD = RECP.ARR<2>                  
+            IWH.RECP.ENT.DATE=RECP.ARR<3>
+         END ELSE
+            IF (INAH.SRC='IR' OR INAH.SRC='IS') AND CUR.QTY.DIFF>0 THEN
+               IF IID.INVR#'' THEN
+                  LAST.RECP=DCOUNT(IID.INVR<1>,@VM)
+                  RECP.NO=IID.INVR<1,LAST.RECP>   
+                  RECP.NO=RECP.NO[4,99]           
+                  RECP.ID=IID.INVR<1,LAST.RECP>   
+               END
+               MATREADU INVR.REC FROM INV_RECEIPTS_TEMP,RECP.ID THEN
+                  INVR.SERIAL.NO<1,-1>=SER.ARR
+                  MATWRITEU INVR.REC ON INV_RECEIPTS_TEMP,RECP.ID 
+               END
+            END
+         END
+         GOSUB ADJUST.SERIAL      
+	 WRITE ERRMSG ON CONTROL,"AA"
+         IF ERRMSG#"" THEN GOTO BUILD.REC.EXIT ;*T27801                
+         GOSUB ADJUST.INV.RECP.WHSE
+	 	 WRITE "22" ON CONTROL,"BB"
+
+         IF ERRMSG#"" THEN GOTO BUILD.REC.EXIT ;*T27801
+         INAH.RECP.NO = ISTK.RECP                          
+         INAH.SERIAL = ISTK.ID[4,99]                        
+         INAH.ID=CONO:INAH.SEQ
+         GOSUB WRITE.INAH.TEMP
+         IWLO.ID = IWH.ID:"!":ISTK.LOC                   
+         GOSUB UPD.IWLO.TEMP
+   END CASE
+WRITE "END" ON CONTROL, "END"
+BUILD.REC.EXIT: 
+   RETURN
+*
+*****************
+UPDATE.REC: 
+*****************
+
+   RECP.CNT = DCOUNT(IID.INVR<1>,@VM)
+   FOR R = 1 TO RECP.CNT
+      INVR.ID = IID.INVR<1,R>
+      MATREADU INVR.REC FROM INV_RECEIPTS_TEMP,INVR.ID THEN
+         IF INVR.POST.DATE ="" THEN
+            INVR.POST.DATE=DATE()
+         END
+         MATWRITE INVR.REC ON INV_RECEIPTS,INVR.ID
+         DELETE INV_RECEIPTS_TEMP,INVR.ID
+      END
+   NEXT RECP.CNT
+
+   RCPWHSE.CNT = DCOUNT(IID.IRW<1>,@VM)
+
+   FOR R = 1 TO RCPWHSE.CNT
+
+      IRW.ID = IID.IRW<1,R>
+      MATREADU IRW.REC FROM INV_RECP_WHSE_TEMP,IRW.ID THEN
+
+
+         MATWRITE IRW.REC ON INV_RECP_WHSE,IRW.ID
+         DELETE INV_RECP_WHSE_TEMP,IRW.ID
+      END
+   NEXT R
+   SER.CNT = DCOUNT(IID.ISTK,@VM)
+   FOR S = 1 TO SER.CNT
+      ISTK.ID = IID.ISTK<1,S>
+      MATREADU ISTK.REC FROM INV_SERIAL_TEMP,ISTK.ID THEN
+
+         MATWRITE ISTK.REC ON INV_SERIAL,ISTK.ID
+         DELETE INV_SERIAL_TEMP,ISTK.ID
+      END
+   NEXT S
+   MTS.CNT=DCOUNT(IID.MTS,@VM)
+   FOR MTS=1 TO MTS.CNT
+      MTS.ID=IID.MTS<1,MTS>
+      READ MTS.REC FROM MILL_TO_SERIAL_TEMP,MTS.ID THEN
+         WRITE MTS.REC ON MILL_TO_SERIAL,MTS.ID
+         DELETE MILL_TO_SERIAL_TEMP,MTS.ID
+      END
+   NEXT MTS
+   INAH.CNT = DCOUNT(IID.INAH,@VM)
+   FOR IH = 1 TO INAH.CNT
+      INAH.ID = IID.INAH<1,IH>
+      MATREADU INAH.REC FROM INV_AUDIT_HIST_TEMP,INAH.ID THEN
+         MATWRITE INAH.REC ON INV_AUDIT_HIST,INAH.ID
+         INV.ID=CONO:INAH.PROD
+         MATREAD INV.REC FROM INVENTORY,INV.ID THEN
+            IF INV.M.LINE='FNGD' THEN
+               IF INAH.GLA.DATE#'X' THEN
+                  WRITE NULL.REC ON FNGD_AUDIT_TAG,INAH.ID
+               END
+            END ELSE
+               IF INAH.ACCT#'' OR INAH.ACCR.ACCT#'' OR INAH.ADJ.ACCT#'' THEN
+                  WRITE NULL.REC ON INV_AUDIT_TAG,INAH.ID
+               END
+            END
+         END
+         DELETE INV_AUDIT_HIST_TEMP,INAH.ID
+      END
+   NEXT IH
+   *STATUS=RBO.setProperty('','TEMPVAL',IID.IWLO)
+   LOC.CNT = DCOUNT(IID.IWLO,@VM)
+   FOR LOC=1 TO LOC.CNT
+      IWLO.ID=IID.IWLO<1,LOC>
+      MATREADU IWLO.REC FROM INV.WHSE.LOC.TEMP,IWLO.ID  THEN
+         MATWRITE IWLO.REC ON INV.WHSE.LOC,IWLO.ID
+         DELETE INV.WHSE.LOC.TEMP,IWLO.ID
+      END
+   NEXT LOC
+   IWH.VDR.FI = ""   
+   IWH.PO.NO.FI = "" 
+   IWH.PO.LN.FI = "" 
+   IWH.ORG.FI = ""   
+   IWH.RSV.FI = ""   
+   IWH.QTY.FI = ""   
+   IWH.COST.FI = ""  
+   IWH.ACT.COST = "" 
+   GOSUB RESORT.IWH.RECPS
+   ONHAND.DIFF=IWH.ON.HAND-IWH.PERIOD.ONHAND
+   IWH.ON.HAND=IWH.HOLD.ONHAND
+   IWH.ON.HAND=IWH.ON.HAND+ONHAND.DIFF
+   IWH.HOLD.ONHAND=''
+   IWH.PERIOD.ONHAND=''
+   MATWRITE IWH.REC ON INV.WHSE,IWH.ID 
+   ;*
+   ;* null out ORIG arrays
+   ;*
+   ORIG.IWH.RSV.FI =""
+   ORIG.IWH.ORG.FI =""
+   ORIG.IWH.QTY.FI =""
+   ORIG.IWH.COST.FI =""
+   ;*
+   ;* clear all arrays
+   ;*
+   MAT IID.REC = ""
+   MAT INAH.REC=""
+   MAT IWLO.REC=""
+   MAT ISTK.REC=""
+   MAT INVR.REC=""
+   MAT IRW.REC=""
+   MAT IWH.REC=""
+   RETURN
+*
+****************
+BUILD.IWH.REC: 
+****************
+   ;*
+   ;*build IWH.REC information from receipts.
+   ;*do not include future period receipts in receipt array
+   ;* if PERIOD variable passed. If not then include all receipts, 
+   ;* current and future.
+   ;*
+*
+   IWH.ORG.FI = ""
+   IWH.RSV.FI = ""
+   IWH.QTY.FI = ""
+   IWH.COST.FI=""
+   IWH.VDR.FI=''
+   IWH.PO.NO.FI=''
+   IWH.PO.LN.FI=''
+   IWH.RECV.FI=''
+   IWH.DATE.FI=''
+   IWH.ACT.COST=''
+   IWH.COST.FI=''
+   IWH.RECP.NO=''
+   IWH.RECP.PERIOD=''
+   IWH.RECP.ENT.DATE=''
+   IWH.HOLD.ONHAND=''
+   IWH.PERIOD.ONHAND=''
+*
+   IF PERIOD='' THEN PERIOD='9999999'
+   RCNT=0
+TESTMSG = " AA REY DUM NAKOO KAR "
+   RECP.CNT = DCOUNT(RECP.ARR<1>,@VM)
+* T27384 v ; Retain the value of INAH.REC and the end of the subroutine
+*            restore it, because of the read of INV_AUDIT_HIST to 
+*            retrieve original receipt period per warehouse.
+   SAVE.WHSE = INAH.WHSE
+   MAT HOLD.INAH.REC = MAT INAH.REC
+* T27384 ^
+   FOR RIDX = 1 TO RECP.CNT
+      SKIP=0
+      RECP.NO=RECP.ARR<1,RIDX>
+      IF RECP.ARR<2,RIDX> <= PERIOD THEN
+         INVR.ID=CONO:RECP.NO
+         IF RECORDLOCKED(INV_RECEIPTS_TEMP,INVR.ID)=0 THEN  
+            DELETE INV_RECEIPTS_TEMP,INVR.ID                 
+         END                                                
+*     MATREADU INVR.REC FROM INV_RECEIPTS_TEMP,INVR.ID ELSE
+         MATREAD INVR.REC FROM INV_RECEIPTS_TEMP,INVR.ID ELSE
+*       MATREADU INVR.REC FROM INV_RECEIPTS,INVR.ID ELSE
+            MATREAD INVR.REC FROM INV_RECEIPTS,INVR.ID ELSE
+               SKIP=1
+            END
+         END
+         SAVE.PERIOD = INVR.PERIOD        ;* T27384
+         SAVE.DATE = INVR.ENT.DATE        ;* T27384
+         IF NOT(SKIP) THEN
+* T27384 v
+*       IRW.ID=CONO:RECP.NO:"!":INAH.WHSE
+            IRW.ID=CONO:RECP.NO:"!":SAVE.WHSE
+* T27384 ^
+            IF RECORDLOCKED(INV_RECP_WHSE_TEMP,IRW.ID)=0 THEN  
+               DELETE INV_RECP_WHSE_TEMP,IRW.ID                 
+            END                                                
+*       MATREADU IRW.REC FROM INV_RECP_WHSE_TEMP,IRW.ID ELSE
+            MATREAD IRW.REC FROM INV_RECP_WHSE_TEMP,IRW.ID ELSE
+*         MATREADU IRW.REC FROM INV_RECP_WHSE,IRW.ID THEN
+               MATREAD IRW.REC FROM INV_RECP_WHSE,IRW.ID THEN
+                  RCNT+=1
+                  IWH.ORG.FI<1,RCNT>=IRW.ORG.QTY   
+                  IWH.RSV.FI<1,RCNT>=IRW.RSVB.QTY   
+                  IWH.QTY.FI<1,RCNT>=IRW.CUR.QTY 
+TESTMSG = IRW.ID : "  PPPPPP " 
+      		     TESTMSG = TESTMSG :"@VM" : IRW.CUR.QTY 
+                  IWH.COST.FI<1,RCNT>=IRW.UNIT.COST   
+                  IWH.VDR.FI<1,RCNT> = INVR.VEND          
+                  IWH.PO.NO.FI<1,RCNT>=INVR.PO            
+                  IWH.PO.LN.FI<1,RCNT>=INVR.PO.LN         
+                  IWH.RECV.FI<1,RCNT>=INVR.ENT.DATE
+                  IWH.DATE.FI<1,RCNT>=INVR.POST.DATE      
+                  IWH.COST.FI<1,RCNT>=INVR.UNIT.COST   
+                  IWH.RECP.PERIOD<1,RCNT>=INVR.PERIOD     
+                  IWH.RECP.ENT.DATE<1,RCNT>=INVR.ENT.DATE 
+*T27396 v The problem with the mod below is that if multiple transfers
+* into this whse occur for the same RECEIPT over more than one PERIOD
+* the Period in IWH.RECP.PERIOD gets set only upon initial transfer so
+* the quantity in the IRW.RSVB.QTY is not ALL necessarily available for
+* usage. To overcome this, the loop was added below to eliminate those
+* quantities from future periods.
+* T27384 v
+*           FOR AA = 1 TO DCOUNT(INVR.AUDIT.NO<1>, @VM)
+*             MATREAD INAH.REC FROM INV_AUDIT_HIST, CONO:INVR.AUDIT.NO<1,AA> THEN
+*               IF INAH.TYPE = "R" OR INAH.TYPE = "I" AND INAH.PERIOD > SAVE.PERIOD THEN
+*                 IF INAH.WHSE = SAVE.WHSE THEN
+*                   SAVE.PERIOD = INAH.PERIOD
+*                   SAVE.DATE = INAH.DATE
+*                 END
+*               END
+*             END
+*           NEXT AA
+*           IF SAVE.PERIOD > INVR.PERIOD THEN
+*             IWH.RECP.PERIOD<1,RCNT> = SAVE.PERIOD
+*             IWH.RECP.ENT.DATE<1,RCNT> = SAVE.DATE
+*           END
+* T27384 ^
+                  IWH.RECP.NO<1,RCNT>=RECP.NO             
+               END
+            END
+         END
+      END
+   NEXT RIDX
+*T27396 v Loop added here.
+   IF PERIOD < 9999999 THEN
+      RECP.CNT=DCOUNT(IWH.RECP.NO,@VM)
+      FOR RIDX = 1 TO RECP.CNT
+         RECP.NO = IWH.RECP.NO<1,RIDX>
+         MATREAD INVR.REC FROM INV_RECEIPTS,CONO:RECP.NO THEN
+	    LAST.INAH.ID='' ;*T28153
+            FOR AA = 1 TO DCOUNT(INVR.AUDIT.NO,@VM)
+               MATREAD INAH.REC FROM INV_AUDIT_HIST,CONO:INVR.AUDIT.NO<1,AA> THEN
+*T28153 v
+                  IF INAH.TYPE = 'I' AND LAST.INAH.ID # '' THEN
+                     MATREAD WORK.INAH.REC FROM INV_AUDIT_HIST,CONO:LAST.INAH.ID THEN
+                        IF WK.INAH.TYPE = 'O' AND (WK.INAH.QTY + INAH.QTY = 0) AND WK.INAH.TRAN = INAH.TRAN AND WK.INAH.WHSE = INAH.WHSE AND INAH.WHSE = SAVE.WHSE THEN
+                           INAH.QTY=0
+                           FOR WA = 1 TO DCOUNT(INAH.DEPL.QTY,@VM)
+                              INAH.DEPL.QTY<1,WA> = 0
+                           NEXT WA
+                        END
+                     END
+                     LAST.INAH.ID=''
+                  END
+                  IF INAH.TYPE = 'O' AND INAH.WHSE = SAVE.WHSE THEN
+                     LAST.INAH.ID = INVR.AUDIT.NO<1,AA>
+                  END
+*T28153 ^
+
+*T27801 v         IF INAH.TYPE = 'I' AND INAH.WHSE = SAVE.WHSE AND INAH.SRC[1,1]#'C' THEN
+                  	IF (INAH.TYPE = 'I' OR (INAH.TYPE = 'A' AND INAH.QTY > 0)) AND INAH.WHSE = SAVE.WHSE AND INAH.SRC[1,1]#'C' THEN                     IF INAH.PERIOD > PERIOD THEN
+                        IF INAH.DEPL.RECP # '' THEN
+                           IF INAH.DEPL.QTY='' THEN INAH.DEPL.QTY = INAH.QTY
+                        END ELSE
+                           INAH.DEPL.RECP = INAH.RECP.NO
+                           INAH.DEPL.QTY = INAH.QTY
+                        END
+                        FOR BB = 1 TO DCOUNT(INAH.DEPL.RECP,@VM)
+                           LOCATE INAH.DEPL.RECP<1,BB> IN IWH.RECP.NO<1> SETTING RFND THEN
+                              IWH.RSV.FI<1,RFND>-=INAH.DEPL.QTY<1,BB>
+                              IWH.QTY.FI<1,RFND>-=INAH.DEPL.QTY<1,BB>
+                              IF IWH.RSV.FI<1,RFND> < 0 THEN IWH.RSV.FI<1,RFND>=0
+                              IF IWH.QTY.FI<1,RFND> < 0 THEN IWH.QTY.FI<1,RFND>=0
+                           END
+                        NEXT BB
+                     END
+                  *END
+               END
+            NEXT AA
+         END
+      NEXT RIDX
+   END
+*T27396 ^
+   IWH.HOLD.ONHAND=IWH.ON.HAND
+   IWH.PERIOD.ONHAND=SUM(IWH.QTY.FI<1>)
+   IWH.ON.HAND=IWH.PERIOD.ONHAND
+   MAT ORG.IWH.REC = MAT IWH.REC
+   MAT INAH.REC = MAT HOLD.INAH.REC     ;* T27384
+   RETURN
+*
+*****************
+CREATE.INVR: 
+*****************
+*
+   MAT INVR.REC = ""
+   INVR.PROD = INAH.PROD
+   INVR.VEND = IWH.VDR.FI<1,FI.CNT>
+   INVR.PO   = IWH.PO.NO.FI<1,FI.CNT>
+   INVR.PO.LN = IWH.PO.LN.FI<1,FI.CNT>
+   INVR.ENT.DATE = IWH.RECV.FI<1,FI.CNT>
+   INVR.PERIOD = INAH.PERIOD
+   INVR.ORG.QTY=IWH.ORG.FI<1,FI.CNT>
+*INVR.DEPL.QTY = IWH.ORG.FI<1,FI.CNT>
+   INVR.UNIT.COST=IWH.COST.FI<1,FI.CNT>
+   INVR.ORG.WHSE = INAH.WHSE
+   INVR.PO.ACCR = PO.ACCRUE        
+   IF INAH.RECP.NO='' THEN
+      RECP.ID=GET_RECP_ID(CONO,CONTROL,INVR.ENT.DATE)
+      RECP.NO=RECP.ID[4,99]
+   END ELSE
+      ;* this would be the case only for FNGD
+      ;* that is being receive through physical inventory
+      RECP.ID=CONO:INAH.RECP.NO
+      RECP.NO=INAH.RECP.NO
+   END
+*T27801 v Add lock on TEMP
+   IF RECORDLOCKED(INV_RECEIPTS_TEMP,RECP.ID)=0 THEN  
+      DELETE INV_RECEIPTS_TEMP,RECP.ID                 
+   END                                                
+   READU DUMMY FROM INV_RECEIPTS_TEMP,RECP.ID ELSE
+      READU DUMMY FROM INV_RECEIPTS,RECP.ID THEN
+         ERRMSG='INV_RECEIPTS ':RECP.ID:' already exists - Cannot create!'
+      END ELSE
+         IID.INVR<1,-1> = RECP.ID
+      END
+   END
+*  IID.INVR<1,-1> = RECP.ID
+*T27801 ^ 
+  RETURN
+*
+
+*****************
+SET.IRW: 
+*****************
+*
+   ;* only for general tracked items when creating new receipt.
+   ;*
+
+   IF LOC=1 THEN
+      MAT IRW.REC=""
+
+    
+      IRW.ORG.QTY+=IWH.ORG.FI<1,FI.CNT>
+
+      IRW.CUR.QTY+=IWH.QTY.FI<1,FI.CNT>
+      IRW.RSVB.QTY+=IWH.RSV.FI<1,FI.CNT>
+      IF (INAH.SRC='IR' OR INAH.SRC='IS' OR INAH.SRC='IQ' OR INAH.ADJ.CODE='PHY' OR INAH.ADJ.CODE='PHS')  THEN 
+         IRW.UNIT.COST=IWH.COST.FI<1,FI.CNT>
+      END
+   END
+ 
+   IRW.SERIAL.NO<1,-1>=ISTK.ID[4,99]
+*  IRW.ON.HAND+=IWH.ORG.FI<1,FI.CNT>
+   IRW.ON.HAND+=CUR.QTY
+
+*TEMP=TEMP+IRW.ON.HAND
+
+   RETURN
+
+
+*
+********************
+CREATE.SERIAL: 
+********************
+*
+*   GOSUB GET.INV.UM.CNV ;* 40365
+   MAT ISTK.REC=""
+
+   ISTK.ID = CONO:"R":RECP.NO:"!":INAH.WHSE:"!":INAH.LOC
+
+   ISTK.PROD=INAH.PROD
+   ISTK.WHSE = INAH.WHSE
+   ISTK.LOC = INAH.LOC
+   ISTK.ORG.QTY = ORG.QTY
+   ISTK.ORG.STK.QTY=CALC_STK_QTY(ORG.QTY,MAT INV.CNV.REC,'.5','')
+   ISTK.CUR.QTY = CUR.QTY
+
+   ISTK.CUR.STK.QTY=CALC_STK_QTY(CUR.QTY,MAT INV.CNV.REC,'.5','')
+   ISTK.RSVB.QTY=RESV.QTY
+   ISTK.PO.NO = INVR.PO
+   ISTK.PO.LINE= INVR.PO.LN
+*ISTK.UOM=INVR.UOM
+
+  ISTK.UNIT.COST = INVR.UNIT.COST
+   ISTK.ENTRY.DATE= INVR.ENT.DATE
+   ISTK.POST.DATE = DATE()
+   ISTK.EDIT.DATE = DATE()
+   ISTK.RECP=RECP.NO
+   ISTK.RECP.PERIOD= INVR.PERIOD
+   ISTK.AUDIT.NO= INAH.SEQ
+   *ISTK.RECP.PERIOD=INAH.PERIOD
+   IID.ISTK<1,-1> = ISTK.ID
+*T27801 v
+*  IID.ISTK<1,-1> = ISTK.ID
+   IF RECORDLOCKED(INV_SERIAL_TEMP,ISTK.ID)=0 THEN
+      DELETE INV_SERIAL_TEMP,ISTK.ID
+   END
+   READU DUMMY FROM INV_SERIAL_TEMP,ISTK.ID ELSE 
+      READU DUMMY FROM INV_SERIAL,ISTK.ID THEN
+         ERRMSG='Serial ':ISTK.ID:' already exists - cannot create!'
+      END ELSE
+         MATWRITEU ISTK.REC ON INV_SERIAL_TEMP,ISTK.ID
+         IID.ISTK<1,-1> = ISTK.ID
+      END
+   END
+*  MATWRITEU ISTK.REC ON INV_SERIAL_TEMP,ISTK.ID
+*T27801 ^ 
+  RETURN
+*
+
+
+
+**************
+ADJUST.SERIAL: 
+**************
+*
+*   GOSUB GET.INV.UM.CNV ; * 40365
+   ;* adjust serial FIFO or actual basis. If SER.ARR has more then one
+   ;* serial then serials will be adjusted in FIFO order. So, to adjust
+   ;* on actual pass only one serial in SER.ARR
+*CUR.QTY.DIFF=CUR.QTY.DIFF*1000
+   *STATUS=RBO.setProperty('','TEMPVAL',CUR.QTY.DIFF)
+
+   IF CUR.QTY.DIFF<0 THEN
+
+      ;*
+      ;* negative serial adjustment
+      ;*
+      DIFF = ABS(CUR.QTY.DIFF)
+      S.CNT=DCOUNT(SER.ARR,@VM)
+
+      STATUS=RBO.setProperty('','READVAL',SER.ARR)
+      FOR SS = 1 TO S.CNT UNTIL DIFF=0
+         ISTK.ID = CONO:SER.ARR<1,SS>
+         IF RECORDLOCKED(INV_SERIAL_TEMP,ISTK.ID)=0 THEN
+            DELETE INV_SERIAL_TEMP,ISTK.ID
+         END
+         IF ISTK.ID<>"001" THEN
+	
+            MATREADU ISTK.REC FROM INV_SERIAL_TEMP,ISTK.ID ELSE 
+               MATREADU ISTK.REC FROM INV_SERIAL,ISTK.ID ELSE
+*T27801 v
+*              MAT ISTK.REC=''
+                  ERRMSG='Cannot locate INV_SERIAL ':ISTK.ID
+                  GOTO ADJUST.SERIAL.EXIT
+               END
+            END
+         END
+
+         IF (INAH.SRC='IA' OR INAH.SRC='IQ') AND CATG.TRK.LVL='G' THEN
+            INAH.CUR.QTY=ISTK.CUR.QTY
+            INAH.CUR.STK.QTY=ISTK.CUR.STK.QTY
+            INAH.CUR.DIAM=ISTK.CUR.DIAM
+         END
+WRITE ISTK.CUR.QTY ON CONTROL,"QTY"
+         IF ISTK.CUR.QTY+0>0 THEN
+
+            IF ISTK.CUR.QTY<DIFF THEN
+
+               IRWDIFF=-(ISTK.CUR.QTY)
+               GOSUB ADJUST.IRW.ON.HAND
+	       
+                  IF ERRMSG THEN GOTO ADJUST.SERIAL.EXIT ;*T27801
+               IF (INAH.SRC#'IA' AND INAH.SRC#'IQ' AND CATG.TRK.LVL='G') OR CATG.TRK.LVL='S' THEN
+                  IRWDIFF=0
+               END
+               ;* if this is a receipt qty adjustment
+               ;* then original qty has to be adjusted too.
+               IF INAH.SRC='IQ' THEN
+                  ISTK.ORG.QTY-=ISTK.CUR.QTY
+                  ISTK.ORG.STK.QTY=CALC_STK_QTY(ISTK.ORG.QTY,MAT INV.CNV.REC,'.5','')
+                  IF CATG.TYPE='L' OR CATG.TYPE='LR' OR CATG.TYPE='PC' THEN
+                     DIAM=CALC_DIAM(ISTK.ORG.QTY,ISTK.ORG.STK.QTY,MAT INV.REC)
+                     ISTK.ORG.DIAM= DIAM
+                  END
+               END
+               DIFF = DIFF-ISTK.CUR.QTY
+               ISTK.CUR.QTY = 0
+               ISTK.RSVB.QTY = 0
+               ISTK.CUR.STK.QTY=0 ; INAH.NEW.STK.QTY=0
+               ISTK.AUDIT.NO<1,-1> = INAH.SEQ
+               IF CATG.TYPE='L' OR CATG.TYPE='LR' OR CATG.TYPE='PC' THEN
+                  ISTK.CUR.DIAM=0 ; INAH.NEW.DIAM=0
+               END
+               IID.ISTK<1,-1> = ISTK.ID
+               MATWRITEU ISTK.REC ON INV_SERIAL_TEMP,ISTK.ID
+            END ELSE
+               IRWDIFF=-(DIFF)
+               GOSUB ADJUST.IRW.ON.HAND
+	       WRITE "D" ON CONTROL,"DD"
+	       WRITE ERRMSG ON CONTROL,"ERR"
+                  IF ERRMSG THEN GOTO ADJUST.SERIAL.EXIT ;*T27801
+               IF (INAH.SRC#'IA' AND INAH.SRC#'IQ' AND CATG.TRK.LVL='G') OR CATG.TRK.LVL='S' THEN
+                  IRWDIFF=0
+               END
+               ISTK.CUR.QTY = ISTK.CUR.QTY - DIFF
+               ISTK.RSVB.QTY = ISTK.RSVB.QTY-DIFF
+               IF INAH.NEW.STK.QTY='' THEN
+                  ISTK.CUR.STK.QTY=CALC_STK_QTY(ISTK.CUR.QTY,MAT INV.CNV.REC,'.5','')
+                  INAH.NEW.STK.QTY=ISTK.CUR.STK.QTY
+               END ELSE
+                  ISTK.CUR.STK.QTY = INAH.NEW.STK.QTY
+               END
+               IF CATG.TYPE='L' OR CATG.TYPE='LR' OR CATG.TYPE='PC' THEN
+                  IF INAH.NEW.DIAM='' THEN
+                     DIAM=CALC_DIAM(ISTK.CUR.QTY,ISTK.CUR.STK.QTY,MAT INV.REC)
+                     ISTK.CUR.DIAM=DIAM ; INAH.NEW.DIAM=DIAM
+                  END ELSE
+                     ISTK.CUR.DIAM = INAH.NEW.DIAM
+                  END
+               END
+               IF INAH.SRC='IQ' THEN
+                  ISTK.ORG.QTY-=DIFF
+                  ISTK.ORG.STK.QTY=CALC_STK_QTY(ISTK.ORG.QTY,MAT INV.CNV.REC,'.5','')
+                  IF CATG.TYPE='L' OR CATG.TYPE='LR' OR CATG.TYPE='PC' THEN
+                     DIAM=CALC_DIAM(ISTK.ORG.QTY,ISTK.ORG.STK.QTY,MAT INV.REC)
+                     ISTK.ORG.DIAM= DIAM
+                  END
+               END
+               ISTK.AUDIT.NO<1,-1> = INAH.SEQ
+               IID.ISTK<1,-1> = ISTK.ID
+               MATWRITEU ISTK.REC ON INV_SERIAL_TEMP,ISTK.ID
+               DIFF=0
+            END
+         END ELSE
+            IRWDIFF=0
+         END
+      NEXT SS
+   END ELSE
+      ;*
+      ;* positive serial adjustment or receipt
+      ;*
+      ISTK.ID=CONO:SER.ARR<1,1>
+      IF RECORDLOCKED(INV_SERIAL_TEMP,ISTK.ID)=0 THEN 
+         DELETE INV_SERIAL_TEMP,ISTK.ID                     
+      END                                          
+      S.OK=1
+      
+      IF ISTK.ID <> "001" THEN
+         MATREADU ISTK.REC FROM INV_SERIAL_TEMP,ISTK.ID ELSE
+           MATREADU ISTK.REC FROM INV_SERIAL,ISTK.ID ELSE
+*T27801 v
+               IF INAH.TYPE # 'R' THEN
+                  S.OK=0
+                  ERRMSG='Cannot locate INV_SERIAL ':ISTK.ID
+                  GOTO ADJUST.SERIAL.EXIT
+               END ELSE
+                  MAT ISTK.REC = ''
+               END
+*T27801 ^ 
+          END
+         END
+       END
+      IF S.OK THEN
+*T27801 v
+            IF (INAH.SRC='IA' OR INAH.SRC='IQ') AND CATG.TRK.LVL='G' THEN
+               INAH.CUR.QTY=ISTK.CUR.QTY
+               INAH.CUR.STK.QTY=ISTK.CUR.STK.QTY
+               INAH.CUR.DIAM=ISTK.CUR.DIAM
+            END
+*T27801 ^
+         ISTK.CUR.QTY +=CUR.QTY.DIFF
+         IF INAH.NEW.STK.QTY='' THEN 
+            ISTK.CUR.STK.QTY=CALC_STK_QTY(ISTK.CUR.QTY,MAT INV.CNV.REC,'.5','')
+            INAH.NEW.STK.QTY=ISTK.CUR.STK.QTY
+         END ELSE
+            ISTK.CUR.STK.QTY=INAH.NEW.STK.QTY
+         END
+         IF CATG.TYPE='L' OR CATG.TYPE='LR' OR CATG.TYPE='PC' THEN
+            IF INAH.NEW.DIAM='' THEN
+               DIAM=CALC_DIAM(ISTK.CUR.QTY,ISTK.CUR.STK.QTY,MAT INV.REC) 
+               ISTK.CUR.DIAM=DIAM ; INAH.NEW.DIAM=DIAM
+            END ELSE
+               ISTK.CUR.DIAM = INAH.NEW.DIAM
+            END
+         END
+         ISTK.RSVB.QTY +=CUR.QTY.DIFF
+         ISTK.AUDIT.NO<1,-1> = INAH.SEQ
+         IID.ISTK<1,-1> = ISTK.ID
+         IF (INAH.SRC='IR' OR INAH.SRC='IS' OR INAH.ADJ.CODE='PHY' OR INAH.SRC='IQ' OR INAH.ADJ.CODE='PHS') THEN 
+            ISTK.ORG.QTY +=CUR.QTY.DIFF
+            ISTK.ORG.STK.QTY=CALC_STK_QTY(ISTK.ORG.QTY,MAT INV.CNV.REC,'.5','')
+            IF CATG.TYPE='L' OR CATG.TYPE='LR' OR CATG.TYPE='PC' THEN
+               DIAM=CALC_DIAM(ISTK.ORG.QTY,ISTK.ORG.STK.QTY,MAT INV.REC)
+               ISTK.ORG.DIAM=DIAM
+            END
+            IF ISTK.POST.DATE='' THEN
+               ISTK.PO.NO = INVR.PO             
+               ISTK.PO.LINE= INVR.PO.LN         
+               ISTK.UNIT.COST= INVR.UNIT.COST
+               ISTK.ENTRY.DATE= INVR.ENT.DATE   
+               ISTK.POST.DATE = DATE()          
+               ISTK.EDIT.DATE = DATE()          
+               ISTK.RECP=RECP.NO             
+               ISTK.RECP.PERIOD= INVR.PERIOD    
+               ISTK.LOC=INAH.LOC
+               ISTK.CUR.DIAM=INAH.NEW.DIAM
+               ISTK.CUR.STK.QTY = INAH.NEW.STK.QTY 
+               FIND SER.ARR<1,1> IN SSTK.SERIAL SETTING FL,PP,SS THEN
+                  ISTK.MILL.ID = SSTK.MILL.ID<FL,PP,SS>
+                  IF ISTK.MILL.ID#'' THEN
+                     MTS.ID=CONO:ISTK.MILL.ID
+                     READ MTS.REC FROM MILL_TO_SERIAL_TEMP,MTS.ID ELSE MTS.REC=''
+                     LOCATE SER.ARR<1,1> IN MTS.REC<1> SETTING MTS.POS ELSE
+                        MTS.REC<1,-1>=SER.ARR<1,1>
+                        MTS.REC<2,-1>=INVR.VEND
+                        WRITE MTS.REC ON MILL_TO_SERIAL_TEMP,MTS.ID
+                        IID.MTS<1,-1>=MTS.ID
+                     END
+                  END
+               END
+*T27801 v      END
+               END ELSE
+                  IF PERIOD > ISTK.RECP.PERIOD THEN
+                     ISTK.FUTR.AUDIT.NO<1,-1> = INAH.SEQ
+                  END
+               END
+*T27801 ^ 
+        END
+         MATWRITEU ISTK.REC ON INV_SERIAL_TEMP,ISTK.ID
+         IRWDIFF=CUR.QTY.DIFF
+         GOSUB ADJUST.IRW.ON.HAND
+            IF ERRMSG THEN GOTO ADJUST.SERIAL.EXIT ;*T27801
+         IRWDIFF=0
+      END
+   END
+ADJUST.SERIAL.EXIT: 
+   RETURN
+*
+
+
+****************
+DELETE.TMP.REC: 
+****************
+*
+   ;* delete INV.RECEIPTS_TEMP record
+   ;* delete INV_RECP_WHSE_TEMP record
+   ;* delete INV_SERIAL_TEMP record
+   ;* delete INV_AUDIT_HIST_TEMP record
+   ;* delete INV.WHSE_TEMP record
+   ;* delete INV.WHSE.LOC_TEMP record
+   ;*
+   RECP.CNT = DCOUNT(IID.INVR<1>,@VM)
+   FOR R = 1 TO RECP.CNT
+      INVR.ID = IID.INVR<1,R>
+      DELETE INV_RECEIPTS_TEMP,INVR.ID
+   NEXT RECP.CNT
+   ;*
+   RCPWHSE.CNT = DCOUNT(IID.IRW<1>,@VM)
+   FOR R = 1 TO RCPWHSE.CNT
+      IRW.ID = IID.IRW<1,R>
+      DELETE INV_RECP_WHSE_TEMP,IRW.ID
+   NEXT R
+   ;*
+   SER.CNT = DCOUNT(IID.ISTK,@VM)
+   FOR S = 1 TO SER.CNT
+      ISTK.ID = IID.ISTK<1,S>
+      DELETE INV_SERIAL_TEMP,ISTK.ID
+   NEXT S
+   ;*
+   INAH.CNT = DCOUNT(IID.INAH,@VM)
+   FOR IH = 1 TO INAH.CNT
+      INAH.ID = IID.INAH<1,IH>
+      DELETE INV_AUDIT_HIST_TEMP,INAH.ID
+   NEXT IH
+   ;*
+   LOC.CNT = DCOUNT(IID.IWLO,@VM)
+   FOR LOC=1 TO LOC.CNT
+      IWLO.ID=IID.IWLO<1,LOC>
+      DELETE INV.WHSE.LOC.TEMP,IWLO.ID
+   NEXT LOC
+   ;*
+   ;*remove FIFO from INV.WHSE
+   ;*
+   IWH.VDR.FI = ""   
+   IWH.PO.NO.FI = "" 
+   IWH.PO.LN.FI = "" 
+   IWH.ORG.FI = ""   
+   IWH.RSV.FI = ""   
+   IWH.QTY.FI = ""   
+   IWH.COST.FI = ""  
+   IWH.ACT.COST = "" 
+   IWH.RECV.FI = ""
+ 
+   ;*
+   ;* null out ORIG arrays
+   ;*
+   ORIG.IWH.RSV.FI =""
+   ORIG.IWH.ORG.FI =""
+   ORIG.IWH.QTY.FI =""
+   ORIG.IWH.COST.FI =""
+   ;*
+   ;* clear all arrays
+   ;*
+   MAT IID.REC = ""
+   MAT INAH.REC=""
+   MAT IWLO.REC=""
+   MAT ISTK.REC=""
+   MAT INVR.REC=""
+   MAT IRW.REC=""
+   MAT IWH.REC=""
+   RETURN
+*
+**********************
+ADJUST.INV.RECP.WHSE: 
+**********************
+*
+   ;* if quantity is being added then 
+   ;* we don't care about depletion method
+   ;* we are going to up the quatity associated
+   ;* with the serial receipt
+   IF CUR.QTY.DIFF>0 THEN
+      IRW.ID=CONO:ISTK.RECP:"!":INAH.WHSE
+*T27801 v
+         IF RECORDLOCKED(INV_RECP_WHSE_TEMP,IRW.ID)=0 THEN
+            DELETE INV_RECP_WHSE_TEMP,IRW.ID
+         END
+         MATREADU IRW.REC FROM INV_RECP_WHSE_TEMP,IRW.ID ELSE
+            MATREADU IRW.REC FROM INV_RECP_WHSE,IRW.ID ELSE
+               IF INAH.TYPE = 'R' THEN
+                  MAT IRW.REC=''
+               END ELSE
+                  ERRMSG='Cannot locate INV_RECP_WHSE ':IRW.ID
+                  GOTO ADJUST.INV.RECP.WHSE.EXIT
+               END
+*T27801 ^ 
+        END
+      END
+      IF INAH.SRC='IQ' THEN
+         IRW.ORG.QTY+=CUR.QTY.DIFF
+      END
+      IF (INAH.SRC='IR' OR INAH.SRC='IS' OR INAH.ADJ.CODE='PHY' OR INAH.ADJ.CODE='PHS') THEN
+         IRW.ORG.QTY+=CUR.QTY.DIFF
+         IRW.UNIT.COST=ISTK.UNIT.COST
+         LOCATE ISTK.ID[4,99] IN IRW.SERIAL.NO<1> SETTING POS ELSE
+            IRW.SERIAL.NO<1,-1>=ISTK.ID[4,99]
+         END
+      END
+      IRW.CUR.QTY += CUR.QTY.DIFF
+      IRW.RSVB.QTY+=CUR.QTY.DIFF
+      MATWRITEU IRW.REC ON INV_RECP_WHSE_TEMP,IRW.ID
+      LOCATE IRW.ID IN IID.IRW<1> SETTING POS ELSE
+         IID.IRW<1,-1> = IRW.ID
+      END
+      IF (INAH.SRC='IR' OR INAH.SRC='IS' OR INAH.ADJ.CODE='PHY' OR INAH.SRC='IQ' OR INAH.ADJ.CODE='PHS') THEN
+         INVR.ID=CONO:ISTK.RECP
+*T27801 v
+            IF RECORDLOCKED(INV_RECEIPTS_TEMP,INVR.ID)=0 THEN  
+               DELETE INV_RECEIPTS_TEMP,INVR.ID                 
+            END                                                
+*T27801 ^
+         MATREADU INVR.REC FROM INV_RECEIPTS_TEMP, INVR.ID ELSE
+            MATREADU INVR.REC FROM INV_RECEIPTS,INVR.ID ELSE
+               MAT INVR.REC=''
+            END
+         END
+         INVR.DEPL.QTY +=CUR.QTY.DIFF
+         IF (INAH.SRC='IQ') THEN
+            INVR.ORG.QTY+=CUR.QTY.DIFF
+         END
+         IF INV.M.LINE="FNGD" THEN
+            GOSUB ADJ.FNGD.ATT.IN.INVR
+         END
+         INVR.AUDIT.NO<1,-1>=INAH.SEQ
+*T27801 v
+            IF PERIOD > INVR.PERIOD THEN INVR.FUTR.AUDIT.NO<1,-1>=INAH.SEQ
+*T27801 ^
+         MATWRITEU INVR.REC ON INV_RECEIPTS_TEMP,INVR.ID
+         LOCATE INVR.ID IN IID.INVR<1> SETTING POS ELSE
+            IID.INVR<1,-1>=INVR.ID
+         END
+      END
+      INAH.UNIT.COST = INVR.UNIT.COST
+      INAH.EXT.COST=INT((INVR.UNIT.COST/10000) * ((CUR.QTY.DIFF/10)/ (INV.COST.WT/100)) + .5)
+*        GOSUB SET.ORIG.IWH.FI ;*T27990 - SEE LINE 1338
+   END
+   IF CUR.QTY.DIFF<0 THEN
+      ;* if we are substracting quantity then
+      ;* if depletion metod (costing method)
+      ;* is actual we can substract the qty.
+      ;* right away. Otherwise we have to 
+      ;* adjust IRW records in FIFO orderd.
+      BEGIN CASE
+         CASE DEPL.METHOD="AC" 
+            IRW.ID=CONO:ISTK.RECP:"!":INAH.WHSE
+            IF RECORDLOCKED(INV_RECP_WHSE_TEMP,IRW.ID)=0 THEN
+               DELETE INV_RECP_WHSE_TEMP,IRW.ID
+            END
+            MATREADU IRW.REC FROM INV_RECP_WHSE_TEMP,IRW.ID ELSE
+               MATREADU IRW.REC FROM INV_RECP_WHSE,IRW.ID ELSE
+*T27801 v
+*                 MAT IRW.REC=''
+                     ERRMSG='Cannot locate INV_RECP_WHSE ':IRW.ID
+                     GOTO ADJUST.INV.RECP.WHSE.EXIT
+               END
+            END
+            IF INAH.SRC='IQ' THEN
+               IRW.ORG.QTY +=CUR.QTY.DIFF
+            END
+            IRW.CUR.QTY += CUR.QTY.DIFF 
+            IRW.RSVB.QTY+=CUR.QTY.DIFF
+            MATWRITEU IRW.REC ON INV_RECP_WHSE_TEMP,IRW.ID
+            LOCATE IRW.ID IN IID.IRW SETTING POS ELSE
+               IID.IRW<1,-1> = IRW.ID
+            END
+            ;* update receipts with audit hist seq. # 
+            ;* and adjust depletion(costing) qty.
+            INVR.ID=CONO:ISTK.RECP
+            MATREADU INVR.REC FROM INV_RECEIPTS_TEMP,INVR.ID ELSE
+               MATREADU INVR.REC FROM INV_RECEIPTS,INVR.ID ELSE
+*T27801 v
+*                 MAT INVR.REC=''
+                     ERRMSG='Cannot locate INV_RECEIPTS ':INVR.ID
+                     GOTO ADJUST.INV.RECP.WHSE.EXIT
+               END
+            END
+            IF INAH.SRC='IQ' THEN
+               INVR.ORG.QTY+=CUR.QTY.DIFF
+            END
+            INVR.DEPL.QTY +=CUR.QTY.DIFF
+            INVR.AUDIT.NO<1,-1>=INAH.SEQ 
+            IF INV.M.LINE="FNGD" THEN   
+               GOSUB ADJ.FNGD.ATT.IN.INVR
+            END                         
+            MATWRITEU INVR.REC ON INV_RECEIPTS_TEMP,INVR.ID
+            LOCATE INVR.ID IN IID.INVR<1> SETTING POS ELSE
+               IID.INVR<1,-1>=INVR.ID
+            END
+            INAH.UNIT.COST = INVR.UNIT.COST
+            INAH.EXT.COST=INT((INVR.UNIT.COST/10000) * ((CUR.QTY.DIFF/10)/ (INV.COST.WT/100)) - .5)
+            INAH.DEPL.RECP=INVR.ID[4,99]
+            INAH.DEPL.QTY=CUR.QTY.DIFF
+            INAH.DEPL.COST=INVR.UNIT.COST
+         CASE DEPL.METHOD='FI' 
+            GOSUB IRW.FIFO.DEPLETE
+	    IF ERRMSG THEN GOTO ADJUST.INV.RECP.WHSE.EXIT ;*T27801
+            ;*now that we adjusted depletion (costing) qty. on 
+            ;*IRW records, update receipts record to which serial
+            ;*belongs to with audit hist #.
+            INVR.ID=CONO:ISTK.RECP                             
+            MATREADU INVR.REC FROM INV_RECEIPTS_TEMP,INVR.ID ELSE 
+               MATREADU INVR.REC FROM INV_RECEIPTS,INVR.ID ELSE    
+*T27801 v
+*                 MAT INVR.REC=''                                   
+                     ERRMSG='Cannot locate INV_RECEIPTS ':INVR.ID
+                     GOTO ADJUST.INV.RECP.WHSE.EXIT
+                        END                                                 
+            END                                                   
+            INVR.AUDIT.NO<1,-1>=INAH.SEQ                          
+            MATWRITEU INVR.REC ON INV_RECEIPTS_TEMP,INVR.ID       
+            LOCATE INVR.ID IN IID.INVR<1> SETTING POS ELSE        
+               IID.INVR<1,-1>=INVR.ID                              
+            END                                                   
+      END CASE
+   END
+      GOSUB SET.ORIG.IWH.FI ;*T27990 - Set whether + or -
+      EOL=1
+*   RETURN
+*
+
+ADJUST.INV.RECP.WHSE.EXIT: 
+   RETURN
+
+*T27990 v
+****************
+SET.ORIG.IWH.FI: 
+****************
+*
+*  Generally tracked may have multiple locations per RECEIPT! v
+*  IF CATG.TRK.LVL='S' THEN
+   ;* if multiple serials then orig FI qty
+   ;* changes for each serial
+   ORIG.IWH.RSV.FI = IWH.RSV.FI  
+   ORIG.IWH.ORG.FI = IWH.ORG.FI  
+   ORIG.IWH.QTY.FI = IWH.QTY.FI  
+   ORIG.IWH.COST.FI = IWH.COST.FI
+*  END
+*T27990 ^
+   RETURN
+
+**********************
+ADJ.FNGD.ATT.IN.INVR: 
+**********************
+*
+   LOCATE "*FNGD*" IN INVR.ORDER<1> SETTING OPOS THEN 
+      INVR.ORD.QTY<1,OPOS>+=CUR.QTY.DIFF
+      INVR.ORD.SQTY<1,OPOS>=CALC_STK_QTY(INVR.ORD.QTY<1,OPOS>,MAT INV.CNV.REC,".5",'')
+      ROND='.5'
+      IF CUR.QTY.DIFF<0 THEN ROND='-.5'
+      INVR.TOT.COST+=INT((INVR.UNIT.COST/10000)*((CUR.QTY.DIFF/10)/(INV.COST.WT/100))+ROND)
+      INVR.TOT.AMT+=INT((INVR.UNIT.COST/10000)*((CUR.QTY.DIFF/10)/(INV.COST.WT/100))+ROND)
+   END ELSE
+      INVR.ORDER<1,OPOS>="*FNGD*"
+      INVR.SHIP.TO<1,OPOS>=''
+      INVR.PICK.FLG<1,OPOS>=''
+      INVR.ORD.QTY<1,OPOS>+=CUR.QTY.DIFF
+      INVR.ORD.SQTY<1,OPOS>=CALC_STK_QTY(INVR.ORD.QTY<1,OPOS>,MAT INV.CNV.REC,".5",'')
+      INVR.UN.SALE<1,OPOS>=INVR.UNIT.COST
+      INVR.TOT.COST=INT((INVR.UNIT.COST/10000) * ((CUR.QTY.DIFF/10)/ (INV.COST.WT/100)) + .5)
+      INVR.TOT.AMT=INVR.TOT.COST
+   END
+   RETURN
+*
+*****************
+IRW.FIFO.DEPLETE: 
+*****************
+*
+   COST=0
+   RECP.CNT=DCOUNT(RECP.ARR<1>,@VM)
+   FOR RIDX=1 TO RECP.CNT
+      IWH.FI.CHANGED=0
+      BEGIN CASE
+         CASE ORIG.IWH.QTY.FI<1,RIDX> # IWH.QTY.FI<1,RIDX>
+            IWH.FI.CHANGED=1
+            CUR.FI.DIFF=IWH.QTY.FI<1,RIDX>-ORIG.IWH.QTY.FI<1,RIDX>
+            RSV.FI.DIFF=IWH.RSV.FI<1,RIDX>-ORIG.IWH.RSV.FI<1,RIDX>
+         CASE ORIG.IWH.RSV.FI<1,RIDX> # IWH.RSV.FI<1,RIDX>
+            IWH.FI.CHANGED=1
+            RSV.FI.DIFF=IWH.RSV.FI<1,RIDX>-ORIG.IWH.RSV.FI<1,RIDX>
+            CUR.FI.DIFF=IWH.QTY.FI<1,RIDX>-ORIG.IWH.QTY.FI<1,RIDX>
+      END CASE
+      IF (IWH.FI.CHANGED) THEN
+         IRW.ID=CONO:RECP.ARR<1,RIDX>:"!":INAH.WHSE
+         MATREADU IRW.REC FROM INV_RECP_WHSE_TEMP,IRW.ID ELSE
+            MATREADU IRW.REC FROM INV_RECP_WHSE,IRW.ID ELSE
+*T27801 v
+*              MAT IRW.REC=''
+               ERRMSG='Cannot locate INV_RECP_WHSE ':IRW.ID
+               GOTO IRW.FIFO.DEPLETE.EXIT
+                     END
+         END
+         IF INAH.SRC='IQ' THEN
+            IRW.ORG.QTY+=CUR.FI.DIFF
+         END
+         IRW.CUR.QTY+=CUR.FI.DIFF
+         IRW.RSVB.QTY+=RSV.FI.DIFF
+         MATWRITEU IRW.REC ON INV_RECP_WHSE_TEMP,IRW.ID
+         LOCATE IRW.ID IN IID.IRW<1> SETTING POS ELSE
+            IID.IRW<1,-1>=IRW.ID
+         END
+         INVR.ID=CONO:RECP.ARR<1,RIDX>
+         SKIP=0
+         MATREADU INVR.REC FROM INV_RECEIPTS_TEMP,INVR.ID ELSE
+            MATREADU INVR.REC FROM INV_RECEIPTS,INVR.ID ELSE
+*T27801 v
+*              MAT INVR.REC=''
+               ERRMSG='Cannot locate INV_RECEIPTS ':INVR.ID
+               GOTO IRW.FIFO.DEPLETE.EXIT
+                     END
+         END
+         INVR.DEPL.QTY+=CUR.FI.DIFF
+         IF INAH.SRC='IQ' THEN
+            INVR.ORG.QTY+=CUR.FI.DIFF
+         END
+         MATWRITEU INVR.REC ON INV_RECEIPTS_TEMP,INVR.ID 
+         LOCATE INVR.ID IN IID.INVR<1> SETTING POS ELSE
+            IID.INVR<1,-1>=INVR.ID
+         END
+         COST+=(INVR.UNIT.COST/10000)*((CUR.FI.DIFF/10)/ (INV.COST.WT/100))
+         INAH.DEPL.RECP<1,-1>=RECP.ARR<1,RIDX>       
+         INAH.DEPL.QTY<1,-1> = CUR.FI.DIFF          
+         INAH.DEPL.COST<1,-1> = INVR.UNIT.COST
+      END
+   NEXT RIDX
+*T27990 v Use Subroutine
+*  IF CATG.TRK.LVL='S' THEN
+*     ;* if multiple serials then orig FI qty
+*     ;* changes for each serial
+*     ORIG.IWH.RSV.FI = IWH.RSV.FI  
+*     ORIG.IWH.ORG.FI = IWH.ORG.FI  
+*     ORIG.IWH.QTY.FI = IWH.QTY.FI  
+*     ORIG.IWH.COST.FI = IWH.COST.FI
+*  END
+   GOSUB SET.ORIG.IWH.FI
+   INAH.EXT.COST=INT(COST-.5)
+*T27801 INAH.UNIT.COST=(COST*1000*INV.COST.WT)/ABS(CUR.QTY.DIFF)
+   INAH.UNIT.COST = INT((COST*1000*INV.COST.WT)/ABS(CUR.QTY.DIFF)-.5)
+*
+IRW.FIFO.DEPLETE.EXIT: 
+   RETURN
+*
+*******************
+ADJUST.IRW.ON.HAND: 
+*******************
+*
+   IRW.ID=CONO:ISTK.RECP:"!":ISTK.WHSE
+   IF RECORDLOCKED(INV_RECP_WHSE_TEMP,IRW.ID)=0 THEN  
+      DELETE INV_RECP_WHSE_TEMP,IRW.ID                 
+   END 
+   MATREADU IRW.REC FROM INV_RECP_WHSE_TEMP,IRW.ID ELSE
+      MATREADU IRW.REC FROM INV_RECP_WHSE,IRW.ID ELSE
+*T27801 v
+    
+         IF IRWDIFF > 0 THEN
+            MAT IRW.REC=''
+         END ELSE
+            ERRMSG='Cannot locate INV_RECP_WHSE record ':IRW.ID
+            GOTO ADJUST.IRW.ON.HAND.EXIT
+         END
+*T27801 ^ 
+     END
+   END
+   IRW.ON.HAND += IRWDIFF
+   MATWRITEU IRW.REC ON INV_RECP_WHSE_TEMP,IRW.ID
+   LOCATE IRW.ID IN IID.IRW<1> SETTING POS ELSE
+      IID.IRW<1,-1>=IRW.ID
+   END
+ADJUST.IRW.ON.HAND.EXIT: 
+   RETURN
+*
+*****************
+RESORT.IWH.RECPS: 
+*****************
+*
+   ;* before we write IWH.REC out resort recp.arr 
+   ;* by period, by entry date, by receipt number.
+   ;* first add back future period receipts 
+   SRN=IWH.RECP.NO<1>
+   SRP=IWH.RECP.PERIOD<1>
+   SRD=IWH.RECP.ENT.DATE<1>
+   MAT HOLD.IWH.REC = MAT IWH.REC
+   MATREADU IWH.REC FROM INV.WHSE,IWH.ID THEN
+      RCNT=DCOUNT(IWH.RECP.NO<1>,@VM)
+      FOR R=1 TO RCNT
+         LOCATE IWH.RECP.NO<1,R> IN SRN<1> SETTING POS ELSE
+            SRN<1,-1>=IWH.RECP.NO<1,R>
+            SRP<1,-1>=IWH.RECP.PERIOD<1,R>    
+            SRD<1,-1>=IWH.RECP.ENT.DATE<1,R>  
+         END
+      NEXT R
+      MAT IWH.REC = MAT HOLD.IWH.REC
+   END
+   IWH.RECP.NO=''
+   IWH.RECP.PERIOD=''
+   IWH.RECP.ENT.DATE=''
+   RCNT=DCOUNT(SRN,@VM)
+   SSQ='' ; SST=''
+   FOR R=1 TO RCNT
+      SSQ<1,R>=SRP<1,R>"R%6":SRD<1,R>"R%5":SRN<1,R>"R%9"
+   NEXT R
+   FOR R=1 TO RCNT
+      LOCATE SSQ<1,R> IN SST<1> BY 'AR' SETTING RPOS ELSE NULL
+      SST<1> = INSERT(SST<1>,1,RPOS,0,SSQ<1,R>)
+      IWH.RECP.NO<1>=INSERT(IWH.RECP.NO<1>,1,RPOS,0,SRN<1,R>)
+      IWH.RECP.PERIOD<1>=INSERT(IWH.RECP.PERIOD<1>,1,RPOS,0,SRP<1,R>)
+      IWH.RECP.ENT.DATE<1>=INSERT(IWH.RECP.ENT.DATE<1>,1,RPOS,0,SRD<1,R>)
+   NEXT R
+   RETURN
+*
+*************
+GET.INAH.SEQ: 
+*************
+*
+   INAH.SEQ = GET_INAH_SEQ(CONO,CONTROL,INV_AUDIT_HIST)
+   RETURN
+*
+*
+***************
+READ.IWLO: 
+***************
+*
+   IF RECORDLOCKED(INV.WHSE.LOC.TEMP,IWLO.ID)=0 THEN 
+      DELETE INV.WHSE.LOC.TEMP,IWLO.ID
+   END
+   MATREADU IWLO.REC FROM INV.WHSE.LOC.TEMP,IWLO.ID ELSE
+      MATREADU IWLO.REC FROM INV.WHSE.LOC,IWLO.ID ELSE
+         MAT IWLO.REC=''
+      END
+   END
+   RETURN
+*
+*************
+UPD.IWLO.TEMP: 
+*************
+*
+   GOSUB READ.IWLO
+   LOCATE IWLO.ID IN IID.IWLO<1> SETTING JUNK ELSE
+      IID.IWLO<1,-1>=IWLO.ID
+   END
+   IF ISTK.ID#'' THEN
+	*T28167 v
+	*     LOCATE ISTK.ID[4,99] IN IWLO.SERIAL<1>,1 BY "AR" SETTING SPOS ELSE
+	*        IWLO.SERIAL<1>=INSERT(IWLO.SERIAL<1>,1,SPOS,0,ISTK.ID[4,99])
+	*     END
+	      SERIAL = ISTK.ID[4,99]
+	      LOCATE SERIAL IN IWLO.SERIAL<1>,1 SETTING SPOS ELSE
+		 IF NUM(SERIAL) THEN
+		    LOCATE SERIAL IN IWLO.SERIAL<1>,1 BY "AR" SETTING SPOS ELSE
+		       IWLO.SERIAL<1>=INSERT(IWLO.SERIAL<1>,1,SPOS,0,SERIAL)
+		    END
+		 END ELSE
+		    LOCATE SERIAL IN IWLO.SERIAL<1>,1 BY "AL" SETTING SPOS ELSE
+		       IWLO.SERIAL<1>=INSERT(IWLO.SERIAL<1>,1,SPOS,0,SERIAL)
+		    END
+		 END
+	      END
+	*T28167 ^
+   END
+   IWLO.LOC.ON.HAND+=INAH.QTY
+   MATWRITEU IWLO.REC ON INV.WHSE.LOC.TEMP,IWLO.ID
+   RETURN
+*
+*****************
+GET.INV.UM.CNV: 
+*****************
+*
+*COPY>ICSBP>INV.UM.CNV
+   RETURN
+*
+*
+*****************
+WRITE.INAH.TEMP: 
+*****************
+*
+   LOCATE INAH.ID IN IID.INAH<1> SETTING JUNK ELSE
+      IID.INAH<1,-1> = INAH.ID                           
+   END
+   MATWRITEU INAH.REC ON INV_AUDIT_HIST_TEMP,INAH.ID  
+   RETURN
+
+****************
+OPEN.FILES: 
+****************
+*
+   OPEN.FLAG=0
+   ;* even if the OPEN.FLAG=0 we still need to test every file if it is
+   ;* open or since some of the files might have been opened and there 
+   ;* migth be some locks that we don't want to loose.
+   IF FILEINFO(INVENTORY,0)=0 THEN
+      OPEN '','INVENTORY' TO INVENTORY ELSE 
+         ERRMSG="INVENTORY FILE IS MISSING";GOTO 93000 
+      END
+   END
+   IF FILEINFO(PO,0)=0 THEN
+      OPEN '','PO' TO PO ELSE 
+         ERRMSG="INVENTORY FILE IS MISSING";GOTO 93000
+      END
+   END
+   IF FILEINFO(INV.WHSE,0)=0 THEN
+      OPEN '','INV.WHSE' TO INV.WHSE ELSE 
+         ERRMSG="INV.WHSE FILE IS MISSING";GOTO 93000
+      END
+   END
+   IF FILEINFO(INV_RECEIPTS,0)=0 THEN
+      OPEN '','INV_RECEIPTS' TO INV_RECEIPTS ELSE 
+         ERRMSG="INV_RECEIPTS FILE IS MISSING";GOTO 93000
+      END
+   END
+   IF FILEINFO(INV_RECEIPTS_TEMP,0)=0 THEN
+      OPEN '','INV_RECEIPTS_TEMP' TO INV_RECEIPTS_TEMP ELSE 
+         ERRMSG="INV_RECEIPTS_TEMP FILE IS MISSING";GOTO 93000
+      END
+   END
+   IF FILEINFO(INV_RECP_WHSE,0)=0 THEN
+      OPEN '','INV_RECP_WHSE' TO INV_RECP_WHSE ELSE 
+         ERRMSG="INV_RECP_WHSE FILE IS MISSING";GOTO 93000
+      END
+   END
+   IF FILEINFO(INV_RECP_WHSE_TEMP,0)=0 THEN
+      OPEN '','INV_RECP_WHSE_TEMP' TO INV_RECP_WHSE_TEMP ELSE 
+         ERRMSG="INV_RECP_WHSE_TEMP FILE IS MISSING";GOTO 93000
+      END
+   END
+   IF FILEINFO(INV_SERIAL,0)=0 THEN
+      OPEN '','INV_SERIAL' TO INV_SERIAL ELSE 
+         ERRMSG="INV_SERIAL FILE  IS MISSING";GOTO 93000
+      END
+   END
+   IF FILEINFO(INV_SERIAL_TEMP,0)=0 THEN
+      OPEN '','INV_SERIAL_TEMP' TO INV_SERIAL_TEMP ELSE 
+         ERRMSG="INV_SERIAL_TEMP FILE IS MISSING";GOTO 93000
+      END
+   END
+   IF FILEINFO(MILL_TO_SERIAL,0)=0 THEN
+      OPEN '','MILL_TO_SERIAL' TO MILL_TO_SERIAL ELSE 
+         ERRMSG="MILL_TO_SERIAL FILE IS MISSING";GOTO 93000
+      END
+   END
+   IF FILEINFO(MILL_TO_SERIAL_TEMP,0)=0 THEN
+      OPEN '','MILL_TO_SERIAL_TEMP' TO MILL_TO_SERIAL_TEMP ELSE 
+         ERRMSG="MILL_TO_SERIAL_TEMP FILE IS MISSING";GOTO 93000
+      END
+   END
+   IF FILEINFO(INV_AUDIT_HIST,0)=0 THEN
+      OPEN '','INV_AUDIT_HIST' TO INV_AUDIT_HIST ELSE 
+         ERRMSG="INV_AUDIT_HIST FILE  IS MISSING";GOTO 93000
+      END
+   END
+   IF FILEINFO(INV_AUDIT_HIST_TEMP,0)=0 THEN
+      OPEN '','INV_AUDIT_HIST_TEMP' TO INV_AUDIT_HIST_TEMP ELSE 
+         ERRMSG="INV_AUDIT_HIST_TEMP FILE IS MISSING";GOTO 93000
+      END
+   END
+   IF FILEINFO(INV_AUDIT_TAG,0)=0 THEN
+      OPEN '','INV_AUDIT_TAG' TO INV_AUDIT_TAG ELSE
+         ERRMSG="INV_AUDIT_TAG FILE IS MISSING";GOTO 93000
+      END
+   END
+   IF FILEINFO(FNGD_AUDIT_TAG,0)=0 THEN
+      OPEN '','FNGD_AUDIT_TAG' TO FNGD_AUDIT_TAG ELSE
+         ERRMSG="FNGD_AUDIT_TAG FILE IS MISSING";GOTO 93000
+      END
+   END
+   IF FILEINFO(INV.WHSE.LOC,0)=0 THEN
+      OPEN '','INV.WHSE.LOC' TO INV.WHSE.LOC ELSE 
+         ERRMSG="INV.WHSE.LOC FILE IS MISSING";GOTO 93000
+      END
+   END
+   IF FILEINFO(INV.WHSE.LOC.TEMP,0)=0 THEN
+      OPEN '','INV.WHSE.LOC.TEMP' TO INV.WHSE.LOC.TEMP ELSE 
+         ERRMSG="INV.WHSE.LOC.TEMP FILE IS MISSING";GOTO 93000
+      END
+   END
+   IF FILEINFO(CATEGORY,0)=0 THEN
+      OPEN '','CATEGORY' TO CATEGORY ELSE 
+         ERRMSG="CATEGORY FILE IS MISSING";GOTO 93000
+      END
+   END
+   IF FILEINFO(CONTROL,0)=0 THEN
+      OPEN '','CONTROL' TO CONTROL ELSE 
+         ERRMSG="CONTROL FILE IS MISSING";GOTO 93000
+      END
+   END
+   RETURN
+91000 
+	RETURN
+       
+93000
+
+  RETURN    
+99999
+RETURN

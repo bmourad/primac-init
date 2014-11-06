@@ -1,0 +1,109 @@
+SUBROUTINE PEN_CCTR_SCHED_SUB (CONO, CCTR, XDATE, ERRMSG)
+$INCLUDE CPYLIB COMMON1
+$INCLUDE PSS.CPYLIB COM.PSS.FILE.VARS
+$INCLUDE PSS.CPYLIB COM.CCTR.SCHED
+$INCLUDE PSS.CPYLIB COM.JOB.SCHED
+$INCLUDE PMC.CPYLIB COM.COMPANY
+$INCLUDE PMC.CPYLIB COM.DIVISION
+$INCLUDE JES.CPYLIB COM.ESTIMATE
+$INCLUDE JCS.CPYLIB COM.JOB
+*********************************************************************
+* REVISION - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM   - PRIMAC
+* SOURCE   - PSSBP
+* PROGRAM  - PEN.CCTR.SCHED.SUB
+* AUTHOR   - JAWEED, COMPUTER BUSINESS ASSOCIATES
+* DATE     - 08/04/03
+* DESCRIPTION
+* This subroutine will generate the PENDING cost center available
+* hours based upon the available hours specified in file CCTR.AVAIL
+* and the defined holiday schedule.
+*********************************************************************
+*
+*---- FILE COPY STATEMENTS
+*
+$DEFINE PSSFILEVARS
+$INCLUDE PSS.CPYLIB PSS.FILE.VARS
+$DEFINE CCTRSCHED
+$INCLUDE PSS.CPYLIB CCTR.SCHED
+$INCLUDE PSS.CPYLIB CCTR.AVAIL
+$INCLUDE PSS.CPYLIB HOLIDAY.SCHED
+$DEFINE FILEVARS
+$INCLUDE CPYLIB FILE.VARS
+*
+*---- INITIALIZATION
+*
+      MATREAD CCTR.AVAIL.REC FROM CCTR.AVAIL, CONO:PCCS.DEPT:"*":CCTR ELSE
+         MATREAD CCTR.AVAIL.REC FROM CCTR.AVAIL, CONO:PCCS.DEPT ELSE
+            ERRMSG = "Cannot locate availability for cost center ":PCCS.DEPT:"*":CCTR
+            GOTO 999999
+         END
+      END
+      DAY = MOD(XDATE,7)+1
+      PCCS.AVL.SHR = ""
+      PCCS.MULT = ""
+      PCCS.AVL.HRS = ""
+      PCCS.REM.HRS = ""
+      READ TP.DIV FROM PSS.LOCK, @TTY ELSE TP.DIV = ""
+*
+*---- MAIN PROCESSING
+*
+100 *
+      FOR SFT = 1 TO 3
+         IF CCA.HOL.SCHED<1,SFT> = "" THEN
+            MAT HOL.SCHED.REC = ""
+         END ELSE
+            MATREAD HOL.SCHED.REC FROM HOLIDAY.SCHED, CONO:CCA.HOL.SCHED<1,SFT> ELSE
+               MAT HOL.SCHED.REC = ""
+            END
+         END
+*
+         FND = 1
+         LOCATE XDATE IN HOL.DATE<1>,1 BY "AR" SETTING P ELSE FND = 0
+         IF FND AND (HOL.HRS<1,P>+0) < (CCA.AVAIL.SHR<1,DAY,SFT>+0) THEN
+            PCCS.AVL.SHR<1,SFT> = HOL.HRS<1,P>
+            PCCS.MULT<1,SFT> = CCA.MULT<1,DAY,SFT>
+            PCCS.AVL.HRS = PCCS.AVL.HRS + (HOL.HRS<1,P> * CCA.MULT<1,DAY,SFT>)
+         END ELSE
+            PCCS.AVL.SHR<1,SFT> = CCA.AVAIL.SHR<1,DAY,SFT>
+            PCCS.MULT<1,SFT> = CCA.MULT<1,DAY,SFT>
+            PCCS.AVL.HRS = PCCS.AVL.HRS + (CCA.AVAIL.SHR<1,DAY,SFT> * CCA.MULT<1,DAY,SFT>)
+         END
+         IF PCCS.AVL.SHR<1,SFT>+0 = 0 THEN
+            PCCS.AVL.SHR<1,SFT> = ""
+            PCCS.MULT<1,SFT> = ""
+         END ELSE
+            IF PCCS.MULT<1,SFT> + 0 = 0 THEN PCCS.MULT<1,SFT> = 1
+         END
+         PCCS.REM.SM.HRS<1,SFT> = ""
+         MCNT = DCOUNT(PCCS.SCH.SM.HRS<1,SFT>,@SVM)
+         IF PCCS.MULT<1,SFT> > MCNT THEN MCNT = PCCS.MULT<1,SFT>
+         FOR MLT = 1 TO MCNT
+            BEGIN CASE
+            CASE MLT > PCCS.MULT<1,SFT> AND PCCS.SCH.SM.HRS<1,SFT,MLT> + 0 # 0
+               PCCS.REM.SM.HRS<1,SFT,MLT> = 0 - PCCS.SCH.SM.HRS<1,SFT,MLT>
+            CASE MLT > PCCS.MULT<1,SFT>
+            CASE 1
+               PCCS.REM.SM.HRS<1,SFT,MLT> = PCCS.AVL.SHR<1,SFT> - PCCS.SCH.SM.HRS<1,SFT,MLT>
+            END CASE
+            IF PCCS.REM.SM.HRS<1,SFT,MLT> = 0 THEN PCCS.REM.SM.HRS<1,SFT,MLT> = ""
+            PCCS.REM.HRS = PCCS.REM.HRS + PCCS.REM.SM.HRS<1,SFT,MLT>
+         NEXT MLT
+      NEXT SFT
+*
+      READU AVLCTR FROM CONTROL, CONO:"PEND.AVLCTR" ELSE AVLCTR=""
+      LOCATE CCTR IN AVLCTR,1 BY "AL" SETTING AVPTR THEN
+         RELEASE CONTROL, CONO:"PEND.AVLCTR"
+      END ELSE
+         AVLCTR = INSERT(AVLCTR,AVPTR,0,0,CCTR)
+***      WRITE AVLCTR ON CONTROL, CONO:"PEND.AVLCTR"
+         TPFID = CONO:"PEND.AVLCTR"
+         TPREC = AVLCTR
+         CALL TRANSACTION_WRITE("WRITE",CONO,TP.DIV,"CONTROL",TPFID,TPREC,CONTROL,PSS.JOURNAL,ERRMSG)
+**********************************************************************
+      END
+999999 *
+      RETURN
+END
+

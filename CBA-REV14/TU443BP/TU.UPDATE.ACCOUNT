@@ -1,0 +1,257 @@
+ INCLUDE TUBP USER.INCLUDE.H
+*
+** SBClient Host 3GL API
+** Copyright (C) Ardent Software Inc. 1998
+** Copyright (C) UniData, Inc. 1996, 1997
+** Copyright (C) System Builder Corporation. 1995
+**
+**      This software is the proprietary property and contains
+**      trade secrets of Ardent Software, Inc. Any unauthorized use,
+**      disclosure or duplication is strictly prohibited.
+**      All rights reserved.
+*
+* MAINLINE
+***************************************************************************
+*     This routine makes the termulator host library available to another
+* account by creating file and program pointer entries in the Master
+* Dictionary (or VOC) of that account. This routine is run from the account
+* where the host library was originally installed and, when invoked,
+* prompts for the name of the target account (or the path to the target
+* account on platforms which provide for paths instead of account names) in
+* which the library is to become available.
+***************************************************************************
+*
+ INCLUDE TUBP TU.API.H
+*
+ INCLUDE TUBP SPECIAL.H
+*
+PROMPT ''
+*
+!@!IF SYSTEM(91) THEN ;!*UV,UP*!
+!@!CRT "This program cannot be run on uniVerse NT, use TU.UPDATE.ACCOUNT.UVNT" ;!*UV,UP*!
+!@!RETURN ;!*UV,UP*!
+!@!END ;!*UV,UP*!
+IF INDEX(SYSTEM(33), "NT", 1) THEN ;!*UDT*!
+CRT "This program cannot be run on Unidata NT, use TU.UPDATE.ACCOUNT.UDT" ;!*UDT*!
+RETURN ;!*UDT*!
+END ;!*UDT*!
+MD.FILE = 'VOC'; !*PI/O,PR1ME,UDT,UDTVMS,UP,UV*!
+!@!MD.FILE = 'MD'; !*ADDS,ALTOS,AP,GA,MRX,PICK,SEQ,ULT*!
+OPEN '',MD.FILE TO F.MD ELSE
+MD.FILE = 'MD'
+OPEN '',MD.FILE TO F.MD ELSE
+CRT 'Cannot open MD or VOC'
+STOP
+END
+END
+IF MD.FILE = 'VOC' THEN VOC = 'VOC' ELSE VOC = 'MD'
+*
+OPEN 'DICT','TUBP' TO DICT.TUBP ELSE CRT 'Cannot open DICT TUBP'; STOP
+READ SYSTYPE FROM DICT.TUBP,'@@SYSTYPE@@' ELSE SYSTYPE = 'HOST'
+SYSTYPE = SYSTYPE<1>
+SYSTYPE = FIELD(SYSTYPE,',',1)
+*
+READV VOC.TYPE FROM F.MD, 'TUBP',1 THEN
+BEGIN CASE
+CASE VOC.TYPE[1,3] = 'DIR'; * unidata
+ETYPE = 2
+DELIM = '/'
+ACNT.PRMPT = 'Account Path'
+IF SYSTYPE = "UDTVMS" THEN ACNT.PRMPT = 'Account Name, eg [TU2]'
+SETF = 'SETFILE'
+SEL.CRIT = ' WITH @ID NE "_]" AND WITH @ID NE "[.H"'
+CASE VOC.TYPE[1,1] = 'D'; * Pick or something similar
+ETYPE = 0
+DELIM = ''
+ACNT.PRMPT = 'Account'
+SETF = 'SET-FILE'
+SEL.CRIT = ' # "[.H"'
+CASE VOC.TYPE[1,1] = 'F'; * Pr1me INFORMATION/PI+/PIOPEN or universe
+OPEN 'TUBP.O' TO TEST THEN
+ETYPE = 1; * universe
+DELIM = '/'
+ACNT.PRMPT = 'Account or Path'
+SETF = 'SET.FILE'
+READ TEST FROM F.MD, "RELLEVEL" THEN
+BEGIN CASE
+CASE INDEX(TEST,'PICK',1)
+SEL.CRIT = ' WITH @ID UNLIKE "[.H"'
+CASE INDEX(TEST,'INFORMATION',1)
+SEL.CRIT = ' WITH @ID UNLIKE "....H"'
+CASE 1
+CRT 'Cannot Proceed: unsupported UniVerse flavour'
+STOP
+END CASE
+END ELSE
+CRT 'Cannot Proceed: unsupported UniVerse flavour'
+STOP
+END
+END ELSE
+READ TEST FROM F.MD, '&PI.HELP' THEN
+ETYPE = 3; * PIOPEN/PI+
+DELIM = '/'
+END ELSE
+ETYPE = 4; * Pr1me INFORMATION
+DELIM = '>'
+END
+ACNT.PRMPT = 'Account Path'
+SETF = 'SETFILE'
+SEL.CRIT = ' WITH @ID UNLIKE "$..." AND WITH @ID UNLIKE "....H"'
+END
+CASE VOC.TYPE[1,1] = 'Q'
+CRT 'Cannot proceed: TUBP Must be a file in this account, not a "Q" Pointer'
+STOP
+CASE 1
+CRT '2 Cannot determine nature of environment'
+STOP
+END CASE
+END ELSE
+CRT '1 Cannot determine nature of environment'
+STOP
+END
+*
+CRT ACNT.PRMPT:' to update with SBClient: ':
+INPUT ACCOUNT
+IF ACCOUNT = '' THEN STOP
+*
+BEGIN CASE
+CASE ETYPE = 4; * Pr1me INFORMATION
+ INCLUDE TUBP THIS.ACCOUNT.H
+*
+SETF.CMD = SETF:' ':ACCOUNT:DELIM:VOC:' QFILE OVERWRITING'
+CASE ETYPE > 1; * PI+/PIOPEN or unidata
+IF SYSTYPE # 'UDTVMS' THEN GOSUB 200
+CASE ETYPE; * universe
+EXECUTE 'SH -c "pwd"' CAPTURING OUTPUT
+THIS.ACCOUNT = OUTPUT<1>
+SETF.CMD = SETF:' ':ACCOUNT:' ':VOC:' QFILE'
+CASE 1; * Pick or something similar
+THIS.ACCOUNT = ACCTNAME
+SETF.CMD = SETF:' ':ACCOUNT:' ':VOC
+END CASE
+IF SYSTYPE = 'UDTVMS' THEN
+VOCREC="F"
+VOCREC<-1>=ACCOUNT:"VOC"
+VOCREC<-1>=ACCOUNT:"D_VOC"
+WRITE VOCREC ON F.MD,"QFILE"
+EXECUTE 'WHERE' CAPTURING RUBBISH
+THIS.ACCOUNT = RUBBISH<1>
+END ELSE
+EXECUTE SETF.CMD
+END
+OPEN 'QFILE' TO REMOTE.VOC THEN
+GOSUB 100
+END ELSE
+CRT 'Cannot open pointer to ':ACCOUNT
+END
+STOP
+*
+100 *
+*
+PROGFILES = 'TUBP':AM:'DEMOBP'
+FILELIST = PROGFILES:AM:'TUSTATE':AM:'TUFORMS':AM:'TUCONFIG':AM:'TUDEFN'
+FILELIST = FILELIST:AM:'TUERRORS':AM:'TUQUERY'
+*
+IF ETYPE AND SYSTYPE # 'UDTVMS' THEN; * non-zero environment types support COMOs
+CRT
+EXECUTE 'COMO ON TU.UPDATE.ACCOUNT'
+END
+CRT
+CRT 'Installing File Pointers'
+AMC = COUNT(FILELIST, AM) + 1
+FOR I = 1 TO AMC
+FILENAME = FILELIST<I>
+CRT FILENAME
+BEGIN CASE
+CASE ETYPE < 2; * universe, Pick or something similar
+WRITE 'Q':AM:THIS.ACCOUNT:AM:FILENAME ON REMOTE.VOC, FILENAME
+CASE ETYPE = 2 AND SYSTYPE = "UDTVMS"; * Unidata on VMS only
+LOCATE FILENAME IN PROGFILES SETTING POS ELSE POS = 0
+IF POS THEN
+DIR = THIS.ACCOUNT[1, LEN(THIS.ACCOUNT)-1]
+WRITE 'F':AM:DIR:DOT:FILENAME:"]":AM:THIS.ACCOUNT:"D_":FILENAME ON REMOTE.VOC, FILENAME
+END ELSE
+WRITE 'F':AM:THIS.ACCOUNT:FILENAME:AM:THIS.ACCOUNT:"D_":FILENAME ON REMOTE.VOC, FILENAME
+END
+CASE 1; * Pr1me INFORMATION/PI+/PIOPEN or unidata
+WRITE 'F':AM:THIS.ACCOUNT:DELIM:FILENAME:AM:THIS.ACCOUNT:DELIM:'D_':FILENAME ON REMOTE.VOC, FILENAME
+END CASE
+NEXT I
+*
+AMC = COUNT(PROGFILES, AM) + 1
+FOR I = 1 TO AMC
+FILENAME = PROGFILES<I>
+CRT 'Installing Program Pointers - ':FILENAME
+BEGIN CASE
+CASE ETYPE = 1; * universe has .O files for object
+WRITE 'Q':AM:THIS.ACCOUNT:AM:FILENAME:'.O' ON REMOTE.VOC, FILENAME:'.O'
+CASE ETYPE = 2; * unidata needs DIR files for source
+WRITEV 'DIR' ON REMOTE.VOC, FILENAME, 1
+END CASE
+OPEN FILENAME TO FVAR THEN
+EXECUTE 'SSELECT ':FILENAME:SEL.CRIT CAPTURING OUTPUT; !*-MRX*!
+!@!PERFORM 'SSELECT ':FILENAME:SEL.CRIT RTNLIST CAPTURING OUTPUT ; !*MRX*!
+LOOP
+READNEXT PROGNAME ELSE PROGNAME = AM
+UNTIL PROGNAME = AM DO
+CRT '.':
+READ VOC.REC FROM F.MD, PROGNAME THEN
+IF ETYPE = 1 AND VOC.REC[1,1] = 'V' THEN; * universe requires full path
+IF VOC.REC<2>[1,1] NE DELIM THEN
+VOC.REC<2> = THIS.ACCOUNT:DELIM:VOC.REC<2>
+VOC.REC<9> = THIS.ACCOUNT:DELIM:VOC.REC<9>
+END
+END
+IF SYSTYPE = 'UDTVMS' THEN
+PGLEN=LEN(PROGNAME)
+PROGDOTNAME = PROGNAME
+FOR IDX=1 TO PGLEN
+IF PROGNAME[IDX,1] = '_' THEN PROGNAME[IDX,1] = DOT
+NEXT IDX
+LVOC=LEN(VOC.REC<3>)
+IF VOC.REC<3>[1,2] = "[." THEN
+VOC.REC<3> = DIR:DOT:VOC.REC<3>[3, LVOC-2]
+END
+LVOC=LEN(VOC.REC<2>)
+IF VOC.REC<2>[1,2] = "[." THEN
+VOC.REC<2> = DIR:DOT:VOC.REC<2>[3, LVOC-2]
+END
+END
+WRITE VOC.REC ON REMOTE.VOC, PROGNAME
+IF SYSTYPE = 'UDTVMS' THEN WRITE VOC.REC ON REMOTE.VOC, PROGDOTNAME
+BEGIN CASE
+CASE PROGNAME[1 ,4] = "TCL."
+TCL.NAME = PROGNAME[5, 99]
+GOSUB 150
+END CASE
+END
+REPEAT
+CRT
+END ELSE
+CRT 'Cannot open program library ':FILENAME
+END
+NEXT I
+IF ETYPE AND SYSTYPE # 'UDTVMS' THEN EXECUTE 'COMO OFF'
+RETURN
+*
+150 *
+*
+IF ETYPE = 3 OR ETYPE = 4 THEN; * PIOPEN/PI+ or Pr1me INFORMATION
+PQ = 'PA':AM:'RUN ':FILENAME:' ':PROGNAME
+WRITE PQ ON REMOTE.VOC,TCL.NAME
+END ELSE
+PQ = 'PQ':AM:'H':PROGNAME
+IF ETYPE = 0 THEN PQ<-1> = "A2,999"; * Pick buffer
+PQ<-1> = 'P'
+WRITE PQ ON REMOTE.VOC,TCL.NAME
+END
+RETURN
+*
+200 *
+*
+READ TEST FROM F.MD,'!' ELSE WRITE 'V':AM:AM:'PR' ON F.MD, '!'
+EXECUTE '! pwd' CAPTURING OUTPUT
+THIS.ACCOUNT = OUTPUT<1>
+SETF.CMD = SETF:' ':ACCOUNT:DELIM:VOC:' QFILE OVERWRITING'
+RETURN
+END

@@ -1,0 +1,449 @@
+SUBROUTINE RS.POST.DRIVER
+*********************************************************************
+* REVISION - [12.00]
+* PROGRAM  - RS.POST.DRIVER
+* AUTHOR   - Scott McHargue, COMPUTER BUSINESS ASSOCIATES
+* DATE     - 08/10/90
+* DESCRIPTION
+* This program controls the posting of roll/skid stock receipts.
+* It calls an update subroutine RS.STOCK.REC.UPDATE
+* MOD CSF 20200 DMT 12/27/93 CORRECT DELETION OF ROLL FROM RSXRF.REC
+* MOD CLW 10/02/94 Task 17919 - Accrual accounting
+* MOD TASK 18761 LMR 10/20/94 MODIFY TO RUN PRE-POSTING TESTS BEFORE
+*     ACTUALLY UPDATING RECORDS - INSERT ERRMSG IN RS.STATUS.
+*T22940 rik 10/09/1998 * PRINT NO ITEMS PRESENT ON REJECT LIST IF POSTED
+*                        ALL CORRECTLY.
+*T23278 markt 11/17/1998 * Enable division level posting.
+*T25740 edvard 07/19/2001 * Replaced COM.STOCK.REC,COM.TRN or 
+*                           COM.TRN.FNGD with R12ICS.COM      
+*                            Enabled to work with R12 data structure
+*T25740 epitka 03/13/2002 * REV12
+*T25740 lhelms 04/23/2002 * REV12 ENHANCEMENT FOR ROUNDING; AFTER
+*                           RECEIVE IN PRODUCT CHECK TO SEE WHAT IS
+*                           STILL ON ON HAND AND IF LESS THAN 50
+*                           (ROUNDING) THEN PO.TOT.CANCEL AND SET
+*                           ON.ORDER TO 0
+*C40540 adelgado 08/20/2002 * Modify the rounding enhancement to include
+*                             if less than or equal to 1 per measurement.
+*T27009 epitka   11/04/2002 * Fix posting problem
+*T27306 lross 06/12/2003 * Complete T26556 Allow Non-existent P/O's.
+*T27902 lross 04/07/2004 * Additional error tests.
+*T27904 cmykleb 02/13/2004 * Janus gun changes.
+*T28054 lross 04/07/2004 * PO.TOT.CANCEL going negative.
+*T28090 lross 04/29/2004 * Allow for deletion of zero serials from system.
+*T28200 lross 07/22/2004 * Check for posting to prior period.
+*********************************************************************
+*COPY>CPYLIB>COM1
+*COPY>ICS.CPYLIB>COM.INV.MAIN  
+*COPY>ICS.CPYLIB>COM.INV.SERIAL
+*COPY>ICS.CPYLIB>COM.INV.LINK  
+*COPY>POS.CPYLIB>COM.PO.INTRF
+*COPY>PMC.CPYLIB>PO
+*COPY>ICS.CPYLIB>SAVE.STOCK.REC
+*COPY>ICS.CPYLIB>INV.HIST
+*COPY>PMC.CPYLIB>VEND
+*COPY>JCS.CPYLIB>JOB
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>APS.CPYLIB>APS.FILE.VARS
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>ICS.CPYLIB>WAREHOUSE
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*
+*COPY>ICS.CPYLIB>ICS.ID         
+*COPY>ICS.CPYLIB>INV.WHSE.LOC   
+*COPY>ICS.CPYLIB>CATEGORY       
+*COPY>ICS.CPYLIB>INV_RECEIPTS   
+*COPY>ICS.CPYLIB>INV_RECP_WHSE  
+*COPY>ICS.CPYLIB>INV_AUDIT_HIST 
+*COPY>ICS.CPYLIB>INV_SERIAL     
+*COPY>ICS.CPYLIB>DAILY_STOCK
+*COPY>ICS.CPYLIB>PO.RSKI.XREF
+*COPY>ICS.CPYLIB>PO.MAN.XREF 
+*
+DEFFUN DIVISION.POSITION(CONO,CONTROL.FILE,DIV.CODE)        
+DEFFUN CURRENT.PERIOD(CONO,CONTROL.FILE,DIV.POS,FISCAL.FLAG)
+*
+*----------------------- READ PROC ------------------------------
+*
+PROCREAD X ELSE
+   ERRMSG = "THIS REPORT MUST RUN FROM A PROC"
+   GOTO 93000 
+END
+HERRMSG='' ;*T27306
+*
+*------------------ SETUP FOR SYSTEM ERRMSGS -------------------
+*
+SYS.TYPE = 1
+CALL SYSCOM(MAT SYSCOM.REC)
+*
+*---------------------- OPEN ALL FILES --------------------------
+*
+OPEN "","COMPANY" TO COMPANY ELSE
+   ERRMSG = "CANNOT OPEN COMPANY FILE";GOTO 93000
+END
+OPEN "","CONTROL" TO CONTROL ELSE
+   ERRMSG = "CANNOT OPEN CONTROL FILE";GOTO 93000
+END
+OPEN "","PO.RSKI.XREF" TO PO.RSKI.XREF ELSE
+   ERRMSG ="CANNOT OPEN PO.RSKI.XREF FILE";GOTO 93000
+END
+OPEN "","PO.MAN.XREF" TO PO.MAN.XREF ELSE
+   ERRMSG ="CANNOT OPEN PO.MAN.XREF FILE";GOTO 93000
+END
+OPEN "","PO" TO PO ELSE
+   ERRMSG = "CANNOT OPEN PO FILE"; GOTO 93000
+END
+OPEN "","CATEGORY" TO CATEGORY ELSE
+   ERRMSG = "CATEGORY FILE IS MISSING"; GOTO 93000
+END
+OPEN "","INVENTORY" TO INVENTORY ELSE
+   ERRMSG = "CANNOT OPEN INVENTORY FILE";GOTO 93000
+END
+OPEN "","INV.STATS" TO INV.STATS ELSE
+   ERRMSG = "INV.STATS FILE IS MISSING"; GOTO 93000 
+END
+OPEN "","INV.WHSE.LOC" TO INV.WHSE.LOC ELSE
+   ERRMSG = "INV.WHSE.LOC IS MISSING"; GOTO 93000 
+END
+OPEN "","INV.WHSE" TO INV.WHSE ELSE
+   ERRMSG = "INV.WHSE IS MISSING"; GOTO 93000 
+END
+OPEN "","INV.HIST" TO INV.HIST ELSE
+   ERRMSG = "INV.HIST IS MISSING"; GOTO 93000 
+END
+OPEN "","INV_AUDIT_HIST" TO INV_AUDIT_HIST ELSE
+   ERRMSG = "INV_AUDIT_HIST FILE IS MISSING"; GOTO 93000 
+END
+OPEN "","INV_AUDIT_TAG" TO INV_AUDIT_TAG ELSE
+   ERRMSG = "INV_AUDIT_TAG FILE IS MISSING"; GOTO 93000 
+END
+OPEN "","INV.JOB.STATS" TO INV.JOB.STATS ELSE
+   ERRMSG = "INV.JOB.STATS FILE IS MISSING"; GOTO 93000 
+END
+OPEN "","JOB" TO JOB ELSE
+   ERRMSG = "JOB FILE IS MISSING"; GOTO 93000 
+END
+OPEN "ACCRUED.LIAB.HIST" TO ACCRUED.LIAB.HIST ELSE
+   ERRMSG = "ACCRUED.LIAB.HIST IS MISSING" ; GOTO 93000
+END
+OPEN "","CATEGORY" TO CATEGORY ELSE
+   ERRMSG = "CATEGORY FILE IS MISSING"; GOTO 93000
+END
+OPEN "","WAREHOUSE" TO WAREHOUSE ELSE
+   ERRMSG = "WAREHOUSE FILE IS MISSING"; GOTO 93000
+END
+OPEN '','DAILY_STOCK' TO DAILY_STOCK ELSE
+   ERRMSG='DAILY_STOCK FILE IS MISSING';GOTO 93000
+END
+OPEN '','INV_SERIAL' TO INV_SERIAL ELSE
+   ERRMSG='INV_SERIAL IS MISSING'; GOTO 93000
+END
+*
+*------------------------ GET CONO -------------------------------
+*
+CONO = ""
+CALL GET.CONO(CONO,MAT COMP.REC)
+IF CONO = "END" THEN GOTO 99990
+IF CO.APS.R.INTRF > 1 THEN
+   OPEN "","VEND" TO VEND ELSE
+      ERRMSG = "CANNOT OPEN VEND FILE"; GOTO 93000 
+   END
+   OPEN "","VEND.STATS" TO VEND.STATS ELSE
+      ERRMSG = "CANNOT OPEN VEND.STATS FILE";GOTO 93000 
+   END
+   OPEN "","VEND.PO.STATS" TO VEND.PO.STATS ELSE
+      ERRMSG="CANNOT OPEN VEND.PO.STATS FILE";GOTO 93000 
+   END
+   OPEN "","VEND.PROD.STATS" TO VEND.PROD.STATS ELSE
+      ERRMSG = "CANNOT OPEN VEND.PROD.STATS FILE"; GOTO 93000 
+   END
+END
+READ DIVISION.REC FROM CONTROL, CONO:"DIVISIONS" ELSE
+   ERRMSG = "CANNOT LOCATE DIVISIONS CONTROL FILE RECORD"; GOTO 93000
+END
+READ SECURITY.REC FROM CONTROL, CONO:"DIV.SECURITY" ELSE
+   ERRMSG = "CANNOT LOCATE DIV.SECURITY CONTROL FILE RECORD:"; GOTO 93000
+END
+MAT EDIT.COM="" ; TYP=0 ; CALL EDIT.SUB    
+*
+*------------------- MAIN PROCESSING ------------------------------
+*
+DONE=0
+LOOP
+   READNEXT DSR.ID ELSE DONE = 1
+UNTIL (DONE) DO
+   RSMAN.ID = DSR.ID
+   PO.CODE = FIELD(DSR.ID,"!",1)[4,99]
+   RSXRF.ID=CONO:PO.CODE
+   DSR.STATUS=''
+   ERROR=0
+*T27306 v
+   PO.PRESENT=1
+   MAN.ENTRY = 0
+   MAT PO.REC = ''
+   PO.DIV.OWNER = '00'
+   MATREADU DSR.REC FROM DAILY_STOCK,DSR.ID THEN
+      READV TESTX FROM PO,CONO:PO.CODE,1 ELSE
+         PO.PRESENT = 0
+         PO.VEND.NO = DSR.VEND
+         MATREAD WHSE.REC FROM WAREHOUSE,CONO:DSR.WHSE<1,1> THEN
+            IF WHS.DIV = '' THEN WHS.DIV = '00'
+            PO.DIV.OWNER = WHS.DIV
+         END
+         MATREADU RSMAN.REC FROM PO.MAN.XREF, DSR.ID THEN
+            SCNT = DCOUNT(RSMAN.RS.NO,VM)
+            IF SCNT > 0 THEN
+               MAN.ENTRY = 1
+               FOR I = 1 TO SCNT
+                  FIND RSMAN.RS.NO<1,I> IN DSR.SERIAL SETTING FLD,VL,SVL THEN
+                     MATREAD ISTK.REC FROM INV_SERIAL,CONO:RSMAN.RS.NO<1,I> THEN
+                        IF ISTK.POST.DATE = '' THEN
+                           PTR = 1
+                           LOOP
+                              LOCATE ISTK.PROD IN PO.PROD.NUM<1>,PTR SETTING FND THEN
+                                 IF ISTK.WHSE = PO.WHSE<1,FND> THEN
+                                    PTR = 0
+                                 END ELSE
+                                    PTR = FND+1
+                                 END
+                              END ELSE
+                                 INS ISTK.PROD BEFORE PO.PROD.NUM<1,RSMAN.LINE.NO<1,I>>
+                                 INS ISTK.WHSE BEFORE PO.WHSE<1,RSMAN.LINE.NO<1,I>>
+                                 INS ISTK.UNIT.COST BEFORE PO.GROS.PRICE<1,RSMAN.LINE.NO<1,I>>
+                                 INS ISTK.UOM BEFORE PO.UNIT.FLG<1,RSMAN.LINE.NO<1,I>>
+                                 PTR = 0
+                              END
+                           WHILE PTR DO REPEAT
+                        END
+                     END
+                  END
+               NEXT I
+            END
+         END
+      END
+   END
+   IF PO.PRESENT AND NOT(MAN.ENTRY) THEN
+      MATREADU PO.REC FROM PO, CONO:PO.CODE ELSE
+         DSR.STATUS<1,-1> = "Cannot locate P/O record - ":CONO:PO.CODE
+         ERROR = 1
+         GOTO BAD.DATA
+      END
+   END
+* MATREADU PO.REC FROM PO, CONO:PO.CODE THEN
+*T27306 ^
+   DIV.CODE = PO.DIV.OWNER; USER.ID = UPCASE(@LOGNAME); ERRMSG = ''
+   CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)               
+   IF ERRMSG # '' THEN                                             
+      DSR.STATUS<1,-1>=ERRMSG
+      ERROR = 1
+      GOTO BAD.DATA ;*T27306
+   END ELSE                                                        
+      GOSUB GET.CURRENT.PERIOD                                                    
+      IF ERRMSG#'' THEN
+         DSR.STATUS<1,-1>=ERRMSG
+         ERROR=1
+         GOTO BAD.DATA ;*T27306
+      END
+*T28200 v
+      IF DSR.PERIOD < CUR.PERIOD THEN
+         ERRMSG='Cannot post receipt to a PRIOR PERIOD!'
+         DSR.STATUS<1,-1>=ERRMSG
+         ERROR=1
+         GOTO BAD.DATA
+      END
+*T28200 ^
+   END
+*T27306 v
+* END ELSE
+*   DSR.STATUS<1,-1> = "Cannot locate P/O record - ":CONO:PO.CODE
+*   ERROR=1
+* END
+*T27306 ^
+   MATREADU RSMAN.REC FROM PO.MAN.XREF,RSMAN.ID ELSE
+      DSR.STATUS<1,-1> = "Cannot locate manifest record - ":DSR.ID
+      ERROR=1
+      GOTO BAD.DATA ;*T27306
+   END
+*T27904 v
+   IF DSR.TYPE = "J" THEN
+      MATREADU RSXRF.REC FROM PO.RSKI.XREF,RSXRF.ID ELSE
+         MAT RSXRF.REC = ""
+      END
+   END ELSE
+*T27904 ^
+      MATREADU RSXRF.REC FROM PO.RSKI.XREF,RSXRF.ID ELSE
+         DSR.STATUS<1,-1>='Cannot locate PO.RSKI.XREF record ': RSXRF.ID
+         ERROR=1
+         GOTO BAD.DATA ;*T27306
+      END
+   END ; * T27904
+   MATREADU DSR.REC FROM DAILY_STOCK,DSR.ID THEN
+      IF NOT(ERROR) THEN
+         MAT SAVE.STK.REC=""
+         SSTK.PO.LINE=DSR.PO.LINE
+         SSTK.PROD = DSR.PROD
+         SSTK.WHSE=DSR.WHSE
+         SSTK.UNIT.PRICE= DSR.UN.PRICE
+         SSTK.DISCOUNT=DSR.DISCOUNT
+         SSTK.TOT.ONORD = PO.TOT.ONORD                            
+         SSTK.TOT.RECEVED = PO.TOT.RECEVED                        
+         SSTK.PREV.RECEVED = PO.PREV.RECEVED                      
+         SSTK.QTY.OPEN = PO.QTY.OPEN                              
+         SSTK.TOT.CANCEL = PO.TOT.CANCEL                          
+         SSTK.TOT.REC = 0                                         
+         SSTK.PROD.TYPE = PO.PROD.TYPE                            
+         SSTK.UNIT.FLG = PO.UNIT.FLG                              
+         SSTK.DEL.DATE = PO.DEL.DATE                              
+         SSTK.STATUS = DSR.LINE.STATUS
+         SSTK.LOC = DSR.LOC             
+         SSTK.SERIAL = DSR.SERIAL       
+*T27902 v Double-check ISTK.POST.DATE
+         FOR P = 1 TO DCOUNT(DSR.PROD,VM)
+            FOR S = 1 TO DCOUNT(DSR.SERIAL<1,P>,SVM)
+               MATREAD ISTK.REC FROM INV_SERIAL,CONO:DSR.SERIAL<1,P,S> THEN
+                  IF ISTK.POST.DATE # '' THEN
+                     DSR.POST.DATE<1,P,S> = ISTK.POST.DATE
+                     DSR.QTY<1,P,S> = 0
+                     DSR.STK.QTY<1,P,S> = 0
+                     DSR.DIAM<1,P,S> = 0
+                  END
+               END
+            NEXT S
+         NEXT P
+*T27902 ^
+         SSTK.QTY = DSR.QTY             
+         SSTK.MILL.ID = DSR.MILL.ID     
+         SSTK.SHEET = DSR.STK.QTY         
+         SSTK.DIAM = DSR.DIAM           
+         SSTK.LOC.STATUS = DSR.LOC.STATUS   
+         SSTK.DATE = DSR.DATE
+         SSTK.PERIOD = DSR.PERIOD
+         SSTK.SHIP.NO = DSR.SHPMNT.NO
+         SSTK.SHIP.TOT = DSR.SHPMNT.TOT
+         SSTK.VEND = DSR.VEND                           
+         SSTK.UNIT.FLG = DSR.UOM         
+         SSTK.JOB.ALC = DSR.JOB.ALC      
+         SSTK.JOB.REC = DSR.JOB.REC      
+         SSTK.COMPLETE = DSR.COMPLETE    
+         SSTK.NO.PIECES = DSR.NO.PIECES 
+         SSTK.POST.DATE=DSR.POST.DATE    ;*27009
+         ;* SSTK.JOB.QTY VALUES
+*T27306 CALL RS.STOCK.REC.UPDATE(CONO,PO.CODE,MAT COMP.REC,MAT RSXRF.REC,MAT RSMAN.REC,ERROR,HERRMSG,CUR.PERIOD)
+         CALL RS.STOCK.REC.UPDATE(CONO,PO.CODE,MAT COMP.REC,MAT RSXRF.REC,MAT RSMAN.REC,ERROR,HERRMSG,CUR.PERIOD,PO.PRESENT)
+*********
+BAD.DATA: 
+*********
+         IF ERROR THEN
+            DSR.LINE.STATUS=SSTK.STATUS
+            DSR.LOC.STATUS=SSTK.LOC.STATUS
+            DSR.JOB.STATUS=SSTK.JOB.STATUS
+            MATWRITE DSR.REC ON DAILY_STOCK,DSR.ID
+         END ELSE
+            DELETE DAILY_STOCK,DSR.ID
+            PO.CHG.FLG=""
+*T25740 v
+*C40540 v
+            NO.PROD = DCOUNT(PO.PROD.NUM,VM)
+            IF PO.PRESENT THEN ;*T27306 v
+               FOR P = 1 TO NO.PROD
+*T27306 v
+                  MATREAD INV.REC FROM INVENTORY,CONO:PO.PROD.NUM<1,P> ELSE MAT INV.REC = ''
+                  TEST.OPEN = ABS(PO.QTY.OPEN<1,P>)
+*T28054 v
+                  IF TEST.OPEN > 0 AND TEST.OPEN <= 50 THEN
+                     IF INV.UNIT<1,3>='MSI' OR TEST.OPEN <= 9 THEN
+                        PO.TOT.CANCEL<1,P> += (PO.TOT.ONORD<1,P>-PO.TOT.CANCEL<1,P>-PO.TOT.RECEVED<1,P>)
+                        PO.QTY.OPEN<1,P> = 0
+                        IF PO.TOT.CANCEL<1,P> < 0 THEN PO.TOT.CANCEL<1,P> = 0
+                     END
+                  END
+*T28054 ^
+*           TEST.OPEN = ABS(PO.TOT.ONORD<1,P> - PO.TOT.RECEVED<1,P> - PO.TOT.CANCEL<1,P>)
+                  ;* Migrate any remainder qty of 1000 or less (costing qty)
+                  ;* to the PO Cancel Qty.
+*           IF TEST.OPEN <= 1000 THEN
+*             PO.TOT.CANCEL<1,P> += TEST.OPEN
+*             PO.TOT.CANCEL<1,P> += PO.TOT.ONORD<1,P> - PO.TOT.RECEVED<1,P>
+*             PO.QTY.OPEN<1,P>  = 0
+*           END
+*T27306 ^
+               NEXT P
+*C40540 ^
+*T25740   ^
+*T28090 v      MATWRITE PO.REC ON PO,CONO:PO.CODE
+            END ;*T27306 ^
+         END
+      END ELSE
+         MATWRITE DSR.REC ON DAILY_STOCK,DSR.ID 
+      END
+      MATWRITE RSXRF.REC ON PO.RSKI.XREF,RSXRF.ID
+*T28090 v
+      IF DCOUNT(RSMAN.RS.NO,VM) > 0 THEN
+         MATWRITE RSMAN.REC ON PO.MAN.XREF,RSMAN.ID 
+      END ELSE
+         DELETE PO.MAN.XREF,RSMAN.ID
+         IF PO.PRESENT THEN
+            MAN.ID = FIELD(DSR.ID,"!",2)
+            LOCATE MAN.ID IN PO.MAN<1> SETTING MFND THEN DEL PO.MAN<1,MFND>
+         END
+      END
+      IF PO.PRESENT THEN MATWRITE PO.REC ON PO,CONO:PO.CODE
+*T28090 ^
+   END
+REPEAT
+GOTO 99999
+*
+**************************************************************************
+**** S U B R O U T I N E S ***********************************************
+**************************************************************************
+*
+**
+************
+GET.CURRENT.PERIOD: 
+************
+**
+DIV.POS=DIVISION.POSITION(CONO,CONTROL,DIV.CODE)         
+CUR.PERIOD = ''
+BEGIN CASE                                              
+   CASE DIV.POS<1,1>=''                                  
+      DIV.POS=DIV.POS<1,2>                                
+      CUR.PERIOD=CURRENT.PERIOD(CONO,CONTROL,DIV.POS,"IC")
+      IF CUR.PERIOD<1,1>='' THEN                          
+         CUR.PERIOD=CUR.PERIOD<1,2>                        
+      END ELSE                                            
+         IF CUR.PERIOD<1,1>='-2' THEN                      
+            ERRMSG=CUR.PERIOD<1,2>                          
+            GOTO 93000                                     
+         END                                               
+      END                                                 
+   CASE DIV.POS<1,1>='-1'                                
+      ERRMSG=DIV.POS<1,2>                                 
+      GOSUB 91000                                         
+      RELEASE PO, CONO:PO.CODE                            
+   CASE DIV.POS<1,1>='-2'                                
+      ERRMSG=DIV.POS<1,2>                                 
+      GOTO 93000                                         
+END CASE                                                
+RETURN                                                  
+**
+*----------------------- CALLS FOR SYSCOM ---------------------------
+*
+91000 
+ERR.TYPE = 1; CALL SYSCOM(MAT SYSCOM.REC)
+RETURN
+92000 
+ERR.TYPE = 2; CALL SYSCOM(MAT SYSCOM.REC)
+RETURN
+93000 
+ERR.TYPE = 3; CALL SYSCOM(MAT SYSCOM.REC)
+99990 PROCWRITE "END"
+*
+*------------------------ END OF JOB -------------------------------
+*
+99999 *
+END

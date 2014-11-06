@@ -1,0 +1,971 @@
+*COPY>CPYLIB>COM1
+*COPY>JCS.CPYLIB>COM.JOB
+*********************************************************************
+* Copyright 1982 by Vercom Software, Inc. (dba CBA)
+* SOURCE      - OPSBP
+* PROGRAM     - POST.ORDER.INVOICE
+* AUTHOR      - NICK AMENDOLA, COMPUTER BUSINESS ASSOCIATES
+* DATE        - 01/20/93
+* DESCRIPTION
+*  This program will process edited invoices, credit memos and
+*  debit memos.
+*  The following files are updated:
+*  ORDER           - invoice data appended and status updated.
+*  ORDER.DETAIL    - invoice quantity updated.
+*  JOB             - WIP reversed if 1 to 1 relationship with order.
+*  CUSTOMER        - A/R data for bill-to customer.
+*  CUSTOMER        - invoice data for order customer.
+*  OPEN.RECV       - A/R data if A/R system is present.
+*  CUST.PROD.STATS - Customer/Product sales statistics.
+* MODIFICATIONS:
+*  By              - Daniel J. Cronin
+*  DATE            - 10/12/93
+*  DESCRIPTION
+*    Added the file INVOICE.SALES.STATS  to capture sales analysis for each
+*    Finished Goods Product.
+*
+* TASK 18606 KITTING
+*
+*T20843 doug 08/12/1996 * Use the INV.COST.WT to calculate
+*                         fngd cost & sell amounts.
+*T21325 lanny 12/12/1996 * Correct read error on JOB file.
+*T22563 stefanie 05/12/1998 * Have Credit/Debit Memo track to SAS.
+*T23278 markt 11/04/1998 * Enable division-level EOP processing.
+*                          Correlate fiscal month to division.
+*T24926 alex 03/13/2000 * The invoice cost is not being calculated
+*                         correctly. Include the task #21358 that fixed
+*                         the problem in REV10B.
+*T25684 alex 03/23/2001 * Fix to not update the Order as 'Complete', if
+*                         reservations still exist.
+*T25756 lanny 04/17/2001 * Invoice must not be posted to a PERIOD prior
+*                          to BOL.
+*T25806 lanny 05/11/2001 * Use orig AC line no. to flag as invoiced.
+*                        * Also, perform all EDIT checks before any
+*                        * updating occurs.
+*T25740 epitka 01/23/2002 * REV12
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>ICS.CPYLIB>CATEGORY
+*COPY>OPS.CPYLIB>DAILY.ORDER.INVOICE
+*COPY>OPS.CPYLIB>ORDER.INVOICE
+*COPY>PMC.CPYLIB>INVOICE.CODE
+*COPY>OPS.CPYLIB>BOL
+*COPY>ICS.CPYLIB>FNGD.BOM
+*COPY>OPS.CPYLIB>ORDER
+*COPY>ICS.CPYLIB>PRICE.TABLE
+*COPY>OPS.CPYLIB>ORDER.DETAIL
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>OPS.CPYLIB>CUST.PROD.STATS
+*COPY>JCS.CPYLIB>JOB
+*COPY>OPS.CPYLIB>JOB.FNGD.STATS
+*COPY>ICS.CPYLIB>INV.JOB.STATS
+*COPY>ICS.CPYLIB>INV.FNGD
+*COPY>ICS.CPYLIB>INV.WHSE                                        ;*ISS
+*COPY>ICS.CPYLIB>INVENTORY                                       ;*ISS
+*COPY>ARS.CPYLIB>OPEN.RECV
+*COPY>PMC.CPYLIB>SHIP.VIA
+*COPY>PMC.CPYLIB>TAX
+*COPY>PMC.CPYLIB>TAX.BAL
+*COPY>PMC.CPYLIB>INVOICE.SALES.STATS                             ;*ISS
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>CHAR
+*
+*---- DEFINE STORAGE AREAS
+*
+   DIM TREC(15)
+   EQU TMP.ORD.NO        TO TREC(1)  ;* (MA) Order numbers
+   EQU TMP.ORD.DIV       TO TREC(2)  ;* (MA) Order divisions
+   EQU TMP.ORD.AMT       TO TREC(3)  ;* (MA) Order ivoice amt
+   EQU TMP.ORD.PROD      TO TREC(4)  ;* (MA,MV1) Order products
+   EQU TMP.ORD.QTY       TO TREC(5)  ;* (MA,MV1) Order quantity
+   EQU TMP.SHP.QTY       TO TREC(6)  ;* (MA,MV1) Ship quantity
+   EQU TMP.ORD.JOB       TO TREC(7)  ;* (MA,MV2) Order job numbers
+   EQU TMP.JOB.PROD      TO TREC(8)  ;* (MA,MV3) Job products
+   EQU TMP.JOB.ORD       TO TREC(9)  ;* (MA,MV4) Job order numbers
+   EQU TMP.RSV.QTY       TO TREC(10) ;* (MA,MV1) Reserve quantity (T25684)
+*
+*---- SETUP SYSTEM ERROR MESSAGES
+*
+   SYS.TYPE = 1
+   CALL SYSCOM(MAT SYSCOM.REC)
+*
+*** GET DIV FROM PROC
+*
+   PROCREAD KEY ELSE
+      ERRMSG = 'THIS PROCESS SHOULD BE RUN FROM A PROC';GOTO 93000
+   END
+   DIV.CODE = KEY<3>
+*
+*---- OPEN ALL FILES
+*
+   OPEN "","COMPANY" TO COMPANY ELSE
+      ERRMSG="COMPANY FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","CONTROL" TO CONTROL ELSE
+      ERRMSG="CONTROL FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","PMC.SCREENS" TO M.SCREENS ELSE
+      ERRMSG="PMC.SCREENS FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","DAILY.ORDER.INVOICE" TO DAILY.ORDER.INVOICE ELSE
+      ERRMSG="DAILY.ORDER.INVOICE FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","FNGD.BOM" TO FNGD.BOM ELSE
+      ERRMSG="FNGD.BOM FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","ORDER.INVOICE" TO ORDER.INVOICE ELSE
+      ERRMSG="ORDER.INVOICE FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","ORDER_INVOICE_TAG" TO ORDER_INVOICE_TAG ELSE
+      ERRMSG="ORDER_INVOICE_TAG FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","INVOICE.CODE" TO INVOICE.CODE ELSE
+      ERRMSG="INVOICE.CODE FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","BOL" TO BOL ELSE
+      ERRMSG="BOL FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","ORDER" TO ORDER ELSE
+      ERRMSG="ORDER FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","ORDER.DETAIL" TO ORDER.DETAIL ELSE
+      ERRMSG="ORDER.DETAIL FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","JOB.FNGD.STATS" TO JOB.FNGD.STATS ELSE
+      ERRMSG="JOB.FNGD.STATS FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","JOB" TO JOB ELSE
+      ERRMSG="JOB FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","JOB.TIME" TO JOB.TIME ELSE
+      ERRMSG="JOB.TIME FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","JOB.MATL" TO JOB.MATL ELSE
+      ERRMSG="JOB.MATL FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","JOB.OSP" TO JOB.OSP ELSE
+      ERRMSG="JOB.OSP FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","JOB.SHIP" TO JOB.SHIP ELSE
+      ERRMSG="JOB.SHIP FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","JOB.MISC" TO JOB.MISC ELSE
+      ERRMSG="JOB.MISC FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","CUSTOMER" TO CUSTOMER ELSE
+      ERRMSG="CUSTOMER FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","CUST.PROD.STATS" TO CUST.PROD.STATS ELSE
+      ERRMSG="CUST.PROD.STATS FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","INVENTORY" TO INVENTORY ELSE
+      ERRMSG="INVENTORY FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","INV.FNGD" TO INV.FNGD ELSE
+      ERRMSG="INV.FNGD FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","CATEGORY" TO CATEGORY ELSE
+      ERRMSG="CATEGORY FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","INV.WHSE" TO INV.WHSE ELSE
+      ERRMSG="INV.WHSE FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","INV.WHSE.LOC" TO INV.WHSE.LOC ELSE
+      ERRMSG="INV.WHSE.LOC FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","INV.STATS" TO INV.STATS ELSE
+      ERRMSG="INV.STATS FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","INV.JOB.STATS" TO INV.JOB.STATS ELSE
+      ERRMSG="INV.JOB.STATS FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","COST.CNTR.WIP" TO COST.CNTR.WIP ELSE
+      ERRMSG="COST.CNTR.WIP FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","TAX" TO TAX ELSE
+      ERRMSG="TAX FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","TAX.BAL" TO TAX.BAL ELSE
+      ERRMSG="TAX.BAL FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","SHIP.VIA" TO SHIP.VIA ELSE
+      ERRMSG="SHIP.VIA FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","INVOICE.SALES.STATS" TO INVOICE.SALES.STATS ELSE      ;*ISS
+      ERRMSG="INVOICE.SALES.STATS FILE IS MISSING"; GOTO 93000    ;*ISS
+   END                                                            ;*ISS
+   OPEN "","PRICE.TABLE" TO PRICE.TABLE ELSE
+      ERRMSG = "PRICE.TABLE FILE IS MISSING"; GOTO 93000
+   END
+*
+*---- INITIALIZATION
+*
+   MAT EDIT.COM.DRIVER = ""
+   MAT IWH.REC = ""
+   POSTING.MON = ""
+   GEN.DIV = "00"
+   GEN.DEPT = "00"
+   GEN.CCTR = "000"
+   TODAY = DATE()
+   DI.ORD.AC.INV = '' ;*T25806
+*
+*---- SETUP VALUES FROM JCS.SCREENS
+*
+   ECD.SCRN.CNT = 1
+   ECD.SCRN.NAME = "GET.FISCAL.MONTH"
+   ECD.ACTION = 1; CALL SCRN.EDIT
+   ECD.SCRN.NO = 1
+*
+*---- PRINT SCREEN
+*
+   MAT SCV.REC = ""
+   ECD.ACTION = 2; CALL SCRN.EDIT
+*
+*---- MAIN PROCESSING
+*
+   READNEXT DI.ID ELSE GOTO 99999
+   CONO = DI.ID[1,3]
+   INVOICE.SFX = DI.ID[10,2]
+   MATREAD COMP.REC FROM COMPANY, CONO ELSE GOTO 99999
+*
+*---- GET POSTING MONTH
+*
+   BEGIN CASE
+      CASE INVOICE.SFX = "CM"
+         SCRN.HEAD = "CREDIT MEMO"
+      CASE INVOICE.SFX = "DM"
+         SCRN.HEAD = "DEBIT MEMO"
+      CASE 1
+         SCRN.HEAD = "INVOICE"
+   END CASE
+   SCRN.HEAD = SCRN.HEAD : " POSTING PROCESS"
+   CALL GET.DIV.FISCAL.MONTH(CONO,POSTING.MON,SCRN.HEAD,"OPFISCAL",CURR.MON,DIV.CODE);* T23278
+   IF POSTING.MON = "END" THEN GOTO 99999
+   IF CO.ARS = "Y" THEN
+      OPEN "","OPEN.RECV" TO OPEN.RECV ELSE
+         ERRMSG="OPEN.RECV FILE IS MISSING"; GOTO 93000
+      END
+   END
+   GOSUB 1000
+*
+*---- CONTINUE
+*
+   DATA = 1
+   LOOP
+      READNEXT DI.ID ELSE DATA = 0
+   WHILE DATA DO
+      GOSUB 1000
+   REPEAT
+   GOTO 99999
+*
+*---- UPDATE ROUTINE
+*
+1000 *
+   EDIT.ERR = 0
+   TOTAL.INV = 0
+   TOTAL.TAX = 0
+   TOTAL.SHP = 0
+   TOTAL.AGC = 0
+   TOTAL.DSC = 0
+   TOTAL.MSC = 0
+   TOTAL.ORDER.INV = ""
+   INVOICE.NO = DI.ID[4,99]
+   INVOICE.SFX = DI.ID[10,2]
+   PRE.BILLS = ""
+   ZERO.INV = 0
+   MATREADU DI.REC FROM DAILY.ORDER.INVOICE, DI.ID ELSE GOTO 1999
+   MATREAD ORD.REC FROM ORDER, CONO:DI.ORDER.NO ELSE ;*ISS
+      MAT ORD.REC=''    ;*ISS
+   END                 ;*ISS
+   MATREADU JOB.REC FROM JOB, CONO:ORD.JOB<1,1> ELSE
+      MAT JOB.REC=''
+   END
+   SAVE.ISS.JOB.N0 = ORD.JOB         ;*ISS
+   SAVE.SALESPERSON = ORD.SLSMN      ;*ISS
+   SAVE.JOB.CATG = JOB.CATG          ;*ISS
+   IF DI.BOL.NO # "" THEN
+      MATREAD BOL.REC FROM BOL, CONO:DI.BOL.NO THEN
+         BEGIN CASE
+            CASE BOL.STATUS = "CANCEL"
+               DI.STATUS = "BOL HAS BEEN CANCELLED"
+               EDIT.ERR = 1
+            CASE INVOICE.SFX = "" AND BOL.INVOICE # ""
+               DI.STATUS = "BOL ALREADY INVOICED"
+               EDIT.ERR = 1
+            CASE BOL.PERIOD > POSTING.MON
+               DI.STATUS = 'BOL POSTED IN ':BOL.PERIOD
+               EDIT.ERR = 1
+         END CASE
+         IF EDIT.ERR THEN GOTO 1900
+      END
+   END
+   GOSUB 14000
+   IF EDIT.ERR THEN GOTO 1900
+   IF LAST.INVOICE THEN DI.LAST = "Y"
+   BEGIN CASE
+      CASE DCOUNT(TMP.ORD.NO,AM) > 1
+         MULTI.ORDER = 1
+      CASE DCOUNT(TMP.ORD.NO,AM) = 1 AND TMP.ORD.NO # DI.ORDER.NO
+         MULTI.ORDER = 1
+      CASE 1
+         MULTI.ORDER = 0
+   END CASE
+   MATREAD ORD.REC FROM ORDER, CONO:DI.ORDER.NO ELSE
+      DI.STATUS = "ORDER ":DI.ORDER.NO:" IS MISSING"
+      EDIT.ERR = 1; GOTO 1900
+   END
+   MATREADU CUST.REC FROM CUSTOMER, CONO:ORD.CUST ELSE
+      DI.STATUS = "CUSTOMER ":ORD.CUST:" IS MISSING"
+      EDIT.ERR = 1; GOTO 1900
+   END
+   CUSTOMER.FOR.ORD = ORD.CUST
+   CUST.STATE = FIELD(CUST.ADDR4,",",2)
+   FND = 1
+   READU REC FROM ORDER.INVOICE, DI.ID ELSE FND = 0
+   IF FND THEN
+      DI.STATUS = "INVOICE ":INVOICE.NO:" ALREADY ON ORDER.INVOICE FILE"
+      EDIT.ERR = 1; GOTO 1900
+   END
+   IF CO.ARS = "Y" THEN
+      FND = 1
+      READU REC FROM OPEN.RECV, DI.ID ELSE FND = 0
+      IF FND THEN
+         DI.STATUS = "INVOICE RECORD ":INVOICE.NO:" ALREADY ON OPEN.RECV FILE"
+         EDIT.ERR = 1; GOTO 1900
+      END
+   END
+   ORDER.UPDATED = ""
+   LCNT = DCOUNT(DI.CHG.CODE,VM)
+   FOR LPTR = 1 TO LCNT UNTIL EDIT.ERR
+      IF DI.CHG.ORDER<1,LPTR> = '' THEN DI.CHG.ORDER<1,LPTR> = DI.ORDER.NO
+      CHARGE.ORD = DI.CHG.ORDER<1,LPTR>
+      CHARGE.CODE = DI.CHG.CODE<1,LPTR>
+      MATREAD ORD.REC FROM ORDER, CONO:CHARGE.ORD ELSE
+         DI.STATUS = "ORDER ":CHARGE.ORD:" IS MISSING"
+         EDIT.ERR = 1; GOTO 1500
+      END
+      IF FIELD(DI.SID<1,LPTR>,"!",1) = "XXX" THEN
+         ACP = FIELD(DI.SID<1,LPTR>,"!",4)
+         IF ORD.AC.INV<1,ACP> = "Y"  THEN
+            DI.STATUS = "ADDITIONAL CHARGES ALREADY BILLED FOR ORDER ":CHARGE.ORD
+            EDIT.ERR = 1; GOTO 1500
+         END
+      END
+      IF CHARGE.CODE = "FNGD" THEN
+         ORD.ID = CHARGE.ORD:"!":DI.SHIP.TO
+         MATREAD ORD.DET.REC FROM ORDER.DETAIL, CONO:ORD.ID ELSE
+            DI.STATUS = "ORDER DETAIL ":ORD.ID:" IS MISSING"
+            EDIT.ERR = 1; GOTO 1500
+         END
+      END
+   NEXT LPTR
+1500 *
+   IF EDIT.ERR THEN
+      MATWRITE DI.REC ON DAILY.ORDER.INVOICE, DI.ID
+      GOTO 1999
+   END
+   ISS.ACC.INV.AMT = 0
+   ISS.ACC.INV.TOTAL = 0
+   FOR LPTR = 1 TO LCNT UNTIL EDIT.ERR
+      CHARGE.CODE = DI.CHG.CODE<1,LPTR>
+      CHARGE.ORD = DI.CHG.ORDER<1,LPTR>
+      CHARGE.CAT = DI.CHG.CAT<1,LPTR>
+      CHARGE.TAX.JURS = DI.TAX.JURS<1,LPTR>
+      CHARGE.INV = 0
+      CHARGE.TAX = 0
+      CHARGE.SHP = 0
+      CHARGE.AGC = 0
+      CHARGE.DSC = 0
+      CHARGE.MSC = 0
+      IF INVOICE.SFX = "CM" THEN
+         SIGN = -1
+      END ELSE
+         SIGN = +1
+      END
+      IF CHARGE.CODE = "TOT" OR CHARGE.CODE = "SUB" OR CHARGE.CAT = "CMT" OR CHARGE.CODE = "SUBT" THEN GOTO 1890
+      ZERO.INV = ZERO.INV + 1
+      CHARGE.INV = DI.AMOUNT<1,LPTR> * SIGN
+      TOTAL.INV = TOTAL.INV + CHARGE.INV
+      MATREADU ORD.REC FROM ORDER, CONO:CHARGE.ORD ELSE
+         DI.STATUS = "ORDER ":CHARGE.ORD:" IS MISSING"
+         EDIT.ERR = 1; GOTO 1890
+      END
+      LOCATE CHARGE.ORD IN TMP.ORD.NO,1 SETTING MX ELSE NULL
+      TMP.ORD.AMT<MX> = TMP.ORD.AMT<MX>+CHARGE.INV
+      IF DI.PRE.BILL = "Y" THEN
+         JICNT = DCOUNT(ORD.INV.NO,VM)
+         FOR JI = 1 TO JICNT
+            IF ORD.INV.NO<1,JI>[7,2] = "PB" THEN
+               LOCATE ORD.INV.NO<1,JI> IN PRE.BILLS<1>,1 SETTING JIFP ELSE
+                  PRE.BILLS<1,-1> = ORD.INV.NO<1,JI>
+               END
+            END
+         NEXT JI
+      END
+      LOCATE INVOICE.NO IN ORD.INV.NO<1>,1 SETTING P1 ELSE
+         ORD.INV.NO<1,P1> = INVOICE.NO
+      END
+      LOCATE CHARGE.CAT IN ORD.INV.CAT<1,P1>,1 SETTING P2 ELSE
+         ORD.INV.CAT<1,P1,P2> = CHARGE.CAT
+      END
+      ORD.INV.DATE<1,P1> = DI.DATE
+      ORD.INV.AMT<1,P1,P2> = ORD.INV.AMT<1,P1,P2> + CHARGE.INV
+      ORD.TOT.INV = ORD.TOT.INV + CHARGE.INV
+      IF CO.ARS = "Y" THEN
+         ORD.INV.BAL<1,P1> = ORD.INV.BAL<1,P1> + CHARGE.INV
+      END ELSE
+         ORD.INV.BAL<1,P1> = ORD.INV.BAL<1,P1> + 0
+      END
+*
+      LOCATE CHARGE.ORD IN ORDER.UPDATED<1>,1 SETTING DD ELSE
+         IF INVOICE.SFX # "PB" THEN
+            IF ORD.STATUS<1,1> # "INVOICED" OR ORD.STAT.DATE<1,1> # TODAY THEN
+               ORD.STATUS = INSERT(ORD.STATUS,1,1,0,"INVOICED")
+               ORD.STAT.DATE = INSERT(ORD.STAT.DATE,1,1,0,TODAY)
+            END
+         END
+         IF DI.LAST = "Y" THEN
+            IF ORD.STATUS<1,1> # "COMPLETE" OR ORD.STAT.DATE<1,1> # TODAY THEN
+               ORD.STATUS = INSERT(ORD.STATUS,1,1,0,"COMPLETE")
+               ORD.STAT.DATE = INSERT(ORD.STAT.DATE,1,1,0,TODAY)
+            END
+         END
+         DD = DCOUNT(ORDER.UPDATED,VM) + 1
+         ORDER.UPDATED<1,DD> = CHARGE.ORD
+      END
+      BEGIN CASE
+         CASE INVOICE.SFX = "CM"
+         CASE INVOICE.SFX = "DM"
+         CASE INVOICE.SFX = "PB"
+         CASE 1
+            IF FIELD(DI.SID<1,LPTR>,"!",1) = "XXX" THEN
+               ACP = FIELD(DI.SID<1,LPTR>,"!",4)
+               IF ORD.AC.INV<1,ACP> = "Y"  AND ACP # DI.ORD.AC.INV<1,ACP> THEN
+                  DI.STATUS = "ADDITIONAL CHARGES ALREADY BILLED FOR ORDER ":CHARGE.ORD
+                  EDIT.ERR = 1; GOTO 1890
+               END ELSE
+                  ORD.AC.INV<1,ACP> = "Y"
+                  DI.ORD.AC.INV<1,ACP> = ACP ;*T25806
+               END
+            END
+*
+            IF CHARGE.CODE = "FNGD" THEN
+               ORD.ID = CHARGE.ORD:"!":DI.SHIP.TO
+               MATREADU ORD.DET.REC FROM ORDER.DETAIL, CONO:ORD.ID ELSE
+                  DI.STATUS = "ORDER DETAIL ":ORD.ID:" IS MISSING"
+                  EDIT.ERR = 1; GOTO 1890
+               END
+               DCNT = DCOUNT(OSD.PROD,VM)
+               PCNT = DCOUNT(DI.PROD<1,LPTR>,SM)
+               FOR PPTR = 1 TO PCNT
+                  PROD = DI.PROD<1,LPTR,PPTR>
+                  WHSE = DI.WHSE<1,LPTR,PPTR>
+                  KIT = DI.KIT<1,LPTR,PPTR>
+                  PROD.SEQ = DI.PROD.SEQ<1,LPTR,PPTR>
+                  IQTY = DI.SHP.QTY<1,LPTR,PPTR>
+                  COST = DI.SHP.COST<1,LPTR,PPTR> ;* C35108  
+                  FACTOR = DI.COST.UNIT<1,LPTR> ;* C35108    
+                  TEMP.INVOICE.COST=''
+                  MATREAD IWH.REC FROM INV.WHSE, CONO:PROD:"!":WHSE ELSE
+                     MAT IWH.REC =''
+                  END
+                  MATREAD INV.REC FROM INVENTORY, CONO:PROD ELSE
+                     MAT INV.REC =''
+                  END
+                  MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE THEN
+                     MAT CATG.REC = ""
+                  END
+                  ISS.KEY = "_O_":DI.ORDER.NO:"_":INVOICE.NO:"_":PROD:"_":WHSE       ;*ISS
+                  MATREADU ISS.REC FROM INVOICE.SALES.STATS, CONO:ISS.KEY ELSE   ;*ISS
+                     MAT ISS.REC = ''                                ;*ISS
+                  END                                             ;*ISS
+                  DPTR = 1
+                  PFND = 0
+                  LOOP
+                     IF (PROD=OSD.PROD<1,DPTR>) AND (WHSE=OSD.WHSE<1,DPTR>) AND (KIT=OSD.KIT<1,DPTR>) AND (PROD.SEQ=OSD.PROD.SEQ<1,DPTR>) THEN PFND = DPTR
+                  WHILE PFND = 0 AND DPTR < DCNT DO
+                     DPTR = DPTR + 1
+                  REPEAT
+                  IF PFND  > 0 THEN
+                     IF OSD.KIT<1,PFND> = "K" THEN
+                        OSD.KIT.I.QTY<1,PFND> = OSD.KIT.I.QTY<1,PFND> + (IQTY*1000)
+                     END ELSE
+                        OSD.I.QTY<1,PFND> = OSD.I.QTY<1,PFND> + (IQTY*1000)
+                     END
+                  END
+                  SAVE.ISS.JOB.N0 = ORD.JOB                 ;* ISS
+                  SAVE.SALESPERSON = ORD.SLSMN              ;* ISS
+                  ISS.CUST.ID = DI.CUST.NO                  ;* ISS
+                  ISS.INVOICE.NO = INVOICE.NO               ;* ISS
+                  ISS.INVOICE.DATE = DI.DATE                ;* ISS
+                  ISS.POSTING.MONTH = POSTING.MON           ;* ISS
+                  ISS.PROD.LINE = INV.LINE                  ;* ISS
+                  ISS.PRODUCT   = PROD                      ;* ISS
+                  ISS.JOB.CAT = SAVE.JOB.CATG               ;* ISS
+                  ISS.MASTER = DI.ORDER.NO                  ;* ISS
+                  ISS.SLSM.ID = ORD.SLSMN                   ;* ISS
+                  ISS.SALES.CODE = IWH.SALES.CODE           ;* ISS
+                  ISS.CUST.STATE = CUST.STATE               ;* ISS
+                  ISS.INVOICE.QTY = ISS.INVOICE.QTY + IQTY  ;* ISS
+                  TIA.AMT = (IQTY / FACTOR ) * DI.UNIT.PRICE<1,LPTR>  ;* ISS
+                  IF TIA.AMT > 0 THEN
+                     TIA.AMT = INT( TIA.AMT/100 + 0.5)
+                  END ELSE
+                     TIA.AMT = INT( TIA.AMT/100 - 0.5)
+                  END
+                  ISS.INVOICE.AMT = ISS.INVOICE.AMT + TIA.AMT
+                  ISS.INVOICE.TOTAL = ISS.INVOICE.TOTAL + TIA.AMT
+                  ISS.ACC.INV.AMT = ISS.ACC.INV.AMT + TIA.AMT
+                  ISS.ACC.INV.TOTAL = ISS.ACC.INV.TOTAL + TIA.AMT
+                  ISS.COST.TOTAL = ISS.COST.TOTAL + COST ;* T24926
+                  MATWRITE ISS.REC ON INVOICE.SALES.STATS, CONO:ISS.KEY     ;* ISS
+               NEXT PPTR
+               MATWRITE ORD.DET.REC ON ORDER.DETAIL, CONO:ORD.ID
+            END
+      END CASE
+*
+      LOCATE CHARGE.ORD IN CUST.ORD.NUM<1>,1 SETTING O ELSE
+         CUST.ORD.NUM<1,O> = CHARGE.ORD
+      END
+      ORD.BALANCE = ORD.TOT.AMT - ORD.TOT.INV
+      IF ORD.BALANCE < 0 THEN ORD.BALANCE = 0
+      CUST.ORD.BAL<1,O> = ORD.BALANCE
+*
+      BEGIN CASE
+         CASE CHARGE.CAT = "TAX"
+            CHARGE.TAX = CHARGE.INV
+            TOTAL.TAX = TOTAL.TAX + CHARGE.TAX
+            MATREADU TAX.REC FROM TAX, CONO:DI.TAX.JURS<1,LPTR> ELSE
+               MAT TAX.REC = ""
+            END
+            LOCATE POSTING.MON IN TAX.PERIOD<1>,1 BY "DR" SETTING FND.PER ELSE
+               INS POSTING.MON BEFORE TAX.PERIOD<1,FND.PER>
+               INS "0" BEFORE TAX.TAXABLE<1,FND.PER>
+               INS "0" BEFORE TAX.CHARGED<1,FND.PER>
+            END
+            TAX.CHARGED<1,FND.PER> = TAX.CHARGED<1,FND.PER> + CHARGE.TAX
+            TAX.TAXABLE<1,FND.PER> = TAX.TAXABLE<1,FND.PER> + DI.TAXABLE<1,LPTR> * SIGN
+            MATWRITE TAX.REC ON TAX, CONO:DI.TAX.JURS<1,LPTR>
+            ID.TAX = CONO
+            LOCATE CHARGE.ORD IN TMP.ORD.NO,1 SETTING P ELSE NULL
+            BEGIN CASE
+               CASE TMP.ORD.DIV<P> = "" OR TMP.ORD.DIV<P> = GEN.DIV
+                  ID.TAX = ID.TAX : GEN.DIV : GEN.DEPT : GEN.CCTR
+               CASE 1
+                  ID.TAX = ID.TAX : TMP.ORD.DIV<P> : GEN.DEPT : GEN.CCTR
+            END CASE
+            ID.TAX = ID.TAX : DI.TAX.JURS<1,LPTR>
+            MATREADU TAX.BAL.REC FROM TAX.BAL, ID.TAX ELSE
+               MAT TAX.BAL.REC = ""
+            END
+            ODI.DATE = OCONV(DI.DATE,"D4/")
+            TAX.MONTH = ODI.DATE[1,2]
+            TAX.YEAR  = ODI.DATE[7,4]
+            TAX.POST.MONTH = TAX.YEAR:TAX.MONTH"R%2"
+            LOCATE TAX.POST.MONTH IN TBR.PERIOD<1>,1 BY "DR" SETTING FND.PER ELSE
+               INS TAX.POST.MONTH BEFORE TBR.PERIOD<1,FND.PER>
+               INS "0" BEFORE TBR.TAXABLE<1,FND.PER>
+               INS "0" BEFORE TBR.CHARGED<1,FND.PER>
+            END
+            TBR.CHARGED<1,FND.PER> = TBR.CHARGED<1,FND.PER> + CHARGE.TAX
+            TBR.TAXABLE<1,FND.PER> = TBR.TAXABLE<1,FND.PER> + DI.TAXABLE<1,LPTR> * SIGN
+            MATWRITE TAX.BAL.REC ON TAX.BAL, ID.TAX
+         CASE CHARGE.CAT = "SHP"
+            CHARGE.SHP = CHARGE.INV
+            TOTAL.SHP = TOTAL.SHP + CHARGE.SHP
+            MATREADU SHIP.VIA.REC FROM SHIP.VIA, CONO:DI.TAX.JURS<1,LPTR> ELSE
+               MAT SHIP.VIA.REC = ""
+            END
+            LOCATE POSTING.MON IN SHPV.PERIOD<1>,1 BY "DR" SETTING FND.PER ELSE
+               INS POSTING.MON BEFORE SHPV.PERIOD<1,FND.PER>
+               INS "0" BEFORE SHPV.SHPMT<1,FND.PER>
+               INS "0" BEFORE SHPV.COST<1,FND.PER>
+               INS "0" BEFORE SHPV.SALE<1,FND.PER>
+            END
+            SHPV.SALE<1,FND.PER> = SHPV.SALE<1,FND.PER> + CHARGE.SHP
+            MATWRITE SHIP.VIA.REC ON SHIP.VIA, CONO:DI.TAX.JURS<1,LPTR>
+         CASE CHARGE.CAT = "AGC"
+            CHARGE.AGC = CHARGE.INV
+            TOTAL.AGC = TOTAL.AGC + CHARGE.AGC
+         CASE CHARGE.CAT = "DSC"
+            CHARGE.DSC = CHARGE.INV
+            TOTAL.DSC = TOTAL.DSC + CHARGE.DSC
+         CASE CHARGE.CAT = "MSC"
+            CHARGE.MSC = CHARGE.INV
+            TOTAL.MSC = TOTAL.MSC + CHARGE.MSC
+      END CASE
+*
+      SCUST = ORD.CUST
+      BPROD = FIELD(DI.SID<1,LPTR>,"!",2)
+      GOSUB 12000
+      MATWRITE ORD.REC ON ORDER, CONO:CHARGE.ORD
+1890 *
+   NEXT LPTR
+1900 *
+   IF EDIT.ERR THEN
+      MATWRITE DI.REC ON DAILY.ORDER.INVOICE, DI.ID
+      GOTO 1999
+   END
+   IF DI.BOL.NO # "" AND INVOICE.SFX = "" THEN
+      MATREADU BOL.REC FROM BOL, CONO:DI.BOL.NO THEN
+         BOL.INVOICE = INVOICE.NO
+         BOL.INV.DATE = DI.DATE
+         BOL.INV.AMT = TOTAL.SHP
+         MATWRITE BOL.REC ON BOL, CONO:DI.BOL.NO
+      END ELSE
+         RELEASE BOL, CONO:DI.BOL.NO
+      END
+   END
+   DI.PROC.MON = POSTING.MON
+   DI.PROC.DATE = TODAY
+   DI.STATUS = ""
+   IF TOTAL.INV = 0 AND ZERO.INV < 2 THEN ZERO.INV = "Y" ELSE ZERO.INV = "N"
+   DI.WIP.DATE = ""
+   DI.WIP.PRCNT = ""
+   DI.WIP.TYPE = ""
+   CHARGE.ORD = DI.ORDER.NO
+   CHARGE.INV = TOTAL.INV
+   CHARGE.TAX = TOTAL.TAX
+   CHARGE.SHP = TOTAL.SHP
+   CHARGE.AGC = TOTAL.AGC
+   CHARGE.DSC = TOTAL.DSC
+   CHARGE.MSC = TOTAL.MSC
+   GOSUB 19000
+*
+*---- UPDATE INVOICED CUSTOMER
+*
+   IF ZERO.INV = "N" AND CO.ARS = "Y" THEN
+      IF DI.CUST.NO # CUSTOMER.FOR.ORD THEN
+         MATWRITE CUST.REC ON CUSTOMER, CONO:CUSTOMER.FOR.ORD
+         MATREADU CUST.REC FROM CUSTOMER, CONO:DI.CUST.NO ELSE
+            MAT CUST.REC = ""
+            CUST.NAME = "CREATED BY POST.INVOICE"
+         END
+         CUST.STATE = FIELD(CUST.ADDR4,",",2)
+      END
+      IN.NUM = 0
+      XI.CNT = DCOUNT(CUST.INVOICE,VM)
+      FOR X = XI.CNT TO 1 STEP -1 UNTIL IN.NUM
+         INV.SFF = CUST.INVOICE<1,X>[7,2]
+         BEGIN CASE
+            CASE INV.SFF = "AC" OR INV.SFF = "PP" OR INV.SFF = "CM" AND INVOICE.SFX = "CM"
+               IN.NUM = X + 1
+            CASE INV.SFF = "AC" OR INV.SFF = "PP" OR INV.SFF = "CM" OR INV.SFF = "BC" OR INV.SFF = "DM" AND INVOICE.SFX = "DM"
+               IN.NUM = X + 1
+            CASE 1
+               IN.NUM = -1
+         END CASE
+      NEXT X
+      IF IN.NUM = 0 THEN IN.NUM = 1
+      CUST.INVOICE = INSERT(CUST.INVOICE,1,IN.NUM,0,INVOICE.NO)
+      CUST.AR.BAL = CUST.AR.BAL + TOTAL.INV
+      POST.AMT = TOTAL.INV - TOTAL.TAX - TOTAL.SHP
+      LOCATE POSTING.MON IN CUST.SALES.PER<1>,1 BY "DR" SETTING FND.PER ELSE
+         INS POSTING.MON BEFORE CUST.SALES.PER<1,FND.PER>
+         INS "0" BEFORE CUST.SALES<1,FND.PER>
+      END
+      CUST.SALES<1,FND.PER> = CUST.SALES<1,FND.PER> + POST.AMT
+      IF INVOICE.SFX = "" THEN
+         IF DI.DATE > CUST.LAST.SALE THEN CUST.LAST.SALE = DI.DATE
+         CUST.INVOICE.CNT<1,1> = CUST.INVOICE.CNT<1,1> + 1
+         CUST.TOT.AMT = CUST.TOT.AMT + TOTAL.INV
+      END
+      BAL.DATE = OCONV(CUST.HIGH.BAL.DATE<1,1>, "D2-")
+      NEW.DATE = OCONV(DI.PROC.DATE, "D2-")
+      BAL.MON = FIELD(BAL.DATE,"-",1)
+      NEW.MON = FIELD(NEW.DATE,"-",1)
+      BAL.YR = BAL.DATE[7,2]
+      NEW.YR = NEW.DATE[7,2]
+      IF NEW.MON # BAL.MON OR NEW.YR # BAL.YR THEN
+         CUST.HIGH.BAL = INSERT(CUST.HIGH.BAL,1,1,0,CUST.AR.BAL)
+         CUST.HIGH.BAL.DATE = INSERT(CUST.HIGH.BAL.DATE,1,1,0,DI.PROC.DATE)
+      END ELSE
+         IF CUST.HIGH.BAL<1,1> < CUST.AR.BAL THEN
+            CUST.HIGH.BAL<1,1> = CUST.AR.BAL
+            CUST.HIGH.BAL.DATE<1,1> = DI.PROC.DATE
+         END
+      END
+      BAL.CNT = DCOUNT(CUST.HIGH.BAL.DATE,VM)
+      FOR DROP = BAL.CNT TO 2 STEP - 1
+         IF (CUST.HIGH.BAL.DATE<1,DROP> + 400) < DI.PROC.DATE THEN
+            CUST.HIGH.BAL.DATE = DELETE(CUST.HIGH.BAL.DATE,1,DROP,0)
+            CUST.HIGH.BAL = DELETE(CUST.HIGH.BAL,1,DROP,0)
+         END
+      NEXT DROP
+      MATWRITE CUST.REC ON CUSTOMER, CONO:DI.CUST.NO
+   END ELSE
+      MATWRITE CUST.REC ON CUSTOMER, CONO:CUSTOMER.FOR.ORD
+   END
+*
+*---- UPDATE OPEN RECEIVABLES
+*
+   IF CO.ARS = "Y" AND ZERO.INV = "N" THEN
+      MAT OR.REC = ""
+      OR.CUST = DI.CUST.NO
+      OR.JOB = DI.ORDER.NO
+      OR.ORDER.FLG = "Y"
+      OR.CHG.JOB = ""
+      JCNT = DCOUNT(DI.CHG.ORDER,VM)
+      FOR J = 1 TO JCNT
+         IF DI.CHG.ORDER<1,J> # "" THEN
+            LOCATE DI.CHG.ORDER<1,J> IN OR.CHG.JOB<1>,1 SETTING JJ ELSE
+               OR.CHG.JOB<1,-1> = DI.CHG.ORDER<1,J>
+            END
+         END
+      NEXT J
+*
+      OR.PO = ORD.PO
+      OR.MON = POSTING.MON
+      OR.DIV = ORD.DIV
+      OR.DEPT = GEN.DEPT
+      OR.CCTR = GEN.CCTR
+      OR.INV.DATE = DI.DATE
+      OR.AS.DATE = DI.PROC.DATE
+      OR.TR.DATE = DI.DATE
+      BEGIN CASE
+         CASE INVOICE.SFX = "CM"
+            OR.TYPE = "C"
+         CASE INVOICE.SFX = "DM"
+            OR.TYPE = "D"
+         CASE 1
+            OR.TYPE = "I"
+      END CASE
+      OR.INV.AMT = TOTAL.INV - TOTAL.TAX - TOTAL.SHP - TOTAL.AGC - TOTAL.DSC - TOTAL.MSC
+      OR.SLSMAN = ORD.SLSMN
+      OR.AMT = TOTAL.INV
+      OR.BAL = TOTAL.INV
+      IF TOTAL.TAX <> 0 THEN
+         PTR = DCOUNT(OR.TYPE,VM) + 1
+         OR.TR.DATE<1,PTR> = DI.DATE
+         OR.TYPE<1,PTR> = "T"
+         OR.INV.AMT<1,PTR> = TOTAL.TAX
+         OR.CHECK<1,PTR> = ""
+         OR.CHK.DATE<1,PTR> = ""
+         OR.CHK.AMT<1,PTR> = ""
+      END
+      IF TOTAL.SHP <> 0 THEN
+         PTR = DCOUNT(OR.TYPE,VM) + 1
+         OR.TR.DATE<1,PTR> = DI.DATE
+         OR.TYPE<1,PTR> = "S"
+         OR.INV.AMT<1,PTR> = TOTAL.SHP
+         OR.CHECK<1,PTR> = ""
+         OR.CHK.DATE<1,PTR> = ""
+         OR.CHK.AMT<1,PTR> = ""
+      END
+      IF TOTAL.AGC <> 0 THEN
+         PTR = DCOUNT(OR.TYPE,VM) + 1
+         OR.TR.DATE<1,PTR> = DI.DATE
+         OR.TYPE<1,PTR> = "G"
+         OR.INV.AMT<1,PTR> = TOTAL.AGC
+         OR.CHECK<1,PTR> = ""
+         OR.CHK.DATE<1,PTR> = ""
+         OR.CHK.AMT<1,PTR> = ""
+      END
+      IF TOTAL.DSC <> 0 THEN
+         PTR = DCOUNT(OR.TYPE,VM) + 1
+         OR.TR.DATE<1,PTR> = DI.DATE
+         OR.TYPE<1,PTR> = "U"
+         OR.INV.AMT<1,PTR> = TOTAL.DSC
+         OR.CHECK<1,PTR> = ""
+         OR.CHK.DATE<1,PTR> = ""
+         OR.CHK.AMT<1,PTR> = ""
+      END
+      IF TOTAL.MSC <> 0 THEN
+         PTR = DCOUNT(OR.TYPE,VM) + 1
+         OR.TR.DATE<1,PTR> = DI.DATE
+         OR.TYPE<1,PTR> = "M"
+         OR.INV.AMT<1,PTR> = TOTAL.MSC
+         OR.CHECK<1,PTR> = ""
+         OR.CHK.DATE<1,PTR> = ""
+         OR.CHK.AMT<1,PTR> = ""
+      END
+      MATWRITE OR.REC ON OPEN.RECV, DI.ID
+   END
+   MATWRITE DI.REC ON ORDER.INVOICE, DI.ID
+   WRITE '' ON ORDER_INVOICE_TAG, DI.ID
+   DELETE DAILY.ORDER.INVOICE, DI.ID
+   PBCNT = DCOUNT(PRE.BILLS,VM)
+   FOR PB = 1 TO PBCNT
+      MATREADU IVC.REC FROM ORDER.INVOICE, CONO:PRE.BILLS<1,PB> ELSE
+         RELEASE ORDER.INVOICE, CONO:PRE.BILLS<1,PB>
+         GOTO 1998
+      END
+      IF IVC.PRE.BILL.MON = "" THEN
+         IVC.PRE.BILL.MON = POSTING.MON
+         MATWRITE IVC.REC ON ORDER.INVOICE, CONO:PRE.BILLS<1,PB>
+         WRITE '' ON ORDER_INVOICE_TAG, DI.ID
+      END ELSE
+         RELEASE ORDER.INVOICE, CONO:PRE.BILLS<1,PB>
+      END
+1998 *
+   NEXT PB
+1999 *
+   RELEASE
+   RETURN
+*
+*---- UPDATE SALES STATISTICS
+*
+12000 *
+   PCNT = DCOUNT(DI.PROD<1,LPTR>,SM)
+   FOR PPTR = 1 TO PCNT
+      PROD = DI.PROD<1,LPTR,PPTR>
+      CPS.ID = ORD.CUST:"!":PROD:"!":POSTING.MON
+      MATREADU CPS.REC FROM CUST.PROD.STATS, CONO:CPS.ID ELSE
+         MAT CPS.REC = ""
+      END
+      IF INVOICE.SFX = "CM" THEN
+         CPS.RETURN.QTY = CPS.RETURN.QTY + DI.REF.QTY<1,LPTR,PPTR>
+         CPS.RETURN.AMT = CPS.RETURN.AMT + CHARGE.INV
+      END ELSE
+         CPS.SALES.QTY = CPS.SALES.QTY + DI.REF.QTY<1,LPTR,PPTR>
+         CPS.SALES.AMT = CPS.SALES.AMT + CHARGE.INV
+      END
+*
+      LOCATE INVOICE.NO IN CPS.INVOICE.NO<1>,1 SETTING IP ELSE
+         CPS.INVOICE.NO<1,IP> = INVOICE.NO
+         CPS.INVOICE.DATE<1,IP> = DI.DATE
+      END
+      CPS.INVOICE.NET<1,IP> = CPS.INVOICE.NET<1,IP> + CHARGE.INV
+      CPS.INVOICE.AMT<1,IP> = CPS.INVOICE.AMT<1,IP> + CHARGE.INV
+*
+      MATWRITE CPS.REC ON CUST.PROD.STATS, CONO:CPS.ID
+   NEXT PPTR
+   RETURN
+*
+*---- STORE ORDER/JOB INFORMATION
+*
+14000 *
+   MAT TREC = ""
+   LCNT = DCOUNT(DI.CHG.CODE,VM)
+   FOR LPTR = 1 TO LCNT
+      CCODE = DI.CHG.CODE<1,LPTR>
+      CCATG = DI.CHG.CAT<1,LPTR>
+      BEGIN CASE
+         CASE CCODE = "SUBT"
+         CASE CCODE = "SUB"
+         CASE CCODE = "TOT"
+         CASE CCATG = "CMT"
+         CASE 1
+            IF DI.CHG.ORDER<1,LPTR> = "" THEN DI.CHG.ORDER<1,LPTR> = DI.ORDER.NO
+            ORDER.NO = DI.CHG.ORDER<1,LPTR>
+            MATREAD ORD.REC FROM ORDER, CONO:ORDER.NO ELSE
+               DI.STATUS = "ORDER ":ORDER.NO:" IS MISSING"
+               EDIT.ERR = 1; GOTO 14099
+            END
+            LOCATE ORDER.NO IN TMP.ORD.NO,1 SETTING TPTR ELSE
+               TMP.ORD.NO<TPTR> = ORDER.NO
+               TMP.ORD.JOB<TPTR> = ORD.JOB
+               TMP.ORD.DIV<TPTR> = ORD.DIV
+            END
+            BEGIN CASE
+               CASE DI.SID<1,LPTR> = ""
+               CASE DI.SID<1,LPTR>[1,3] = "XXX"
+                  IF INVOICE.SFX = "" THEN
+                     ACP = FIELD(DI.SID<1,LPTR>,"!",3)
+                     IF ORD.AC.INV<1,ACP> = "Y"  THEN
+                        DI.STATUS = "ADDITIONAL CHARGES ALREADY BILLED FOR ORDER ":ORDER.NO
+                        EDIT.ERR = 1; GOTO 14099
+                     END
+                  END
+               CASE DI.SID<1,LPTR>[1,3] = "ZZZ"
+               CASE FIELD(DI.SID<1,LPTR>,"!",2) = ""
+               CASE 1
+                  BPROD = FIELD(DI.SID<1,LPTR>,"!",2)
+                  MATREAD IOF.REC FROM INV.FNGD, CONO:BPROD ELSE
+                     DI.STATUS = "PROD ":BPROD:" IS MISSING"
+                     EDIT.ERR = 1; GOTO 14099
+                  END
+                  TMP.ORD.DIV<TPTR> = IOF.DIVISION
+                  SCNT= DCOUNT(ORD.SHIP.TO,VM)
+                  FOR SPTR = 1 TO SCNT
+                     ORD.ID = ORDER.NO:"!":ORD.SHIP.TO<1,SPTR>
+                     MATREAD ORD.DET.REC FROM ORDER.DETAIL, CONO:ORD.ID ELSE
+                        DI.STATUS = "ORDER DETAIL ":ORD.ID:" IS MISSING"
+                        EDIT.ERR = 1; GOTO 14099
+                     END
+                     DCNT = DCOUNT(OSD.PROD,VM)
+                     FOR DPTR = 1 TO DCNT
+                        PROD = OSD.PROD<1,DPTR>
+                        LOCATE PROD IN TMP.ORD.PROD<TPTR>,1 BY "AL" SETTING PPTR ELSE
+                           TMP.ORD.PROD = INSERT(TMP.ORD.PROD,TPTR,PPTR,0,PROD)
+                        END
+                        TMP.ORD.QTY<TPTR,PPTR> = TMP.ORD.QTY<TPTR,PPTR> + OSD.O.QTY<1,DPTR>
+                        TMP.SHP.QTY<TPTR,PPTR> = TMP.SHP.QTY<TPTR,PPTR> + OSD.S.QTY<1,DPTR>
+                        TMP.RSV.QTY<TPTR,PPTR> += OSD.R.QTY<1,DPTR>    ;*T25684
+                     NEXT DPTR
+                  NEXT SPTR
+*
+                  JCNT = DCOUNT(ORD.JOB,VM)
+                  FOR JPTR= 1 TO JCNT
+                     JOB.NO = ORD.JOB<1,JPTR>
+                     MATREAD JFS.REC FROM JOB.FNGD.STATS, CONO:JOB.NO ELSE MAT JFS.REC = ""
+                     DCNT = DCOUNT(JFS.PROD,VM)
+                     FOR DPTR = 1 TO DCNT
+                        PROD = JFS.PROD<1,DPTR>
+                        LOCATE PROD IN TMP.JOB.PROD<TPTR>,1 BY "AL" SETTING PPTR ELSE
+                           TMP.JOB.PROD = INSERT(TMP.JOB.PROD,TPTR,PPTR,0,PROD)
+                        END
+                        OCNT = DCOUNT(JFS.ORDER<1,DPTR>,SM)
+                        FOR OPTR = 1 TO OCNT
+                           ORDER.NO = JFS.ORDER<1,DPTR,OPTR>
+                           LOCATE ORDER.NO IN TMP.JOB.ORD<TPTR>,1 BY "AL" SETTING PPTR ELSE
+                              TMP.JOB.ORD = INSERT(TMP.JOB.ORD,TPTR,PPTR,0,ORDER.NO)
+                           END
+                        NEXT OPTR
+                     NEXT DPTR
+                  NEXT JPTR
+            END CASE
+      END CASE
+14080 NEXT LPTR
+   LAST.INVOICE = 1
+   TCNT = DCOUNT(TMP.ORD.NO,AM)
+   FOR TPTR = 1 TO TCNT
+      PCNT = DCOUNT(TMP.ORD.PROD<TPTR>,VM)
+      FOR PPTR = 1 TO PCNT WHILE LAST.INVOICE
+         PROD = TMP.ORD.PROD<TPTR,PPTR>
+         IF TMP.SHP.QTY<TPTR,PPTR> < TMP.ORD.QTY<TPTR,PPTR> OR TMP.RSV.QTY<TPTR,PPTR> > 0 THEN
+            LAST.INVOICE = 0
+         END
+      NEXT PPTR
+   NEXT TPTR
+14099 RETURN
+*
+*----------- INVOICE TOTAL RECORD
+19000 * 
+   MATREADU ISS.REC FROM INVOICE.SALES.STATS, CONO:"_O_":DI.ORDER.NO:"_":INVOICE.NO:"_0_0" ELSE
+      MAT ISS.REC = ""
+   END
+   ISS.CUST.ID = DI.CUST.NO
+   ISS.SLSM.ID = ORD.SLSMN
+   ISS.INVOICE.NO = INVOICE.NO
+   ISS.INVOICE.AMT = ISS.INVOICE.AMT + CHARGE.INV - CHARGE.TAX  - ISS.ACC.INV.AMT
+   ISS.INVOICE.TOTAL = ISS.INVOICE.TOTAL + CHARGE.INV - CHARGE.TAX  - ISS.ACC.INV.TOTAL
+   ISS.INVOICE.TAX = ISS.INVOICE.TAX + CHARGE.TAX
+   ISS.INVOICE.SHIP = ISS.INVOICE.SHIP + CHARGE.SHP
+   ISS.INVOICE.DATE = DI.DATE
+   ISS.POSTING.MONTH = POSTING.MON
+   ISS.CUST.STATE = CUST.STATE
+   ISS.SALES.CODE = IWH.SALES.CODE         ;* T22563 < 
+   IF CO.SAS = "Y" THEN
+      MATWRITE ISS.REC ON INVOICE.SALES.STATS, CONO:"_O_":DI.ORDER.NO:"_":INVOICE.NO:"_0_0"
+   END
+   RETURN
+*
+*---- CALLS FOR SYSCOM
+*
+91000 *
+   ERR.TYPE = 1;CALL SYSCOM(MAT SYSCOM.REC); RETURN
+92000 *
+   ERR.TYPE = 2;CALL SYSCOM(MAT SYSCOM.REC); RETURN
+93000 *
+   ERR.TYPE = 3;CALL SYSCOM(MAT SYSCOM.REC)
+99999 *
+   RELEASE
+   END
+*******************************************************************************
+*******************************************************************************

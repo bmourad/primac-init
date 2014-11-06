@@ -1,0 +1,1074 @@
+*********************************************************************
+* REVISION     - [08.1]
+* SOURCE       - GLSBP
+* PROGRAM      - REPORT.PRINT
+* BY           - ZIAD YAMOUT, COMPUTER BUSINESS ASSOCIATES
+* DATE         - 03/08/87
+* DESCRIPTION  -
+* 04/12/89 (GG) TASK # 14025
+* 02/25/92 DLG TASK 16468(CSF 17552) FIXED USER REPORT CREATE FOR 'N'
+* DLG THIS PROGRAM DIFFERS ON UNIDATA BECAUSE NO FILE CAN START W/NUMERIC
+* T18573 5/95 LLH 1-52 ACCOUNTING PERIODS
+* T21488 lanny 01/17/1997 * Error in determining correct pointer for
+*                           Budget data.
+* C36742 cm 07/19/2000 * If the last page of the report ends on exactly 
+*                        line 60 then an extra page with just a heading
+*                        prints.
+*T26493 cmykleb 05/23/2002 * Use GET.PROG.HEAD for the heading.
+*C40361 adelgado 07/19/2002 * The report is overflowing to another page.
+*                             and allow hidden lines.
+*T27936 Abed Ali 04/21/2004 * Added a prompt in GL418/GL419, If the prompt
+*                             value is 'Y' then print the reports selected
+*                             and drill down every row to the acct level.
+*T27936 wyamout 04/26/2004 * Drill down capabilities.
+*T27936 wyamout 04/27/2004 * Correct printing detail drilldown.
+*T28554 lross 12/08/2005 * When Curr period is 01 extracting last period
+*                          data using -1 in "MON" column duplicates curr
+*                          period data in that column.
+*T29032 cmyklebu 12/30/2006 * Move pgm from rev12 to rev14.
+*ENDDOC
+*********************************************************************
+*
+**************************
+* DIMENSIONS AND EQUATES *
+**************************
+*
+*COPY>GLS.CPYLIB>GLS.REPORT
+*COPY>GLS.CPYLIB>ACCT.TYPE
+*COPY>GLS.CPYLIB>ACCT.CATG
+*COPY>GLS.CPYLIB>CATG.AND.SUB
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>COA
+*COPY>PMC.CPYLIB>DIVISION
+*COPY>PMC.CPYLIB>DEPARTMENT
+*COPY>PMC.CPYLIB>COST.CNTR
+*COPY>PMC.CPYLIB>FISCAL
+*COPY>GLS.CPYLIB>COA.BAL
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>CHAR
+DIM ACCT.AMT(8,100)
+DIM LINES(25)
+DIM COL.ATT(100)
+DIM COL.CASE(100)
+DIM COL.PIC(100)
+DIM COL.SPC(100)
+DIM COL.CONV(100)
+DIM COL.PREC(100)
+DIM COL.LEN(100)
+DIM COL.TYPE(100)
+DIM COL.TLN(100)
+DIM COL.MON(100)
+DIM FIL.PTR(100)
+DIM OFIL.PTR(100)
+DIM COL.PTR(100)
+DIM LINE.DASH(25)
+DIM COA.BAL(5)
+MAT COL.PTR = ""
+SYS.TYPE = 1
+CALL SYSCOM(MAT SYSCOM.REC)
+*
+**************
+* OPEN FILES *
+**************
+OPEN "", "GLS.REPORT" TO GLS.REPORT ELSE
+   ERRMSG = "GLS.REPORT FILE IS MISSING"; GOTO 93000
+END
+OPEN "", "COMPANY" TO COMPANY ELSE
+   ERRMSG = "COMPANY FILE IS MISSING"; GOTO 93000
+END
+OPEN "", "CONTROL" TO CONTROL ELSE
+   ERRMSG = "CONTROL FILE IS MISSING"; GOTO 93000
+END
+OPEN "", "COA" TO COA ELSE
+   ERRMSG = "COA FILE IS MISSING"; GOTO 93000
+END
+OPEN "", "ACCT.TYPE" TO ACCT.TYPE ELSE
+   ERRMSG = "ACCT.TYPE FILE IS MISSING"; GOTO 93000
+END
+OPEN "", "ACCT.CATG" TO ACCT.CATG ELSE
+   ERRMSG = "ACCT.CATG FILE IS MISSING"; GOTO 93000
+END
+OPEN "", "CATG.AND.SUB" TO CATG.AND.SUB ELSE
+   ERRMSG = "CATG.AND.SUB FILE IS MISSING"; GOTO 93000
+END
+OPEN "", "DIVISION" TO DIVISION ELSE
+   ERRMSG = "DIVISION FILE IS MISSING"; GOTO 93000
+END
+OPEN "", "DEPARTMENT" TO DEPARTMENT ELSE
+   ERRMSG = "DEPARTMENT FILE IS MISSING"; GOTO 93000
+END
+OPEN "", "COST.CNTR" TO COST.CNTR ELSE
+   ERRMSG = "COST.CNTR FILE IS MISSING"; GOTO 93000
+END
+******************
+* INITIALIZATION *
+******************
+*
+PROCREAD BUFFER ELSE
+   ERRMSG = "MUST RUN FROM A PROC"
+   GOSUB 91000; GOTO 99999
+END
+*T27936 v
+DTL.ACCT.NO = "" ;* ADDED
+PTR_ON = "N"
+*T27936 ^
+CONO = BUFFER<1>
+MATREAD COMP.REC FROM COMPANY, CONO ELSE
+   ERRMSG = "INVALID COMPANY # ":CONO
+   GOSUB 91000; GOTO 99999
+END
+READ PERIOD.REC FROM CONTROL, CONO:"ACCT.PERIODS" ELSE
+   PERIOD.REC = ""; PERIOD.REC<1> = 12
+END
+NUM.PERIODS = PERIOD.REC<1>
+READ COMPANY.HEADING FROM CONTROL, CONO:"HEADING" ELSE
+   ERRMSG = "CANNOT LOCATE COMPANY HEADING"
+   GOSUB 91000; GOTO 99999
+END
+MATREAD FISCAL.REC FROM CONTROL, CONO:"FISCAL" ELSE
+   ERRMSG = "CANNOT LOCATE CONTROL, FISCAL"
+   GOSUB 91000; GOTO 99999
+END
+CUR.MON = FR.CURR.PER[5,2]
+IN.ACCT.LEN = LEN(CO.ACCT.PIC)
+PERIOD = BUFFER<3>[5,2]
+ENDN.DATE = BUFFER<4>
+LEVEL = BUFFER<5>
+SEL.DV = BUFFER<6>
+SEL.DP = BUFFER<7>
+SEL.CC = BUFFER<8>
+   * BUFFER<16> value of Is the 6th prompt added DrillDown(Y/N)
+BEGIN CASE
+   CASE LEVEL > 7
+      OPEN "", "ALL.COA.BAL" TO COA.BAL(1) ELSE
+         ERRMSG = "ALL.COA.BAL FILE IS MISSING"; GOTO 93000
+      END
+      S.CONO.KEY = ""
+      S.FIL.PTR = 1
+   CASE LEVEL < 8 AND LEVEL > 4
+      OPEN "", "ALL.COA.BAL" TO COA.BAL(1) ELSE
+         ERRMSG = "ALL.COA.BAL FILE IS MISSING"; GOTO 93000
+      END
+      OPEN "", "CO.COA.BAL" TO COA.BAL(2) ELSE
+         ERRMSG = "CO.COA.BAL FILE IS MISSING"; GOTO 93000
+      END
+      OPEN "", "DV.COA.BAL" TO COA.BAL(3) ELSE
+         ERRMSG = "DV.COA.BAL FILE IS MISSING"; GOTO 93000
+      END
+      OPEN "", "DP.COA.BAL" TO COA.BAL(4) ELSE
+         ERRMSG = "DP.COA.BAL FILE IS MISSING"; GOTO 93000
+      END
+      OPEN "", "CC.COA.BAL" TO COA.BAL(5) ELSE
+         ERRMSG = "CC.COA.BAL FILE IS MISSING"; GOTO 93000
+      END
+      S.CONO.KEY = ""
+      S.FIL.PTR = ""
+   CASE LEVEL < 1
+      OPEN "", "CO.COA.BAL" TO COA.BAL(2) ELSE
+         ERRMSG = "CO.COA.BAL FILE IS MISSING"; GOTO 93000
+      END
+      S.CONO.KEY = CONO
+      S.FIL.PTR = 2
+   CASE LEVEL < 2
+      OPEN "", "DV.COA.BAL" TO COA.BAL(3) ELSE
+         ERRMSG = "DV.COA.BAL FILE IS MISSING"; GOTO 93000
+      END
+      S.CONO.KEY = CONO : SEL.DV
+      S.FIL.PTR = 3
+   CASE LEVEL < 3
+      OPEN "", "DP.COA.BAL" TO COA.BAL(4) ELSE
+         ERRMSG = "DP.COA.BAL FILE IS MISSING"; GOTO 93000
+      END
+      S.CONO.KEY = CONO : SEL.DV : SEL.DP
+      S.FIL.PTR = 4
+   CASE 1
+      OPEN "", "CC.COA.BAL" TO COA.BAL(5) ELSE
+         ERRMSG = "CC.COA.BAL FILE IS MISSING"; GOTO 93000
+      END
+      S.CONO.KEY = CONO : SEL.DV : SEL.DP : SEL.CC
+      S.FIL.PTR = 5
+END CASE
+TEMP.FILE.NAME = BUFFER<20>
+TODAY = DATE()
+REPORT.LEN = 132
+* PAGE.SIZE = 60       ;* C40361
+PAGE.SIZE = 59       ;* C40361
+*T26493 v
+CONO.NAME = ""
+RPT.NAME = ""
+RPT.NO = BUFFER<2>
+HD1 = ""
+HD2 = ""
+CALL GET.PROG.HEAD(CONO,CONO.NAME,RPT.NAME,RPT.NO,"",HD1,HD2)
+*T26493 ^
+*CSF 26179 - REVERSED THE '*' LINES BELOW.
+SCB.OPN=CB.OPN
+SCB.LYR=CB.LYR
+SCB.BUD=CB.BUD
+CB.OPN = CB.OPN + PERIOD + 1
+BG.OPN = CB.OPN - 1
+CB.LYR = CB.LYR + PERIOD + 1
+BG.LYR = CB.LYR - 1
+*  BG.LYR = CB.OPN + NUM.PERIODS + 1
+CB.BUD = CB.BUD + PERIOD + 1
+BG.BUD = CB.BUD - 1
+*  BG.BUD = CB.OPN + 53 + NUM.PERIODS + 1
+*CSF 26179 ^
+*
+*--- OPEN TEMP FILES
+*
+* OPEN "",PORT.NO:"TEMP.REPORT" TO TEMP.REPORT ELSE
+OPEN "",TEMP.FILE.NAME TO TEMP.REPORT ELSE
+   ERRMSG = "TEMP.REPORT FILE IS MISSING"; GOTO 93000
+END
+LINE = ""
+*
+*COL.CASE(COL) Is always '0' for regular columns
+*******************
+* MAIN PROCESSING *
+*******************
+DATA = 1
+LOOP
+   READNEXT GLRP.ID ELSE DATA = 0
+WHILE DATA DO
+   DASHES = ""
+   MAT LINE.DASH = ""
+   TLINES = ""
+   TLN.CNT = 0
+   TLN.BEG = 1
+   PAGE.NO = 0
+   MATREAD GLRP.REC FROM GLS.REPORT, GLRP.ID ELSE
+      GOTO 9999
+   END
+* TASK 16468 *
+   IF BUFFER<11> # "NONE" THEN
+      USER.FILE = BUFFER<11>:GLRP.ID[4,99]
+      SENTENCE = "CREATE-FILE (":USER.FILE:" 1,1 71,1)"
+      EXECUTE SENTENCE CAPTURING OUTPUT
+      OPEN "",USER.FILE TO USER.REPORT ELSE
+         GOTO 9999
+      END
+      CLEARFILE USER.REPORT
+   END
+   CLEARFILE TEMP.REPORT
+*T27936 v
+   DTL.ACCT.NO = ""
+*T27936 ^
+   COL.CNT = COUNT(GLRP.COLUMN,VM) + (GLRP.COLUMN # "")
+   LN.CNT = GLRP.BEG.LINE + 1
+   LOOP WHILE GLRP.REC(LN.CNT) # "" DO
+      LN.CNT = LN.CNT + 1
+   REPEAT
+   LN.CNT = LN.CNT - GLRP.BEG.LINE - 1
+   IF LN.CNT < 1 THEN GOTO 9999
+   LINE.DESC.PIC = "L#" : GLRP.GRP.LEN + 1
+   START.SPC = GLRP.GRP.LEN + 1
+   CONO.KEY = S.CONO.KEY
+   MAT FIL.PTR = ""; FIL.PTR(1) = S.FIL.PTR
+   MAT COL.SPC = ""; MAT COL.PIC = ""; MAT COL.MON = ""
+   MAT COL.ATT = ""; MAT COL.CASE = ""; MAT COL.CONV = ""
+   MAT COL.PREC = ""; MAT COL.LEN = ""; MAT COL.TYPE = ""
+   COL.CC1 = ""; COL.CC2 = ""; MAT COL.TLN = ""
+   COL.MONTHS = ""
+   FOR COL = 1 TO COL.CNT
+      COL.TYPE(COL) = GLRP.COL.TYPE<1,COL>
+      COL.CC1<COL> = GLRP.COL.CC1<1,COL>
+      COL.CC2<COL> = GLRP.COL.CC2<1,COL>
+      COL.TLN(COL) = GLRP.COL.TLN<1,COL>
+      COL.PREC(COL) = GLRP.COL.PREC<1,COL>
+      COL.LEN(COL) = GLRP.COL.LEN<1,COL>
+      MPTR = PERIOD + GLRP.COL.MON<1,COL>
+      BEGIN CASE
+*T28554 v
+         CASE MPTR = 0 AND GLRP.COL.MON<1,COL>+0 # 0
+            IF COL.CC1<COL> = 'P' AND GLRP.COL.C.Y<1,COL> = 'Y' THEN
+               MPTR = NUM.PERIODS - 1
+               GLRP.COL.MON<1,COL> = MPTR
+               COL.CC1<COL> = 'L'
+            END
+*T28554 ^
+         CASE MPTR < 1
+            MPTR = PERIOD - 1
+*T21488 v
+*      CASE MPTR > 52
+         CASE MPTR > NUM.PERIODS
+*        MPTR = 52 - PERIOD
+            MPTR = NUM.PERIODS - PERIOD
+*T21488 ^
+         CASE 1
+            MPTR = GLRP.COL.MON<1,COL> + 0
+      END CASE
+      COL.ATT(COL) = 0
+      IF GLRP.COL.C.Y<1,COL> = "Y" THEN
+         IF MPTR # 0 AND (PERIOD + MPTR > CUR.MON) THEN
+            IF COL.CC1<COL> = "P" OR COL.CC2<COL> = "P" THEN
+               MPTR = CUR.MON - PERIOD
+            END
+         END
+         ADD = 0
+      END ELSE
+         IF MPTR # 0 AND (PERIOD + MPTR > CUR.MON) THEN
+            IF COL.CC1<COL> = "P" OR COL.CC2<COL> = "P" THEN
+               COL.ATT(COL) = 8
+            END
+         END
+         ADD = 1
+      END
+      LOCATE MPTR IN COL.MONTHS,1 SETTING MON.FND ELSE
+         COL.MONTHS<MON.FND> = MPTR
+      END
+      COL.MON(COL) = MON.FND
+      BEGIN CASE
+         CASE COL.ATT(COL)
+         CASE COL.CC1<COL> = "P" OR COL.CC2<COL> = "P"
+            COL.ATT(COL) = 1 + ADD
+         CASE COL.CC1<COL> = "L" OR COL.CC2<COL> = "L"
+            COL.ATT(COL) = 3 + ADD
+         CASE COL.CC1<COL> = "B" OR COL.CC2<COL> = "B"
+            COL.ATT(COL) = 5 + ADD
+         CASE COL.CC1<COL> = "F" OR COL.CC2<COL> = "F"
+            COL.ATT(COL) = 7
+         CASE 1
+            COL.ATT(COL) = 8
+      END CASE
+      IF COL.CC1<COL> = "0" THEN COL.CC1<COL> = ""
+      IF COL.CC2<COL> = "0" THEN COL.CC2<COL> = ""
+      BEGIN CASE
+         CASE COL.CC1<COL> = "" OR COL.CC2<COL> = ""
+            COL.CASE(COL) = 0
+         CASE NUM(COL.CC1<COL>)
+            BEGIN CASE
+               CASE NUM(COL.CC2<COL>)
+                  COL.CASE(COL) = 1
+               CASE COL.CC2<COL> # "T"
+                  COL.CASE(COL) = 2
+               CASE COL.TLN(COL) + 0 > 0
+                  COL.CASE(COL) = 3
+               CASE 1
+                  COL.CASE(COL) = 4
+            END CASE
+         CASE NUM(COL.CC2<COL>)
+            BEGIN CASE
+               CASE COL.CC1<COL> # "T"
+                  COL.CASE(COL) = 5
+               CASE COL.TLN(COL) + 0 > 0
+                  COL.CASE(COL) = 6
+               CASE 1
+                  COL.CASE(COL) = 7
+            END CASE
+         CASE 1
+            COL.CASE(COL) = 0
+      END CASE
+      COL.CONV(COL) = GLRP.COL.CONV<1,COL>
+      PPTR = INDEX(COL.CONV(COL),"%",1)
+      IF PPTR THEN
+         COL.PIC(COL) = "R" : STR("#",COL.LEN(COL)-1)
+         COL.PIC(COL)<1,2> = "%"
+         COL.CONV(COL) = COL.CONV(COL)[1,PPTR-1] : COL.CONV(COL)[PPTR+1,99]
+      END ELSE
+         COL.PIC(COL) = "R#" : COL.LEN(COL)
+      END
+      IF COL.PREC(COL) < 1 THEN
+         COL.CONV(COL) = "MD0":COL.CONV(COL)
+      END ELSE
+         COL.CONV(COL) = "MD" : COL.PREC(COL) : COL.CONV(COL)
+      END
+      COL.PREC(COL) = PWR(10,(2-COL.PREC(COL)))
+      COL.SPC(COL) = GLRP.COLUMN<1,COL> - START.SPC
+      START.SPC = GLRP.COLUMN<1,COL> + COL.LEN(COL)
+      BEGIN CASE
+         CASE LEVEL < 6 OR LEVEL > 7
+            COL.PTR(COL) = 1
+         CASE GLRP.DIV<1,COL> = "S" OR GLRP.DIV<1,COL> = ""
+            LOCATE CONO IN CONO.KEY,1 SETTING FND.KEY ELSE
+               FIL.PTR(FND.KEY) = 2
+               CONO.KEY<FND.KEY> = CONO
+            END
+            COL.PTR(COL) = FND.KEY
+         CASE GLRP.DEPT<1,COL> = "S"
+            LOCATE (CONO:GLRP.DIV<1,COL>) IN CONO.KEY,1 SETTING FND.KEY ELSE
+               FIL.PTR(FND.KEY) = 3
+               CONO.KEY<FND.KEY> = CONO:GLRP.DIV<1,COL>
+            END
+            COL.PTR(COL) = FND.KEY
+         CASE GLRP.CCTR<1,COL> = "S"
+            LOCATE (CONO:GLRP.DIV<1,COL>:GLRP.DEPT<1,COL>) IN CONO.KEY,1 SETTING FND.KEY ELSE
+               FIL.PTR(FND.KEY) = 4
+               CONO.KEY<FND.KEY> = CONO:GLRP.DIV<1,COL>:GLRP.DEPT<1,COL>
+            END
+            COL.PTR(COL) = FND.KEY
+         CASE 1
+            LOCATE (CONO:GLRP.DIV<1,COL>:GLRP.DEPT<1,COL>:GLRP.CCTR<1,COL>) IN CONO.KEY,1 SETTING FND.KEY ELSE
+               FIL.PTR(FND.KEY) = 5
+               CONO.KEY<FND.KEY> = CONO:GLRP.DIV<1,COL>:GLRP.DEPT<1,COL>:GLRP.CCTR<1,COL>
+            END
+            COL.PTR(COL) = FND.KEY
+      END CASE
+   NEXT COL
+   BEGIN CASE
+      CASE LEVEL > 7
+         MAX.LEVEL = 1
+      CASE LEVEL = 5
+         MAX.LEVEL = 1
+      CASE 1
+         MAX.LEVEL = COUNT(CONO.KEY,AM) + (CONO.KEY # "")
+   END CASE
+   OCONO.KEY = CONO.KEY
+   MAT OFIL.PTR = MAT FIL.PTR
+   FOR XLN = 1 TO LN.CNT
+      LN = XLN + GLRP.BEG.LINE
+      LN.TYPE = GLRP.REC(LN)<1,GLRP.LINE.TYPE>
+      LINE = ""
+      BEGIN CASE
+         CASE LN.TYPE = "R"
+            LN.ACCT = GLRP.REC(LN)<1,GLRP.LINE.ACCT>
+            ACCT.CNT = COUNT(LN.ACCT,SVM) + (LN.ACCT # "")
+            MAT ACCT.AMT = 0
+            LN.DV = GLRP.REC(LN)<1,GLRP.LINE.DIV>
+            LN.DP = GLRP.REC(LN)<1,GLRP.LINE.DEPT>
+            LN.CC = GLRP.REC(LN)<1,GLRP.LINE.CCTR>
+            BEGIN CASE
+               CASE LEVEL = 5
+                  BEGIN CASE
+                     CASE LN.DV = "S"
+                        CONO.KEY = CONO
+                        FIL.PTR(1) = 2
+                     CASE LN.DP = "S"
+                        CONO.KEY = CONO : LN.DV
+                        FIL.PTR(1) = 3
+                     CASE LN.CC = "S"
+                        CONO.KEY = CONO : LN.DV : LN.DP
+                        FIL.PTR(1) = 4
+                     CASE 1
+                        CONO.KEY = CONO : LN.DV : LN.DP : LN.CC
+                        FIL.PTR(1) = 5
+                  END CASE
+               CASE LEVEL <> 6
+               CASE LN.DV = "S"
+               CASE LN.DP = "S"
+                  FOR FLV = 1 TO MAX.LEVEL
+                     IF OFIL.PTR(FLV) = 2 THEN
+                        CONO.KEY<FLV> = OCONO.KEY<FLV>:LN.DV
+                        FIL.PTR(FLV) = 3
+                     END
+                  NEXT FLV
+               CASE LN.CC = "S"
+                  FOR FLV = 1 TO MAX.LEVEL
+                     BEGIN CASE
+                        CASE OFIL.PTR(FLV) = 2
+                           CONO.KEY<FLV> = OCONO.KEY<FLV>:LN.DV:LN.DP
+                           FIL.PTR(FLV) = 4
+                        CASE OFIL.PTR(FLV) = 3
+                           CONO.KEY<FLV> = OCONO.KEY<FLV>:LN.DP
+                           FIL.PTR(FLV) = 4
+                     END CASE
+                  NEXT FLV
+               CASE 1
+                  FOR FLV = 1 TO MAX.LEVEL
+                     BEGIN CASE
+                        CASE OFIL.PTR(FLV) = 2
+                           CONO.KEY<FLV> = OCONO.KEY<FLV>:LN.DV:LN.DP:LN.CC
+                           FIL.PTR(FLV) = 5
+                        CASE OFIL.PTR(FLV) = 3
+                           CONO.KEY<FLV> = OCONO.KEY<FLV>:LN.DP:LN.CC
+                           FIL.PTR(FLV) = 5
+                        CASE OFIL.PTR(FLV) = 4
+                           CONO.KEY<FLV> = OCONO.KEY<FLV>:LN.CC
+                           FIL.PTR(FLV) = 5
+                     END CASE
+                  NEXT FLV
+            END CASE
+            ACT.CV = 1 ;* T27936
+            FOR ACCT = 1 TO ACCT.CNT ;* NO. OF ACCTS FROM WHICH TO BE DRAWN TO A PERTICULAR REGULAR LINE
+               SIGN = GLRP.REC(LN)<1,GLRP.ACCT.SIGN,ACCT> : "1"
+               ATYPE = GLRP.REC(LN)<1,GLRP.ACCT.TYPE,ACCT>
+               BEGIN CASE
+                  CASE GLRP.REC(LN)<1,GLRP.ACCT.CODE,ACCT> = ""
+                     ACCT.NO = LN.ACCT<1,1,ACCT>
+                     GOSUB 20000
+                  CASE GLRP.REC(LN)<1,GLRP.ACCT.CODE,ACCT> = 1
+                     MATREAD CAS.REC FROM CATG.AND.SUB, CONO : LN.ACCT<1,1,ACCT> ELSE MAT CAS.REC = ""
+                     ACNT = COUNT(CAS.ACCT,VM) + (CAS.ACCT # "")
+                     FOR AA = 1 TO ACNT
+                        ACCT.NO = CAS.ACCT<1,AA>
+                        GOSUB 20000
+                     NEXT AA
+                  CASE GLRP.REC(LN)<1,GLRP.ACCT.CODE,ACCT> = 2
+                     MATREAD AC.REC FROM ACCT.CATG, LN.ACCT<1,1,ACCT> ELSE MAT AC.REC = ""
+                     SCNT = COUNT(AC.SUB,VM) + (AC.SUB # "")
+                     FOR SS = 1 TO SCNT
+                        MATREAD CAS.REC FROM CATG.AND.SUB, CONO : LN.ACCT<1,1,ACCT> : AC.SUB<1,SS> ELSE MAT CAS.REC = ""
+                        ACNT = COUNT(CAS.ACCT,VM) + (CAS.ACCT # "")
+                        FOR AA = 1 TO ACNT
+                           ACCT.NO = CAS.ACCT<1,AA>
+                           GOSUB 20000
+                        NEXT AA
+                     NEXT SS
+                  CASE GLRP.REC(LN)<1,GLRP.ACCT.CODE,ACCT> = 3
+                     MATREAD AT.REC FROM ACCT.TYPE, LN.ACCT<1,1,ACCT> ELSE MAT AT.REC = ""
+                     CCNT = COUNT(AT.CATG,VM) + (AT.CATG # "")
+                     FOR CC = 1 TO CCNT
+                        MATREAD AC.REC FROM ACCT.CATG, AT.CATG<1,CC> ELSE MAT AC.REC = ""
+                        SCNT = COUNT(AC.SUB,VM) + (AC.SUB # "")
+                        FOR SS = 1 TO SCNT
+                           MATREAD CAS.REC FROM CATG.AND.SUB, CONO : AT.CATG<1,CC> : AC.SUB<1,SS> ELSE MAT CAS.REC = ""
+                           ACNT = COUNT(CAS.ACCT,VM) + (CAS.ACCT # "")
+                           FOR AA = 1 TO ACNT
+                              ACCT.NO = CAS.ACCT<1,AA>
+                              GOSUB 20000
+                           NEXT AA
+                        NEXT SS
+                     NEXT CC
+                  CASE 1
+               END CASE
+            NEXT ACCT
+            ACCT.AMT(7,1) = GLRP.REC(LN)<1,GLRP.LINE.AMT>
+            FOR COL = 1 TO COL.CNT ;* THIS IS COLUMN COUNT TO GET FOR THAT PERTICULAR REGULAR LINE
+               LINE<COL> = ACCT.AMT(COL.ATT(COL),COL.PTR(COL))<COL.MON(COL)>
+               FIL.PTR(COL) = OFIL.PTR(COL)
+            NEXT COL
+            CONO.KEY = OCONO.KEY
+         CASE LN.TYPE = "S" ;* IF THE LINE IS SUB TOTAL
+            TO.LN = GLRP.REC(LN)<1,GLRP.LINE.LINE>
+            FOR COL = 1 TO COL.CNT
+               BEGIN CASE
+                  CASE COL.ATT(COL) = 7
+                     LINE<COL> = GLRP.REC(LN)<1,GLRP.LINE.AMT>
+                  CASE COL.ATT(COL) < 7
+                     SLN = XLN - 1
+                     LOOP
+                        LTYPE = GLRP.REC(SLN+GLRP.BEG.LINE)<1,GLRP.LINE.TYPE>
+                        LSLN = GLRP.REC(SLN+GLRP.BEG.LINE)<1,GLRP.LINE.LINE>
+                        BEGIN CASE
+                           CASE LTYPE = "R"
+                              READ TEMP.LINE FROM TEMP.REPORT, SLN ELSE TEMP.LINE = ""
+                              LINE<COL> = LINE<COL> + TEMP.LINE<COL>
+                           CASE LTYPE = "S" AND TO.LN <= LSLN
+                              READ TEMP.LINE FROM TEMP.REPORT, SLN ELSE TEMP.LINE = ""
+                              LINE<COL> = LINE<COL> + TEMP.LINE<COL>
+                              SLN = LSLN
+                        END CASE
+                        SLN = SLN - 1
+                     WHILE SLN >= TO.LN DO REPEAT
+               END CASE
+            NEXT COL
+         CASE LN.TYPE = "T"
+            FOR COL = 1 TO COL.CNT
+               BEGIN CASE
+                  CASE COL.ATT(COL) = 7
+                     LINE<COL> = GLRP.REC(LN)<1,GLRP.LINE.AMT>
+                  CASE COL.ATT(COL) < 7
+                     SLN = XLN - 1
+                     LOOP
+                        LTYPE = GLRP.REC(SLN+GLRP.BEG.LINE)<1,GLRP.LINE.TYPE>
+                        LSLN = GLRP.REC(SLN+GLRP.BEG.LINE)<1,GLRP.LINE.LINE>
+                        BEGIN CASE
+                           CASE LTYPE = "R"
+                              READ TEMP.LINE FROM TEMP.REPORT, SLN ELSE TEMP.LINE = ""
+                              LINE<COL> = LINE<COL> + TEMP.LINE<COL>
+                           CASE LTYPE = "S" AND TLN.BEG <= LSLN
+                              READ TEMP.LINE FROM TEMP.REPORT, SLN ELSE TEMP.LINE = ""
+                              LINE<COL> = LINE<COL> + TEMP.LINE<COL>
+                              SLN = LSLN
+                        END CASE
+                        SLN = SLN - 1
+                     WHILE SLN >= TLN.BEG DO REPEAT
+               END CASE
+            NEXT COL
+            TLN.CNT = TLN.CNT + 1
+            TLINES<TLN.CNT> = XLN
+            TLN.BEG = XLN + 1
+      END CASE
+      WRITE LINE ON TEMP.REPORT, XLN
+* TASK 16468 *
+      IF BUFFER<11> # "NONE" THEN
+         WRITE LINE ON USER.REPORT, XLN
+      END
+   NEXT XLN
+   MAT LINES = ""
+   TITLE.CNT = COUNT(GLRP.TITLE,VM) + (GLRP.TITLE # "")
+   HLN = 0
+   FOR L = 1 TO TITLE.CNT
+      IF TRIM(GLRP.TITLE<1,L>) # "" THEN
+         HLN = HLN + 1
+         TITLE = GLRP.TITLE<1,L>
+         POS = INDEX(TITLE,"^P^",1)
+         IF POS THEN TITLE = TITLE[1,POS-1]:PERIOD:TITLE[POS+3,999]
+         POS = INDEX(TITLE,"^D^",1)
+         IF POS THEN TITLE = TITLE[1,POS-1]:ENDN.DATE:TITLE[POS+3,999]
+         IF LEVEL <> 7 THEN
+            POS = INDEX(TITLE,"^DV^",1)
+            IF POS THEN
+               IF SEL.DV = "00" THEN
+                  DIV.DESC = "GENERAL DIVISION"
+               END ELSE
+                  MATREAD DIV.REC FROM DIVISION, CONO : SEL.DV ELSE
+                     DIV.DESC = SEL.DV
+                  END
+               END
+               TITLE = TITLE[1,POS-1]:DIV.DESC:TITLE[POS+4,999]
+            END
+            POS = INDEX(TITLE,"^DP^",1)
+            IF POS THEN
+               IF SEL.DP = "00" THEN
+                  DEPT.DESC = "GENERAL DEPARTMENT"
+               END ELSE
+                  MATREAD DEPT.REC FROM DEPARTMENT, CONO : SEL.DP ELSE
+                     DEPT.DESC = SEL.DP
+                  END
+               END
+               TITLE = TITLE[1,POS-1]:DEPT.DESC:TITLE[POS+4,999]
+            END
+            POS = INDEX(TITLE,"^CC^",1)
+            IF POS THEN
+               IF SEL.CC = "000" THEN
+                  CCTR.DESC = "GENERAL COST CENTER"
+               END ELSE
+                  MATREAD CCTR.REC FROM COST.CNTR, CONO : SEL.CC ELSE
+                     CCTR.DESC = SEL.CC
+                  END
+               END
+               TITLE = TITLE[1,POS-1]:CCTR.DESC:TITLE[POS+4,999]
+            END
+         END
+         LINES(HLN) = SPACE(INT((REPORT.LEN-LEN(TITLE))/2 + .5)) : TITLE
+         LINES(HLN) = SPACE(10):LINES(HLN) ; * T26493
+      END
+   NEXT L
+   HLN = HLN + 1
+   LINES(HLN) = ""
+   IF GLRP.HD.COL # "" THEN
+      HLN = HLN + 1
+      SUP.HD.CNT = COUNT(GLRP.HD.COL,VM) + 1
+      FOR S = 1 TO SUP.HD.CNT
+         LINES(HLN) = LINES(HLN) : SPACE(GLRP.HD.COL<1,S> - LEN(LINES(HLN))) : GLRP.HD.DESC<1,S>
+      NEXT S
+   END
+   LINES(HLN+1) = SPACE(GLRP.GRP.LEN+1)
+   LINES(HLN+2) = SPACE(GLRP.GRP.LEN+1)
+   LINES(HLN+3) = SPACE(GLRP.GRP.LEN+1)
+   FOR COL = 1 TO COL.CNT
+      COL.HEAD1 = GLRP.COL.HEAD1<1,COL>
+      COL.HEAD2 = GLRP.COL.HEAD2<1,COL>
+      BEF.SPC = INT((COL.LEN(COL) - LEN(COL.HEAD1)) / 2 + .5)
+      AFT.SPC = COL.LEN(COL) - LEN(COL.HEAD1) - BEF.SPC
+      LINES(HLN+1) = LINES(HLN+1):SPACE(COL.SPC(COL)+BEF.SPC):COL.HEAD1:SPACE(AFT.SPC)
+      BEF.SPC = INT((COL.LEN(COL) - LEN(COL.HEAD2)) / 2 + .5)
+      AFT.SPC = COL.LEN(COL) - LEN(COL.HEAD2) - BEF.SPC
+      LINES(HLN+2) = LINES(HLN+2):SPACE(COL.SPC(COL)+BEF.SPC):COL.HEAD2:SPACE(AFT.SPC)
+      IF GLRP.COL.DASH<1,COL> = "" THEN
+         LINES(HLN+3) = LINES(HLN+3) : SPACE(COL.SPC(COL)+COL.LEN(COL))
+      END ELSE
+         LINES(HLN+3) = LINES(HLN+3) : SPACE(COL.SPC(COL)) : STR(GLRP.COL.DASH<1,COL>,COL.LEN(COL))
+      END
+   NEXT COL
+   FOR L = 1 TO 3
+      LLL = HLN + 1
+      IF TRIM(LINES(LLL)) = "" THEN
+         FOR LL = LLL TO 19
+            LINES(LL) = LINES(LL+1)
+         NEXT LL
+         LINES(25) = ""
+      END ELSE
+         HLN = HLN + 1
+      END
+   NEXT L
+   FOR XLN = 1 TO LN.CNT
+      READ LINE FROM TEMP.REPORT, XLN ELSE LINE = ""
+      FOR COL = 1 TO COL.CNT
+         IF COL.TYPE(COL) # "R" AND COL.CASE(COL) = 1 THEN
+            GOSUB 1100
+            BEGIN CASE
+               CASE COL.TYPE(COL) = "A"
+                  LINE<COL> = AVALUE + BVALUE
+               CASE COL.TYPE(COL) = "S"
+                  LINE<COL> = AVALUE - BVALUE
+            END CASE
+         END
+      NEXT COL
+      WRITE LINE ON TEMP.REPORT, XLN
+* TASK 16468 *
+      IF BUFFER<11> # "NONE" THEN
+         WRITE LINE ON USER.REPORT, XLN
+      END
+   NEXT XLN
+   IF PTR_ON = "N" THEN
+      PRINTER ON
+      PTR_ON = "Y"
+   END
+   GOSUB 10000
+   IF TLN.CNT = 0 THEN
+      TLN = 0
+   END ELSE
+      TLN = TLINES<1>
+      TLN.CNT = TLN.CNT - 1
+      TLINES = DELETE(TLINES,1,0,0)
+   END
+   FOR XLN = 1 TO LN.CNT
+      LN = XLN + GLRP.BEG.LINE
+      LN.TYPE = GLRP.REC(LN)<1,GLRP.LINE.TYPE>
+      LN.DESC = GLRP.REC(LN)<1,GLRP.LINE.DESC>
+      LN.DASH = GLRP.REC(LN)<1,GLRP.LINE.DASH>
+      LN.SKIP = GLRP.REC(LN)<1,GLRP.LINE.SKIP>
+      BEGIN CASE
+         CASE LN.DASH # ""
+            LOCATE LN.DASH IN DASHES,1 SETTING FND ELSE
+               DASHES<FND> = LN.DASH
+               LINE.DASH(FND) = SPACE(GLRP.GRP.LEN+1)
+               FOR COL = 1 TO COL.CNT
+                  LINE.DASH(FND) = LINE.DASH(FND) : SPACE(COL.SPC(COL))
+                  IF COL.LEN(COL) > 0 THEN
+                     LINE.DASH(FND) = LINE.DASH(FND) : STR(LN.DASH,COL.LEN(COL))
+                  END
+               NEXT COL
+            END
+            IF LN.PTR+1 GE PAGE.SIZE THEN GOSUB 10000    ;* C40361
+            PRINT LINE.DASH(FND)
+            LN.PTR = LN.PTR + 1
+            IF LN.TYPE = "C" THEN GOTO 999
+         CASE LN.TYPE = "C"
+            PLINE = LN.DESC LINE.DESC.PIC
+            IF LN.PTR+1 GE PAGE.SIZE THEN GOSUB 10000    ;* C40361
+            PRINT PLINE
+            LN.PTR += 1                                 ;* C40361
+            GOTO 999
+      END CASE
+      READ LINE FROM TEMP.REPORT, XLN ELSE LINE = ""
+      PLINE = LN.DESC LINE.DESC.PIC
+      PLINE.DET.DATA = "" ;* T27936
+      FOR COL = 1 TO COL.CNT
+         PLINE = PLINE : SPACE(COL.SPC(COL))
+         PVALUE = LINE<COL>
+* SPC.COL = 1
+         IF COL.TYPE(COL) = "R" THEN
+            PVALUE = PVALUE / COL.PREC(COL)
+         END ELSE
+            IF COL.CASE(COL) < 1 THEN
+               AVALUE = ""; BVALUE = ""
+            END ELSE
+               ON COL.CASE(COL) GOSUB 1100,1200,1300,1400,1500,1600,1700
+            END
+            BEGIN CASE
+               CASE AVALUE = "" AND BVALUE = ""
+                  PVALUE = ""
+               CASE COL.TYPE(COL) = "P"
+                  IF AVALUE+0 = 0 OR BVALUE+0 = 0 THEN
+                     PVALUE = 0
+                     LINE<COL> = 0
+                  END ELSE
+                     TOT.LN = COL.TLN(COL) + GLRP.BEG.LINE
+                     BEGIN CASE
+                        CASE COL.CASE(COL) = 3
+                           IF GLRP.REC(LN)<1,GLRP.LINE.REV> = "Y" THEN
+                              AVALUE = 0 - AVALUE
+                           END
+                           IF GLRP.REC(TOT.LN)<1,GLRP.LINE.REV> = "Y" THEN
+                              BVALUE = 0 - BVALUE
+                           END
+                        CASE COL.CASE(COL) = 6
+                           IF GLRP.REC(TOT.LN)<1,GLRP.LINE.REV> = "Y" THEN
+                              AVALUE = 0 - AVALUE
+                           END
+                           IF GLRP.REC(LN)<1,GLRP.LINE.REV> = "Y" THEN
+                              BVALUE = 0 - BVALUE
+                           END
+                     END CASE
+                     LINE<COL> = (AVALUE/BVALUE) * 10000
+                     PVALUE = LINE<COL> / COL.PREC(COL)
+                  END
+* SPC.COL = PVALUE
+               CASE COL.TYPE(COL) = "A"
+                  LINE<COL> = AVALUE + BVALUE
+                  PVALUE = (AVALUE + BVALUE) / COL.PREC(COL)
+               CASE COL.TYPE(COL) = "S"
+                  LINE<COL> = AVALUE - BVALUE
+                  PVALUE = (AVALUE - BVALUE) / COL.PREC(COL)
+               CASE 1
+                  PVALUE = ""
+            END CASE
+         END
+         BEGIN CASE
+            CASE COL.TYPE(COL) = "R" AND COL.PREC(COL) = 1
+            CASE PVALUE > 0
+               PVALUE = INT(PVALUE + .5)
+            CASE PVALUE < 0
+               PVALUE = INT(PVALUE - .5)
+         END CASE
+         BEGIN CASE
+            CASE COL.LEN(COL) < 1
+* CASE SPC.COL = 0
+* PLINE = PLINE : SPACE(COL.LEN(COL))
+            CASE GLRP.REC(LN)<1,GLRP.LINE.REV> = "Y" AND COL.ATT(COL) # 7 AND COL.TYPE(COL) # "P"
+               PVALUE = 0 - PVALUE
+               PLINE = PLINE : OCONV((PVALUE),COL.CONV(COL)) COL.PIC(COL)<1,1> : COL.PIC(COL)<1,2>
+            CASE 1
+               PLINE = PLINE : OCONV(PVALUE,COL.CONV(COL)) COL.PIC(COL)<1,1> : COL.PIC(COL)<1,2>
+         END CASE
+*T27936 v
+         IF BUFFER<16> = "Y" THEN
+            ACCT.CNT = DCOUNT(DTL.ACCT.NO<XLN>,VM)
+            FOR I = 1 TO ACCT.CNT ;* Account Count
+               KEY.ID = DTL.ACCT.NO<XLN,I>: "!" : COL.ATT(COL) : "!" : XLN : "!" : COL.PTR(COL) : "!" : COL.MON(COL)
+               READ MYDATA FROM TEMP.REPORT, KEY.ID ELSE MYDATA = ""
+               MY.PVALUE = MYDATA<1> / COL.PREC(COL)
+               BEGIN CASE
+                  CASE COL.LEN(COL) < 1
+                  CASE GLRP.REC(LN)<1,GLRP.LINE.REV> = "Y" AND COL.ATT(COL) # 7 AND COL.TYPE(COL) # "P"
+                     MY.PVALUE = 0 - MY.PVALUE
+                     PLINE.DET.DATA<I,COL> = OCONV(MY.PVALUE,COL.CONV(COL)) COL.PIC(COL)<1,1> : COL.PIC(COL)<1,2>
+                  CASE 1
+                     PLINE.DET.DATA<I,COL> = OCONV(MY.PVALUE,COL.CONV(COL)) COL.PIC(COL)<1,1> : COL.PIC(COL)<1,2>
+               END CASE
+            NEXT I
+         END
+*T27936 ^
+      NEXT COL
+      WRITE LINE ON TEMP.REPORT, XLN
+* TASK 16468 *
+      IF BUFFER<11> # "NONE" THEN
+         WRITE LINE ON USER.REPORT, XLN
+      END
+      IF LN.TYPE = "T" THEN
+         IF TLN.CNT = 0 THEN
+            TLN = 0
+         END ELSE
+            TLN = TLINES<1>
+            TLN.CNT = TLN.CNT - 1
+            TLINES = DELETE(TLINES,1,0,0)
+         END
+      END
+      IF LN.PTR+1 GE PAGE.SIZE THEN GOSUB 10000    ;* C40361
+      PRINT PLINE
+*T27936 v
+      IF BUFFER<16> = "Y" THEN
+         ACCT.CNT = DCOUNT(DTL.ACCT.NO<XLN>,VM)
+         MYCNT = DCOUNT(PLINE.DET.DATA,AM) ;* This is Line Items
+         FOR I = 1 TO ACCT.CNT
+            STR = "...." : DTL.ACCT.NO<XLN,I> CO.ACCT.PIC
+            STR = STR LINE.DESC.PIC
+            FOR J = 1 TO DCOUNT(PLINE.DET.DATA<I>,VM) ;* This is column count
+               STR = STR : SPACE(COL.SPC(J)) : PLINE.DET.DATA<I,J>
+            NEXT J
+            IF STR # "" THEN
+               PRINT STR
+            END
+            LN.PTR += 1  ;* C40361
+*              FOR SKIP = 1 TO LN.SKIP
+*                 IF LN.PTR+1 GE PAGE.SIZE THEN GOSUB 10000  ;* C40361
+*                 PRINT
+*                 LN.PTR += 1                                ;* C40361
+*              NEXT SKIP
+            IF LN.PTR GE PAGE.SIZE THEN GOSUB 10000      ;* C40361
+         NEXT I
+      END
+*T27936 ^
+      LN.PTR += 1 ;* C40361
+999 *
+      FOR SKIP = 1 TO LN.SKIP
+         IF LN.PTR+1 GE PAGE.SIZE THEN GOSUB 10000  ;* C40361
+         PRINT
+         LN.PTR += 1                                ;* C40361
+      NEXT SKIP
+      IF LN.PTR GE PAGE.SIZE THEN GOSUB 10000      ;* C40361
+   NEXT XLN
+   IF BUFFER<17> = "V" OR BUFFER<17> = "M" THEN GOTO 9999
+   PRINTER OFF
+   PRINTER CLOSE
+   PTR_ON = "N"
+9999*
+REPEAT
+IF BUFFER<17> = "V" OR BUFFER<17> = "M" OR PTR_ON = "Y" THEN
+   PRINTER CLOSE
+   PRINTER OFF
+   PTR_ON = "N"
+END
+GOTO 99999
+1100*
+AVALUE = LINE<COL.CC1<COL>>
+BVALUE = LINE<COL.CC2<COL>>
+RETURN
+1200*
+AVALUE = LINE<COL.CC1<COL>>
+BVALUE = PVALUE
+RETURN
+1300*
+READ TEMP.LINE FROM TEMP.REPORT, COL.TLN(COL) ELSE TEMP.LINE = ""
+AVALUE = LINE<COL.CC1<COL>>
+BVALUE = TEMP.LINE<COL.CC1<COL>>
+RETURN
+1400*
+READ TEMP.LINE FROM TEMP.REPORT, TLN ELSE TEMP.LINE = ""
+AVALUE = LINE<COL.CC1<COL>>
+BVALUE = TEMP.LINE<COL.CC1<COL>>
+RETURN
+1500*
+AVALUE = PVALUE
+BVALUE = LINE<COL.CC2<COL>>
+RETURN
+1600*
+READ TEMP.LINE FROM TEMP.REPORT, COL.TLN(COL) ELSE TEMP.LINE = ""
+AVALUE = TEMP.LINE<COL.CC2<COL>>
+BVALUE = LINE<COL.CC2<COL>>
+RETURN
+1700*
+IF TLN THEN
+   READ TEMP.LINE FROM TEMP.REPORT, TLN ELSE TEMP.LINE = ""
+   AVALUE = TEMP.LINE<COL.CC2<COL>>
+   BVALUE = LINE<COL.CC2<COL>>
+END ELSE
+   AVALUE = ""; BVALUE = ""
+END
+RETURN
+10000*
+PRINT CHAR(12)
+PAGE.NO = PAGE.NO + 1
+*T26493 v
+*  IF LEN(PAGE.NO) < 2 THEN PAGE.NO = "0" : PAGE.NO
+*  PRINT COMPANY.HEADING
+*  PRINT " REPORT # : ": GLRP.ID[4,3] :
+*  PRINT SPACE(2) : "PAGE # : " : PAGE.NO "R#2" :
+*  PRINT SPACE(70) : "DATE : ":OCONV(DATE(),"D2/") :
+*  PRINT SPACE(2) : "TIME : ":OCONV(TIME(),"MTS")
+PHD1 = HD1 : PAGE.NO
+HD3 = "FRG REPORT # : ":GLRP.ID[4,3]
+PRINT PHD1
+PRINT HD2
+PRINT HD3
+*T26493 ^
+FOR PLN = 1 TO HLN
+   PRINT LINES(PLN)
+NEXT PLN
+*C36742 v
+*  LN.PTR = HLN + 3
+LN.PTR = HLN + 2
+*C36742 ^
+LN.PTR = HLN + 3 ; * T26493
+RETURN
+***************************
+20000*
+MON.COL.CNT = DCOUNT(COL.MONTHS,AM)
+FOR FLV = 1 TO MAX.LEVEL
+*T27936 v
+*     MATREAD CB.REC FROM COA.BAL(FIL.PTR(FLV)) , CONO.KEY<FLV>:ACCT.NO ELSE GOTO 29999
+   MATREAD CB.REC FROM COA.BAL(FIL.PTR(FLV)) , CONO.KEY<FLV>:ACCT.NO ELSE
+      IF BUFFER<16> = "Y" THEN
+         MAT CB.REC = ""
+      END ELSE
+         GOTO 29999
+      END
+   END
+*T27936 ^
+*CSF 26179 v
+   CB.REC(SCB.OPN+NUM.PERIODS+1) = CB.REC(55)
+   CB.REC(SCB.LYR+NUM.PERIODS+1) = CB.REC(108)
+   CB.REC(SCB.BUD+NUM.PERIODS+1) = CB.REC(161)
+*CSF 26179 ^
+   FOR MC = 1 TO MON.COL.CNT
+      DATA1 = 0;DATA2 = 0; DATA3 = 0; DATA4 = 0; DATA5 = 0; DATA6 = 0
+      MONTH = COL.MONTHS<MC>
+      BEGIN CASE
+         CASE ATYPE = ""
+            ACCT.AMT(1,FLV)<MC> = ACCT.AMT(1,FLV)<MC> + (CB.REC(CB.OPN + MONTH) * SIGN)
+            ACCT.AMT(2,FLV)<MC> = ACCT.AMT(2,FLV)<MC> + ((CB.REC(CB.OPN + MONTH) - CB.REC(BG.OPN + MONTH)) * SIGN)
+            ACCT.AMT(3,FLV)<MC> = ACCT.AMT(3,FLV)<MC> + (CB.REC(CB.LYR + MONTH) * SIGN)
+            ACCT.AMT(4,FLV)<MC> = ACCT.AMT(4,FLV)<MC> + ((CB.REC(CB.LYR + MONTH) - CB.REC(BG.LYR + MONTH)) * SIGN)
+            ACCT.AMT(5,FLV)<MC> = ACCT.AMT(5,FLV)<MC> + (CB.REC(CB.BUD + MONTH) * SIGN)
+            ACCT.AMT(6,FLV)<MC> = ACCT.AMT(6,FLV)<MC> + ((CB.REC(CB.BUD + MONTH) - CB.REC(BG.BUD + MONTH)) * SIGN)
+*T27936 v      
+            IF BUFFER<16> = "Y" THEN
+               DATA1 = (CB.REC(CB.OPN + MONTH) * SIGN)
+               DATA2 = ((CB.REC(CB.OPN + MONTH) - CB.REC(BG.OPN + MONTH)) * SIGN)
+               DATA3 = (CB.REC(CB.LYR + MONTH) * SIGN)
+               DATA4 = ((CB.REC(CB.LYR + MONTH) - CB.REC(BG.LYR + MONTH)) * SIGN)
+               DATA5 = (CB.REC(CB.BUD + MONTH) * SIGN)
+               DATA6 = ((CB.REC(CB.BUD + MONTH) - CB.REC(BG.BUD + MONTH)) * SIGN)
+            END
+*T27936 ^
+         CASE ATYPE = "B"
+            ACCT.AMT(1,FLV)<MC> = ACCT.AMT(1,FLV)<MC> + (CB.OPN.01 * SIGN)
+            ACCT.AMT(2,FLV)<MC> = ACCT.AMT(2,FLV)<MC> + (CB.REC(BG.OPN + MONTH) * SIGN)
+            ACCT.AMT(3,FLV)<MC> = ACCT.AMT(3,FLV)<MC> + (CB.LYR.01 * SIGN)
+            ACCT.AMT(4,FLV)<MC> = ACCT.AMT(4,FLV)<MC> + (CB.REC(BG.LYR + MONTH) * SIGN)
+            ACCT.AMT(5,FLV)<MC> = ACCT.AMT(5,FLV)<MC> + (CB.BUD.01 * SIGN)
+            ACCT.AMT(6,FLV)<MC> = ACCT.AMT(6,FLV)<MC> + (CB.REC(BG.BUD + MONTH) * SIGN)
+*T27936 v
+            IF BUFFER<16> = "Y" THEN
+               DATA1 = (CB.OPN.01 * SIGN)
+               DATA2 = (CB.REC(BG.OPN + MONTH) * SIGN)
+               DATA3 = (CB.LYR.01 * SIGN)
+               DATA4 = (CB.REC(BG.LYR + MONTH) * SIGN)
+               DATA5 = (CB.BUD.01 * SIGN)
+               DATA6 = (CB.REC(BG.BUD + MONTH) * SIGN)
+            END
+*T27936 ^
+         CASE ATYPE = "E"
+            ACCT.AMT(1,FLV)<MC> = ACCT.AMT(1,FLV)<MC> + (CB.REC(CB.OPN + MONTH) * SIGN)
+            ACCT.AMT(2,FLV)<MC> = ACCT.AMT(2,FLV)<MC> + (CB.REC(CB.OPN + MONTH) * SIGN)
+            ACCT.AMT(3,FLV)<MC> = ACCT.AMT(3,FLV)<MC> + (CB.REC(CB.LYR + MONTH) * SIGN)
+            ACCT.AMT(4,FLV)<MC> = ACCT.AMT(4,FLV)<MC> + (CB.REC(CB.LYR + MONTH) * SIGN)
+            ACCT.AMT(5,FLV)<MC> = ACCT.AMT(5,FLV)<MC> + (CB.REC(CB.BUD + MONTH) * SIGN)
+            ACCT.AMT(6,FLV)<MC> = ACCT.AMT(6,FLV)<MC> + (CB.REC(CB.BUD + MONTH) * SIGN)
+*T27936 v
+            IF BUFFER<16> = "Y" THEN
+               DATA1 = (CB.REC(CB.OPN + MONTH) * SIGN)
+               DATA2 = (CB.REC(CB.OPN + MONTH) * SIGN)
+               DATA3 = (CB.REC(CB.LYR + MONTH) * SIGN)
+               DATA4 = (CB.REC(CB.LYR + MONTH) * SIGN)
+               DATA5 = (CB.REC(CB.BUD + MONTH) * SIGN)
+               DATA6 = (CB.REC(CB.BUD + MONTH) * SIGN)
+            END
+*T27936 ^
+         CASE 1
+            ACCT.AMT(1,FLV)<MC> = ACCT.AMT(1,FLV)<MC> + ((CB.REC(CB.OPN + MONTH) - CB.OPN.01) * SIGN)
+            ACCT.AMT(2,FLV)<MC> = ACCT.AMT(2,FLV)<MC> + ((CB.REC(CB.OPN + MONTH) - CB.REC(BG.OPN + MONTH)) * SIGN)
+            ACCT.AMT(3,FLV)<MC> = ACCT.AMT(3,FLV)<MC> + ((CB.REC(CB.LYR + MONTH) - CB.LYR.01) * SIGN)
+            ACCT.AMT(4,FLV)<MC> = ACCT.AMT(4,FLV)<MC> + ((CB.REC(CB.LYR + MONTH) - CB.REC(BG.LYR + MONTH)) * SIGN)
+            ACCT.AMT(5,FLV)<MC> = ACCT.AMT(5,FLV)<MC> + ((CB.REC(CB.BUD + MONTH) - CB.BUD.01) * SIGN)
+            ACCT.AMT(6,FLV)<MC> = ACCT.AMT(6,FLV)<MC> + ((CB.REC(CB.BUD + MONTH) - CB.REC(BG.BUD + MONTH)) * SIGN)
+*T27936 v
+            IF BUFFER<16> = "Y" THEN
+               DATA1 = (CB.REC(CB.OPN + MONTH) - CB.OPN.01) * SIGN
+               DATA2 = (CB.REC(CB.OPN + MONTH) - CB.REC(BG.OPN + MONTH)) * SIGN
+               DATA3 = (CB.REC(CB.LYR + MONTH) - CB.LYR.01) * SIGN
+               DATA4 = (CB.REC(CB.LYR + MONTH) - CB.REC(BG.LYR + MONTH)) * SIGN
+               DATA5 = (CB.REC(CB.BUD + MONTH) - CB.BUD.01) * SIGN
+               DATA6 = (CB.REC(CB.BUD + MONTH) - CB.REC(BG.BUD + MONTH)) * SIGN
+            END
+*T27936 ^         
+      END CASE
+*T27936 v 
+      IF BUFFER<16> = "Y" THEN
+         KEY.ID = ACCT.NO: "!" : "1" : "!" : XLN : "!" : FLV : "!" : MC
+         WRITE DATA1 ON TEMP.REPORT, KEY.ID
+         KEY.ID = ACCT.NO: "!" : "2" : "!" : XLN : "!" : FLV : "!" : MC
+         WRITE DATA2 ON TEMP.REPORT, KEY.ID
+         KEY.ID = ACCT.NO: "!" : "3" : "!" : XLN : "!" : FLV : "!" : MC
+         WRITE DATA3 ON TEMP.REPORT, KEY.ID
+         KEY.ID = ACCT.NO: "!" : "4" : "!" : XLN : "!" : FLV : "!" : MC
+         WRITE DATA4 ON TEMP.REPORT, KEY.ID
+         KEY.ID = ACCT.NO: "!" : "5" : "!" : XLN : "!" : FLV : "!" : MC
+         WRITE DATA5 ON TEMP.REPORT, KEY.ID
+         KEY.ID = ACCT.NO: "!" : "6" : "!" : XLN : "!" : FLV : "!" : MC
+         WRITE DATA6 ON TEMP.REPORT, KEY.ID
+      END
+*T27936 ^
+   NEXT MC
+   DTL.ACCT.NO<XLN,-1> = ACCT.NO ;*ADDED
+29999*
+NEXT FLV
+   * XLN - LINE INDX, COL- COL INDX
+   *DTL.ACCT.NO<XLN,ACT.CV> += "    " : ACCT.AMT(COL.ATT(COL),COL.PTR(COL))<COL.MON(COL)>
+RETURN
+***************************
+*
+*--- CALLS FOR SYSCOM
+*
+91000 *
+ERR.TYPE = 1;CALL SYSCOM(MAT SYSCOM.REC); RETURN
+92000 *
+ERR.TYPE = 2;CALL SYSCOM(MAT SYSCOM.REC); RETURN
+93000 *
+ERR.TYPE = 3;CALL SYSCOM(MAT SYSCOM.REC)
+99999*
+*   PRINT @(-1)
+END

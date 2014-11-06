@@ -1,0 +1,1436 @@
+*********************************************************************
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* PROGRAM - ICOMPILE
+* AUTHOR  - NICK AMENDOLA, COMPUTER BUSINESS ASSOCIATES
+* - Modified by Ziad Yamout on 12/12/89
+* DATE    - 10/16/84
+* DESCRIPTION
+* This program will convert all "COPY" statements to "INCLUDE" statements
+* in the source program. The source program an associated COPY library
+* code will be written to the "USER.SCRATCH" file and submitted for
+* compilation.
+* The object created by the BASIC compiler is then transferred to the
+* file containing the original source program.
+*
+*T21177 diane 11/06/1996 * REV11 UPG
+*T26663 ajibaly 09/13/2002 * ADD -i BASIC OPTION
+*T27646 thompson 08/15/2003 * Upgrade functions to be run by system type
+*********************************************************************
+*
+*---- Get system equates
+*
+INCLUDE CHAR FROM CPYLIB
+INCLUDE NEW.BUILD.SCREEN FROM CPYLIB
+INCLUDE GEN.XREF.SUB FROM CPYLIB
+*
+*---- Dimensions
+*
+DIM U.S.SRC(425)
+DIM CPY.FILES(35)
+DIM SCR.FILES(35)
+DIM U.S.IDS(425)
+DIM VOC.FILES(35)
+*
+PROMPT ""
+CRT
+*
+*---- Open files
+*
+OPEN "", "USER.SCRATCH" TO USER.SCRATCH ELSE
+  ERRMSG = BEL:"** Cannot locate the USER.SCRATCH file **"
+  GOTO 99000
+END
+OPEN "","MACRO" TO MACRO ELSE
+  ERRMSG = BEL:"** Cannot locate the MACRO file **"
+  GOTO 99000
+END
+OPEN "","COMPILE.MSGS" TO COMPILE.MSGS ELSE
+  ERRMSG = BEL:"** Cannot locate the COMPILE.MSGS file **"
+  GOTO 99000
+END
+OPEN "","VOC" TO VOC ELSE
+  ERRMSG = BEL:"** Cannot locate the VOC file **"
+  GOTO 99000
+END
+OPEN "","CONTROL" TO CONTROL ELSE
+  ERRMSG = BEL:"** Cannot locate the CONTROL file **"
+  GOTO 99000
+END
+*OPEN "","pgm.map" TO PGM.MAP ELSE
+*   ERRMSG = BEL:"** Cannot locate the pgm.map file **"
+*   GOTO 99000
+*END
+*
+*---- Get command
+*
+PROCREAD BUFFER ELSE BUFFER = "ICOMPILE"
+OPERATION = BUFFER<1>
+IF OPERATION # "PBASIC" THEN
+  ERRMSG = BEL:"[":OPERATION:"] is not a valid verb"
+  GOTO 99000
+END
+*
+*T27646
+OS = 'OS' ; CALL SYSVARS.SUB(OS)
+*---- Establish System Type
+BEGIN CASE
+  CASE OS = "UNIX"
+    ISYS = "U"
+  CASE OS[1,7] = "Windows"
+    ISYS = "W"
+END CASE
+*T27646
+*---- Validate programs file
+*
+BPF.CNT = 0; BP.FILES = ""
+BP.FNAME = BUFFER<2>
+BEGIN CASE
+  CASE BP.FNAME = ""
+    OPEN "","XREF.DATA" TO XREF.DATA ELSE
+      ERRMSG = BEL:"** Cannot locate the XREF.DATA file **"
+      GOTO 99000
+    END
+    OPEN "","PREFIX" TO PREFIX ELSE
+      ERRMSG = BEL:"** Cannot locate the PREFIX file **"
+      GOTO 99000
+    END
+    MAT GEN.XREF.REC = ""
+    GXR.OPEN.XREF = "SCREEN.HELP.FILE"
+    GXR.NAME = "PBASIC.HELP"
+    GXR.SRCH.ID = "PBASIC.HELP"
+    CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+    GOTO 99999
+  CASE BP.FNAME = "LIST"
+    READNEXT BP.FNAME ELSE
+      ERRMSG = BEL:"** File list names was not specified **"
+      GOTO 99000
+    END
+    READ VREC FROM VOC, BP.FNAME ELSE VREC = ""
+    IF BP.FNAME # "PRODLIB" THEN
+      IF VREC<1> # "DIR" OR VREC<2> # BP.FNAME THEN
+        ERRMSG = BEL:"[":BP.FNAME:"] is not a valid program file"
+        GOTO 99000
+      END
+    END
+    OPEN "",BP.FNAME TO BP.FILE ELSE
+      ERRMSG = BEL:"[":BP.FNAME:"] is not a valid file"
+      GOTO 99000
+    END
+    BPF.CNT = 1; DATA = 1
+    LOOP
+      READNEXT BP.ID ELSE DATA = 0
+    WHILE DATA DO
+      BP.FILES<BPF.CNT> = BP.ID
+      BPF.CNT = BPF.CNT + 1
+    REPEAT
+  CASE 1
+    READ VREC FROM VOC, BP.FNAME ELSE VREC = ""
+    IF BP.FNAME # "PRODLIB" THEN
+      IF VREC<1> # "DIR" OR VREC<2> # BP.FNAME THEN
+        ERRMSG = BEL:"[":BP.FNAME:"] is not a valid program file"
+        GOTO 99000
+      END
+    END
+    OPEN "",BP.FNAME TO BP.FILE ELSE
+      ERRMSG = BEL:"[":BP.FNAME:"] is not a valid file"
+      GOTO 99000
+    END
+END CASE
+*
+*---- Initilalization
+*
+PORT.NO = 'TTY'
+CALL SYSVARS.SUB(PORT.NO)
+ACCT.NAME = @WHO
+VOC.CNT = 0
+READ MENU.CNTL FROM CONTROL, "MENUS.CONTROL" THEN
+  PMC.SYS = MENU.CNTL<6>
+  PMC.PATH = MENU.CNTL<9>
+  QF.ID = "QF_":PORT.NO
+  READU O.QREC FROM VOC, QF.ID ELSE O.QREC = ""
+  QREC = "F"
+  BEGIN CASE
+    CASE ISYS = "U"
+      QREC<2> = PMC.PATH:"/VOC"
+      QREC<3> = PMC.PATH:"/D_VOC"
+    CASE ISYS = "W"
+      QREC<2> = PMC.PATH:"\VOC"
+      QREC<3> = PMC.PATH:"\D_VOC"
+  END CASE
+*T27646
+  WRITEU QREC ON VOC, QF.ID
+  OPEN "", QF.ID TO VOC.FILES(VOC.CNT+1) THEN
+    VOC.CNT = VOC.CNT + 1
+    SYS.CNT = DCOUNT(PMC.SYS,VM)
+    FOR VC = 1 TO SYS.CNT
+      BEGIN CASE
+        CASE PMC.SYS<1,VC> = 'primacweb'
+          QREC<2> = "../":PMC.SYS<1,VC>:"/VOC"
+          QREC<3> = "../":PMC.SYS<1,VC>:"/D_VOC"
+        CASE ISYS = "U"
+          QREC<2> = PMC.PATH:"-":PMC.SYS<1,VC>:"/VOC"
+          QREC<3> = PMC.PATH:"-":PMC.SYS<1,VC>:"/D_VOC"
+        CASE ISYS = "W"
+          QREC<2> = PMC.PATH:"-":PMC.SYS<1,VC>:"\VOC"
+          QREC<3> = PMC.PATH:"-":PMC.SYS<1,VC>:"\D_VOC"
+      END CASE
+*T27646
+      WRITEU QREC ON VOC, QF.ID
+      OPEN "", QF.ID TO VOC.FILES(VOC.CNT+1) THEN
+        VOC.CNT = VOC.CNT + 1
+      END
+    NEXT VC
+  END
+  IF O.QREC = "" THEN
+    DELETE VOC, QF.ID
+  END ELSE
+    WRITE O.QREC ON VOC, QF.ID
+  END
+  O.QREC = ""; QREC = ""
+END
+ADD.LINE = ""
+CPY.NAMES = ""
+SCR.NAMES = ""
+B.OPT = ""; I.OPT = ""
+CNV.FLG = 0
+LIST.FLG = 0; CATL.FLG = 1; LOCAL.FLG = 0; VOCUPD = 0
+U.S.FLG = 1; DEL.U.S = 1
+EXP.MC.I = 0; EXP.MC.C = 0
+EXP.CP.I = 0; EXP.CP.C = 0
+*
+*---- Validate program
+*
+ERRMSG = ""; SRC.NAME = BUFFER<3>
+BEGIN CASE
+  CASE SRC.NAME = ""
+    GOSUB 128
+  CASE SRC.NAME[1,1] = "{"
+    OPTIONS = SRC.NAME[2,999]; SRC.NAME = ""
+    BPTR = 3; GOSUB 110
+  CASE SRC.NAME[1,1] = "("
+    OPTIONS = SRC.NAME[2,999]; SRC.NAME = ""
+    BPTR = 3; GOSUB 120
+  CASE BPF.CNT
+    ERRMSG = BEL:"** Cannot specify programs with an active file list **"
+    GOTO 99000
+  CASE 1
+    OPTIONS = BUFFER<4>
+    BEGIN CASE
+      CASE OPTIONS[1,1] = "{"
+        OPTIONS = OPTIONS[2,999]
+        BPTR = 4; GOSUB 110
+      CASE OPTIONS[1,1] = "("
+        OPTIONS = OPTIONS[2,999]
+        BPTR = 4; GOSUB 120
+      CASE 1
+        GOSUB 128
+    END CASE
+END CASE
+IF ERRMSG # "" THEN GOTO 99000
+IF BPF.CNT THEN SRC.NAME = "*"
+IF LIST.FLG THEN
+  PRINTER ON
+END
+GOSUB 21
+IF BPF.CNT > 1 THEN
+  BPF.CNT = BPF.CNT - 1
+  FOR BPF = 1 TO BPF.CNT
+    BP.FNAME = BP.FILES<BPF>
+    OPEN "",BP.FNAME TO BP.FILE THEN
+      SRC.NAME = "*"
+      GOSUB 21
+    END
+  NEXT BPF
+END
+IF LIST.FLG THEN
+  PRINTER OFF
+  PRINTER CLOSE
+END
+GOTO 99999
+21*
+M = INDEX(BP.FNAME,".",1)
+IF M THEN
+  SSC.FNAME = BP.FNAME[1,M-1]:".SCREENS"
+END ELSE
+  SSC.FNAME = BP.FNAME[1,LEN(BP.FNAME)-2]:".SCREENS"
+END
+BEGIN CASE
+  CASE SRC.NAME = ""
+    READNEXT SRC.NAME ELSE
+      ERRMSG = BEL:"** Program name was not specified **"
+      GOTO 99000
+    END
+    IF SRC.NAME[1,1] = "_" THEN
+      ERRMSG = BEL:"Cannot compile an OBJECT program [":SRC.NAME:"]"
+      GOTO 99000
+    END
+    READ SRC.ITEM FROM BP.FILE, SRC.NAME ELSE
+      ERRMSG = BEL:"Cannot locate program [":SRC.NAME:"] in file [":BP.FNAME:"]"
+      GOTO 99000
+    END
+    DATA = 1
+    CRT; CRT DATA "L#5":SRC.NAME; CRT
+    GOSUB 800; GOSUB 200
+    LOOP
+      READNEXT SRC.NAME ELSE DATA = 0
+    WHILE DATA DO
+      BEGIN CASE
+        CASE SRC.NAME[1,1] = "_"
+        CASE SRC.NAME = "makefile"
+        CASE 1
+          DATA = DATA + 1
+          CRT; CRT DATA "L#5":SRC.NAME; CRT
+          GOSUB 800; READ.OK = 1
+          READ SRC.ITEM FROM BP.FILE, SRC.NAME ELSE
+            C.ERR<-1> = "Cannot locate program [":SRC.NAME:"] in file [":BP.FNAME:"]"
+            READ.OK = 0; GOSUB 850
+          END
+          IF READ.OK THEN GOSUB 200
+      END CASE
+    REPEAT
+  CASE SRC.NAME = "*"
+    SELECT BP.FILE
+    DATA = 1
+    LOOP
+      READNEXT SRC.NAME ELSE DATA = 0
+    WHILE DATA DO
+      BEGIN CASE
+        CASE SRC.NAME[1,1] = "_"
+        CASE SRC.NAME = "makefile"
+        CASE 1
+          CRT; CRT DATA "L#5":SRC.NAME; CRT
+          DATA = DATA + 1
+          GOSUB 800; READ.OK = 1
+          READ SRC.ITEM FROM BP.FILE, SRC.NAME ELSE
+            C.ERR<-1> = "Cannot locate program [":SRC.NAME:"] in file [":BP.FNAME:"]"
+            READ.OK = 0; GOSUB 850
+          END
+          IF READ.OK THEN GOSUB 200
+      END CASE
+    REPEAT
+  CASE 1
+    READ SRC.ITEM FROM BP.FILE, SRC.NAME ELSE
+      ERRMSG = BEL:"Cannot locate program [":SRC.NAME:"] in file [":BP.FNAME:"]"
+      GOTO 99000
+    END
+    GOSUB 800; GOSUB 200
+END CASE
+RETURN
+*
+*---- Validate ICOMPILE options
+110*
+OPTR = 1
+IF OPTIONS[LEN(OPTIONS),1] = "}" THEN OPTIONS = OPTIONS[1,LEN(OPTIONS)-1]
+LOOP
+  OPT = FIELD(OPTIONS,",",OPTR)
+WHILE OPT # "" DO
+  BEGIN CASE
+* (U) Do not delete USER.SCRATCH.
+    CASE OPT = "U"
+      I.OPT = I.OPT:OPT:","
+      DEL.U.S = 0
+* (P) Print.
+    CASE OPT = "P"
+      I.OPT = I.OPT:OPT:","
+      LIST.FLG = 1
+* (L) Print only.
+    CASE OPT = "L"
+      I.OPT = I.OPT:OPT:","
+      U.S.FLG = 0; LIST.FLG = 1
+* (NC) Do not catalog
+    CASE OPT = "NC"
+      I.OPT = I.OPT:OPT:","
+      CATL.FLG = 0
+* (LOCAL) Locally catalog
+    CASE OPT = "LOCAL"
+      I.OPT = I.OPT:OPT:","
+      LOCAL.FLG = 1
+* (UPD) Update all VOC files
+    CASE OPT = "UPD"
+      I.OPT = I.OPT:OPT:","
+      VOCUPD = 1
+* (CNV) convert to a different hardware
+    CASE OPT = "CNV"
+      I.OPT = I.OPT:OPT:","
+      CNV.FLG = 1
+* (E) Print with exploding (no comments).
+    CASE OPT = "E"
+      I.OPT = I.OPT:OPT:","
+      LIST.FLG = 1
+      EXP.MC.I = 1; EXP.CP.I = 1
+* (E*) Print with exploding.
+    CASE OPT = "E*"
+      I.OPT = I.OPT:OPT:","
+      LIST.FLG = 1
+      EXP.MC.I = 1; EXP.CP.I = 1
+      EXP.MC.C = 1; EXP.CP.C = 1
+* (EM) Print with exploding macro (no comments).
+    CASE OPT = "EM"
+      I.OPT = I.OPT:OPT:","
+      LIST.FLG = 1
+      EXP.MC.I = 1
+* (EM*) Print with exploding macro.
+    CASE OPT = "EM*"
+      I.OPT = I.OPT:OPT:","
+      LIST.FLG = 1
+      EXP.MC.I = 1; EXP.MC.C = 1
+* (EC) Print with exploding copy libraries (no comments).
+    CASE OPT = "EC"
+      I.OPT = I.OPT:OPT:","
+      LIST.FLG = 1
+      EXP.CP.I = 1
+* (EC*) Print with exploding copy libraries.
+    CASE OPT = "EC*"
+      I.OPT = I.OPT:OPT:","
+      LIST.FLG = 1
+      EXP.CP.I = 1; EXP.CP.C = 1
+    CASE 1
+      OPTIONS = ""
+      ERRMSG = "** Invalid PBASIC option [":OPT:"] **"
+  END CASE
+  OPTR = OPTR + 1
+REPEAT
+IF I.OPT # "" THEN I.OPT = "(":I.OPT[1,LEN(I.OPT)-1]:")"
+OPTIONS = BUFFER<BPTR+1>
+IF OPTIONS[1,1] # "(" THEN GOTO 128
+OPTIONS = OPTIONS[2,999]
+*
+*---- Validate BASIC options
+120*
+IF OPTIONS[LEN(OPTIONS),1] = ")" THEN OPTIONS = OPTIONS[1,LEN(OPTIONS)-1]
+OPTR = 1
+LOOP
+  OPT = FIELD(OPTIONS,",",OPTR)
+WHILE OPT # "" DO
+  BEGIN CASE
+* (B) Backwards compatibility
+    CASE OPT = "B"
+      B.OPT = B.OPT:OPT:","
+* (D) Debugger
+    CASE OPT = "D"
+      B.OPT = B.OPT:OPT:","
+* (E) Compile without end-of-line opcodes
+    CASE OPT = "E"
+      B.OPT = B.OPT:OPT:","
+* (L) Print
+    CASE OPT = "L"
+      B.OPT = B.OPT:OPT:","
+* (M) Create symbol table and print map
+    CASE OPT = "M"
+      B.OPT = B.OPT:OPT:","
+* (N) No page
+    CASE OPT = "N"
+      B.OPT = B.OPT:OPT:","
+* (P) Print error/warning messages on the printer
+    CASE OPT = "P"
+      B.OPT = B.OPT:OPT:","
+* (X) Create cross reference of variables and labels
+    CASE OPT = "X"
+      B.OPT = B.OPT:OPT:","
+* (-i) odbc CALLS T26663
+    CASE OPT = "-i"
+      B.OPT = B.OPT:OPT:","
+    CASE 1
+      OPTIONS = ""
+      ERRMSG = "** Invalid BASIC option [":OPT:"] **"
+  END CASE
+  OPTR = OPTR + 1
+REPEAT
+*IF B.OPT # "" THEN B.OPT = "(":B.OPT[1,LEN(B.OPT)-1]:")"
+IF B.OPT # "" THEN B.OPT = "(":B.OPT[1,LEN(B.OPT)-1]
+IF B.OPT = "(-i" THEN B.OPT = "-i" ;* T26663
+128*
+IF NOT(CATL.FLG) THEN GOTO 129
+IF LOCAL.FLG AND VOCUPD THEN GOTO 129
+READ VREC FROM VOC, "CBABP" ELSE VREC = ""
+IF VREC<1> # "DIR" OR VREC<2> # "CBABP" THEN
+  LOCAL.FLG = 1; VOCUPD = 1
+  GOTO 129
+END
+READ VREC FROM VOC, "PMCBP" ELSE VREC = ""
+IF VREC<1> # "DIR" OR VREC<2> # "PMCBP" THEN
+  LOCAL.FLG = 1; VOCUPD = 1
+END
+129*
+RETURN
+*
+*---- ICOMPILE the program
+*
+200*
+NLN = 0; NLV = 1; NLX = 0
+ONLN = 0; OPLN = 0
+CNV.PTR = ""; CNV.LINES = ""
+COM.VARS = ""
+S$NAMES = ""; S$LAST = "!@#$%"; M$SEQ = 1000
+C$SEQ = 1000
+MAT U.S.SRC = ""; ERRMSG = ""
+U.S.CNT = 0
+IF U.S.FLG THEN
+  READ.OK = 1
+  READVU DUMMY FROM USER.SCRATCH, SRC.NAME,1 ELSE READ.OK = 0
+  IF READ.OK THEN
+    DELETE USER.SCRATCH, SRC.NAME
+    READVU DUMMY FROM USER.SCRATCH, SRC.NAME,1 ELSE NULL
+  END
+END
+DUMMY = ""
+210*
+LINE.CNT = DCOUNT(SRC.ITEM,AM)
+FOR PLN = 1 TO LINE.CNT
+  IF MOD(PLN,10) = 0 THEN CRT ">":
+  PRT.LINE = SRC.ITEM<1>
+  DEL SRC.ITEM<1>
+  SRC.LINE = TRIMB(PRT.LINE)
+*  SRC.LINE = PRT.LINE
+  BEGIN CASE
+    CASE SRC.LINE[1,6] = "*COPY>"
+      SRC.LINE = "*COPY ":SRC.LINE[7,999]
+    CASE SRC.LINE[1,6] = "*JOIN>"
+      SRC.LINE = "*JOIN ":SRC.LINE[7,999]
+*  CASE SRC.LINE[1,6] = "      "
+*     SRC.LINE = SRC.LINE[7,999]
+  END CASE
+  STMT = FIELD(TRIM(SRC.LINE)," ",1)
+  BEGIN CASE
+    CASE STMT = "*JOIN"
+      READ SRC.ITEM FROM BP.FILE, FIELD(SRC.LINE," ",2) ELSE
+        LINE.CNT = 0
+        ERRMSG = "Cannot locate join program [":FIELD(SRC.LINE," ",2):"] in file [":BP.FNAME:"]"
+      END
+      IF LINE.CNT THEN GOTO 210
+    CASE STMT = "*COPY"
+      GOSUB 5000
+    CASE STMT = "SCREEN" OR STMT = "MACRO"
+      NLN = NLN + 1
+      BEGIN CASE
+        CASE EXP.MC.I
+          IF PRT.LINE[1,1] = " " THEN
+            SPC = 2
+            LOOP WHILE PRT.LINE[SPC,1] = " " DO
+              SPC = SPC + 1
+            REPEAT
+            SPC = SPC - 1
+            PRT.LINE = "*":PRT.LINE[2,999]
+          END ELSE
+            PRT.LINE = "*":PRT.LINE
+            SPC = 0
+          END
+          GOSUB 1100
+        CASE LIST.FLG
+          GOSUB 1100
+      END CASE
+      P.LINE = TRIM(SRC.LINE)
+      IF STMT = "SCREEN" THEN
+        GOSUB 10000
+      END ELSE
+        P = INDEX(P.LINE," ",1)
+        PARAM = P.LINE[P+1,999]
+        P = INDEX(PARAM,";",1)
+        IF P = 0 THEN
+          MACRO.NAME = PARAM
+          MACRO.PARAM = ""
+        END ELSE
+          MACRO.NAME = PARAM[1,P-1]
+          MACRO.PARAM = PARAM[P+1,999]
+        END
+        GOSUB 10100; GOSUB 12000
+      END
+      IF LINE.CNT AND U.S.FLG THEN
+        WRITE U.S.ITEM ON USER.SCRATCH, U.S.ID
+        U.S.CNT = U.S.CNT + 1
+        U.S.IDS(U.S.CNT) = U.S.ID
+      END
+    CASE 1
+      NLN = NLN + 1
+      IF LIST.FLG THEN GOSUB 1100
+      BEGIN CASE
+        CASE SRC.LINE[1,1] = "*"
+          SRC.LINE = "*"
+        CASE CNV.FLG
+          CALL BP.CONV(PRT.LINE,ERRMSG)
+          BEGIN CASE
+            CASE ERRMSG = "CNV"
+              ERRMSG = ""
+              C.ERR<-1> = "Converted the following line :"
+              C.ERR<-1> = SRC.LINE
+              SRC.LINE = TRIMB(PRT.LINE)
+              C.ERR<-1> = SRC.LINE
+              CNV.PTR<-1> = PLN
+              CNV.LINES<-1> = PRT.LINE
+            CASE ERRMSG # ""
+              C.ERR<-1> = "ERROR in converting the following line :"
+              C.ERR<-1> = SRC.LINE
+              LINE.CNT = 0
+          END CASE
+*     CASE INDEX(PRT.LINE,"CALL ",1)
+*        CALL LS.BP.SUB(PRT.LINE,ERRMSG,PGM.MAP,ADD.LINE)
+*        BEGIN CASE
+*        CASE ERRMSG = "CNV"
+*          ERRMSG = ""
+*          C.ERR<-1> = "Converted the following subroutine line :"
+*          C.ERR<-1> = SRC.LINE
+*          SRC.LINE = TRIMB(PRT.LINE)
+*          C.ERR<-1> = SRC.LINE
+*        CASE ERRMSG # ""
+*          C.ERR<-1> = "ERROR in converting the following line :"
+*          C.ERR<-1> = SRC.LINE
+*          LINE.CNT = 0
+*        END CASE
+      END CASE
+      GOSUB 700
+  END CASE
+NEXT PLN
+BEGIN CASE
+  CASE U.S.FLG = 0
+    RELEASE COMPILE.MSGS, SRC.NAME
+    GOTO 290
+  CASE LINE.CNT = 0
+    RELEASE USER.SCRATCH, SRC.NAME
+    CRT; CRT ERRMSG
+    C.ERR<-1> = ERRMSG
+    GOTO 280
+END CASE
+MATWRITE U.S.SRC ON USER.SCRATCH, SRC.NAME
+* RELEASE USER.SCRATCH, SRC.NAME
+MAT U.S.SRC = ""; PRT.LINE = ""
+IF MOD(LINE.CNT,10) THEN
+  CRT ">"
+END ELSE
+  CRT
+END
+*
+*---- BASIC the program
+*
+STMT = "BASIC USER.SCRATCH ":SRC.NAME
+IF B.OPT # "" THEN STMT = STMT:" ":B.OPT
+C.ERR<-1> = STMT
+C.DATE = OCONV(DATE(),"D2/"); C.TIME = OCONV(TIME(),"MTS")
+PERFORM STMT CAPTURING RESPONSE
+CRT
+RCNT = DCOUNT(RESPONSE,AM)
+FOR I = 1 TO RCNT
+  IF RESPONSE<I> # "" THEN
+    CRT RESPONSE<I>
+    C.ERR<-1> = RESPONSE<I>
+  END
+NEXT I
+IF TRIM(RESPONSE<RCNT-1>) = "compilation finished" THEN
+  C.LN = 1
+END
+OBJ.NAME = "_":SRC.NAME
+ERRMSG = "COPY ":OBJ.NAME:" from USER.SCRATCH to ":BP.FNAME:" (O,D)"
+C.ERR<-1> = ERRMSG
+READ.OK = 1
+IF ISYS = "U" THEN
+  PCPERFORM "mv ":@PATH:"/USER.SCRATCH/":OBJ.NAME:" ":@PATH:"/":BP.FNAME:"/":OBJ.NAME
+END ELSE
+  PCPERFORM "del ":@PATH:"\":BP.FNAME:"\":OBJ.NAME
+  PCPERFORM "move ":@PATH:"\USER.SCRATCH\":OBJ.NAME:" ":@PATH:"\":BP.FNAME:"\":OBJ.NAME
+END
+IF READ.OK THEN
+  IF CATL.FLG THEN
+    IF NOT(LOCAL.FLG) THEN
+      READ VREC FROM VOC, SRC.NAME THEN
+        VOCUPD = 1
+      END
+      STMT = "DELETE.CATALOG ":SRC.NAME
+      C.ERR<-1> = STMT
+      PERFORM STMT CAPTURING RESPONSE
+      RCNT = DCOUNT(RESPONSE,AM)
+      FOR I = 1 TO RCNT
+        IF RESPONSE<I> # "" THEN
+          CRT RESPONSE<I>
+          C.ERR<-1> = RESPONSE<I>
+        END
+      NEXT I
+      IF VOCUPD THEN
+        FOR VC = 1 TO VOC.CNT
+          READU DUMMY FROM VOC.FILES(VC), SRC.NAME THEN
+            DELETE VOC.FILES(VC), SRC.NAME
+          END ELSE
+            RELEASE VOC.FILES(VC), SRC.NAME
+          END
+        NEXT VC
+      END
+    END
+    STMT = "CATALOG ":BP.FNAME:" ":SRC.NAME
+    IF LOCAL.FLG THEN
+      STMT = STMT:" LOCAL FORCE"
+    END ELSE
+      STMT = STMT:" FORCE"
+    END
+    C.ERR<-1> = STMT
+    PERFORM STMT CAPTURING RESPONSE
+    CRT
+    RCNT = DCOUNT(RESPONSE,AM)
+    FOR I = 1 TO RCNT
+      IF RESPONSE<I> # "" THEN
+        CRT RESPONSE<I>
+        C.ERR<-1> = RESPONSE<I>
+      END
+    NEXT I
+    IF LOCAL.FLG AND VOCUPD AND VOC.CNT THEN
+      READ VREC FROM VOC, SRC.NAME THEN
+        FOR VC = 1 TO VOC.CNT
+          READU DUMMY FROM VOC.FILES(VC), SRC.NAME ELSE NULL
+          WRITE VREC ON VOC.FILES(VC), SRC.NAME
+        NEXT VC
+      END
+    END
+*END
+*END
+    OBJ.ITEM = ""
+    IF CNV.PTR # "" THEN
+      READU SRC.ITEM FROM BP.FILE, SRC.NAME THEN
+        CNT = DCOUNT(CNV.PTR,AM)
+        FOR I = 1 TO CNT
+          SRC.ITEM<CNV.PTR<I>> = CNV.LINES<I>
+        NEXT I
+        WRITE SRC.ITEM ON BP.FILE, SRC.NAME
+      END ELSE
+        RELEASE BP.FILE, SRC.NAME
+      END
+    END
+  END
+END
+RESPONSE = ""
+*
+*---- Clear the USER.SCRATCH file
+280*
+IF DEL.U.S THEN
+  ERRMSG = "DELETE USER.SCRATCH, ":SRC.NAME
+  CRT; CRT ERRMSG
+  C.ERR<-1> = ERRMSG
+  READ.OK = 1
+  READVU DUMMY FROM USER.SCRATCH, SRC.NAME,1 ELSE
+    ERRMSG = "Cannot locate USER.SCRATCH, ":SRC.NAME
+    CRT; CRT ERRMSG
+    C.ERR<-1> = ERRMSG
+    RELEASE USER.SCRATCH, SRC.NAME
+    READ.OK = 0
+  END
+  DUMMY = ""
+  IF READ.OK THEN
+    DELETE USER.SCRATCH, SRC.NAME
+  END
+  FOR I = 1 TO U.S.CNT
+    ERRMSG = "DELETE USER.SCRATCH, ":U.S.IDS(I)
+    READ.OK = 1
+    READU OBJ.ITEM FROM USER.SCRATCH, U.S.IDS(I) ELSE
+      ERRMSG = "Cannot locate USER.SCRATCH, ":U.S.IDS(I)
+      CRT; CRT ERRMSG
+      C.ERR<-1> = ERRMSG
+      RELEASE USER.SCRATCH, U.S.IDS(I)
+      READ.OK = 0
+    END
+    OBJ.ITEM = ""
+    IF READ.OK THEN
+      DELETE USER.SCRATCH, U.S.IDS(I)
+    END
+  NEXT I
+END
+GOSUB 850
+290*
+MAT U.S.IDS = ""
+RETURN
+*
+*---- Update the USER.SCRATCH file
+700*
+IF ADD.LINE # "" THEN
+  NLX = NLX + 1
+  IF NLX > 10 THEN
+    NLV = NLV + 1
+    NLX = 1
+  END
+  U.S.SRC(NLV)<NLX> = ADD.LINE
+  ADD.LINE = ""
+END
+NLX = NLX + 1
+IF NLX > 10 THEN
+  NLV = NLV + 1
+  NLX = 1
+END
+U.S.SRC(NLV)<NLX> = SRC.LINE
+* WRITEVU SRC.LINE ON USER.SCRATCH, SRC.NAME,NLX
+RETURN
+*
+*---- Setup the COMPILE.MSGS file
+800*
+READ.OK = 1
+READU C.ERR FROM COMPILE.MSGS, SRC.NAME ELSE READ.OK = 0
+IF READ.OK THEN
+  FOR R = 9 TO 1 STEP -1
+    READ.OK = 1
+    READU DUMMY FROM COMPILE.MSGS, R:"!":SRC.NAME ELSE
+      RELEASE COMPILE.MSGS, R:"!":SRC.NAME
+      READ.OK = 0
+    END
+    IF READ.OK THEN
+      WRITE DUMMY ON COMPILE.MSGS, (R+1):"!":SRC.NAME
+    END
+  NEXT R
+  WRITE C.ERR ON COMPILE.MSGS, "1!":SRC.NAME
+END
+C.ERR = ""; C.LN = 0
+C.DATE = OCONV(DATE(),"D2/"); C.TIME = OCONV(TIME(),"MTS")
+RETURN
+*
+*---- Update the COMPILE.MSGS file
+850*
+INS C.TIME BEFORE C.ERR<1>
+INS C.DATE BEFORE C.ERR<1>
+INS B.OPT BEFORE C.ERR<1>
+INS I.OPT BEFORE C.ERR<1>
+INS C.LN BEFORE C.ERR<1>
+INS BP.FNAME BEFORE C.ERR<1>
+INS ACCT.NAME BEFORE C.ERR<1>
+PORT.USER = PORT.NO:" ":@LOGNAME
+INS PORT.USER BEFORE C.ERR<1>
+WRITE C.ERR ON COMPILE.MSGS, SRC.NAME
+RETURN
+*
+*---- Setup page heading
+1000*
+H.LINE = CHAR(12)
+H.LINE = H.LINE : BP.FNAME : "   " : SRC.NAME
+H.LINE = H.LINE "L#50" : "P R O G R A M   L I S T I N G" "L#50"
+H.LINE = H.LINE : OCONV(DATE(),"D2/") "L#10"
+H.LINE = H.LINE : OCONV(TIME(),"MTS") "L#10"
+H.LINE = H.LINE : "PAGE "
+PAGE.NO = 1
+PRINT H.LINE:PAGE.NO
+PRINT; PRINT
+L.P.CNT = 3
+RETURN
+*
+*---- Setup page to print
+1100*
+IF L.P.CNT > 55 THEN
+  PAGE.NO = PAGE.NO + 1
+  PRINT H.LINE:PAGE.NO
+  PRINT; PRINT
+  L.P.CNT = 3
+END
+L.P.CNT = L.P.CNT + 1
+IF NLN = ONLN THEN
+  PFX = SPACE(5)
+END ELSE
+  PFX = NLN "R%4":" "
+END
+IF PLN = OPLN THEN
+  PRINT PFX:SPACE(5):PRT.LINE
+END ELSE
+  PRINT PFX:PLN "R%4":" ":PRT.LINE
+END
+ONLN = NLN; OPLN = PLN
+RETURN
+*
+*---- Process *COPY statement
+5000*
+NLN = NLN + 1
+IF LIST.FLG THEN GOSUB 1100
+PARAM = FIELD(SRC.LINE," ",2)
+CPY.FILE = FIELD(PARAM,">",1)
+LOCATE CPY.FILE IN CPY.NAMES SETTING C.F.PTR ELSE
+  OPEN "",CPY.FILE TO CPY.FILES(C.F.PTR) ELSE
+    ERRMSG = "Cannot locate the ":CPY.FILE:" copy file"
+    LINE.CNT = 0; GOTO 5090
+  END
+  CPY.NAMES<C.F.PTR> = CPY.FILE
+END
+CPY.NAME = FIELD(PARAM,">",2)
+*T27646
+BEGIN CASE
+  CASE CPY.NAME = "COM0"
+    CPY.NAME = "PMC.":CPY.NAME
+  CASE CPY.NAME = "COM1"
+    CPY.NAME = "PMC.":CPY.NAME
+  CASE CPY.NAME = "COM2"
+    CPY.NAME = "PMC.":CPY.NAME
+  CASE CPY.NAME = "COM3"
+    CPY.NAME = "PMC.":CPY.NAME
+END CASE
+*T27646
+READ CPYL.ITEM FROM CPY.FILES(C.F.PTR), CPY.NAME ELSE
+  ERRMSG = "Cannot locate cpylib [":CPY.NAME:"] in file [":CPY.FILE:"]"
+  LINE.CNT = 0; GOTO 5090
+END
+U.S.ITEM = ""
+* SRC.LINE = "*":SRC.LINE
+GOSUB 700
+C$SEQ = C$SEQ + 1
+*RKB FOR NT *U.S.ID = PORT.NO:"*C*":C$SEQ
+U.S.ID = PORT.NO:"_C_":C$SEQ
+SRC.LINE = "INCLUDE ":U.S.ID
+GOSUB 700
+NLN = NLN + 1
+IF EXP.CP.I THEN
+  PRT.LINE = SRC.LINE; GOSUB 1100
+END
+CPY.CNT = DCOUNT(CPYL.ITEM,AM)
+FOR CLN = 1 TO CPY.CNT
+  PRT.LINE = CPYL.ITEM<1>
+  DEL CPYL.ITEM<1>
+  CPY.LINE = TRIM(FIELD(PRT.LINE,";",1))
+  BEGIN CASE
+    CASE CPY.LINE[1,1] = "*"
+      IF EXP.CP.C THEN GOSUB 1100
+    CASE CPY.LINE[1,3] = "COM"
+      CPY.TEMP = TRIM(CPY.LINE[4,999])
+      COM.CNT = DCOUNT(CPY.TEMP,",")
+      FOR CC = 1 TO COM.CNT
+        VAR = TRIM(FIELD(CPY.TEMP,",",CC))
+        VAR = FIELD(VAR,"(",1)
+        COM.VARS<-1> = VAR
+      NEXT CC
+      NLN = NLN + 1
+      U.S.ITEM<-1> = CPY.LINE
+      IF EXP.CP.I THEN GOSUB 1100
+    CASE CPY.LINE[1,3] = "DIM"
+      CPY.TEMP = TRIM(CPY.LINE[4,999])
+      ARRAY = TRIM(FIELD(CPY.TEMP,"(",1))
+      LOCATE ARRAY IN COM.VARS,1 SETTING FND ELSE FND = 0
+      IF NOT(FND) THEN
+        NLN = NLN + 1
+        U.S.ITEM<-1> = CPY.LINE
+        IF EXP.CP.I THEN GOSUB 1100
+      END
+    CASE 1
+      SPTR = 2
+      LOOP
+        SLINE = TRIM(FIELD(PRT.LINE,";",SPTR))
+        BEGIN CASE
+          CASE SLINE = ""
+            SPTR = 0
+          CASE SLINE[1,1] = "*"
+          CASE 1
+            CPY.LINE = CPY.LINE:";":SLINE
+        END CASE
+      WHILE SPTR DO
+        SPTR = SPTR + 1
+      REPEAT
+      NLN = NLN + 1
+      U.S.ITEM<-1> = CPY.LINE
+      IF EXP.CP.I THEN GOSUB 1100
+  END CASE
+NEXT CLN
+IF U.S.FLG THEN
+  READU DUMMY FROM USER.SCRATCH, U.S.ID ELSE NULL
+  DUMMY = ""
+  WRITE U.S.ITEM ON USER.SCRATCH, U.S.ID
+  U.S.CNT = U.S.CNT + 1
+  U.S.IDS(U.S.CNT) = U.S.ID
+END
+U.S.ITEM = ""
+5090*
+RETURN
+*
+*---- Process SCREEN statement
+10000*
+S$SCR = ""
+P = INDEX(P.LINE," ",1)
+IF P = 0 THEN
+  PARAM = ""
+END ELSE
+  PARAM = P.LINE[P+1,999]
+END
+P = INDEX(PARAM,";",1)
+IF P = 0 THEN
+  NAME = PARAM
+  PARAM = ""
+END ELSE
+  NAME = PARAM[1,P-1]
+  PARAM = PARAM[P+1,999]
+END
+BEGIN CASE
+  CASE NAME = "INIT"
+    MACRO.NAME = "INIT.SCREEN"
+    MACRO.PARAM = PARAM
+    GOSUB 10100; GOSUB 12000
+  CASE NAME = "DEFINE"
+    IF NUM(FIELD(PARAM,";",1)) THEN
+      S$SCR = FIELD(PARAM,";",1)
+      S$NAME = FIELD(PARAM,";",2)
+      S$FILE = FIELD(PARAM,";",3)
+      S$NAMES<S$SCR> = S$NAME
+    END ELSE
+      S$NAME = FIELD(PARAM,";",1)
+      S$FILE = FIELD(PARAM,";",2)
+      S$NAMES<-1> = S$NAME
+    END
+    IF S$FILE = "" THEN
+      S$FILE = "M.SCREENS"
+      SCR.FNAME = SSC.FNAME
+    END ELSE
+      SCR.FNAME = S$FILE
+    END
+10005*
+    LOCATE SCR.FNAME IN SCR.NAMES SETTING S.F.PTR ELSE
+      OPEN "",SCR.FNAME TO SCR.FILES(S.F.PTR) ELSE
+        IF SCR.FNAME = SSC.FNAME AND SSC.FNAME # "M.SCREENS" THEN
+          SCR.FNAME = "M.SCREENS"; GOTO 10005
+        END
+        ERRMSG = "Cannot locate the ":SCR.FNAME:" screen file"
+        LINE.CNT = 0; GOTO 10099
+      END
+      SCR.NAMES<S.F.PTR> = SCR.FNAME
+    END
+*  MACRO.NAME = "DEFINE.SCREEN.STD"
+    MACRO.NAME = "DEFINE.SCREEN"
+    MACRO.PARAM = S$SCR
+    MACRO.PARAM = MACRO.PARAM:";":S$NAME:";":S$FILE
+    GOSUB 10100; GOSUB 12000
+  CASE NAME = "FORMAT"
+    SCR = FIELD(PARAM,";",1)
+    BEGIN CASE
+      CASE SCR = ""
+        S$NAME = S$NAMES<1>
+      CASE NUM(SCR)
+        S$SCR = SCR
+        S$NAME = S$NAMES<S$SCR>
+    END CASE
+    MACRO.NAME = "FORMAT.SCREEN"
+    MACRO.PARAM = S$SCR
+    GOSUB 10100; GOSUB 12000
+  CASE NAME = "CLEAR"
+    SCR = FIELD(PARAM,";",1)
+    BEGIN CASE
+      CASE SCR = ""
+        S$NAME = S$NAMES<1>
+      CASE NUM(SCR)
+        S$SCR = SCR
+        S$NAME = S$NAMES<S$SCR>
+      CASE 1
+        S$NAME = FIELD(PARAM,";",1)
+    END CASE
+    GOSUB 11000
+    IF NOT(LINE.CNT) THEN GOTO 10099
+    MAX.FLD.REF = 0
+    MAXI = 60
+    FOR INT.REF = 1 TO MAXI
+      S$FLD = BLD.EXT.REF<1,INT.REF>
+      IF S$FLD = "" THEN
+        MAXI = 0
+      END ELSE
+        IF S$FLD > MAX.FLD.REF THEN MAX.FLD.REF = S$FLD
+      END
+    NEXT INT.REF
+    MACRO.NAME = "CLEAR.SCREEN"
+    MACRO.PARAM = S$SCR
+    MACRO.PARAM = MACRO.PARAM:";":MAX.FLD.REF
+    MACRO.PARAM = MACRO.PARAM:";":FIELD(PARAM,";",2)
+    GOSUB 10100; GOSUB 12000
+  CASE NAME = "DISPLAY" OR NAME = "V.DISPLAY"
+    SCR = FIELD(PARAM,";",1)
+    BEGIN CASE
+      CASE SCR = ""
+        S$NAME = S$NAMES<1>
+      CASE NUM(SCR)
+        S$SCR = SCR
+        S$NAME = S$NAMES<S$SCR>
+      CASE 1
+        S$NAME = FIELD(PARAM,";",1)
+    END CASE
+    S$FLD = FIELD(PARAM,";",2)
+    GOSUB 11000
+    IF NOT(LINE.CNT) THEN GOTO 10099
+    MACRO.NAME = NAME : ".SCREEN"
+    IF S$FLD = "ALL" THEN
+      GOSUB 10100
+      MAXI = 60
+      FOR INT.REF = 1 TO MAXI
+        S$FLD = BLD.EXT.REF<1,INT.REF>
+        IF S$FLD = "" THEN
+          MAXI = 0
+        END ELSE
+          GOSUB 11200
+          IF S$LCNT < 2 AND S$PMSG = "" THEN
+            MACRO.PARAM = S$SCR
+            MACRO.PARAM = MACRO.PARAM:";":S$FLD
+            MACRO.PARAM = MACRO.PARAM:";":S$TYP
+            MACRO.PARAM = MACRO.PARAM:";":S$X
+            MACRO.PARAM = MACRO.PARAM:";":S$Y
+            MACRO.PARAM = MACRO.PARAM:";":S$CVT
+            MACRO.PARAM = MACRO.PARAM:";":S$FMT
+            GOSUB 12000
+            IF NOT(LINE.CNT) THEN
+              MAXI = 0
+            END
+          END
+        END
+      NEXT INT.REF
+      IF NOT(LINE.CNT) THEN GOTO 10099
+    END ELSE
+      GOSUB 11100
+      IF NOT(LINE.CNT) THEN GOTO 10099
+      GOSUB 11200
+      MACRO.PARAM = S$SCR
+      MACRO.PARAM = MACRO.PARAM:";":S$FLD
+      MACRO.PARAM = MACRO.PARAM:";":S$TYP
+      MACRO.PARAM = MACRO.PARAM:";":S$X
+      MACRO.PARAM = MACRO.PARAM:";":S$Y
+      MACRO.PARAM = MACRO.PARAM:";":S$CVT
+      MACRO.PARAM = MACRO.PARAM:";":S$FMT
+      MACRO.PARAM = MACRO.PARAM:";":S$LCNT
+      MACRO.PARAM = MACRO.PARAM:";":S$LSPC
+      GOSUB 10100; GOSUB 12000
+    END
+  CASE NAME = "COUNT"
+    SCR = FIELD(PARAM,";",1)
+    BEGIN CASE
+      CASE SCR = ""
+        S$NAME = S$NAMES<1>
+      CASE NUM(SCR)
+        S$SCR = SCR
+        S$NAME = S$NAMES<S$SCR>
+      CASE 1
+        S$NAME = FIELD(PARAM,";",1)
+    END CASE
+    S$FLD = FIELD(PARAM,";",2)
+    GOSUB 11000
+    IF NOT(LINE.CNT) THEN GOTO 10099
+    GOSUB 11100
+    IF NOT(LINE.CNT) THEN GOTO 10099
+    GOSUB 11200
+    MACRO.NAME = "COUNT.SCREEN"
+    MACRO.PARAM = S$LCNT
+    MACRO.PARAM = MACRO.PARAM:";":S$LSPC
+    GOSUB 10100; GOSUB 12000
+  CASE NAME = "MULTI" OR NAME = "V.MULTI"
+    SCR = FIELD(PARAM,";",1)
+    BEGIN CASE
+      CASE SCR = ""
+        S$NAME = S$NAMES<1>
+      CASE NUM(SCR)
+        S$SCR = SCR
+        S$NAME = S$NAMES<S$SCR>
+      CASE 1
+        S$NAME = FIELD(PARAM,";",1)
+    END CASE
+    S$CLR = FIELD(PARAM,";",2)
+    S$FLD = FIELD(PARAM,";",3)
+    GOSUB 11000
+    IF NOT(LINE.CNT) THEN GOTO 10099
+    PCNT = COUNT(PARAM,";")+1
+    IF S$CLR = "S" THEN
+      S$FLD = FIELD(PARAM,";",PCNT)
+      GOSUB 11100
+      IF NOT(LINE.CNT) THEN GOTO 10099
+      GOSUB 11200
+      LX = S$X + S$MAXL
+      S$FLD = FIELD(PARAM,";",3)
+    END ELSE
+      S$CLR = "CL"
+    END
+    GOSUB 11100
+    IF NOT(LINE.CNT) THEN GOTO 10099
+    GOSUB 11200
+    IF S$CLR = "S" THEN
+      S$CLR = "SPACE(":LX-S$X:")"
+    END
+    MACRO.NAME = NAME : ".SCREEN"
+    MACRO.PARAM = S$SCR
+    MACRO.PARAM = MACRO.PARAM:";":S$Y
+    MACRO.PARAM = MACRO.PARAM:";":S$LCNT
+    MACRO.PARAM = MACRO.PARAM:";":S$LSPC
+    MACRO.PARAM = MACRO.PARAM:";":S$CLR
+    MACRO.PARAM = MACRO.PARAM:";"
+    MACRO.PARAM = MACRO.PARAM:";":S$FLD
+    MACRO.PARAM = MACRO.PARAM:";":S$TYP
+    MACRO.PARAM = MACRO.PARAM:";":S$X
+    MACRO.PARAM = MACRO.PARAM:";":S$Y
+    MACRO.PARAM = MACRO.PARAM:";":S$CVT
+    MACRO.PARAM = MACRO.PARAM:";":S$FMT
+    MAXI = PCNT
+    FOR P = 4 TO MAXI
+      S$FLD = FIELD(PARAM,";",P)
+      GOSUB 11100
+      IF LINE.CNT THEN
+        GOSUB 11200
+        MACRO.PARAM = MACRO.PARAM:";":S$FLD
+        MACRO.PARAM = MACRO.PARAM:";":S$TYP
+        MACRO.PARAM = MACRO.PARAM:";":S$X
+        MACRO.PARAM = MACRO.PARAM:";":S$Y
+        MACRO.PARAM = MACRO.PARAM:";":S$CVT
+        MACRO.PARAM = MACRO.PARAM:";":S$FMT
+      END ELSE
+        MAXI = 0
+      END
+    NEXT P
+    IF NOT(LINE.CNT) THEN GOTO 10099
+    GOSUB 10100; GOSUB 12000
+  CASE NAME = "FIELD"
+    SCR = FIELD(PARAM,";",1)
+    BEGIN CASE
+      CASE SCR = ""
+        S$NAME = S$NAMES<1>
+      CASE NUM(SCR)
+        S$SCR = SCR
+        S$NAME = S$NAMES<S$SCR>
+      CASE 1
+        S$NAME = FIELD(PARAM,";",1)
+    END CASE
+    S$FLD = FIELD(PARAM,";",2)
+    GOSUB 11000
+    IF NOT(LINE.CNT) THEN GOTO 10099
+    GOSUB 11100
+    IF NOT(LINE.CNT) THEN GOTO 10099
+    GOSUB 11300
+    MACRO.NAME = "FIELD.SCREEN"
+    MACRO.PARAM = S$SCR
+    MACRO.PARAM = MACRO.PARAM:";":S$FLD
+    MACRO.PARAM = MACRO.PARAM:";":S$TYP
+    MACRO.PARAM = MACRO.PARAM:";":S$X
+    MACRO.PARAM = MACRO.PARAM:";":S$Y
+    MACRO.PARAM = MACRO.PARAM:";":S$MINL
+    MACRO.PARAM = MACRO.PARAM:";":S$MAXL
+    MACRO.PARAM = MACRO.PARAM:";":S$MINV
+    MACRO.PARAM = MACRO.PARAM:";":S$MAXV
+    MACRO.PARAM = MACRO.PARAM:";":S$O.R
+    MACRO.PARAM = MACRO.PARAM:";":S$DEFAULT
+    MACRO.PARAM = MACRO.PARAM:";":S$JUSTIFY
+    MACRO.PARAM = MACRO.PARAM:";":S$SCALER
+    MACRO.PARAM = MACRO.PARAM:";":S$PATRN
+    MACRO.PARAM = MACRO.PARAM:";":S$EMODE
+    MACRO.PARAM = MACRO.PARAM:";":S$EX
+    MACRO.PARAM = MACRO.PARAM:";":S$EY
+    MACRO.PARAM = MACRO.PARAM:";":S$MASK
+    MACRO.PARAM = MACRO.PARAM:";":S$PMSG
+    MACRO.PARAM = MACRO.PARAM:";":S$BLANK
+    MACRO.PARAM = MACRO.PARAM:";":S$REVERSE
+    MACRO.PARAM = MACRO.PARAM:";":S$VALDAT
+    MACRO.PARAM = MACRO.PARAM:";":S$AUTO.RTN
+    MACRO.PARAM = MACRO.PARAM:";":S$FILL
+    MACRO.PARAM = MACRO.PARAM:";":S$LCNT
+    MACRO.PARAM = MACRO.PARAM:";":S$LSPC
+    MACRO.PARAM = MACRO.PARAM:";":S$ORVALDAT
+    MACRO.PARAM = MACRO.PARAM:";":S$INVALCHR
+    MACRO.PARAM = MACRO.PARAM:";":S$FLDTYPE
+    MACRO.PARAM = MACRO.PARAM:";":S$EXVALDAT
+    GOSUB 10100; GOSUB 12000
+  CASE NAME = "INPUT"
+    SCR = FIELD(PARAM,";",1)
+    BEGIN CASE
+      CASE SCR = ""
+        S$NAME = S$NAMES<1>
+      CASE NUM(SCR)
+        S$SCR = SCR
+        S$NAME = S$NAMES<S$SCR>
+      CASE 1
+        S$NAME = FIELD(PARAM,";",1)
+    END CASE
+    S$FLD = FIELD(PARAM,";",2)
+    MACRO.NAME = "INPUT.SCREEN"
+    MACRO.PARAM = S$SCR
+    MACRO.PARAM = MACRO.PARAM:";":S$FLD
+    MACRO.PARAM = MACRO.PARAM:";":FIELD(PARAM,";",3)
+    GOSUB 10100; GOSUB 12000
+  CASE NAME = "CLOSE"
+    SCR = FIELD(PARAM,";",1)
+    BEGIN CASE
+      CASE SCR = ""
+        S$NAME = S$NAMES<1>
+      CASE NUM(SCR)
+        S$SCR = SCR
+        S$NAME = S$NAMES<S$SCR>
+    END CASE
+    MACRO.NAME = "CLOSE.SCREEN"
+    MACRO.PARAM = S$SCR
+    GOSUB 10100; GOSUB 12000
+  CASE 1
+    ERRMSG = "Invalid SCREEN statement - ":SRC.LINE
+    LINE.CNT = 0
+END CASE
+10099*
+RETURN
+*
+*---- Setup the INCLUDE statement
+10100*
+O.SRC.LINE = SRC.LINE
+SRC.LINE = "*":SRC.LINE
+GOSUB 700
+M$SEQ = M$SEQ + 1
+*RKB FOR NT *U.S.ID = PORT.NO:"*M*":M$SEQ
+U.S.ID = PORT.NO:"_M_":M$SEQ
+U.S.ITEM = ""
+SRC.LINE = "INCLUDE ":U.S.ID
+GOSUB 700
+NLN = NLN + 1
+IF EXP.MC.I THEN
+  PRT.LINE = SPACE(SPC):SRC.LINE; GOSUB 1100
+END
+SRC.LINE = O.SRC.LINE; O.SRC.LINE = ""
+RETURN
+*
+*---- Get screen definition
+11000*
+IF S$NAME # S$LAST THEN
+  MATREAD BLD.SCRN FROM SCR.FILES(S.F.PTR), S$NAME:"*FLD" ELSE
+    ERRMSG = "Cannot locate screen [":S$NAME:"] in file [":SCR.NAMES<S.F.PTR>:"]"
+    LINE.CNT = 0; GOTO 11099
+  END
+  S$LAST = S$NAME
+END
+11099*
+RETURN
+*
+*---- Get internal field reference #
+11100*
+LOCATE S$FLD IN BLD.EXT.REF<1>,1 SETTING INT.REF ELSE
+  ERRMSG = "Cannot locate referenced field [":S$FLD:"] in screen [":S$NAME:"] in file [":SCR.NAMES<S.F.PTR>:"]"
+  LINE.CNT = 0
+END
+RETURN
+*
+*---- Get summary field definition
+11200*
+S$TYP = BLD.SCRN(INT.REF)<1,B.TYP>
+S$X = BLD.SCRN(INT.REF)<1,B.X>
+S$Y = BLD.SCRN(INT.REF)<1,B.Y>
+S$MAXL = BLD.SCRN(INT.REF)<1,B.MAXL>
+S$JUSTIFY = BLD.SCRN(INT.REF)<1,B.JUSTIFY>
+S$SCALER = BLD.SCRN(INT.REF)<1,B.SCALER>
+S$BLINK = BLD.SCRN(INT.REF)<1,B.BLINK>
+S$BLANK = BLD.SCRN(INT.REF)<1,B.BLANK>
+S$REVERSE = BLD.SCRN(INT.REF)<1,B.REVERSE>
+S$PMSG = BLD.SCRN(INT.REF)<1,B.PMSG>
+S$LCNT = BLD.SCRN(INT.REF)<1,B.MULTI.LN>
+S$LSPC = BLD.SCRN(INT.REF)<1,B.MULTI.SP>
+IF S$LCNT = "" THEN S$LCNT = 1
+IF S$LSPC = "" THEN S$LSPC = 1
+BEGIN CASE
+  CASE S$TYP = 4
+    S$CVT = "MD":S$SCALER
+  CASE S$TYP = 6
+    S$CVT = "D2/"
+  CASE 1
+    S$CVT = ""
+END CASE
+S$FMT = S$JUSTIFY:"#":S$MAXL
+IF S$TYP = 1 THEN S$TYP = ""
+RETURN
+*
+*---- Get field definition
+11300*
+S$TYP = BLD.SCRN(INT.REF)<1,B.TYP>
+S$X = BLD.SCRN(INT.REF)<1,B.X>
+S$Y = BLD.SCRN(INT.REF)<1,B.Y>
+S$MAXL = BLD.SCRN(INT.REF)<1,B.MAXL>
+S$JUSTIFY = BLD.SCRN(INT.REF)<1,B.JUSTIFY>
+S$SCALER = BLD.SCRN(INT.REF)<1,B.SCALER>
+S$MASK = BLD.SCRN(INT.REF)<1,B.MASK>
+S$O.R = BLD.SCRN(INT.REF)<1,B.O.R>
+S$DEFAULT = BLD.SCRN(INT.REF)<1,B.DEFAULT>
+S$MINL = BLD.SCRN(INT.REF)<1,B.MINL>
+S$MINV = BLD.SCRN(INT.REF)<1,B.MINV>
+S$MAXV = BLD.SCRN(INT.REF)<1,B.MAXV>
+S$VALDAT = BLD.SCRN(INT.REF)<1,B.VALDAT>
+S$PATRN = BLD.SCRN(INT.REF)<1,B.PATRN>
+S$BLINK = BLD.SCRN(INT.REF)<1,B.BLINK>
+S$BLANK = BLD.SCRN(INT.REF)<1,B.BLANK>
+S$REVERSE = BLD.SCRN(INT.REF)<1,B.REVERSE>
+S$EMODE = BLD.SCRN(INT.REF)<1,B.EMODE>
+S$EX = BLD.SCRN(INT.REF)<1,B.EX>
+S$EY = BLD.SCRN(INT.REF)<1,B.EY>
+S$PMSG = BLD.SCRN(INT.REF)<1,B.PMSG>
+S$AUTO.RTN = BLD.SCRN(INT.REF)<1,B.AUTO.RTN>
+S$FILL = BLD.SCRN(INT.REF)<1,B.FILL.CHR>
+S$LCNT = BLD.SCRN(INT.REF)<1,B.MULTI.LN>
+S$LSPC = BLD.SCRN(INT.REF)<1,B.MULTI.SP>
+S$ORVALDAT = BLD.SCRN(INT.REF)<1,B.ORVALDAT>
+S$INVALCHR = BLD.SCRN(INT.REF)<1,B.INVALCHR>
+S$FLDTYPE = BLD.SCRN(INT.REF)<1,B.FLDTYPE>
+S$EXVALDAT = BLD.SCRN(INT.REF)<1,B.EXVALDAT>
+IF S$LCNT = "" THEN S$LCNT = 1
+IF S$LSPC = "" THEN S$LSPC = 1
+S$HMSG = ""
+BEGIN CASE
+  CASE S$TYP = 4
+    S$CVT = "MD":S$SCALER
+  CASE S$TYP = 6
+    S$CVT = "D2/"
+  CASE 1
+    S$CVT = ""
+END CASE
+S$FMT = S$JUSTIFY:"#":S$MAXL
+IF S$TYP = 1 THEN S$TYP = ""
+IF S$MINL = 1 THEN S$MINL = ""
+IF S$MAXL = 1 THEN S$MAXL = ""
+IF S$O.R = "R" THEN S$O.R = ""
+IF S$SCALER = 2 THEN S$SCALER = ""
+IF S$TYP = 3 OR S$TYP = "4" THEN
+  IF S$JUSTIFY = "R" THEN S$JUSTIFY = ""
+END ELSE
+  IF S$JUSTIFY = "L" THEN S$JUSTIFY = ""
+END
+RETURN
+*
+*---- Process MACRO statement
+12000*
+READ MACRO.ITEM FROM MACRO, MACRO.NAME ELSE
+*  READ SHORT.MACRO.NAME FROM PGM.MAP, "MACRO/":MACRO.NAME ELSE
+  ERRMSG = "Cannot locate item [":MACRO.NAME:"] in the MACRO file"
+  LINE.CNT = 0; GOTO 12099
+*  END
+*  MACRO.NAME = SHORT.MACRO.NAME<1>
+*  READ MACRO.ITEM FROM MACRO , MACRO.NAME ELSE
+*     ERRMSG = "Cannot locate item [":MACRO.NAME:"] in the MACRO file"
+*     LINE.CNT = 0; GOTO 12099
+*  END
+END
+N2 = COUNT(MACRO.ITEM,AM)+1
+FOR N = 1 TO N2
+  PRT.LINE = MACRO.ITEM<1>
+  DEL MACRO.ITEM<1>
+  IF PRT.LINE[1,1] = "*" THEN
+    IF EXP.MC.C THEN GOSUB 1100
+    GOTO 12090
+  END
+12020P1 = INDEX(PRT.LINE,"\",1)
+  IF P1 = 0 THEN GOTO 12080
+  P2 = INDEX(PRT.LINE,"\",2)
+  PN = PRT.LINE[P1+1,P2-P1-1]
+  IF INDEX(PN,"=",1) > 0 THEN
+    VALS = FIELD(PN,"=",2)
+    PN = FIELD(PN,"=",1)
+    DEL.FLG = 1
+    VCNT = COUNT(VALS,",")+1
+    FOR V = 1 TO VCNT WHILE DEL.FLG
+      IF FIELD(MACRO.PARAM,";",PN) = FIELD(VALS,",",V) THEN DEL.FLG = 0
+    NEXT V
+    IF DEL.FLG THEN GOTO 12090
+    PRT.LINE = PRT.LINE[1,P1-1]:PRT.LINE[P2+1,999]
+    GOTO 12020
+  END
+  IF INDEX(PN,"#",1) > 0 THEN
+    VALS = FIELD(PN,"#",2)
+    PN = FIELD(PN,"#",1)
+    VCNT = COUNT(VALS,",")+1
+    DEL.FLG = 0
+    FOR V = 1 TO VCNT UNTIL DEL.FLG = 1
+      IF FIELD(MACRO.PARAM,";",PN) = FIELD(VALS,",",V) THEN DEL.FLG = 1
+    NEXT V
+    IF DEL.FLG THEN GOTO 12090
+    PRT.LINE = PRT.LINE[1,P1-1]:PRT.LINE[P2+1,999]
+    GOTO 12020
+  END
+  IF FIELD(MACRO.PARAM,";",PN) = "" THEN GOTO 12090
+  PRT.LINE = PRT.LINE[1,P1-1]:FIELD(MACRO.PARAM,";",PN):PRT.LINE[P2+1,999]
+  GOTO 12020
+12080*
+  U.S.ITEM<-1> = TRIM(PRT.LINE)
+  NLN = NLN + 1
+  IF EXP.MC.I THEN GOSUB 1100
+12090*
+NEXT N
+12099*
+RETURN
+*
+*---- Error message routines
+99000*
+CRT ERRMSG
+*
+*---- End of program
+99999*
+END

@@ -1,0 +1,419 @@
+SUBROUTINE DELIVERY_TICKET_MAIN(CONO,PPDField02,PPDField03,PPDField04,CMD)
+
+********************************************************************************
+*   Program name :- DELIVERY_TICKET_MAIN
+*   Created:- 2/18/2005
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+
+* Insert method code here
+
+$INCLUDE JCS.CPYLIB DAILY.SHIP
+$INCLUDE JCS.CPYLIB JOB
+$INCLUDE PMC.CPYLIB COMPANY
+$INCLUDE PMC.CPYLIB CUSTOMER
+$INCLUDE PMC.CPYLIB SHIP.VIA
+
+*
+*---- OPEN FILES
+*
+      OPEN '','DAILY.SHIP' TO DAILY.SHIP ELSE ERRMSG = 'DAILY.SHIP FILE MISSING';GOTO 99999
+      OPEN '','CUSTOMER' TO CUSTOMER ELSE ERRMSG = 'CUSTOMER FILE MISSING';GOTO 99999
+      OPEN '','SHIP.VIA' TO SHIP.VIA ELSE ERRMSG = 'SHIP.VIA FILE MISSING';GOTO 99999
+      OPEN '','COMPANY' TO COMPANY ELSE ERRMSG = 'COMPANY FILE MISSING';GOTO 99999
+      OPEN '','CONTROL' TO CONTROL ELSE ERRMSG = 'CONTROL FILE MISSING';GOTO 99999
+      OPEN '','JOB' TO JOB ELSE ERRMSG = 'JOB FILE MISSING';GOTO 99999
+      OPEN '','WIN.PRINTERS' TO WIN.PRINTERS ELSE ERRMSG="Cannot open WIN.PRINTERS file" ; GOTO 99999
+      OPEN '','_HOLD_' TO HOLD.FILE ELSE ERRMSG = 'CANNOT LOCATE THE _HOLD_ FILE!' ; GOTO 99999
+*
+*---- INITIALIZATION
+*
+UDTEXECUTE CMD CAPTURING MESG1
+
+      MAT DSP.REC = ''
+      MAT JOB.REC = ''
+      MAT CUST.REC = ''
+      LINE.CNT=0
+      SP=" ";SP2="  ";SP3="   "
+      SP12=STR(" ",12);SP51=STR(" ",51);SP74=STR(" ",74)
+
+      SP72 = STR(" ",72)
+      SP47 = STR(" ",47)
+      SP9  = STR(" ",9)
+
+      UNKNOWN=STR("?",25)
+      ERRMSG = ''
+      DESC = ''
+      TOTAL = 0
+      QTY.FLG=0
+*
+*---- GET COMPANY NUMBER
+*
+*
+*---- MAIN PROCESSING
+*
+
+      LASER.FLAG = ''
+      IF OCONV(CONO:OCONV(@LOGNAME,'MCU'):'!LASER','TSECURITY;X;0;0') # '' THEN LASER.FLAG = 1
+      *
+      IF LASER.FLAG = '' THEN
+        GOSUB 100
+      END
+
+      PRINTER ON
+10*
+
+      READNEXT DSP.KEY ELSE GOTO 15
+      MATREADU DSP.REC FROM DAILY.SHIP,DSP.KEY ELSE GOTO 10
+      MATREAD JOB.REC FROM JOB,CONO:DSP.JOB ELSE MAT JOB.REC=""
+      IF JOB.CUST # DSP.SHIP.TO AND DSP.SHIP.TO # "SAME" THEN
+         MATREAD CUST.REC FROM CUSTOMER,CONO:DSP.SHIP.TO ELSE MAT CUST.REC=""
+         ATTENTION = CUST.ATTENTION
+         MATREAD CUST.REC FROM CUSTOMER,CONO:JOB.CUST ELSE MAT CUST.REC=""
+      END ELSE
+         MATREAD CUST.REC FROM CUSTOMER,CONO:JOB.CUST ELSE MAT CUST.REC=""
+         ATTENTION = CUST.ATTENTION
+      END
+      IF DSP.ATTN # "" THEN ATTENTION = DSP.ATTN ; * T25959
+      MATREAD SHIP.VIA.REC FROM SHIP.VIA,CONO:DSP.VIA ELSE SHPV.DESC=UNKNOWN
+      SHIP.DATE = OCONV(DSP.DATE,"D2/")
+      PO.NO=JOB.CUST.PO
+      REF.NO=DSP.FRT.NO
+      GOSUB 20
+      D.CNT = COUNT(DSP.DESC,@VM) + (DSP.DESC # '')
+      DONE=0;QTY.USED=0;FIRST.TIME=1
+      FOR Z=1 TO D.CNT UNTIL DONE
+         FIRST.FIELD=FIELD(DSP.DESC<1,Z>," ",1)
+         IF NUM(FIRST.FIELD) THEN
+            QTY.USED=1
+            DONE=1
+         END
+      NEXT Z
+
+
+      **  This will loop thru records to see if there are any numbers
+      **  with eight digits in it.  If so, then print without commas.
+      **     -- THIS IS ONLY FOR LASER PRINTERS --
+
+      PTRN.FOUND = ''
+      PTRN       = "MD0Z,"
+      *
+      IF LASER.FLAG # '' THEN
+        FOR TOTAL.CNT = 1 TO D.CNT UNTIL PTRN.FOUND
+          IF DSP.DESC<1,TOTAL.CNT> # '' THEN
+            FIRST.FIELD = FIELD(DSP.DESC<1,TOTAL.CNT>," ",1)
+            IF QTY.USED = 0 THEN
+              IF DSP.QTY MATCHES "8N" THEN
+                PTRN.FOUND = 1
+              END
+            END ELSE
+              IF NUM(FIRST.FIELD) THEN
+                IF FIRST.FIELD MATCHES "8N" THEN
+                  PTRN.FOUND = 1
+                END
+              END
+            END
+          END
+        NEXT TOTAL.CNT
+      END
+      *
+      IF PTRN.FOUND THEN PTRN = "MD0Z"
+      *
+
+      FOR Z = 1 TO D.CNT
+         IF DSP.DESC<1,Z> # "" THEN
+            FIRST.FIELD=FIELD(DSP.DESC<1,Z>," ",1)
+            IF QTY.USED=0 THEN
+               IF FIRST.TIME=1 THEN
+                  FIRST.TIME=0
+                  QTY=OCONV(DSP.QTY,PTRN)   ;* T22081 (WAS "MD0Z,")
+               END ELSE
+                  QTY=""
+               END
+               DESC=DSP.DESC<1,Z>
+            END ELSE
+               IF NUM(FIRST.FIELD) THEN
+                  QTY=OCONV(FIRST.FIELD,PTRN)  ;* T22081 (WAS "MD0Z,")
+                  FF=LEN(FIRST.FIELD) + 2
+                  DESC=DSP.DESC<1,Z>[FF,99]
+               END ELSE
+                  QTY=""
+                  DESC=DSP.DESC<1,Z>
+               END
+            END
+            IF LINE.CNT >= 9 THEN
+               PRINT
+
+               IF LASER.FLAG = '' THEN
+
+                 P.LINE = "";P.LINE = SPACE(70):"(CONTINUED)"
+
+               END ELSE
+                 P.LINE = "";P.LINE = SPACE(68):"(CONTINUED)"
+               END
+
+               PRINT P.LINE
+               LINE.CNT = LINE.CNT + 2
+               D = 17 - LINE.CNT
+               FOR L = 1 TO D
+                  PRINT
+               NEXT L
+               GOSUB 20
+            END
+            GOSUB 30
+         END
+      NEXT Z
+      GOSUB 40
+      DSP.PRT.DATE = DATE()
+      MATWRITE DSP.REC ON DAILY.SHIP,DSP.KEY
+      TOTAL=0;QTY.FLG=0
+      GOTO 10
+15*
+      GOTO 99999
+*
+*---- PRINT TOP OF FORM
+*
+20*
+      LINE.CNT = 0
+
+*     FOR P = 1 TO 6
+      FOR P = 1 TO 9
+         PRINT
+      NEXT P
+
+      IF LASER.FLAG = '' THEN
+
+        PRINT SP74:SHIP.DATE
+
+      END ELSE
+        PRINT SP72:SHIP.DATE
+      END
+
+      FOR P = 1 TO 6
+         PRINT
+      NEXT P
+
+      IF LASER.FLAG = '' THEN
+
+        PRINT SP12:DSP.NAME
+        PRINT SP12:DSP.ADDR1
+        PRINT SP12:DSP.ADDR2
+
+      END ELSE
+        PRINT SP9:DSP.NAME
+        PRINT SP9:DSP.ADDR1
+        PRINT SP9:DSP.ADDR2
+      END
+      IF DSP.ADDR3 = "" THEN
+         GOTO 21
+      END ELSE
+
+         IF LASER.FLAG = '' THEN
+
+           PRINT SP12:DSP.ADDR3
+
+         END ELSE
+           PRINT SP9:DSP.ADDR3
+         END
+
+      END
+21*
+      IF DSP.ADDR4 = "" THEN
+         IF DSP.ADDR3="" THEN
+
+            IF LASER.FLAG = '' THEN
+              PRINT SP12:"ATTN: ":ATTENTION "L#29"
+            END ELSE
+              PRINT SP9:"ATTN: ":ATTENTION "L#29"
+            END
+            PRINT;PRINT
+         END ELSE
+            IF LASER.FLAG = '' THEN
+              PRINT SP12:"ATTN: ":ATTENTION "L#29"
+            END ELSE
+              PRINT SP9:"ATTN: ":ATTENTION "L#29"
+            END
+            PRINT
+         END
+      END ELSE
+         IF DSP.ADDR3 = "" THEN
+            IF LASER.FLAG = '' THEN
+              PRINT SP12:DSP.ADDR4
+              PRINT SP12:"ATTN: ":ATTENTION "L#29"
+            END ELSE
+              PRINT SP9:DSP.ADDR4
+              PRINT SP9:"ATTN: ":ATTENTION "L#29"
+            END
+            PRINT
+         END ELSE
+            IF LASER.FLAG = '' THEN
+
+              PRINT SP12:DSP.ADDR4
+              PRINT SP12:"ATTN: ":ATTENTION "L#29"
+
+            END ELSE
+              PRINT SP9:DSP.ADDR4
+              PRINT SP9:"ATTN: ":ATTENTION "L#29"
+            END
+         END
+      END
+      FOR P = 1 TO 3
+         PRINT
+      NEXT P
+      IF LASER.FLAG = '' THEN
+
+        PRINT SP3:DSP.JOB "L#8":SP2:PO.NO "L#10":SP:SHPV.DESC "L#25":SP:REF.NO "L#15"
+
+      END ELSE
+        PRINT SP:DSP.JOB "L#8":SP2:PO.NO "L#10":SP:SHPV.DESC "L#25":SP:REF.NO "L#15"
+      END
+      PRINT
+      PRINT ; * C35347
+      IF LASER.FLAG # '' THEN PRINT   ;*T22081 <
+      RETURN
+*
+*---- PRINT INVOICE BODY
+*
+30*
+      IF QTY = 0 THEN QTY = ""
+
+      IF LASER.FLAG = '' THEN
+
+        PRINT SP:QTY "R#11":SP2:DESC "L#70"
+
+      END ELSE
+        PRINT QTY "R#9":SP2:DESC "L#69"
+      END
+
+      LINE.CNT = LINE.CNT + 1
+      IF LINE.CNT >= 9 THEN
+         PRINT
+
+         IF LASER.FLAG = '' THEN
+
+           P.LINE = "";P.LINE = SPACE(70):"(CONTINUED)"
+
+         END ELSE
+           P.LINE = "";P.LINE = SPACE(68):"(CONTINUED)"
+         END
+
+         PRINT P.LINE
+         LINE.CNT = LINE.CNT + 2
+         D = 17 - LINE.CNT
+         FOR L = 1 TO D
+            PRINT
+         NEXT L
+
+         IF LASER.FLAG # '' THEN PRINT CHAR(12):
+
+         GOSUB 20
+      END
+      RETURN
+*
+*---- PRINT TOTAL
+*
+40*
+      TOTAL=DSP.MARKUP + DSP.INV.AMT
+      HANDLING=OCONV(DSP.MARKUP,"MD2Z,")
+      SHIPPING=OCONV(DSP.INV.AMT,"MD2Z,")
+      IF LINE.CNT + 2 >= 9 THEN
+         PRINT
+         P.LINE = "";P.LINE = SPACE(70):"(CONTINUED)"
+         PRINT P.LINE
+         LINE.CNT = LINE.CNT + 2
+         D = 17 - LINE.CNT
+         FOR L = 1 TO D
+            PRINT
+         NEXT L
+
+         IF LASER.FLAG # '' THEN PRINT CHAR(12):
+
+         GOSUB 20
+      END
+      G.TOTAL = OCONV(TOTAL,"MD2,$")
+
+*     D = 14 - LINE.CNT
+      D = 13 - LINE.CNT
+
+      IF LASER.FLAG # '' THEN D = 13 - LINE.CNT   ;*T22081 <
+      FOR L = 1 TO D
+         PRINT
+      NEXT L
+      T.LINE = ""
+
+      IF LASER.FLAG = '' THEN
+        T.LINE = SP51:SHIPPING "R#10":SP:HANDLING "R#10":SP:G.TOTAL "R#11"
+      END ELSE
+
+        T.LINE = SPACE(49):SHIPPING "R#10":HANDLING "R#10":G.TOTAL "R#11"
+      END
+
+      PRINT T.LINE
+
+*      PRINT;PRINT
+
+* COMMENTED OUT NEXT LINE
+*     IF LASER.FLAG = '' THEN PRINT;PRINT
+*T23941 ^
+      IF LASER.FLAG # '' THEN
+        PRINT CHAR(12):
+      END
+   
+      RETURN
+*
+*---- ALIGNMENT ROUTINE
+*
+100*      
+    
+      IF PPDField03 = "10" THEN	     	
+	      IF PPDField02 = "N" THEN
+		STMT = 'SETPTR ,,,,,3,BRIEF,BANNER DEL_TIC_MAIN'
+		UDTEXECUTE STMT CAPTURING RESULT		 
+		 GOTO 199
+	      END ELSE
+	         CALL DELIVERY_TICKET_ALIGN
+		  GOTO 99999
+	      END
+      END ELSE	      
+	      IF PPDField04 = "Y" THEN		
+
+		STMT = 'SETPTR ,,,,,3,BRIEF,BANNER DEL_TIC_MAIN'
+		UDTEXECUTE STMT CAPTURING RESULT
+		 PRINTER ON
+		 GOTO 199      
+	      END
+      END	   
+199*
+      RETURN
+99999*
+
+	CMD = 'SPOOL _HOLD_ DEL_TIC_MAIN -O'
+       UDTEXECUTE CMD CAPTURING JUNK
+	DELETE HOLD.FILE,"DEL_TIC_MAIN"
+
+      PRINTER OFF
+* T22081 v
+      IF LASER.FLAG # '' THEN
+        OPEN '',"SECURITY" TO SECURITY THEN
+          READ TEMP.REC FROM SECURITY, CONO:OCONV(@LOGNAME,'MCU'):'!LASER' THEN
+            DELETE SECURITY, CONO:OCONV(@LOGNAME,'MCU'):'!LASER'
+          END
+        END
+      END
+* T22081 ^      
+     PRINT @(-1)
+
+END
+
+* End of method code
+

@@ -1,0 +1,101 @@
+**********************************************
+* REVISION    - [XX.X]
+* Copyright 1995 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - CNVBP
+* PROGRAM     - ICREW.INV.AUDIT.HIST.CONV
+* BY          - ct6; CBA
+* DATE        - 06/12/2001
+* DESCRIPTION -
+*
+*T????? edvard 04/16/2001 * Create the INV_AUDIT_HIST records using data
+*                        from INV.TRAN.HIST, INV.ADJ.HIST and
+*                        INV.REC.ADJ AND INV.COST.ADJ
+*T2 thompson 09/18/2002 * FIX BUG FOR NON PAPER RECEIPTS
+*ENDDOC
+**********************************************
+*COPY>ICS.CPYLIB>INV.TRAN.HIST
+*COPY>ICS.CPYLIB>INV_AUDIT_BAL
+*COPY>ICS.CPYLIB>WAREHOUSE
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>CPYLIB>CHAR
+*
+DEFFUN DIVISION.POSITION(CONO,CONTROL.FILE,DIV.CODE)
+DEFFUN CURRENT.PERIOD(CONO,CONTROL.FILE,DIV.POS,FISCAL.FLAG)
+*
+*   FILE OPENS
+*
+OPEN "", "ITB.NEW" TO ITB.NEW ELSE STOP "CANNOT OPEN ITB.NEW FILE"
+OPEN "", "INV.TRAN.HIST" TO INV.TRAN.HIST ELSE STOP "CANNOT OPEN INV.TRAN.HIST FILE"
+OPEN "", "CONTROL" TO CONTROL ELSE STOP "CANNOT OPEN CONTROL FILE"
+OPEN "", "COMPANY" TO COMPANY ELSE STOP "CANNOT OPEN COMPANY FILE"
+OPEN "", "WAREHOUSE" TO WAREHOUSE ELSE STOP "CANNOT OPEN WAREHOUSE FILE"
+*
+*   INITIALIZATION SECTION
+*
+*
+PRINT @(-1)
+PRINT @(1,5):'SELECTING INV.TRAN.HIST':@(-4)
+UDTEXECUTE 'SSELECT INV.TRAN.HIST BY DATE WITH M.LINE#"FNGD" AND WITH ITH.TYPE="B"' CAPTURING GARBAGE
+PRINT @(1,5):'CONVERTING INV.TRAN.HIST':@(-4)
+*
+DONE = 0 ; CNT=0
+LOOP
+  READNEXT ITH.ID ELSE DONE = 1
+UNTIL DONE DO
+  CNT+=1                   
+  IF REM(CNT,100)=0 THEN   
+    PRINT @(45,5):CNT:@(-4)
+  END                      
+  MATREAD ITH.REC FROM INV.TRAN.HIST, ITH.ID THEN
+    CONO = ITH.ID[1,3]
+    MATREAD COMP.REC FROM COMPANY, CONO  THEN 
+      READ APD.REC FROM CONTROL, CONO:"AUDIT.PERIOD.DATES" THEN
+        X=DCOUNT(APD.REC<1>, @VM)   
+        PYR = APD.REC<1,X>[1,4]     
+        PNO = APD.REC<1,X>[5,2]     
+        PNO = PNO + 1 "R%2"         
+        IF PNO > CO.LAST.FISCAL THEN
+          PYR = PYR + 1             
+          PNO = "01"                
+        END                         
+        APD.REC<1,X+1> = PYR:PNO  ;*
+        IWH.ID = OCONV(ITH.ID,"G!2")
+        DT = OCONV(ITH.ID,"G2!1")
+        IF ITH.TYPE<1,1> = "B" THEN 
+          GOSUB SET.BEG.BAL
+        END
+      END
+    END
+  END ELSE
+    RELEASE
+  END
+REPEAT
+GOTO 99999
+*
+*
+*****************
+SET.BEG.BAL: 
+*****************
+*
+MAT ITB.REC=""
+ITB.BEG = ITH.QTY
+ITB.BEG.AMT = ITH.COST
+TMP=OCONV(ITH.ID,"G2!1")
+LOCATE TMP IN APD.REC<2> BY "AR" SETTING PLOC ELSE
+  NULL                                                            
+END                                                               
+PYR = APD.REC<1,PLOC>[1,4]                                        
+PNO = APD.REC<1,PLOC>[5,2]                                        
+NPNO = PNO + 1 "R%2"                                               
+IF NPNO > CO.LAST.FISCAL THEN                                      
+  PYR = PYR + 1                                                   
+  PNO = "01"                                                      
+END                                                               
+EPERIOD = PYR:PNO                                                 
+ITB.ID=OCONV(ITH.ID,"G!2"):"!":EPERIOD
+MATWRITE ITB.REC ON ITB.NEW, ITB.ID                        
+RETURN
+*
+99999 
+END

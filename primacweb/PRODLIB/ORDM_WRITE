@@ -1,0 +1,421 @@
+SUBROUTINE ORDM_WRITE
+********************************************************************************
+*   Program name :- ORDM_WRITE
+*   Created:- 11/17/2004
+*------------------------------------------------------------------------------*
+*
+* Programed By Syed Abdul Aleem 
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE CPYLIB COMMON1
+$INCLUDE JCS.CPYLIB COM.JCS.LINK  
+$INCLUDE ICS.CPYLIB COM.INV.MAIN  
+$INCLUDE ICS.CPYLIB COM.INV.SERIAL
+$INCLUDE JCS.CPYLIB COM.INV.STATS 
+$INCLUDE PMC.CPYLIB COM.CUST
+$INCLUDE OPS.CPYLIB COM.ORDER
+$INCLUDE ICS.CPYLIB COM.INV.CNV
+
+$DEFINE COMPOPS
+$INCLUDE PMC.CPYLIB COMP.OPS
+$DEFINE FILEVARS
+$INCLUDE CPYLIB FILE.VARS
+
+$INCLUDE PMC.CPYLIB COMPANY
+$INCLUDE PMC.CPYLIB DIVISION
+$DEFINE CUSTOMER
+$INCLUDE PMC.CPYLIB CUSTOMER
+$DEFINE CATEGORY
+$INCLUDE ICS.CPYLIB CATEGORY
+$DEFINE INVENTORY
+$INCLUDE ICS.CPYLIB INVENTORY
+$DEFINE INVWHSE
+$INCLUDE ICS.CPYLIB INV.WHSE
+$INCLUDE PMC.CPYLIB SALESMAN
+$INCLUDE PMC.CPYLIB CSR.CODE
+$DEFINE ORDER
+$INCLUDE OPS.CPYLIB ORDER
+$INCLUDE OPS.CPYLIB ORDER.DETAIL
+$DEFINE ORDERDETAILINQ
+$INCLUDE OPS.CPYLIB ORDER.DETAIL.INQ
+$DEFINE FNGDSTATS
+$INCLUDE ICS.CPYLIB FNGD.STATS
+$DEFINE FNGDORDERSTATS
+$INCLUDE ICS.CPYLIB FNGD.ORDER.STATS
+$INCLUDE PMC.CPYLIB COUNTRY.CODE           ;*T25159
+$INCLUDE JCS.CPYLIB JOB.CREDIT.STATS
+$INCLUDE CPYLIB CHAR
+* Insert method code here
+ERRMSG = ""
+   OPEN "","CONTROL" TO CONTROL ELSE
+      ERRMSG = "Cannot locate the CONTROL file";GOTO 1000
+   END
+
+   OPEN "","INVENTORY" TO INVENTORY ELSE
+      ERRMSG = "Cannot locate the INVENTORY file";GOTO 1000
+   END
+
+   OPEN "","CATEGORY" TO CATEGORY ELSE
+      ERRMSG = "Cannot locate the CATEGORY file";GOTO 1000
+   END
+
+   OPEN "","INV.FNGD" TO INV.FNGD ELSE
+      ERRMSG = "Cannot locate the INV.FNGD file";GOTO 1000
+   END
+
+   OPEN "","INV.WHSE" TO INV.WHSE ELSE
+      ERRMSG = "Cannot locate the INV.WHSE file";GOTO 1000
+   END
+
+   OPEN "","ESTIMATE" TO ESTIMATE ELSE
+      ERRMSG = "Cannot locate the ESTIMATE file";GOTO 1000
+   END
+
+   OPEN "","CREDIT_STATS" TO CREDIT_STATS ELSE
+      ERRMSG = "Cannot locate the CREDIT_STATS file";GOTO 1000
+   END
+
+   OPEN "","CUSTOMER" TO CUSTOMER ELSE
+      ERRMSG = "Cannot locate the CUSTOMER file";GOTO 1000
+   END
+
+   OPEN "","ORDER" TO ORDER ELSE
+      ERRMSG = "Cannot locate the ORDER file";GOTO 1000
+   END
+
+UPDCRED     = 0
+OLD.TOT.AMT = 0
+O.ODQ.PROD  = ""
+O.ODQ.KIT   = ""
+O.ODQ.WHSE  = ""
+O.ODQ.SEQ   = ""
+OLD.CUST    = ""
+PROMPTMSG   = ""
+**********************************************************
+   STATUS = RBO.getProperty('', 'ID',ORDNO)
+   STATUS = RBO.getProperty('', 'ORD_CUST',ORD.CUST)
+   STATUS = RBO.getProperty('', 'OLD_CUST',OLD.CUST)
+   STATUS = RBO.getProperty('', 'PMCProperty',PMCProperty)
+***********************************************************
+   CONO   = PMCProperty<1,4> 
+******************************************************************
+   MATREAD OPCO.REC FROM CONTROL, CONO:"OPS" ELSE
+      ERRMSG = "Cannot locate Order Processing company setup"
+      GOTO 1000
+   END
+   IF ORDNO # "N" THEN
+      NEWREC = 0
+      MATREAD ORD.REC FROM ORDER, CONO:ORDNO ELSE	
+
+      END      
+   END ELSE
+      NEWREC = 1
+      * GET PROPERTIES WILL COME IF NEW ORDER
+
+   END 
+   MATREAD CUST.REC FROM CUSTOMER, CONO:ORD.CUST ELSE
+      MAT CUST.REC = ""; CUST.NAME = "Unknown"
+   END
+
+
+*********************************************************
+
+
+   JOB.BALANCE = SUM(CUST.JOB.BAL)
+   ORD.BALANCE = SUM(CUST.ORD.BAL)
+   LOCATE ORDNO IN CUST.ORD.NUM<1>,1 SETTING FND THEN
+      ORD.BALANCE = ORD.BALANCE - CUST.ORD.BAL<1,FND>
+   END
+
+   STATUS = "L"; SHPNO = "ALL"
+   CALL ORDER_LINE_UPD1(CONO,ORDNO,SHPNO,STATUS)
+   OLD.TOT.AMT = SUM(ODQ.AMT)
+
+   CUR.BALANCE = SUM(ODQ.AMT) - ORD.TOT.INV
+   IF CUR.BALANCE < 0 THEN CUR.BALANCE = 0
+   TOT.BALANCE = JOB.BALANCE + ORD.BALANCE + CUR.BALANCE
+   AVAIL = ""
+   BEGIN CASE
+      CASE CUST.CREDIT = "E"
+         AVAIL = CUST.CR.LIMIT * 100 - CUST.AR.BAL - TOT.BALANCE
+         IF NOT(UPDCRED) AND SUM(ODQ.AMT) # OLD.TOT.AMT AND AVAIL < 0 THEN
+            LOOP
+********    CREDIT AUTHRIZATION CODE NEEDS TO BE ADDED INSTEAD OF GOSUB 1900
+		  GOSUB 1900
+            WHILE ECD.RET.VALUE = "END" DO REPEAT
+         END
+      CASE CUST.CREDIT = "CASH"
+         AVAIL = CUST.AR.BAL + CUST.AR.BAL + TOT.BALANCE
+         IF NOT(UPDCRED) AND SUM(ODQ.AMT) # OLD.TOT.AMT AND AVAIL > 0 THEN
+            LOOP
+********    CREDIT AUTHRIZATION CODE NEEDS TO BE ADDED INSTEAD OF GOSUB 1900 
+		   GOSUB 1900
+            WHILE ECD.RET.VALUE = "END" DO REPEAT
+         END
+      CASE NOT(UPDCRED) AND SUM(ODQ.AMT) # OLD.TOT.AMT
+         LOOP
+********    CREDIT AUTHRIZATION CODE NEEDS TO BE ADDED INSTEAD OF GOSUB 1900 
+		GOSUB 1900
+         WHILE ECD.RET.VALUE = "END" DO REPEAT
+   END CASE
+
+GOTO 123456
+**************************
+*
+*---- Credit Authorization
+1900*
+   JOB.BALANCE = SUM(CUST.JOB.BAL)
+   ORD.BALANCE = SUM(CUST.ORD.BAL)
+   IF ORD.STATUS<1,1> # "NEW" THEN
+      LOCATE ORDNO IN CUST.ORD.NUM<1>,1 SETTING FND THEN
+         ORD.BALANCE = ORD.BALANCE - CUST.ORD.BAL<1,FND>
+      END
+   END
+   CUR.BALANCE = SUM(ODQ.AMT) - ORD.TOT.INV
+   IF CUR.BALANCE < 0 THEN CUR.BALANCE = 0
+   TOT.BALANCE = JOB.BALANCE + ORD.BALANCE + CUR.BALANCE
+   EPTR=0
+   BEGIN CASE
+      CASE CUST.CREDIT = "N"
+         ERRMSG = "There is NO CREDIT for this customer"
+         GOSUB 91000; ECD.RET.VALUE = "END"; GOTO 1909
+      CASE CUST.CREDIT = "E"
+         AVAIL = CUST.CR.LIMIT * 100 - CUST.AR.BAL - TOT.BALANCE
+         IF AVAIL < 0 THEN
+            ERRMSG = "A/R = ":OCONV(CUST.AR.BAL,"MD2,$<")
+            ERRMSG = ERRMSG : " & ORD/JOB = ":OCONV(TOT.BALANCE,"MD2,$<")
+            ERRMSG = ERRMSG : " & AVAIL = ":OCONV(AVAIL,"MD2,$<")
+            EPTR = INDEX(ERRMSG," & AVAIL",1)
+         END ELSE
+            GOTO 1909
+         END
+      CASE CUST.CREDIT = "CASH"
+         AVAIL = CUST.AR.BAL + CUST.AR.BAL + TOT.BALANCE
+         IF AVAIL > 0 THEN
+            ERRMSG = "A/R = ":OCONV(CUST.AR.BAL,"MD2,$<")
+            ERRMSG = ERRMSG : " & ORD/JOB = ":OCONV(TOT.BALANCE,"MD2,$<")
+            ERRMSG = ERRMSG : " & TOTAL BAL = ":OCONV(AVAIL,"MD2,$<")
+            EPTR = INDEX(ERRMSG," & AVAIL",1)
+         END ELSE
+            GOTO 1909
+         END
+      CASE 1
+         ERRMSG = "A/R = ":OCONV(CUST.AR.BAL,"MD2,$<")
+         ERRMSG = ERRMSG : " & JOB = ":OCONV(TOT.BALANCE,"MD2,$<")
+         ERRMSG = ERRMSG : " & TOTAL BAL = ":OCONV(CUST.AR.BAL+TOT.BALANCE,"MD2,$<")
+         EPTR = INDEX(ERRMSG," & TOTAL",1)
+   END CASE
+   IF EPTR AND LEN(ERRMSG) > 79 THEN
+      EMSGLEFT = ERRMSG[EPTR,99]
+      ERRMSG   = ERRMSG[1,EPTR-1]
+      GOSUB 91000
+      ERRMSG   = EMSGLEFT
+   END
+   GOSUB 91000
+   ECD.NUM = 27; SCV.REC(ECD.NUM)<ESN> = ""
+   ECD.ACTION = 5; CALL SCRN.EDIT
+   ECD.MAXL = 3; ECD.DEFAULT = FIELD(ORD.CRED.AUTH,"!",1)
+   ECD.ACTION = 4; CALL SCRN.EDIT
+   IF ECD.RET.VALUE # "END" THEN
+      READ TREC FROM CREDIT.AUTH.CODE, CONO:ECD.RET.VALUE THEN
+         ORD.CRED.AUTH = ECD.RET.VALUE:"!":USER.ID:"!":PORT.NO
+         UPDCRED = 1
+      END ELSE
+         ERRMSG = 'Invalid Credit Authorization Code'
+         GOSUB 91000
+         GOTO 1900
+      END
+   END
+   ECD.NUM = 27; SCV.REC(ECD.NUM)<ESN> = ORD.CRED.AUTH
+   ECD.ACTION = 5; CALL SCRN.EDIT
+1909*
+   RETURN
+*********************************
+*********************************
+123456*
+   IF NEWREC THEN
+      B.QTY = 0
+      NUM.PRODS = DCOUNT(ODQ.PROD,VM)
+      FOR P = 1 TO NUM.PRODS
+         IF ODQ.KIT<1,P> = "N" THEN
+            B.QTY = B.QTY + ODQ.O.QTY<1,P> - ODQ.R.QTY<1,P> - ODQ.A.QTY<1,P> - ODQ.S.QTY<1,P>
+         END
+      NEXT P
+      EST.BLD = 0
+      BEGIN CASE
+         CASE B.QTY < 1
+            JB.BLD = 0
+         CASE OPCO.JOB.BLD = "N"
+            JB.BLD = 0
+         CASE OPCO.JOB.BLD = "A"
+            JB.BLD = 1
+         CASE 1	     	     
+*            ECD.NUM = 54; ECD.ACTION = 4; CALL SCRN.EDIT
+            IF ECD.RET.VAL = "Y" THEN
+               JB.BLD = 1
+            END ELSE
+		 IF ECD.RET.VAL # "N" THEN
+			ERRMSG = "Auto create a JOB (Y/N)"
+			GOTO 1000
+		 END
+               JB.BLD = 0
+            END	    
+      END CASE
+      IF ORDNO = "N" THEN
+         READU ORDNO FROM CONTROL, CONO:"ORDER" ELSE
+            ORDNO = 10000
+         END
+         ERRMSG = ""
+         LOOP
+            ORDNO = ORDNO + 1
+            IF ORDNO > 9999999 THEN ORDNO = 10000  ;*T22724
+            READU O.REC FROM ORDER, CONO:ORDNO ELSE
+               IF NOT(JB.BLD) OR OPCO.ORD.JOB = "N" THEN
+                  ERRMSG = "Please note down the assigned order number"
+               END ELSE
+                  READ O.REC FROM JOB, CONO:ORDNO ELSE
+                     ERRMSG = "Please note down the assigned order / job number"
+                  END
+               END
+            END
+         WHILE ERRMSG = "" DO
+            RELEASE ORDER, CONO:ORDNO
+         REPEAT
+         WRITE ORDNO ON CONTROL, CONO:"ORDER"
+*         ECD.NUM = 1; SCV.REC(ECD.NUM)<ESN> = ORDNO
+ *        ECD.ACTION = 5; CALL SCRN.EDIT
+  *       GOSUB 91000
+*	  GOTO 1000
+      END
+      SHPNO = ""
+      CALL ORDER_LINE_UPD1(CONO,ORDNO,SHPNO,STATUS)
+*      GOSUB 6100      
+      CALL DECIDE_PICK_TICKET_PRINTED(CONO,ORDNO,ECD.RET.VAL,ERRMSG)
+      IF ERRMSG # "" THEN
+	  GOTO 1000
+      END
+
+      IF JB.BLD THEN
+         BEGIN CASE
+            CASE OPCO.EST.BLD = "A"
+               EST.BLD = 1
+            CASE OPCO.EST.BLD = "P"
+*               ECD.NUM = 50
+ *              ECD.ACTION = 4 ; CALL SCRN.EDIT
+		  IF ECD.RET.VAL = "Y" THEN 
+			EST.BLD = 1
+		  END ELSE
+			IF ECD.RET.VAL # "N"	THEN				
+				ERRMSG = "Auto create a ESTIMATE (Y/N)"
+				GOTO 1000
+			END
+		  END               
+         END CASE
+         IF OPCO.ORD.JOB = "N" THEN
+            JOBNO = "N"
+         END ELSE
+            JOBNO = ORDNO
+         END
+         MAT JOB.REC = ""
+         CALL JOB_FNGD_UPD(CONO,ORDNO,JOBNO,JB.BLD,EST.BLD,MAT COMP.REC,ECD.RET.VAL,PROMPTMSG,ERRMSG)
+	  IF PROMPTMSG # "" THEN ERRMSG = PROMPTMSG;GOTO 1000	
+	  IF ERRMSG # "" THEN GOTO 1000
+      END
+   END ELSE
+      SHPNO = ""
+      CALL ORDER_LINE_UPD1(CONO,ORDNO,SHPNO,STATUS)
+*      GOSUB 6100
+      CALL DECIDE_PICK_TICKET_PRINTED(CONO,ORDNO,ECD.RET.VAL,ERRMSG)
+      IF ERRMSG # "" THEN
+	  GOTO 1000
+      END
+   END
+   IF UPDCRED THEN
+      MATREADU JOCS.REC FROM CREDIT_STATS, CONO:ORDNO ELSE
+         MAT JOCS.REC = ""
+      END
+      JOCS.CRED.CODE = INSERT(JOCS.CRED.CODE,1,1,0,CUST.CREDIT)
+      JOCS.CRED.AUTH = INSERT(JOCS.CRED.AUTH,1,1,0,ORD.CRED.AUTH)
+      JOCS.CUST.NO = INSERT(JOCS.CUST.NO,1,1,0,ORD.CUST)
+      JOCS.CRED.AVAIL = INSERT(JOCS.CRED.AVAIL,1,1,0,AVAIL)
+      JOCS.CRED.LIMIT = INSERT(JOCS.CRED.LIMIT,1,1,0,CUST.CR.LIMIT)
+      JOCS.CHG.DATE = INSERT(JOCS.CHG.DATE,1,1,0,DATE())
+      MATWRITE JOCS.REC ON CREDIT_STATS, CONO:ORDNO
+   END
+   STATUS = "L"; SHPNO = "ALL"
+   CALL ORDER_LINE_UPD1(CONO,ORDNO,SHPNO,STATUS)
+   PCNT = DCOUNT(O.ODQ.PROD,VM)
+   FOR P = 1 TO PCNT
+      PROD = O.ODQ.PROD<1,P>; WHSE = O.ODQ.WHSE<1,P>
+      PROD.SEQ = O.ODQ.SEQ<1,P>; KIT.TYPE = O.ODQ.KIT<1,P>
+      PTR = 1; FND = 0
+      LOOP
+         LOCATE PROD IN ODQ.PROD<1>,PTR SETTING L THEN
+            IF (WHSE = ODQ.WHSE<1,L>) AND (PROD.SEQ=ODQ.PROD.SEQ<1,L>) AND (KIT.TYPE = ODQ.KIT<1,L>) THEN
+               PTR = 0; FND = 1
+            END
+         END ELSE
+            PTR = 0
+         END
+      WHILE PTR DO
+         PTR = L + 1
+      REPEAT
+      IF NOT(FND) THEN
+         IWH.ID = CONO:PROD:"!":WHSE
+         MATREADU FGS.REC FROM FNGD.STATS, IWH.ID THEN
+            PTR = 1
+            LOOP
+               LOCATE ORDNO IN FGS.ORDER<1>,PTR SETTING OLOC THEN
+*T26356 
+                  IF PROD.SEQ=FGS.SEQ<1,OLOC> AND KIT.TYPE=FGS.KIT<1,OLOC> THEN 
+                     FGS.ORDER = DELETE(FGS.ORDER,1,OLOC,0)
+                     FGS.O.QTY = DELETE(FGS.O.QTY,1,OLOC,0)
+                     FGS.B.QTY = DELETE(FGS.B.QTY,1,OLOC,0)
+                     FGS.SEQ   = DELETE(FGS.SEQ,1,OLOC,0)
+                     FGS.KIT   = DELETE(FGS.KIT,1,OLOC,0)
+                  END
+               END ELSE
+                  PTR = 0
+               END
+            UNTIL PTR = 0 DO
+               PTR = 1
+            REPEAT
+            IF FGS.ORDER # "" OR FGS.JOB # "" THEN
+               MATWRITE FGS.REC ON FNGD.STATS, IWH.ID
+            END ELSE
+               DELETE FNGD.STATS, IWH.ID
+            END
+         END
+         RELEASE FNGD.STATS, IWH.ID
+         MATREADU FOS.REC FROM FNGD.ORDER.STATS, IWH.ID:"!":ORDNO:"!":PROD.SEQ:"!":KIT.TYPE THEN
+            DELETE FNGD.ORDER.STATS, IWH.ID:"!":ORDNO:"!":PROD.SEQ:"!":KIT.TYPE
+         END
+         RELEASE FNGD.ORDER.STATS, IWH.ID:"!":ORDNO:"!":PROD.SEQ:"!":KIT.TYPE
+      END
+   NEXT P
+*
+   IF (OLD.CUST # "") AND (OLD.CUST # ORD.CUST) THEN
+      MATREADU CUST.REC FROM CUSTOMER,CONO:OLD.CUST THEN
+         LOCATE ORDNO IN CUST.ORD.NUM<1>,1 SETTING OFND THEN
+            CUST.ORD.NUM = DELETE(CUST.ORD.NUM,1,OFND,0)
+            CUST.ORD.BAL = DELETE(CUST.ORD.BAL,1,OFND,0)
+            MATWRITE CUST.REC ON CUSTOMER, CONO:OLD.CUST
+         END
+      END
+      RELEASE CUSTOMER, CONO:OLD.CUST
+   END
+1000*
+    IF ERRMSG # '' THEN
+	STATUS = RBO.setProperty('', 'ServerStatus', '1')
+	STATUS = RBO.setProperty('', 'ServerMessage', ERRMSG)
+    END
+* End of method code
+RETURN
+

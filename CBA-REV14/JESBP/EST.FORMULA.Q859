@@ -1,0 +1,167 @@
+   SUBROUTINE EST.FORMULA.Q658 (CONO, ACTION, EQTY, DEPT, COMP)
+*********************************************************************
+* REVISION    - [11.1]
+* Copyright 1995 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - NOSCOBP
+* PROGRAM     - EST.FORMULA.Q959
+* BY          - diane; CBA
+* DATE        - 12/07/1999
+* DESCRIPTION -
+*
+*T24239 diane 12/07/1999 * Formula to calculate number of cartons
+*C35113 cm 12/21/1999 * Getting error message when a qty is added to the
+*                       qty/roll field on prod def scr
+*T24657 cm 01/03/2000 * Formula to calculate number of cartons.
+*T25785 cm 05/18/2001 * Use core thickness from estimate instead of always
+*                       using a thickness of .5000 (EST.RL.CORE.THICK).
+*T25786 cm 05/18/2001 * Use the labels per roll on product def screen # 2
+*                       when a value exists in that field else calculate
+*                       and populate the field.
+*ENDDOC
+*********************************************************************
+*
+* The TEMP.QTY returned is the No of Cartons
+*
+* VARIABLES
+*        MAX.OD = The maximum OD in inches
+*        CORE.SZ= The size of the core (internal, add 0.5 inch for thickness)
+*        NO.ROLL= The Actual Quantity/Roll (user set)
+*        LACR   = The number of labels across the roll (user set)
+*        REPT   = The repeat of a SINGLE label (Die Repeat/No Around)
+*
+* FORMULA for Calculating No of Labels/Roll given MAX OD
+*
+*  LINEAL INCH PER ROLL =  ((MAX.OD*MAX.OD) / 4) * (3.1416 / CALIPER)
+*                  MINUS ((CORE.SZ*CORE.SZ) # 4) * (3.1416 / CALIPER)
+*  LABELS PER ROLL      =  (LINEAL INCH PER ROLL / REPEAT) * NUMBER ACROSS
+*  NUMBER OF ROLLS      =  ORDER QUANTITY / LABELS PER ROLL
+*
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>JES.CPYLIB>SCOMMON.ESTIMATE
+*COPY>JES.CPYLIB>ESTIMATE
+*COPY>JES.CPYLIB>ESTIMATE.TEMP
+*COPY>JES.CPYLIB>ESTIMATE.RES
+*COPY>JES.CPYLIB>ESTIMATE.RES.DIE
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>CHAR
+*
+*---- INITIALIZATION
+   OPEN "ESTIMATE.RES.DIE" TO ESTIMATE.RES.DIE ELSE
+      ERRMSG = "CANNOT OPEN ESTIMATE.RES.DIE"
+      TEMP.QTY = 0
+      GOTO 99999
+   END
+*
+   IF TEMP.MPTR = "" THEN MPTR = 1 ELSE MPTR = TEMP.MPTR
+   LOCATE EQTY IN EST.QTY<1>,1 SETTING QPTR ELSE QPTR=1
+*
+*---- MAIN PROCESSING
+*
+   TEMP.QTY = 0
+* TEMP.FCTR = 1000
+   TYP = 0
+* Prompt for number of rolls per carton
+10*
+   BEGIN CASE
+      CASE QPTR > 1 OR ACTION = "R"
+         NULL
+      CASE QPTR = 1 AND ACTION # "R"
+         IF TYP = 0 THEN CALL EDIT.SUB1 (MAT EDIT.COM)
+         X=0;Y=23;TYP=11;MAXL=3;MINV=1;MAXV=999;JUSTIFY="L"
+         HMSG="Enter number of rolls per carton "
+         BEGIN CASE
+            CASE TEMP.FVAR1 # ""
+               DEFAULT = TEMP.FVAR1
+            CASE 1
+               DEFAULT = ""
+         END CASE
+         IF DEFAULT = "" THEN
+            PMSG = "Number of rolls per carton ?"
+         END ELSE
+            O.R = "O"
+            PMSG = "Number of rolls per carton (Default = ":DEFAULT:") ?"
+         END
+         CALL EDIT.SUB1 (MAT EDIT.COM)
+         IF VALUE = "END" THEN RETURN
+         IF VALUE = "" THEN GOTO 10
+         XXROLLS = VALUE
+         TEMP.FVAR1 = VALUE
+   END CASE
+   XXROLLS = TEMP.FVAR1
+*
+*
+*--- Calculate Weight and Caliper by adding Stocks
+*
+   WEB.CNT=DCOUNT(EST.PROD.OS.USAGE<1,COMP>,SM)
+   TOT.CAL=0
+   FOR WPTR=1 TO WEB.CNT
+      TOT.CAL=EST.RL.PAP.CAL<1,COMP,WPTR>+TOT.CAL
+   NEXT WPTR
+*
+*--- Calculate Lineal/Roll, Max OD and Qty/Roll
+*
+   ROLL.LINEAL=0
+   LABEL.PER.ROLL=0
+   ROLL.MAXOD=0
+   MAX.OD=EST.RL.MAX.OD<1,COMP,1>+0
+*T25785 v
+*  CORE.SZ=EST.RL.CORE.SIZE<1,COMP,1> + 5000 ;* Add 0.5 inch for Core Thickness
+   IF EST.RL.CORE.THICK<1,COMP,1> + 0 = 0 THEN
+      EST.RL.CORE.THICK<1,COMP,1> = 500
+   END
+   CORE.SZ=EST.RL.CORE.SIZE<1,COMP,1> + (EST.RL.CORE.THICK * 10) ;* Add 0.5 inch for Core Thickness
+*T25785 ^
+*C35115 v
+*  NO.ROLL=EST.RL.NO.PER.ROLL<1,COMP,1>+0
+   NO.ROLL = 0
+*C35115 ^
+   LABEL.PER.ROLL=EST.RL.NO.PER.ROLL<1,COMP,1>+0 ; * T25786
+   LACR=EST.RL.LAB.ACR<1,COMP,1>
+   IF LACR+0=0 THEN LACR = EST.RL.DIE.NO.ACR<1,COMP,1>
+   MATREAD RLDIE.REC FROM ESTIMATE.RES.DIE,CONO:EST.RL.DIE<1,COMP,1> THEN
+      REPT = (RLDIE.REPEAT / 10000)
+   END ELSE
+      REPT=EST.RL.DIE.REPEAT<1,COMP,1>/10000
+      REPT=REPT/EST.RL.DIE.NO.ARD<1,COMP,1>
+   END
+* Lineal inches per roll
+   BEGIN CASE
+*T25786 v
+*     CASE NO.ROLL=0 AND MAX.OD#0
+      CASE LABEL.PER.ROLL=0 AND MAX.OD#0
+*T25786 ^
+         VAR1 = (MAX.OD**2 / 4) * (3.1416 / TOT.CAL)
+         VAR2 = (CORE.SZ**2 / 4) * (3.1416 / TOT.CAL)
+         ROLL.LINEAL = VAR1 - VAR2
+         ROLL.MAXOD=MAX.OD
+         LABEL.PER.ROLL=INT(((ROLL.LINEAL/1000)/(REPT/1000))*LACR+.99)
+         LABEL.PER.ROLL = INT((LABEL.PER.ROLL/10000) + .5)
+         IF LABEL.PER.ROLL=0 THEN LABEL.PER.ROLL=EQTY
+   END CASE
+*
+*-- Calculate Values
+*
+* Prompt for number of rolls per carton
+   IF LABEL.PER.ROLL+0 # 0 THEN
+      TEMP.QTY=INT(EQTY/LABEL.PER.ROLL+.99)
+      TEMP.QTY = INT(TEMP.QTY / XXROLLS + .99)
+   END
+   IF TEMP.QTY < 1 THEN TEMP.QTY = 1
+   TEMP.VSALE = "Y"
+*
+*--- Update ESTIMATE.RES fields with Calculated Values
+*
+*      EST.RL.NO.ROLLS<1,COMP,QPTR>=TEMP.QTY
+*
+*T25786 v
+   IF EST.RL.NO.PER.ROLL + 0 = 0 THEN
+      EST.RL.NO.PER.ROLL = LABEL.PER.ROLL
+   END
+*T25786 ^
+99999 *
+   RETURN
+END

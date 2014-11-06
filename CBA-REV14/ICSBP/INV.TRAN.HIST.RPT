@@ -1,0 +1,652 @@
+*********************************************************************
+* REVISION    - [12.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - ICSBP
+* PROGRAM     - INV.TRAN.HIST.RPT
+* DATE        - 04/18/2002
+* BY          - EDVARD PITKA, PRIMAC SYSTEMS
+* DESCRIPTION -
+* This report print an Inventory transaction history report.
+* T25740 cmykleb 04/18/2002 * Re-write report for rev12.
+* T25740 epitka  05/07/2002 * Re-write of rewrite for rev12
+* C40069 ajibaly 05/28/2002 * Do not print zero line item products
+* T27277 thompson 02/10/2003 * Fix problem with report after conversion
+*                            * with all data built by conversion.
+*T27705 lross 11/14/2003 * Expand Serial # to 15 char.
+*T28005 lross 03/15/2004 * Bug in 'S'ummary version.
+*T28934 lross 06/20/2006 * "B" TYPE getting cleared before 1st tran to
+*                          process.
+*ENDDOC
+*********************************************************************
+*
+***   INSERT EQUATE FROM CPYLIB
+*
+*COPY>ICS.CPYLIB>INV_AUDIT_HIST
+*COPY>ICS.CPYLIB>INV_AUDIT_BAL
+*COPY>CPYLIB>SYSCOM
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>CPYLIB>CHAR
+*
+   DEFFUN CALC.STK.QTY(COST.QTY,MAT INV.CNV.REC,ROND,LN)
+*
+   DIM TOT.PROD(10)
+   DIM TOT.B.WT(10)
+   DIM TOT.P.LINE(10)
+*
+   EQU BEG.BAL       TO TOT.PROD(1)
+   EQU RECEIPT       TO TOT.PROD(2)
+   EQU TRAN.IN       TO TOT.PROD(3)
+   EQU TRAN.OUT      TO TOT.PROD(4)
+   EQU ADJUST        TO TOT.PROD(5)
+   EQU SALE          TO TOT.PROD(6)
+   EQU QTY           TO TOT.PROD(7)
+   EQU COST          TO TOT.PROD(8)
+*
+   MAT TOT.PROD = 0
+*
+   LINE.COUNT = 0
+*C40069v
+*  PAGE.NO = 0
+   PAGE.NO = 1
+*C40069^
+   SP = SPACE(1)
+   SP2 = SPACE(2)
+   D15 = STR('-',15)
+   D4 = D15[1,4]
+   D9 = D15[1,9]
+   D11 = D15[1,11]
+   D12 = D15[1,12]
+   D10 = D15[1,10]
+   D7 = D15[1,7]
+   D8 = D15[1,8]
+   D3 = D15[1,3]
+   PREV.VAL = ''
+   PREV.PLINE = ''
+   PREV.WHSE = ''
+   PREV.PROD = ''
+   PREV.B.WT = ''
+   TOT.WHSE = 0
+   MAT TOT.P.LINE = 0
+   MAT TOT.B.WT = ''
+   GRAND.COST = 0
+*
+   TITLE.LINE = "U/M   DATE     BEG-BAL    RECEIPT   TRANS-IN   TRANS-OUT"
+*T27705 TITLE.LINE:= "   ADJUST      SALE      QUANTITY      "
+   TITLE.LINE:= "   ADJUST      SALE      QUANTITY  "
+   EQL.LINE = D10:SP:D10:SP:D10:SP:D10:SP:D10:SP:D10:SP:D12
+*
+   SYS.TYPE = 1; CALL SYSCOM(MAT SYSCOM.REC)
+*
+   OPEN '','INV_AUDIT_HIST' TO INV_AUDIT_HIST ELSE
+      ERRMSG = 'INV_AUDIT_HIST FILE IS MISSING'
+      GOTO 93000
+   END
+   OPEN '','INV_AUDIT_BAL' TO INV_AUDIT_BAL ELSE
+      ERRMSG = 'INV_AUDIT_BAL FILE IS MISSING'
+      GOTO 93000
+   END
+   OPEN '', 'INVENTORY' TO INVENTORY ELSE
+      ERRMSG = 'INVENTORY FILE IS MISSING'
+      GOTO 93000
+   END
+*
+   PROCREAD ID ELSE
+      ERRMSG = ' CANNOT PERFORM PROCREAD'
+      GOTO 93000
+   END
+   CONO       = ID<1>
+   SUM.DTL    = ID<8>
+   ST.DATE    = ICONV(ID<9>,'D4')
+   END.DATE   = ICONV(ID<10>,'D4')
+   ST.PERIOD  = ID<11>
+   END.PERIOD = ID<12>
+   CONO.NAME  = ""
+   RPT.NAME   = ""
+   RPT.NUM    = ID<2>
+   RPT.DATE   = DATE()
+   HD1 = "" ; HD2 = ""
+   CALL GET.PROG.HEAD(CONO,CONO.NAME,RPT.NAME,RPT.NUM,RPT.DATE,HD1,HD2)
+*
+   IF SUM.DTL = 'S' THEN
+*T27705 SUM.HEAD = "PRODUCT NUMBER  BAS.WGHT ":TITLE.LINE:"COST"
+      SUM.HEAD = "PRODUCT NUMBER  BAS.WGHT ":TITLE.LINE:"    COST"
+      SUM.DASH = D15:SP:D8:SP:D3:SP:D8:SP:EQL.LINE:SP:D10
+   END ELSE
+*T27705 DTL.HEAD = 'JOB/VEND TRAN/PO#  LOC#   SERIAL #  ':TITLE.LINE
+      DTL.HEAD = 'JOB/VEND TRAN/PO#  LOC#     SERIAL #    ':TITLE.LINE
+*T27705 DTL.DASH = D8:SP:D9:SP:D4:SP:D11:SP:D3:SP:D8:SP:EQL.LINE
+      DTL.DASH = D8:SP:D9:SP:D4:SP:D15:SP:D3:SP:D8:SP:EQL.LINE
+   END
+*
+   PRINTER ON
+   ;*
+   ;* Main Loop
+   ;*
+   PRINT.LIST = ''       ;*C40069
+   PRINT.LIST.FLAG = "N" ;*C40069
+   FIRST.TIME = 1
+   WHSE.ARR = ''
+   DONE = 0
+   LOOP
+      READNEXT KEY ELSE DONE=1
+*IF @LOGNAME='cba' THEN DEBUG
+   UNTIL DONE DO
+      IF KEY[4,1] = 'C' THEN CONTINUE
+      MATREAD INAH.REC FROM INV_AUDIT_HIST,KEY ELSE CONTINUE
+      MATREAD INV.REC FROM INVENTORY,CONO:INAH.PROD ELSE CONTINUE
+      IF FIRST.TIME THEN
+         FIRST.TIME = 0
+         PREV.WHSE  = INAH.WHSE
+         PREV.PLINE = INV.M.LINE:' / ':INV.LINE
+         PREV.B.WT  = INV.BAS.WT
+         PREV.PROD  = INAH.PROD
+         GOSUB PRINT.HEADINGS
+      END
+*      INAH.DATE=OCONV(INAH.DATE,'D2/')
+      PRODWHSE=INAH.PROD:INAH.WHSE
+      LOCATE PRODWHSE IN WHSE.ARR<1> SETTING JUNK ELSE
+         TYPE='B' ; D.BEG.BAL=''
+         GOSUB GET.BEG.BAL
+         GOSUB CHECK.BREAK
+         GOSUB GET.INV.UM.CNV
+         GOSUB PROCESS.RECORD
+      END
+      ;* keep type as 'B' until we hit the record
+      ;* that falls in the date range selected within a period
+      ;* range
+*        IF INAH.DATE>=ST.DATE THEN
+      IF INAH.DATE>=ST.DATE AND INAH.DATE <=END.DATE THEN
+         IF TYPE='B' THEN
+            PRINT.LIST.FLAG = "Y" ;*C40069
+            GOSUB PRINT.LIST.SUB  ;*C40069
+            IF SUM.DTL='D' THEN
+               GOSUB PRINT.DETAIL
+               BEG.BAL+=D.BEG.BAL
+               QTY+=D.BEG.BAL
+            END
+            PRINT.LIST.FLAG = "N" ;*C40069
+         END
+         TYPE=INAH.TYPE
+      END ELSE
+*T28934 v Until 1st record to process donot set the variables below.
+*        TYPE=INAH.TYPE ;*T28005
+*        QUANTITY=INAH.QTY
+*        IF SUM.DTL = 'D' THEN 
+*           D.COST=INAH.EXT.COST
+*        END ELSE
+*           S.COST=INAH.EXT.COST
+*        END
+*T28934 ^
+      END
+      GOSUB CHECK.BREAK
+*        IF INAH.DATE>=ST.DATE THEN
+      IF INAH.DATE>=ST.DATE AND INAH.DATE <=END.DATE THEN
+         GOSUB GET.INV.UM.CNV
+         GOSUB GET.QTY.COST
+         GOSUB PROCESS.RECORD ;*T28005
+      END
+*T28005 GOSUB PROCESS.RECORD
+*        IF INAH.DATE>= ST.DATE THEN
+      IF INAH.DATE>=ST.DATE AND INAH.DATE <=END.DATE THEN
+         PRINT.LIST.FLAG = "Y" ;*C40069
+         GOSUB PRINT.LIST.SUB  ;*C40069
+         IF SUM.DTL='D' THEN
+            GOSUB PRINT.DETAIL
+         END
+         PRINT.LIST.FLAG = "N" ;*C40069
+      END
+   REPEAT
+   PRINT.LIST.FLAG = "Y" ;* C40069
+*T27277
+   IF FIRST.TIME = 1 THEN
+      GOSUB PRINT.HEADINGS
+      PRINT "NO VALID DATA FOR THIS REPORT"
+      PRINTER OFF
+      GOTO 999999
+   END
+*T27277
+   GOSUB 300
+   IF SUM.DTL = 'D' THEN GOSUB 350
+   GOSUB 400
+   GOSUB 500
+   IF SUM.DTL = 'S' THEN GOSUB 600
+   PRINTER OFF
+   GOTO 999999
+*
+**************************************************************************
+******** S U B R O U T I N E S *******************************************
+**************************************************************************
+*
+**************
+CHECK.BREAK: 
+**************
+*
+   IF INAH.WHSE # PREV.WHSE THEN
+      GOSUB 300
+      IF SUM.DTL = 'D' THEN GOSUB 350
+      GOSUB 400
+      GOSUB 500
+      PREV.PLINE = INV.M.LINE:" / ":INV.LINE
+      PREV.B.WT = INV.BAS.WT
+      PREV.PROD = INAH.PROD
+      PREV.WHSE = INAH.WHSE
+      LINE.COUNT = 99
+   END
+   IF INV.M.LINE:" / ":INV.LINE # PREV.PLINE THEN
+      GOSUB 300
+      IF SUM.DTL = 'D' THEN GOSUB 350
+      GOSUB 400
+      PREV.PLINE = INV.M.LINE:" / ":INV.LINE
+      PREV.B.WT = INV.BAS.WT
+      PREV.PROD = INAH.PROD
+      LINE.COUNT = 99
+   END
+   IF INV.BAS.WT # PREV.B.WT AND SUM.DTL = 'D' THEN
+      GOSUB 300
+      GOSUB 350
+      PREV.B.WT = INV.BAS.WT
+      PREV.PROD = INAH.PROD
+   END
+   IF INAH.PROD # PREV.PROD THEN
+      GOSUB 300
+      PREV.PROD = INAH.PROD
+   END
+   RETURN
+*
+***************
+GET.QTY.COST: 
+***************
+*
+   IF SUM.DTL = 'S' THEN
+      S.COST = INAH.EXT.COST
+      QUANTITY = INAH.QTY
+   END ELSE
+      D.COST = INAH.EXT.COST
+      QUANTITY = INAH.QTY
+   END
+   RETURN
+*
+***************
+GET.BEG.BAL: 
+***************
+*
+   PRODWHSE=INAH.PROD:INAH.WHSE
+   ITB.ID=CONO:INAH.PROD:'!':INAH.WHSE:'!':INAH.PERIOD
+   QUANTITY = 0 ; D.COST = 0 ; S.COST = 0
+   MATREAD ITB.REC FROM INV_AUDIT_BAL,ITB.ID THEN
+      IF SUM.DTL='D' THEN
+         QUANTITY=ITB.BEG
+         D.COST=ITB.BEG.AMT
+      END ELSE
+         QUANTITY=ITB.BEG
+         S.COST=ITB.BEG.AMT
+      END
+      WHSE.ARR<1,-1>=PRODWHSE                         
+      WHSE.ARR<2,-1>=INAH.PERIOD                        
+   END                                               
+   RETURN                                            
+*
+****************
+PROCESS.RECORD: 
+****************
+*
+   U.M = INV.UNIT<1,2>
+   B.WT = OCONV(INV.BAS.WT,"MD2")
+   QUANTITY=CALC.STK.QTY(QUANTITY,MAT INV.CNV.REC,'','')
+   IF SUM.DTL = 'D' THEN
+      BEGIN CASE
+         CASE TYPE="B"                                                   
+            D.BEG.BAL+=QUANTITY                                           
+            D.RECEIPT="";D.TRAN.IN="";D.TRAN.OUT="";D.ADJUST="";D.SALE=""
+            D.QTY=D.BEG.BAL
+         CASE TYPE="R"
+            D.RECEIPT=QUANTITY
+            D.BEG.BAL="";D.TRAN.IN="";D.TRAN.OUT="";D.ADJUST="";D.SALE=""
+         CASE TYPE="I"
+            D.TRAN.IN=QUANTITY
+            D.BEG.BAL="";D.RECEIPT="";D.TRAN.OUT="";D.ADJUST="";D.SALE=""
+         CASE TYPE="O"
+            D.TRAN.OUT=QUANTITY
+            D.BEG.BAL="";D.RECEIPT="";D.TRAN.IN="";D.ADJUST="";D.SALE=""
+         CASE TYPE="S"
+            D.SALE=QUANTITY
+            D.BEG.BAL="";D.RECEIPT="";D.TRAN.IN="";D.ADJUST="";D.TRAN.OUT=""
+         CASE TYPE="A"
+            D.ADJUST=QUANTITY
+            D.BEG.BAL="";D.RECEIPT="";D.TRAN.IN="";D.SALE="";D.TRAN.OUT=""
+      END CASE
+*  IF INAH.DATE>=ST.DATE THEN
+      IF INAH.DATE>=ST.DATE AND INAH.DATE <=END.DATE THEN
+         D.QTY = QUANTITY
+         RECEIPT+=D.RECEIPT
+         TRAN.IN+=D.TRAN.IN
+         TRAN.OUT+=D.TRAN.OUT
+         ADJUST+=D.ADJUST
+         SALE+=D.SALE
+         IF TYPE#'B' THEN
+            QTY+=D.QTY
+         END
+         COST+=D.COST
+         GRAND.COST+=D.COST
+      END
+   END ELSE
+      BEGIN CASE
+         CASE TYPE = "B"                 
+            BEG.BAL+=QUANTITY
+            QTY+=QUANTITY
+         CASE TYPE = "R"
+            RECEIPT+=QUANTITY
+         CASE TYPE = "I"
+            TRAN.IN+=QUANTITY
+         CASE TYPE = "O"
+            TRAN.OUT+=QUANTITY
+         CASE TYPE = "S"
+            SALE+=QUANTITY
+         CASE TYPE = "A"
+            ADJUST+=QUANTITY
+      END CASE
+      COST+=S.COST
+      GRAND.COST+=S.COST
+*  IF INAH.DATE>ST.DATE THEN
+      IF INAH.DATE>=ST.DATE AND INAH.DATE <=END.DATE THEN
+         IF TYPE#'B' THEN
+            QTY+=QUANTITY
+         END
+      END
+   END
+   RETURN
+*
+********
+300: 
+********
+*
+   IF SUM.DTL = 'S' THEN
+      GOSUB 40000
+      FOR JJ = 1 TO 8
+         TOT.P.LINE(JJ) = TOT.P.LINE(JJ) + TOT.PROD(JJ)
+      NEXT JJ
+      MAT TOT.PROD = 0
+   END ELSE
+      GOSUB 50000
+      FOR JJ = 1 TO 8
+         TOT.B.WT(JJ) = TOT.B.WT(JJ) + TOT.PROD(JJ)
+      NEXT JJ
+      MAT TOT.PROD = ""
+   END
+   RETURN
+*
+********
+350: 
+********
+*
+***  CHECK FOR NEW BASIS WEIGHT  (DETAIL ONLY)
+*
+   GOSUB 55000
+   FOR JJ = 1 TO 8
+      TOT.P.LINE(JJ) = TOT.P.LINE(JJ) + TOT.B.WT(JJ)
+   NEXT JJ
+   MAT TOT.B.WT = ""
+   RETURN
+*
+*******
+400: 
+*******
+*
+***   CHECK FOR NEW PRODUCT LINE
+*
+   GOSUB 60000
+   TOT.WHSE = TOT.WHSE + TOT.P.LINE(8)
+   MAT TOT.P.LINE   = 0
+   RETURN
+*
+********
+500: 
+********
+*
+***   CHECK FOR NEW WHSE
+*
+   GOSUB 70000
+   TOT.WHSE = 0
+   RETURN
+*
+*******
+600: 
+*******
+*
+***   PRINT GRAND TOTAL (COST -  SUMMARY ONLY)
+*
+   IF LINE.COUNT + 2 >= 55 THEN GOSUB PRINT.HEADINGS
+   PRINT.LIST<-1> = SPACE(117):'----------'
+   PRINT.LIST<-1> = SPACE(103):'GRAND TOTAL : ':OCONV(GRAND.COST,"MD2")"R#10"
+   GOSUB PRINT.LIST.SUB ;* C40069
+   RETURN
+*
+***************
+PRINT.HEADINGS: 
+***************
+*
+   PRINT.LIST = '' ;*C40069
+   PRINT.LIST<-1> = CHAR(12)
+   ;*C40069* PAGE.NO = PAGE.NO + 1
+   PRINT.LIST<-1> = HD1:PAGE.NO
+   PRINT.LIST<-1> = HD2
+   H.LINE = SPACE(39) :"FOR PERIOD ":ST.PERIOD:" THROUGH ":END.PERIOD
+   H.LINE:= " AND DATES FROM " : OCONV(ST.DATE, "D2/") "L#8" : " THROUGH "
+   H.LINE:= OCONV(END.DATE, "D2/")
+   PRINT.LIST<-1> = H.LINE
+   H.LINE = '' ; D.LINE = '' ; T.LINE = ''
+   IF SUM.DTL = 'S' THEN
+      T.LINE = SUM.HEAD
+      D.LINE = SUM.DASH
+   END ELSE
+      T.LINE = DTL.HEAD
+      D.LINE = DTL.DASH
+   END
+   H.LINE = "WAREHOUSE : ":PREV.WHSE "L#4"
+   PRINT.LIST<-1> = ''
+   PRINT.LIST<-1> = H.LINE
+   PRINT.LIST<-1> = "MLINE / PLINE : ":PREV.PLINE
+   PRINT.LIST<-1> = ''
+   PRINT.LIST<-1> = T.LINE
+   PRINT.LIST<-1> = D.LINE
+   PRINT.LIST<-1> = ''
+   LINE.COUNT = 10
+   GOSUB PRINT.LIST.SUB
+   RETURN
+*C40069 ^
+*
+**************
+PRINT.DETAIL: 
+**************
+*
+   IF LINE.COUNT >= 55 THEN GOSUB PRINT.HEADINGS
+   LINE.COUNT = LINE.COUNT + 1
+   IF TYPE='B' THEN
+      JOB.VEND='' ; TRAN=''; LOC='' ; SERIAL=''
+   END ELSE
+      JOB.VEND = INAH.JOB
+      TRAN = INAH.TRAN
+      LOC = INAH.LOC
+      IF INAH.SERIAL[1,1]='R' THEN
+         ;* serial that begins with R is not a true serial
+         ;* but a tracking record for generally tracked
+         ;* items
+         SERIAL=''
+      END ELSE
+         SERIAL=INAH.SERIAL
+      END
+   END
+   H.LINE = ''
+   H.LINE = H.LINE : JOB.VEND"L#8":SP:TRAN"L#9":SP:LOC"L#4":SP
+*T27705 v H.LINE = H.LINE:SERIAL"L#11":SP:U.M"L#3":SP:OCONV(INAH.DATE,"D2/")"R#8"
+   H.LINE = H.LINE:SERIAL"L#15":SP:U.M"L#3":SP:OCONV(INAH.DATE,"D2/")"R#8"
+   H.LINE = H.LINE : SP : OCONV(D.BEG.BAL, ICR.CNV) "R#10"
+   H.LINE = H.LINE : SP : OCONV(D.RECEIPT, ICR.CNV) "R#10"
+   H.LINE = H.LINE : SP : OCONV(D.TRAN.IN, ICR.CNV) "R#10"
+   H.LINE = H.LINE : SP : OCONV(D.TRAN.OUT, ICR.CNV) "R#10"
+   H.LINE = H.LINE : SP : OCONV(D.ADJUST, ICR.CNV) "R#10"
+   H.LINE = H.LINE : SP : OCONV(D.SALE, ICR.CNV) "R#10"
+   H.LINE = H.LINE : SP : OCONV(D.QTY, ICR.CNV) "R#12"
+   PRINT.LIST<-1> =  H.LINE
+   GOSUB PRINT.LIST.SUB ;*C40069
+   RETURN
+*
+***********
+40000: 
+***********
+*
+***   PRINT SUMMARY PRODUCT
+*
+   IF LINE.COUNT + 1 >= 55 THEN GOSUB PRINT.HEADINGS
+   LINE.COUNT = LINE.COUNT + 1
+   H.LINE = ''
+   H.LINE = H.LINE : PREV.PROD"L#15":SP:B.WT "R#8":SP:U.M"L#3"
+   H.LINE = H.LINE : SP :OCONV(INAH.DATE,"D2/")"R#8"
+   H.LINE = H.LINE : SP : OCONV(TOT.PROD(1), ICR.CNV) "R#10"
+   H.LINE = H.LINE : SP : OCONV(TOT.PROD(2), ICR.CNV) "R#10"
+   H.LINE = H.LINE : SP : OCONV(TOT.PROD(3), ICR.CNV) "R#10"
+   H.LINE = H.LINE : SP : OCONV(TOT.PROD(4), ICR.CNV) "R#10"
+   H.LINE = H.LINE : SP : OCONV(TOT.PROD(5), ICR.CNV) "R#10"
+   H.LINE = H.LINE : SP : OCONV(TOT.PROD(6), ICR.CNV) "R#10"
+   H.LINE = H.LINE : SP : OCONV(TOT.PROD(7), ICR.CNV) "R#12"
+   H.LINE = H.LINE : SP : OCONV(TOT.PROD(8), 'MD2') "R#10"
+   PRINT.LIST<-1> =  H.LINE
+   GOSUB PRINT.LIST.SUB ;* C40069
+   RETURN
+*
+*********
+50000: 
+*********
+*
+***   PRINT THE TOTALS FOR PRODUCT 
+*
+   IF LINE.COUNT + 3 >= 55 THEN GOSUB PRINT.HEADINGS
+   LINE.COUNT = LINE.COUNT + 3
+*T27705 PRINT.LIST<-1> = SPACE(49) : EQL.LINE
+   PRINT.LIST<-1> = SPACE(53) : EQL.LINE
+   H.LINE = ''
+*T27705 H.LINE = H.LINE : SPACE(15):'PRODUCT NUM   : ':PREV.PROD"L#17"
+   H.LINE = H.LINE : SPACE(15):'PRODUCT NUM   : ':PREV.PROD"L#21"
+   H.LINE = H.LINE : SP : OCONV(TOT.PROD(1), ICR.CNV) "R#10"
+   H.LINE = H.LINE : SP : OCONV(TOT.PROD(2), ICR.CNV) "R#10"
+   H.LINE = H.LINE : SP : OCONV(TOT.PROD(3), ICR.CNV) "R#10"
+   H.LINE = H.LINE : SP : OCONV(TOT.PROD(4), ICR.CNV) "R#10"
+   H.LINE = H.LINE : SP : OCONV(TOT.PROD(5), ICR.CNV) "R#10"
+   H.LINE = H.LINE : SP : OCONV(TOT.PROD(6), ICR.CNV) "R#10"
+   H.LINE = H.LINE : SP : OCONV(TOT.PROD(7), ICR.CNV) "R#12"
+   PRINT.LIST<-1> = H.LINE
+   PRINT.LIST<-1> = ''
+   GOSUB PRINT.LIST.SUB ;* C40069
+   RETURN
+*
+*********
+55000: 
+*********
+*
+***   PRINT THE TOTALS FOR BASIS WEIGHT  (DETAIL ONLY) 
+*
+   IF LINE.COUNT + 3 >= 55 THEN GOSUB PRINT.HEADINGS
+   LINE.COUNT = LINE.COUNT + 3
+*T27705 PRINT.LIST<-1> = SPACE(49) : EQL.LINE
+   PRINT.LIST<-1> = SPACE(53) : EQL.LINE
+   H.LINE = ''
+*T27705 H.LINE = H.LINE : SPACE(15):'BASIS WEIGHT  : ':OCONV(PREV.B.WT,"MD2")"L#17"
+   H.LINE = H.LINE : SPACE(15):'BASIS WEIGHT  : ':OCONV(PREV.B.WT,"MD2")"L#21"
+   H.LINE = H.LINE : SP : OCONV(TOT.B.WT(1), ICR.CNV) "R#10"
+   H.LINE = H.LINE : SP : OCONV(TOT.B.WT(2), ICR.CNV) "R#10"
+   H.LINE = H.LINE : SP : OCONV(TOT.B.WT(3), ICR.CNV) "R#10"
+   H.LINE = H.LINE : SP : OCONV(TOT.B.WT(4), ICR.CNV) "R#10"
+   H.LINE = H.LINE : SP : OCONV(TOT.B.WT(5), ICR.CNV) "R#10"
+   H.LINE = H.LINE : SP : OCONV(TOT.B.WT(6), ICR.CNV) "R#10"
+   H.LINE = H.LINE : SP : OCONV(TOT.B.WT(7), ICR.CNV) "R#12"
+   PRINT.LIST<-1> = H.LINE
+   PRINT.LIST<-1> = ''
+   GOSUB PRINT.LIST.SUB ;* C40069
+   RETURN
+*
+***********
+60000: 
+***********
+*
+***   PRINT THE TOTALS FOR PRODUCT LINE
+*
+   H.LINE = ''
+   IF SUM.DTL = 'S' THEN
+      IF LINE.COUNT + 2 >= 55 THEN GOSUB PRINT.HEADINGS
+      LINE.COUNT = LINE.COUNT + 2
+*T27705 PRINT.LIST<-1> = SPACE(39) : EQL.LINE : SP : D10
+      PRINT.LIST<-1> = SPACE(38) : EQL.LINE : SP : D10
+      H.LINE = "   MLINE / PLINE : ":PREV.PLINE "L#17":":"
+   END ELSE
+      IF LINE.COUNT + 3 >= 55 THEN GOSUB PRINT.HEADINGS
+      LINE.COUNT = LINE.COUNT + 3
+*T27705 PRINT.LIST<-1> = SPACE(49) : EQL.LINE
+      PRINT.LIST<-1> = SPACE(53) : EQL.LINE
+*T27705 H.LINE = SPACE(15):"MLINE / PLINE : ":PREV.PLINE"L#17"
+      H.LINE = SPACE(15):"MLINE / PLINE : ":PREV.PLINE"L#21"
+   END
+   H.LINE = H.LINE : SP : OCONV(TOT.P.LINE(1), ICR.CNV) "R#10"
+   H.LINE = H.LINE : SP : OCONV(TOT.P.LINE(2), ICR.CNV) "R#10"
+   H.LINE = H.LINE : SP : OCONV(TOT.P.LINE(3), ICR.CNV) "R#10"
+   H.LINE = H.LINE : SP : OCONV(TOT.P.LINE(4), ICR.CNV) "R#10"
+   H.LINE = H.LINE : SP : OCONV(TOT.P.LINE(5), ICR.CNV) "R#10"
+   H.LINE = H.LINE : SP : OCONV(TOT.P.LINE(6), ICR.CNV) "R#10"
+   H.LINE = H.LINE : SP : OCONV(TOT.P.LINE(7), ICR.CNV) "R#12"
+   IF SUM.DTL = 'S' THEN
+      H.LINE = H.LINE : SP : OCONV(TOT.P.LINE(8), 'MD2') "R#10"
+   END
+   PRINT.LIST<-1> = H.LINE
+   PRINT.LIST<-1> = ''
+   GOSUB PRINT.LIST.SUB ;* C40069
+   RETURN
+*
+*************
+70000: 
+*************
+*
+***   PRINT THE TOTALS FOR WHSE
+*
+   H.LINE = ''
+   IF LINE.COUNT + 3 >= 55 THEN GOSUB PRINT.HEADINGS
+   LINE.COUNT = LINE.COUNT + 3
+   IF SUM.DTL = 'S' THEN
+      PRINT.LIST<-1> = SPACE(117) : D10
+      H.LINE = SPACE(94):"WAREHOUSE ":PREV.WHSE "L#4":" TOTAL :"
+      H.LINE = H.LINE : SP : OCONV(TOT.WHSE, 'MD2') "R#10"
+      PRINT.LIST<-1> = H.LINE
+      PRINT.LIST<-1> = ''
+   END
+   GOSUB PRINT.LIST.SUB ;* C40069
+   RETURN
+*
+*****************
+GET.INV.UM.CNV: 
+*****************
+*
+*COPY>ICSBP>INV.UM.CNV
+   RETURN
+*
+*****************
+PRINT.LIST.SUB: 
+*****************
+*
+   IF PRINT.LIST.FLAG # 'Y' THEN RETURN
+   FOR PRINT.IDX = 1 TO DCOUNT(PRINT.LIST, @AM)
+      PRINT PRINT.LIST<PRINT.IDX>
+   NEXT PRINT.IDX
+   PAGE.NO = PAGE.NO + COUNT(PRINT.LIST, CHAR(12))
+   PRINT.LIST = ''
+   RETURN
+*
+***   CALLS FOR SYSCOM
+91000 ERR.TYPE = 1; CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+92000 ERR.TYPE = 2; CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+93000*
+   PRINTER OFF
+   ERR.TYPE = 3; CALL SYSCOM(MAT SYSCOM.REC)
+999999*
+END

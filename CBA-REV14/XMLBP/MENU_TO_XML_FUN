@@ -1,0 +1,146 @@
+   FUNCTION MENU_TO_XML_FUN(MAT PASS.FILES, EMENU.REC, SELF, LVL, CUTOFF)
+********************************************************************
+* REVISION - [12.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM   - PRIMAC
+* SOURCE   - FUNBP
+* PROGRAM  - MENU_TO_XML_FUN
+* BY       - Abdullah Jibaly, COMPUTER BUSINESS ASSOCIATES
+* DATE     - 06/13/02
+*
+* DESCRIPTION
+*
+* This function recursively processes EPRIMAC.MENUS records to XML
+* 
+* ARGUMENTS
+*
+* - MAT PASS.FILES: Dimensioned array containing file handles
+* - EMENU.REC     : Current menu record to process
+* - SELF          : Variable containing current menu's record ID and desc
+* - LVL           : An integer specifiying what level to begin numbering at
+* - CUTOFF        : Menus with LVL values greater than CUTOFF will be
+*                   processed and embedded in parent
+*
+*********************************************************************
+*
+   ;*
+   ;* Initialization
+   ;*
+   DEFFUN MENU_TO_XML_FUN(MAT PASS.FILES, EMENU.REC, SELF, LVL, CUTOFF)
+   DEFFUN XML_FORMAT_CDATA(STR)
+   XML.REC  = ''
+   LINEFEED = CHAR(10)
+   ;*
+   ;* Extract file handles
+   ;*
+   DIM PASS.FILES(3)
+   PRIMAC.MENUS     = PASS.FILES(1)
+   EPRIMAC.MENUS    = PASS.FILES(2)
+   PMC_PROCESS_XREF = PASS.FILES(3)
+   ;*
+   ;* Process all records in menu except first, which points to parent
+   ;*
+   EMENU.CNT = DCOUNT(EMENU.REC,@AM)
+   FOR EMENU.IDX = 2 TO EMENU.CNT
+      THIS = EMENU.REC<EMENU.IDX>
+      EMENU.ID = EMENU.REC<EMENU.IDX,1>
+      ;*
+      ;* Ignore comment records
+      ;*
+      IF EMENU.ID = "C" THEN CONTINUE
+      ;*
+      ;* Recursively process submenus
+      ;*
+      IF EMENU.ID[1,2] = "M." THEN
+         READ REC FROM EPRIMAC.MENUS, EMENU.ID ELSE
+            REC = ''
+         END
+         MENU_DESC = EMENU.REC<EMENU.IDX,3>
+         XMENU = MENU_TO_XML_FUN(MAT PASS.FILES, REC, THIS, LVL+1, CUTOFF)
+         XFILE = ''
+         IF XMENU<1> = 'MENU-FILE' THEN
+            XFILE = ' FILE=':QUOTE(XMENU<2>)
+            XMENU = ''
+         END
+         XML.REC<-1> = '<L':LVL:' ID=':QUOTE(LVL):XFILE:'>'
+         XML.REC<-1> = XML_FORMAT_CDATA(MENU_DESC)
+         IF XMENU # '' THEN XML.REC<-1> = XMENU
+         XML.REC<-1> = '</L':LVL:'>'
+      END ELSE
+         ;*
+         ;* This record must be a process,
+         ;* find the process name and add to XML
+         ;*
+         XREF_ID = EMENU.ID
+         READ REC FROM PMC_PROCESS_XREF, XREF_ID ELSE
+            REC = 'PROCESS_FILE_NOT_FOUND'
+         END
+         PROCESS_FILE = REC<1>:'.asp'
+         PROCESS_DESC = EMENU.REC<EMENU.IDX,3>
+         ;*
+         ;* Get the menu item name from PRIMAC.MENUS to match the base
+         ;* system, ie not depend on PMC_PROCESS
+         ;*
+         READ MENU.REC FROM PRIMAC.MENUS, REC<2> ELSE
+            MENU.REC = ''
+         END
+         FIND XREF_ID IN MENU.REC SETTING IDX THEN
+            MENU_DESC = MENU.REC<IDX,3>
+         END ELSE
+            MENU_DESC = PROCESS_DESC
+         END
+         XML.REC.ADD = '<Doc ID=':QUOTE(LVL):' FILE=':QUOTE(PROCESS_FILE):'>'
+         XML.REC.ADD:= XML_FORMAT_CDATA(MENU_DESC):'</Doc>'
+         XML.REC<-1> = XML.REC.ADD
+      END
+   NEXT EMENU.IDX
+   ;*
+   ;* If we've passed CUTOFF, return the XML to the previous level
+   ;*
+   IF LVL > CUTOFF THEN
+      RETURN XML.REC
+   END
+   ;*
+   ;* Otherwise, write out XML.REC and return a pointer to it
+   ;*
+   XML.FILE.NAME = CHANGE(SELF<1,1>, '.', '_')
+   XML.FILE.SUFFIX = XML.FILE.NAME[LEN(XML.FILE.NAME)-1,2]
+   XML.FILE.NAME:= '.xml'
+   XML.ROOT.PREFIX = ''
+   ;*
+   ;* Determine XML root prefix
+   ;*
+   BEGIN CASE
+     CASE XML.FILE.SUFFIX = '_C'
+       XML.ROOT.PREFIX = 'CUSTOM_'
+     CASE XML.FILE.SUFFIX = '_E'
+       XML.ROOT.PREFIX = 'EOD_'
+     CASE XML.FILE.SUFFIX = '_F'
+       XML.ROOT.PREFIX = 'FUNCTIONS_'
+     CASE XML.FILE.SUFFIX = '_I'
+       XML.ROOT.PREFIX = 'INQUIRY_'
+     CASE XML.FILE.SUFFIX = '_L'
+       XML.ROOT.PREFIX = 'LISTING_'
+     CASE XML.FILE.SUFFIX = '_M'
+       XML.ROOT.PREFIX = 'SYSTEM_'
+     CASE XML.FILE.SUFFIX = '_P'
+       XML.ROOT.PREFIX = 'PURGE_'
+     CASE XML.FILE.SUFFIX = '_R'
+       XML.ROOT.PREFIX = 'REPORTS_'
+   END CASE
+   ;*
+   ;* Create file to write out
+   ;*
+   XML.FILE = '<?xml version="1.0"?>'
+   XML.FILE<-1> = '<':XML.ROOT.PREFIX:'Main>'
+   XML.FILE<-1> = XML.REC
+   XML.FILE<-1> = '</':XML.ROOT.PREFIX:'Main>'
+   SWAP @AM WITH LINEFEED IN XML.FILE
+   OSWRITE XML.FILE ON "ePRIMAC_MENUS_XML/":XML.FILE.NAME
+   ;*
+   ;* Return a variable pointing to the XML file
+   ;*
+   XML.RET = "MENU-FILE"
+   XML.RET<-1> = XML.FILE.NAME
+   RETURN XML.RET
+*

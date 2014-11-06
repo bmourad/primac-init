@@ -1,0 +1,198 @@
+SUBROUTINE PHYIM_validateReceipt
+********************************************************************************
+*   Program name :- PHYIM_validateReceipt
+*   Created:- 8/27/2003
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB PHY.INV
+$INCLUDE JCS.CPYLIB JOB
+$INCLUDE OPS.CPYLIB JOB.FNGD.STATS
+* Insert method code here
+   OPEN "","CONTROL" TO CONTROL ELSE
+      ERRMSG = "CANNOT OPEN CONTROL FILE"
+      GOTO 90000
+   END
+
+   OPEN "","INVENTORY" TO INVENTORY ELSE
+      ERRMSG = "INVENTORY FILE IS MISSING"
+      GOTO 90000
+   END
+
+   OPEN "","PHY.INV" TO PHY.INV ELSE
+      ERRMSG = "PHY.INV FILE IS MISSING"
+      GOTO 90000
+   END
+
+   OPEN "","JOB" TO JOB ELSE
+      ERRMSG = "JOB FILE IS MISSING"
+      GOTO 90000
+   END
+
+   OPEN "","JOB.FNGD.STATS" TO JOB.FNGD.STATS ELSE
+      ERRMSG = "JOB.FNGD.STATS FILE IS MISSING"
+      GOTO 90000
+   END
+  ID = ''
+  RECEIPT = ''
+  PROD.NUM = ''
+  INV.ID = ''
+  CONO = ''
+  ERR = 0
+  EOJ=0
+  TEMP.RECEIPT = ''
+  PHY.ID = ''
+  JOB.ID = ''
+  LN = ''
+  RECP.ID=''
+  DEFFUN PHYIM_GET_RECP_ID(CONO,CONTROL.FILE,DATE)
+  DEFFUN GET_RECP_ID(CONO,CONTROL.FILE,DATE)
+
+
+   DIM TEMP.REC(18)
+   EQU TEMP.PROD      TO TEMP.REC(1)
+   EQU TEMP.SERIAL    TO TEMP.REC(2)
+   EQU TEMP.ONHAND    TO TEMP.REC(3)
+   EQU TEMP.DIA       TO TEMP.REC(4)
+   EQU TEMP.COST      TO TEMP.REC(5)
+   EQU TEMP.DESC      TO TEMP.REC(6)
+   EQU TEMP.PO        TO TEMP.REC(7)
+   EQU TEMP.VENDOR    TO TEMP.REC(16)
+   EQU TEMP.RECEIPT   TO TEMP.REC(17)
+   EQU TEMP.UNIT      TO TEMP.REC(18)
+
+   ERRMSG = RBO.getProperty('','ID',ID)
+   MATREAD PHYSI.REC FROM PHY.INV,ID ELSE
+      ERRMSG='Invalid sequence number' 
+      GOTO 90000
+   END
+
+   ERRMSG = RBO.getProperty('','PHYSI_TEMP_INPUT',RECEIPT)
+*  ERRMSG = RBO.getProperty('','PHYSI_TEMP_OUTPUT',TEMP.RECEIPT)
+   ERRMSG = RBO.setProperty('','PHYSI_TEMP_OUTPUT','') 
+ 
+   PROD.NUM = RECEIPT<1,2>
+   TEMP.PROD = RECEIPT<1,2>
+   MAINT.DATE = RECEIPT<1,3>
+   LN = RECEIPT<1,4>
+   PREV.RECEIPT = RECEIPT<1,5>
+   TEMP.PO = RECEIPT<1,1>
+   RECEIPT = RECEIPT<1,6>
+   IF RECEIPT = "NEW" THEN
+	RECEIPT = ''
+   END
+   CONO = ID[1,3]
+   PHY.ID = ID
+   OUT_PARAM = ''
+   INV.ID=CONO:PROD.NUM
+MATREAD INV.REC FROM INVENTORY,INV.ID THEN
+
+
+IF PHYSI.MAINT.DATE = '' THEN
+ 	PHYSI.MAINT.DATE=ICONV(DATE(),"D2/")
+END
+	ERR = 0
+   	EOJ = 0
+	*TEMP.PO = RECEIPT
+	BEGIN CASE
+		CASE TEMP.PO='INIT'
+			EOJ=1
+			TEMP.VENDOR = "INIT"
+			*IF PREV.RECEIPT = '' THEN
+			 IF PHYSI.RECP.NO<1,LN> = '' THEN
+				
+				RECP.ID=GET_RECP_ID(CONO,CONTROL,PHYSI.MAINT.DATE)
+				RECP.NO=RECP.ID[4,99]
+				TEMP.RECEIPT="NEW-":RECP.NO
+				OUT_PARAM = TEMP.RECEIPT
+				
+			END ELSE
+				RECP.NO = PREV.RECEIPT
+				OUT_PARAM = RECP.NO
+				
+			END
+			STATUS = RBO.setProperty('','PHYSI_SERIAL',"NEW-":RECP.NO)
+			
+		CASE TEMP.PO # 'INIT'
+			JOB.ID=CONO:TEMP.PO
+			MATREAD JOB.REC FROM JOB,JOB.ID THEN
+				MATREAD JFS.REC FROM JOB.FNGD.STATS,JOB.ID ELSE
+					MAT JFS.REC=''
+				END
+				PTR = 1
+				LOOP
+					LOCATE TEMP.PROD IN JFS.PROD<1>,PTR SETTING FND THEN
+						IF PHYSI.WHSE = JFS.WHSE<1,FND> THEN
+							PTR = 0
+						END
+					END ELSE
+						PTR = 0
+						FND = 0
+					END
+				WHILE PTR DO
+					PTR = FND + 1
+				REPEAT
+				IF FND THEN
+					EOJ=1
+					TEMP.COST = JFS.U.PRICE<1,FND>
+					TEMP.VENDOR = JOB.CUST
+				WRITE RECEIPT ON CONTROL,'01R'
+				*	IF RECEIPT = '' THEN
+				*	 IF PHYSI.RECP.NO<1,LN>='' THEN
+					 IF PHYSI.RECP.NO<1,LN>='' OR PHYSI.RECP.NO<1,LN>='NEW' THEN
+					* RECP.ID=GET.RECP.ID(CONO,CONTROL,PHYSI.MAINT.DATE)
+					
+						PHYSI.MAINT.DATE = OCONV(PHYSI.MAINT.DATE,"D2/")
+						WRITE PHYSI.MAINT.DATE ON CONTROL,'01DD1'
+					*	RECP.ID=GET_RECP_ID(CONO,CONTROL,PHYSI.MAINT.DATE)
+						RECP.ID = PHYIM_GET_RECP_ID(CONO,CONTROL,PHYSI.MAINT.DATE)
+
+					*	RECP.DATE=OCONV(RECP.ID[4,5],"D2/")
+					*	RECP.NO=RECP.ID[9,99]
+					*	TEMP.RECEIPT="NEW-":RECP.DATE:RECP.NO
+						WRITE RECP.ID ON CONTROL,'01TR1'
+
+						RECP.NO=RECP.ID[4,99]
+						TEMP.RECEIPT="NEW-":RECP.NO
+						WRITE TEMP.RECEIPT ON CONTROL,'01TR'
+						OUT_PARAM = TEMP.RECEIPT
+						
+					END ELSE
+					*	RECP.NO = RECEIPT
+						RECP.NO = PHYSI.RECP.NO<1,LN>	
+						OUT_PARAM = RECP.NO
+						
+
+					END
+					*STATUS = RBO.setProperty('','PHYSI_TEMP_OUTPUT',RECP.NO)
+					*OUT_PARAM = RECP.NO
+				END ELSE
+					ERRMSG = "Product ":TEMP.PROD:" is not on job ":TEMP.PO
+					GOTO 90000
+				END
+			END ELSE
+				ERRMSG = "Job ":TEMP.PO:" is not on file "
+				GOTO 90000
+			END
+	END CASE
+END
+VAL = RBO.setProperty('','PHYSI_TEMP_OUTPUT',OUT_PARAM)
+* End of method code
+RETURN
+
+90000
+STATUS = RBO.setProperty('','ServerStatus',1)
+STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+RETURN
+
+

@@ -1,0 +1,158 @@
+      SUBROUTINE JKT_NOTIFY_SEND(CONO,MAIL.F.ID,MAIL.LIST,SECURITY,USER.MAIL,TKT.ID,FLD.NAME,PREV.VALUE,CURR.VALUE,ERRMSG)
+********************************************************************
+* REVISION    - [10.0]
+* SOURCE      - JISBP
+* PROGRAM     - JKT_NOTIFY_SEND
+* AUTHOR      - Nick Amendola, NASTech, Inc.
+* DATE        - 01/07/94
+* DESCRIPTION
+* This subroutine is utilized to distribute messages, from
+* within PRIMAC application.
+*CSF29313 bilal 10/24/1997 * Send message, convert date to external format
+*T22664 rick 04/17/1998 * TEST CO
+*T22664 renee 08/28/1998 * CSF 31495 - Message not sending properly 
+*T24958 edvard 04/05/2000 * FIX UNINITIALIZED VARIABLE PROBLEM.
+********************************************************************
+*
+*---- Data structure libraries
+*
+$INCLUDE PMC.CPYLIB SECURITY
+$INCLUDE PMC.CPYLIB USER.MAIL
+$INCLUDE CPYLIB CHAR
+*
+*---- Validate the USER & MAIL record
+*
+      ERRMSG = ""
+      MLCNT = DCOUNT(MAIL.LIST,AM)
+      IF MLCNT < 1 THEN
+         ERRMSG = "Cannot locate any users !!"
+         GOTO 99999
+      END
+      MAIL.ID = MAIL.LIST<1>
+      MATREAD SEC.REC FROM SECURITY, CONO:MAIL.ID ELSE
+         ERRMSG = "Cannot locate user # ":MAIL.ID[4,99]
+         GOTO 99999
+      END
+*
+*---- Initialization
+*
+      MDATE = DATE()
+      MTIME = TIME()
+      IF MTIME < 30 THEN MDATE = DATE()
+*
+      UMSG = ""
+      UMSG<1> = "Job ticket ":TKT.ID:" has been modified as follows:"
+      PTR = 2
+      FCNT = DCOUNT(FLD.NAME,AM)
+      FOR FPTR = 1 TO FCNT
+         PTR = PTR + 1
+         BEGIN CASE
+         CASE PREV.VALUE<FPTR> = "" AND CURR.VALUE<FPTR> # ""
+            MODE = "A"
+            UMSG<PTR> = FLD.NAME<FPTR>:" has been added."
+         CASE PREV.VALUE<FPTR> # "" AND CURR.VALUE<FPTR> = ""
+            MODE = "D"
+            UMSG<PTR> = FLD.NAME<FPTR>:" has been deleted."
+         CASE 1
+            MODE = "C"
+            UMSG<PTR> = FLD.NAME<FPTR>:" has been changed."
+         END CASE
+         PTR = PTR + 1
+         IF MODE = "C" THEN UMSG<PTR> = " FR: " ELSE UMSG<PTR> = SPACE(5)
+         VCNT = DCOUNT(PREV.VALUE<FPTR>,VM)
+         FOR VPTR = 1 TO VCNT
+            SCNT = COUNT(PREV.VALUE<FPTR,VPTR>,SM)+1
+            FOR SPTR = 1 TO SCNT
+               PV = PREV.VALUE<FPTR,VPTR,SPTR>
+               IF LEN(PV) > 75 THEN
+                  CALL DESC.REFORMAT(PV,75,PV)
+               END
+               LCNT = COUNT(PV,VM)+1
+               FOR LPTR = 1 TO LCNT
+                  UMSG<PTR> = UMSG<PTR>:PV<1,LPTR>
+                  PTR = PTR + 1
+                  UMSG<PTR> = SPACE(5)
+               NEXT LPTR
+            NEXT SPTR
+         NEXT VPTR
+         IF MODE = "C" THEN UMSG<PTR> = " TO: " ELSE UMSG<PTR> = SPACE(5)
+         VCNT = DCOUNT(CURR.VALUE<FPTR>,VM)
+         FOR VPTR = 1 TO VCNT
+            SCNT = COUNT(CURR.VALUE<FPTR,VPTR>,SM)+1
+            FOR SPTR = 1 TO SCNT
+               CV = CURR.VALUE<FPTR,VPTR,SPTR>
+               IF LEN(CV) > 75 THEN
+                  CALL DESC.REFORMAT(CV,75,CV)
+               END
+               LCNT = COUNT(CV,VM)+1
+               FOR LPTR = 1 TO LCNT
+                  UMSG<PTR> = UMSG<PTR>:CV<1,LPTR>
+                  PTR = PTR + 1
+                  UMSG<PTR> = SPACE(5)
+               NEXT LPTR
+            NEXT SPTR
+         NEXT VPTR
+      NEXT FPTR
+*
+*---- Process users
+*
+      FOR LNO = 1 TO MLCNT
+         MAIL.ID = MAIL.LIST<LNO>
+         MATREAD SEC.REC FROM SECURITY, CONO:MAIL.ID THEN GOSUB 1000
+      NEXT LNO
+      GOTO 99999
+*
+*---- Update User mail
+1000*
+      MATREADU UMDR.REC FROM USER.MAIL, CONO:MAIL.ID ELSE
+         MAT UMDR.REC = ""
+         UMDR.DET = 0
+         UMDR.SRC = CONO:MAIL.ID
+         UMDR.TYPE = 0
+*---- C29313
+*         UMDR.DATE = MDATE
+         UMDR.DATE = OCONV(MDATE,"D2/")
+*---- ^
+         UMDR.TIME = MTIME
+      END
+      IF UMDR.DET<1,1> # "0" THEN
+         UMDR.DET  = INSERT(UMDR.DET,1,1,0,"0")
+         UMDR.SRC  = INSERT(UMDR.SRC,1,1,0,CONO:MAIL.ID)
+         UMDR.TYPE = INSERT(UMDR.TYPE,1,1,0,"0")
+*---- C29313
+*         UMDR.DATE = INSERT(UMDR.DATE,1,1,0,MDATE)
+         UMDR.DATE = INSERT(UMDR.DATE,1,1,0,OCONV(MDATE,"D2/"))
+*---- ^
+         UMDR.TIME = INSERT(UMDR.TIME,1,1,0,MTIME)
+         UMDR.LIST = INSERT(UMDR.LIST,1,1,0,"")
+      END
+      UMDR.SEQ = UMDR.SEQ + 1
+      IF UMDR.SEQ > 9999 THEN UMDR.SEQ = 1
+      MP = DCOUNT(UMDR.DET,VM) + 1
+      UMDR.DET<1,MP>  = UMDR.SEQ
+      UMDR.SRC<1,MP>  = CONO:MAIL.F.ID
+      UMDR.TYPE<1,MP> = 1
+      UMDR.LIST<1,MP> = MAIL.ID:"_":UMDR.SEQ
+*---- C29313
+*      UMDR.DATE<1,MP> = MDATE
+*     UDMR.DATE<1,MP> = OCONV(MDATE,"D2/")  ;* Misspelled CSF 30268
+      UMDR.DATE<1,MP> = OCONV(MDATE,"D2/")
+*---- ^
+      UMDR.TIME<1,MP> = MTIME
+      MATWRITE UMDR.REC ON USER.MAIL, CONO:MAIL.ID
+      WRITE UMSG ON USER.MAIL, CONO:MAIL.ID:"!":UMDR.SEQ
+      WRITE (CONO:MAIL.ID) ON USER.MAIL, "L!":CONO:MAIL.F.ID:"!":MAIL.ID:"_":UMDR.SEQ
+      RETURN
+*
+*---- PRINT ERRMSG
+*
+90000*
+*      PRINT @(0,23):@(-4):ERRMSG:
+*      INPUT REPLY,1
+*      PRINT @(0,23):@(-4):
+      RETURN
+*
+*---- End of job
+99999*
+      RETURN
+END

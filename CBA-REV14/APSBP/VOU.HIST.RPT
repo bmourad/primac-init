@@ -1,0 +1,245 @@
+******************************************************
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - APSBP
+* PROGRAM     - VOUCH.HIST.RPT
+* BY          - CURTIS WILLIAMS , C.B.A
+* DATE        - 02/19/87
+* DESCRIPTION - This program list by voucher by or by vendor all
+*                 vouchers (SQV) file.
+*T22950 lanny 05/29/1998 * Deleted Vouchers should show Zero open
+*                          balance.
+*T26493 cmykleb 04/02/2002 * Change the rpt heading.
+*ENDDOC
+******************************************************
+*COPY>APS.CPYLIB>SQV
+*COPY>PMC.CPYLIB>VEND
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>CHAR
+*
+**** INITIALZATION
+*
+   TOT.AMT = 0 ; GTOT.AMT = 0
+   TOT.PAID = 0; GTOT.PAID = 0
+   VTOT.AMT = 0 ; VTOT.PAID = 0
+   VTOT.DSC = 0 ; VTOT.BAL = 0
+   SP1 = " "
+*
+**** GET PROC VALUES
+*
+   PROCREAD PROC.VALUES ELSE
+      ERRMSG = "THIS REPORT MUST RUN FROM A PROC" ; GOTO 93000
+   END
+   CONO = PROC.VALUES<1>
+   CONO.NAME = PROC.VALUES<2>
+   START.PER = PROC.VALUES<3>
+   END.PER = PROC.VALUES<4>
+   IF PROC.VALUES<7> = "V" THEN
+      HD7 = SPACE(61):"BY VENDOR":"'L'"
+   END ELSE
+      HD7 = SPACE(61):"BY VOUCHER":"'L'"
+   END
+*
+**** OPEN FILES
+*
+   OPEN "VEND" TO VEND ELSE ERRMSG = "VEND FILE IS MISSING";GOTO 93000
+   OPEN "SQV" TO SQV ELSE ERRMSG = "SQV FILE IS MISSING";GOTO 93000
+   OPEN "COMPANY" TO COMPANY ELSE ERRMSG = "COMPANY FILE IS MISSING";GOTO 93000
+   MATREAD COMP.REC FROM COMPANY , CONO ELSE ERRMSG = "CANNOT READ COMPANY RECORD" ; GOTO 93000
+*
+**** SETUP HEADING
+*
+*T26493 v
+*  IF PROC.VALUES<8> = 'C' THEN
+*     REPORT.NAME = "VOUCHER HISTORY REPORT (CLEAR)"
+*  END ELSE
+*     REPORT.NAME = "VOUCHER HISTORY REPORT"
+*  END
+*  REPORT.NUMBER = "XXXX"
+   CONO.NAME = ""
+   REPORT.NAME = ""
+   REPORT.NUMBER = PROC.VALUES<2>
+*T26493 ^
+   REPORT.DATE = DATE()
+   HD1 = "" ; HD2 = ""
+   CALL GET.PROG.HEAD(CONO,CONO.NAME,REPORT.NAME,REPORT.NUMBER,REPORT.DATE,HD1,HD2)
+   HD1 = HD1:"'PL'"
+   HD3 = "VEND/ NA VOUCH#   BALANCE   DISCOUNT   INV/PO   INV/DUE   G/L ACCOUNT   DV DP CTR DIST AMOUNT  ASSET ID CHECK# CHK DATE CHECK AMOUNT"
+   HD4 = "-------- ------ ----------- -------- ---------- -------- -------------- -- -- --- ------------ -------- ------ -------- ------------"
+   HD5 = "                                                    ------------                          ------------"
+   HD9 = "                ----------- --------                                              ------------                          ------------"
+   HD6 = "                                                                                  ============                          ============"
+   HD8=SPACE(50):"FROM PERIOD : ":START.PER:" TO : ":END.PER:"'LL'"
+   PRINTER ON
+   HEADING HD1:HD2:HD7:HD8:HD3:HD4
+   HD1="";HD2="";HD7="";HD8="";HD3="";HD4=""
+1*
+   READNEXT ID ELSE GOTO 99999
+   MATREAD SQV.REC FROM SQV, ID ELSE GOTO 1
+   PREV.VEND = SQV.VEND
+   CK.CNT = COUNT(SQV.CHK.NO,VM) + (SQV.CHK.NO # "")
+   GOSUB 1000
+*
+**** START PROCESSING
+*
+   DATA = 1
+   LOOP
+      READNEXT ID ELSE DATA = 0
+   WHILE DATA = 1 DO
+      MATREAD SQV.REC FROM SQV, ID ELSE GOTO 111
+      CK.CNT = COUNT(SQV.CHK.NO,VM) + (SQV.CHK.NO # "")
+      GOSUB 1000
+111 REPEAT
+   IF PROC.VALUES<7> = "V" THEN
+      GOSUB 4000
+   END
+   GOSUB 8000
+   GOTO 99999
+*
+**** PRINT LINES
+*
+1000*
+   IF PREV.VEND # SQV.VEND AND PROC.VALUES<7> = "V" THEN
+      GOSUB 4000
+      PREV.VEND = SQV.VEND
+   END
+   TOT.PAID = 0 ; TOT.AMT = 0 ; PRT.FLG = 1
+   IF SQV.DUE.DATE = "ADVANCE" THEN
+      GRS.AMT = 0
+      DSC.AMT = 0
+   END ELSE
+      GRS.AMT = SQV.GRS.AMT
+      DSC.AMT = SQV.DSC.AMT
+   END
+   FOR Z = 1 TO CK.CNT
+      TOT.PAID = TOT.PAID + SQV.PAID.AMT<1,Z>
+      GRS.AMT = GRS.AMT - SQV.PAID.AMT<1,Z> - SQV.DSC.PAID<1,Z>
+      DSC.AMT = DSC.AMT - SQV.DSC.PAID<1,Z>
+   NEXT Z
+   IF GRS.AMT # 0 THEN
+*T22950 v
+      IF SQV.CHK.NO<1,CK.CNT> # 'DELETE' THEN
+         OPEN.BAL = GRS.AMT - DSC.AMT
+      END ELSE OPEN.BAL = 0
+*T22950 ^
+   END ELSE
+      OPEN.BAL = GRS.AMT
+   END
+   IF SQV.CTR < CK.CNT THEN
+      COUNT = CK.CNT
+   END ELSE
+      COUNT = SQV.CTR
+   END
+   FOR DA = 1 TO COUNT
+      P.LINE = ""
+      IF PRT.FLG = 1 THEN
+         GOSUB 2000
+         PRT.FLG = 0
+      END ELSE
+         IF DA = 2 THEN
+            P.LINE = P.LINE: VEND.DESC "L#30":SPACE(7)
+            P.LINE = P.LINE: SQV.PO "L#10":SP1
+            P.LINE = P.LINE :OCONV(SQV.DUE.DATE, "D2/") "L#8":SP1
+         END ELSE
+            P.LINE = P.LINE :SPACE(57)
+         END
+      END
+      IF SQV.ACCT<1,DA> # '' THEN
+         P.LINE = P.LINE :SQV.ACCT<1,DA> CO.ACCT.MASK:SP1
+      END ELSE
+         P.LINE = P.LINE : SPACE(15)
+      END
+      P.LINE = P.LINE :SQV.DIV<1,DA> "R#2":SP1
+      P.LINE = P.LINE :SQV.DEPT<1,DA> "R#2":SP1
+      P.LINE = P.LINE :SQV.CCTR<1,DA> "R#3":SP1
+      P.LINE = P.LINE :OCONV(SQV.DIST.AMT<1,DA>, "MD2") "R#12":SP1
+      P.LINE = P.LINE :SQV.ASSET<1,DA> "R#8":SP1
+      IF SQV.CHK.NO<1,DA> # "" THEN
+         P.LINE = P.LINE :SQV.CHK.NO<1,DA> "L#6":SP1
+         P.LINE = P.LINE :OCONV(SQV.PAID.DATE<1,DA>, "D2/") "L#8":SP1
+         P.LINE = P.LINE :OCONV(SQV.PAID.AMT<1,DA>, "MD2") "R#12"
+      END
+      TOT.AMT = TOT.AMT + SQV.DIST.AMT<1,DA>
+      PRINT P.LINE
+   NEXT DA
+   T.LINE = ""
+   IF COUNT = 1 THEN
+      PRINT VEND.DESC "L#30":
+      PRINT SPACE(7): SQV.PO "L#10":SP1:
+      PRINT OCONV(SQV.DUE.DATE, "D2/") "L#8":SPACE(26):
+      PRINT "------------                          ------------"
+   END ELSE
+      PRINT SPACE(30):HD5
+   END
+   T.LINE = T.LINE:SPACE(67):"VOUCHER TOTAL  "
+   T.LINE = T.LINE:OCONV(TOT.AMT , "MD2") "R#12":SPACE(26)
+   T.LINE = T.LINE:OCONV(TOT.PAID, "MD2") "R#12"
+   PRINT T.LINE
+   PRINT
+   VTOT.AMT = VTOT.AMT + TOT.AMT
+   VTOT.PAID = VTOT.PAID + TOT.PAID
+   GTOT.AMT = GTOT.AMT + TOT.AMT
+   GTOT.PAID = GTOT.PAID + TOT.PAID
+   TOT.AMT = 0; TOT.PAID = 0
+   RETURN
+*
+**** SET COMMOM LINE VALUES
+*
+2000*
+   P.LINE = P.LINE :SQV.VEND<1,1> "L#8":SP1
+   P.LINE = P.LINE : ID[4,6] "L#6":SP1
+   IF SQV.VEND<1,2> # "" THEN
+      VEND.DESC = SQV.VEND<1,2>
+   END ELSE
+      MATREAD VEND.REC FROM VEND , CONO:SQV.VEND<1,1> ELSE VEND.DESC = "NOT ON FILE"
+   END
+   P.LINE = P.LINE :OCONV(OPEN.BAL,"MD2") "R#11": SP1
+   P.LINE = P.LINE :OCONV(SQV.DSC.AMT, "MD2") "R#8":SP1
+   P.LINE = P.LINE :SQV.INV "L#10":SP1
+   P.LINE = P.LINE :OCONV(SQV.INV.DATE, "D2/") "R#8":SP1
+   VTOT.DSC = VTOT.DSC + SQV.DSC.AMT
+   VTOT.BAL = VTOT.BAL + OPEN.BAL
+   RETURN
+*
+**** PRINT VEND TOTAL
+*
+4000*
+   PRINT HD9
+   T.LINE = ""
+   T.LINE = T.LINE:"VENDOR TOTAL   "
+   T.LINE = T.LINE:OCONV(VTOT.BAL, "MD2") "R#11":SPACE(1)
+   T.LINE = T.LINE:OCONV(VTOT.DSC , "MD2") "R#9":SPACE(47)
+   T.LINE = T.LINE:OCONV(VTOT.AMT , "MD2") "R#11":SPACE(26)
+   T.LINE = T.LINE:OCONV(VTOT.PAID, "MD2") "R#12"
+   PRINT T.LINE
+   PRINT
+   VTOT.AMT = 0;VTOT.DSC=0
+   VTOT.PAID = 0;VTOT.BAL= 0
+   RETURN
+*
+**** PRINT GRAND TOTAL
+*
+8000*
+   PRINT HD6
+   T.LINE = ""
+   T.LINE = T.LINE:SPACE(67):"GRAND TOTAL    "
+   T.LINE = T.LINE:OCONV(GTOT.AMT , "MD2") "R#12":SPACE(26)
+   T.LINE = T.LINE:OCONV(GTOT.PAID, "MD2") "R#12"
+   PRINT T.LINE
+   RETURN
+*
+**** PRINT HEADING
+*
+*
+**** CALLS FOR SYSCOM
+91000 ERR.TYPE = 1 ; CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+92000 ERR.TYPE = 2 ; CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+93000 ERR.TYPE = 3 ; CALL SYSCOM(MAT SYSCOM.REC)
+99999*
+   PRINTER OFF
+   PRINTER CLOSE
+END

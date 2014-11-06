@@ -1,0 +1,180 @@
+SUBROUTINE JCS_GETJOBMATERIAL(CONO, JOBID,FLAG,ERRMSG, STRXML)
+STRXML='<Job><CompanyNo></CompanyNo><JobId></JobId><Status></Status><CustomerNumber></CustomerNumber><CustomerName></CustomerName><MaterialReservation><ProductId></ProductId><ProductDescription></ProductDescription><WarehouseId></WarehouseId><Type></Type><ReservedDate></ReservedDate><UnitOfMeasurement></UnitOfMeasurement><AllocatedQuantity></AllocatedQuantity><ReservedQuantity></ReservedQuantity><UsedQuantity></UsedQuantity></MaterialReservation><MaterialRequirement><ProductId></ProductId><ProductDescription></ProductDescription><WarehouseId></WarehouseId><UnitOfMeasurement></UnitOfMeasurement><AllocatedQuantity></AllocatedQuantity><ReservedQuantity></ReservedQuantity><UsedQuantity></UsedQuantity><RequiredDate></RequiredDate><UnitPrice></UnitPrice><RequiredQuantity></RequiredQuantity><Balance></Balance></MaterialRequirement></Job>'
+FLAG="1"
+$INCLUDE JCS.CPYLIB JOB
+$INCLUDE PMC.CPYLIB CUSTOMER
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB INV.CNV
+$INCLUDE ICS.CPYLIB INV.JOB.STATS
+*IF CONO = "" THEN
+*  ERRMSG = "COMPANY NUMBER CANNOT BE BLANK"; GOSUB 9999
+*  RETURN
+*END
+*IF JOBID = "" THEN
+*  ERRMSG = "JOBID CANNOT BE BLANK"
+*  RETURN
+*END
+OPEN '','JOB' TO JOB ELSE
+  ERRMSG = 'CANNOT OPEN JOB FILE'  
+  GOTO 99999 
+END
+OPEN '','CUSTOMER' TO CUSTOMER ELSE
+  ERRMSG = 'CANNOT OPEN CUSTOMER FILE'  
+  GOTO 99999  
+END
+OPEN '','INVENTORY' TO INVENTORY ELSE
+  ERRMSG = 'CANNOT OPEN INVENTORY FILE' 
+  GOTO 99999 
+END
+OPEN '','INV.JOB.STATS' TO INV.JOB.STATS ELSE
+  ERRMSG = 'CANNOT OPEN INV.JOB.STATS FILE'  
+  GOTO 99999  
+END
+*
+* INITIALIZE VARIABLE
+*
+JOB_TYPE=""
+C=""
+*
+* MAIN PROCESSING
+*
+MATREAD JOB.REC FROM JOB, CONO:JOBID THEN
+          FLAG="0"
+           STRXML = '<Job>'
+           STRXML := '<CompanyNo>' : CONO : '</CompanyNo>'
+           STRXML := '<JobId>' : JOBID : '</JobId>'
+	   GOSUB 5000
+           STRXML := '<Status>' : STATUS : '</Status>'
+           STRXML := '<CustomerNumber>' : JOB.CUST : '</CustomerNumber>'
+           STRXML := '<CustomerName>' : OCONV(CONO:JOB.CUST,"TCUSTOMER;X;1;1")  : '</CustomerName>'
+           ERRMSG=""
+           CNT=DCOUNT(JOB.RESV.MATL,@VM)	    
+	   IF CNT > 0 THEN
+           FOR C = 1 TO CNT
+	        BALANCE=0
+               	MAT INV.REC=""
+                MATREAD INV.REC FROM INVENTORY, CONO:JOB.RESV.MATL<1,C> ELSE
+                           ERRMSG = 'PRODUCT NUMBER ':JOB.RESV.MATL<1,C>:' IS MISSING'; GOSUB 99999
+                END 
+		REQD=JOB.RESV.QTY<1,C>
+		$INCLUDE ICSBP INV.UM.CNV
+		ECD.SCALER = "MD0"
+		ECD.SCALER = ICR.CNV1
+		STRXML := '<MaterialReservation>'
+                STRXML := '<ProductId>' : JOB.RESV.MATL<1,C> : '</ProductId>'
+                STRXML := '<ProductDescription>' : INV.FULL.DESC : '</ProductDescription>'
+                STRXML := '<WarehouseId>' : JOB.RESV.WHSE<1,C>  : '</WarehouseId>'
+                STRXML := '<Type>' : INV.PAP.TYPE : '</Type>'
+		STRXML := '<ReservedDate>' : OCONV(JOB.RESV.DATE<1,C>,"D2/") : '</ReservedDate>'	
+	        STRXML := '<UnitOfMeasurement>' : INV.UNIT<1,2> : '</UnitOfMeasurement>'
+		GOSUB 7000
+                STRXML := '<AllocatedQuantity>' : OCONV(JOB.ALOC.QTY<1,C>,ECD.SCALER)  : '</AllocatedQuantity>'
+                STRXML := '<ReservedQuantity>' : OCONV(JOB.RESV.QTY<1,C>,ECD.SCALER)  : '</ReservedQuantity>'
+                STRXML := '<UsedQuantity>' : OCONV(JOB.USED.QTY<1,C>,ECD.SCALER)  : '</UsedQuantity>'
+                STRXML := '</MaterialReservation>'
+*Material Requirement data
+	        STRXML := '<MaterialRequirement>' 
+	        STRXML := '<ProductId>' : JOB.RESV.MATL<1,C> : '</ProductId>'
+                STRXML := '<ProductDescription>' : INV.FULL.DESC : '</ProductDescription>'
+                STRXML := '<WarehouseId>' : JOB.RESV.WHSE<1,C>  : '</WarehouseId>'
+                STRXML := '<UnitOfMeasurement>' : INV.UNIT<1,2> : '</UnitOfMeasurement>'
+		JSTAT.ID = JOB.RESV.MATL<1,C>:"!":JOB.RESV.WHSE<1,C>:"!":JOBID
+                MATREAD INV.JS.REC FROM INV.JOB.STATS,CONO:JSTAT.ID ELSE
+                     MAT INV.JS.REC = ''
+                END
+		STRXML := '<AllocatedQuantity>' : OCONV(JOB_ALOC_AMT<1,C>,ECD.SCALER)  : '</AllocatedQuantity>'
+                STRXML := '<ReservedQuantity>' : OCONV(JOB.RESV.QTY<1,C>,ECD.SCALER)  : '</ReservedQuantity>'
+                STRXML := '<UsedQuantity>' : OCONV(JOB.USED.QTY<1,C>,ECD.SCALER)  : '</UsedQuantity>'
+		STRXML := '<RequiredDate>' : OCONV(IJS.REQ.DATE<1,1>,"D2/")  : '</RequiredDate>'
+                STRXML := '<UnitPrice>' : OCONV(IJS.REQ.AMT,"MD4") : '</UnitPrice>'
+		REQDQ = INT(((IJS.REQ.QTY/ICR.DV1)*ICR.MT1)/ICR.DV2 + .5)
+		STRXML := '<RequiredQuantity>' : OCONV(REQDQ,ICR.CNV) : '</RequiredQuantity>'		
+		BALANCE = IJS.REQ.QTY - JOB.ALOC.QTY<1,C>-REQD-JOB.USED.QTY<1,C>
+		IF BALANCE >= 0 THEN
+                     BALANCE = INT(((BALANCE/ICR.DV1)*ICR.MT1)/ICR.DV2 + .5)
+		     BALANCE = OCONV(BALANCE,ICR.CNV)
+                END ELSE
+                     BALANCE = 0
+                         BALANCE = INT(((BALANCE/ICR.DV1)*ICR.MT1)/ICR.DV2 - .5)
+		     BALANCE = OCONV(BALANCE,ICR.CNV)
+                END
+		STRXML := '<Balance>' : BALANCE : '</Balance>'
+		STRXML := '</MaterialRequirement>'
+            NEXT C
+	    END
+	    STRXML := '</Job>' 
+END
+RETURN
+*
+*
+* FOR JOBDESCRIPTION
+5000 *
+ STATUS = ""
+ BEGIN CASE
+   CASE JOB.STATUS<1,1> = ""
+     STATUS = "BOOKED"
+   CASE JOB.TRACK.DATE<1,10> # ""
+    BEGIN CASE
+       CASE JOB.STATUS<1,1> = "1"
+          STATUS = "IN PROCESS"
+       CASE JOB.STATUS<1,1> = "5"
+          STATUS="REOPENED"
+       CASE JOB.STATUS<1,1> = "3"
+          STATUS="INVOICED"
+      CASE 1
+         STATUS = "COMPLETED"
+    END CASE
+  CASE JOB.TRACK.DATE<1,9> # ""
+     BEGIN CASE
+       CASE JOB.STATUS<1,1> = "1"
+         STATUS = "IN PROCESS"
+       CASE JOB.STATUS<1,1> = "5"
+         STATUS="REOPENED"
+       CASE 1
+         STATUS = "INVOICED"
+     END CASE
+  CASE JOB.TRACK.DATE<1,8> # ""
+     STATUS = "COSTED"
+  CASE JOB.TRACK.DATE<1,7> # ""
+     STATUS = "RDY-TO-BILL"
+  CASE JOB.TRACK.DATE<1,6> # ""
+     STATUS = "DELIVERED"
+  CASE JOB.TRACK.DATE<1,5> # ""
+     STATUS = "IN PROCESS"
+  CASE JOB.TRACK.DATE<1,3> # ""
+     STATUS = "IN PROCESS"
+  CASE JOB.STATUS<1,1> = "1"
+     STATUS = "IN PROCESS"
+  CASE 1
+     STATUS = JOB.STATUS<1,1>
+ END CASE
+RETURN
+*
+* CONVERSION CODE
+*
+7000 *
+         IF JOB.ALOC.QTY<1,C> < 0 THEN
+               JOB.ALOC.QTY<1,C>=INT(((JOB.ALOC.QTY<1,C>/ICR.DV1)*ICR.MT1)/ICR.DV2-.5)
+         END ELSE
+               JOB_ALOC_AMT<1,C>=INT(((JOB_ALOC_AMT<1,C>/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+         END
+	 IF JOB.RESV.QTY<1,C> < 0 THEN
+               JOB.RESV.QTY<1,C>=INT(((JOB.RESV.QTY<1,C>/ICR.DV1)*ICR.MT1)/ICR.DV2-.5)
+         END ELSE
+               JOB.RESV.QTY<1,C>=INT(((JOB.RESV.QTY<1,C>/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+         END
+	 IF JOB.USED.QTY<1,C> < 0 THEN
+               JOB.USED.QTY<1,C>=INT(((JOB.USED.QTY<1,C>/ICR.DV1)*ICR.MT1)/ICR.DV2-.5)
+         END ELSE
+               JOB.USED.QTY<1,C>=INT(((JOB.USED.QTY<1,C>/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+         END	
+    RETURN
+*
+* WRITE ERROR MESSAGE
+*
+99999*
+      IF ERRMSG <> "" THEN
+      ERRMSG = "ERROR FROM JCS_GETJOBMATERIAL --> " : ERRMSG
+      CALL WRITELOG(ERRMSG)
+      END
+   RETURN

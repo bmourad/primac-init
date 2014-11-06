@@ -1,0 +1,858 @@
+SUBROUTINE ORDM_REL_CHK_RESV_QTY
+********************************************************************************
+*   Program name :- ORDM_REL_CHK_RESV_QTY
+*   Created:- 4/4/2006
+*   Programmer :- Suhail Hussain S
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+
+$INCLUDE CPYLIB COMMON1
+$INCLUDE JCS.CPYLIB COM.JCS.LINK  
+$INCLUDE ICS.CPYLIB COM.INV.MAIN  
+$INCLUDE ICS.CPYLIB COM.INV.SERIAL
+$INCLUDE JCS.CPYLIB COM.INV.STATS 
+$INCLUDE PMC.CPYLIB COM.CUST 
+$INCLUDE OPS.CPYLIB COM.ORDER
+$INCLUDE OPS.CPYLIB COM.OPS.LINK
+
+$DEFINE INVENTORY
+$DEFINE ORDER
+$DEFINE ORDERDETAILINQ
+$DEFINE COMPOPS
+$DEFINE CUSTOMER
+$DEFINE CATEGORY
+$DEFINE INVWHSE
+$DEFINE FNGDSTATS
+$DEFINE FNGDORDERSTATS
+$DEFINE JOB
+$DEFINE FILEVARS
+
+$INCLUDE PMC.CPYLIB COMP.OPS
+$INCLUDE PMC.CPYLIB CUSTOMER
+$INCLUDE OPS.CPYLIB ORDER
+$INCLUDE OPS.CPYLIB ORDER.DETAIL
+$INCLUDE OPS.CPYLIB ORDER.DETAIL.INQ
+$INCLUDE OPS.CPYLIB ORDER.RELEASE
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB CATEGORY
+$INCLUDE ICS.CPYLIB INV.WHSE
+$INCLUDE ICS.CPYLIB INV.FNGD
+$INCLUDE ICS.CPYLIB INV.CNV
+$INCLUDE ICS.CPYLIB FNGD.BOM
+$INCLUDE ICS.CPYLIB FNGD.STATS
+$INCLUDE ICS.CPYLIB FNGD.ORDER.STATS
+$INCLUDE ICS.CPYLIB FNGD.JOB.STATS
+$INCLUDE ICS.CPYLIB PRICE.TABLE
+$INCLUDE ICS.CPYLIB WAREHOUSE
+$INCLUDE JES.CPYLIB ESTIMATE
+$INCLUDE JCS.CPYLIB JOB
+$INCLUDE CPYLIB FILE.VARS
+$INCLUDE CPYLIB CHAR
+
+   OPEN "","CUSTOMER" TO CUSTOMER ELSE ERRMSG = "CANNOT OPEN CUSTOMER FILE";GOTO 91000
+   OPEN "","ORDER" TO ORDER ELSE ERRMSG = "CANNOT OPEN ORDER FILE";GOTO 91000
+   OPEN "","ORDER.DETAIL" TO ORDER.DETAIL ELSE ERRMSG = "CANNOT OPEN ORDER.DETAIL FILE";GOTO 91000
+   OPEN "","ORDER.RELEASE" TO ORDER.RELEASE ELSE ERRMSG = "CANNOT OPEN ORDER.RELEASE FILE";GOTO 91000
+   OPEN "","INVENTORY" TO INVENTORY ELSE ERRMSG = "CANNOT OPEN INVENTORY FILE";GOTO 91000
+   OPEN "","CATEGORY" TO CATEGORY ELSE ERRMSG = "CANNOT OPEN CATEGORY FILE";GOTO 91000
+   OPEN "","INV.WHSE" TO INV.WHSE ELSE ERRMSG = "CANNOT OPEN INV.WHSE FILE";GOTO 91000
+   OPEN "","INV.FNGD" TO INV.FNGD ELSE ERRMSG = "CANNOT OPEN INV.FNGD FILE";GOTO 91000
+   OPEN "","FNGD.BOM" TO FNGD.BOM ELSE ERRMSG = "CANNOT OPEN FNGD.BOM FILE";GOTO 91000
+   OPEN "","FNGD.STATS" TO FNGD.STATS ELSE ERRMSG = "CANNOT OPEN FNGD.STATS FILE";GOTO 91000
+   OPEN "","FNGD.ORDER.STATS" TO FNGD.ORDER.STATS ELSE ERRMSG = "CANNOT OPEN  FILE";GOTO 91000
+   OPEN "","FNGD.JOB.STATS" TO FNGD.JOB.STATS ELSE ERRMSG = "CANNOT OPEN FNGD.JOB.STATS FILE";GOTO 91000
+   OPEN "","PRICE.TABLE" TO PRICE.TABLE ELSE ERRMSG = "CANNOT OPEN PRICE.TABLE FILE";GOTO 91000
+   OPEN "","WAREHOUSE" TO WAREHOUSE ELSE ERRMSG = "CANNOT OPEN WAREHOUSE FILE";GOTO 91000
+   OPEN "","ESTIMATE" TO ESTIMATE ELSE ERRMSG = "CANNOT OPEN ESTIMATE FILE";GOTO 91000
+   OPEN "","JOB" TO JOB ELSE ERRMSG = "CANNOT OPEN JOB FILE";GOTO 91000
+   OPEN "","CONTROL" TO CONTROL ELSE ERRMSG = "CANNOT OPEN CONTROL FILE";GOTO 91000
+
+*** VARIABLES AND PROPERTIES
+   STATUS = RBO.getProperty("","PMCProperty",PMCProperty)
+   STATUS = RBO.getProperty("","INARR",INARR)
+   STATUS = RBO.getProperty("","DISPARR",OSDARR)
+   STATUS = RBO.getProperty("","RETARR",REL_DATA)
+   STATUS = RBO.getProperty("","GRIDARR",RESV_ARRAY)
+   STATUS = RBO.getProperty("","REMOTE_ARR1",OSD_FULL_ARR)
+
+***
+* RESET THE PROPERTIES
+   STATUS = RBO.setProperty("","INARR","")
+   STATUS = RBO.setProperty("","DISPARR","")
+   STATUS = RBO.setProperty("","RETARR","")
+   STATUS = RBO.setProperty("","GRIDARR","")
+   STATUS = RBO.setProperty("","REMOTE_ARR1","")
+***
+   DELIM = "ð"
+   CONO = PMCProperty<1,4>
+   VALUE    = INARR<1,1>
+   ORR.ORD  = INARR<1,2>
+   ORD.CUST = INARR<1,3>
+   RELNO    = INARR<1,4>
+   SHPNO    = INARR<1,5>
+   LN       = INARR<1,6>
+   MODE     = INARR<1,7>
+   MODE_EXIT = INARR<1,8>
+   ORD.SHIP.TO = INARR<1,9>
+
+   RET_ARR = ""
+
+***** THIS IS FOR TEST
+   SWAP DELIM WITH VM IN ORD.SHIP.TO
+   TEMPORD_REC = ""
+   MAT ORD.DET.SUM = ""
+   MAT ORD.DET.INQ = ""
+   IF OSD_FULL_ARR # "" THEN
+      FOR X = 1 TO DCOUNT(ORD.SHIP.TO,VM) 
+         TEMPORD_REC = FIELD(OSD_FULL_ARR,"¥",X,1)
+         IF ORD.SHIP.TO<1,X> = SHPNO THEN TEMPORD_REC = OSDARR
+         IF TEMPORD_REC # "" THEN
+            MATPARSE ORD.DET.REC FROM TEMPORD_REC,"ð"
+         END ELSE
+            MAT ORD.DET.REC = ""
+         END
+         FOR P = 1 TO ORD.DET.REC.SIZE
+            ORD.DET.SUM(P,X) = ORD.DET.REC(P)
+         NEXT P
+      NEXT X
+   END
+
+*   FOR P = 1 TO ORD.DET.REC.SIZE
+*      ORD.DET.SUM(P,SPTR) = ORD.DET.REC(P)    
+*   NEXT P
+   FOR X = 1 TO DCOUNT(ORD.SHIP.TO,VM)
+      STATUS = "L";SHPNO = ORD.SHIP.TO<1,X>
+      CALL ORDER_LINE_UPD(CONO,ORDNO,SHPNO,STATUS)
+   NEXT X
+***
+
+   MATPARSE ORD.DET.REC FROM OSDARR,"ð"
+   MATREAD INV.REC FROM INVENTORY, CONO:OSD.PROD<1,LN> ELSE
+      MAT INV.REC = ""
+   END
+   MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE ELSE
+      MAT CATG.REC = ""
+   END
+   $INCLUDE ICSBP INV.UM.CNV
+   RELQTY = 0; PTR = 1
+   LOOP
+      LOCATE RELNO IN OSD.REL.NO<1,LN>,PTR SETTING FND THEN
+         RELQTY = RELQTY + OSD.REL.QTY<1,LN,FND>
+      END ELSE
+         PTR = 0
+      END
+   WHILE PTR DO
+      PTR = FND + 1
+   REPEAT
+   O.R = "O"
+   IF RELQTY > 0 THEN
+      DEFAULT = OCONV(INT(((RELQTY / ICR.DV1) * ICR.MT1) / ICR.DV2 + .5),ICR.CNV)
+   END ELSE
+      DQTY = OSD.R.QTY<1,LN> - SUM(OSD.REL.QTY<1,LN>)
+      DEFAULT = OCONV(INT(((DQTY / ICR.DV1) * ICR.MT1) / ICR.DV2 + .5),ICR.CNV)
+   END
+** INSERT HERE
+
+  BEGIN CASE
+    CASE MODE = "S"
+      IF OSD.KIT<1,LN> = "N" THEN
+        RTYPE = "M"
+        ORDNO = ORR.ORD
+        PDNO = OSD.PROD<1,LN>
+        WHNO = OSD.WHSE<1,LN>
+        PROD.SEQ = OSD.PROD.SEQ<1,LN> ; KIT.TYPE = OSD.KIT<1,LN>
+        IWH.ID=CONO:PDNO:"!":WHNO
+        MATREAD IWH.REC FROM INV.WHSE,IWH.ID THEN
+          ERR.FLG='';ERRMSG='';PERIOD='';OPEN.FLAG=1
+          CALL BUILD_IWH_FI(IWH.ID,MAT IWH.REC,PERIOD,ERR.FLG,ERRMSG,OPEN.FLAG)
+        END ELSE
+          MAT IWH.REC = ""
+        END
+        RTOT = OSD.R.QTY<1,LN>
+        RQTY = OSD.FI.QTY<1,LN>
+        RSV.NO = OSD.RECP.NO<1,LN>
+        REL.NO = OSD.REL.NO<1,LN>
+        REL.QTY = OSD.REL.QTY<1,LN>
+        IF RELQTY = 0 THEN
+          RELQTY = OSD.R.QTY<1,LN> - SUM(OSD.REL.QTY<1,LN>)
+          ACTION = "S";CUSTNO = ORD.CUST;RTYPE = "B";RESV.TOT = RTOT;PICK.QTY = ""
+          TMP.FI.QTY = RQTY;TMP.FI.NO = RSV.NO;TMP.REL.NO = REL.NO;TMP.REL.QTY = REL.QTY
+          GOSUB ORDER_RESERVE_SEL
+        END
+        MAXQTY = OSD.R.QTY<1,LN>
+        DCNT = DCOUNT(OSD.RECP.NO<1,LN>,SM)
+        FOR DPTR = 1 TO DCNT
+         BEGIN CASE
+            CASE OSD.REL.NO<1,LN,DPTR> = RELNO
+             RELQTY = RELQTY + OSD.REL.QTY<1,LN,DPTR>
+            CASE OSD.REL.NO<1,LN,DPTR> # ""
+              MAXQTY = MAXQTY - OSD.REL.QTY<1,LN,DPTR>
+          END CASE
+        NEXT DPTR
+        ACTION = "S";CUSTNO = ORD.CUST;RESV.TOT = RTOT;PICK.QTY = "";RELQTY = MAXQTY;RTYPE="M"
+        TMP.FI.QTY = RQTY;TMP.FI.NO = RSV.NO;TMP.REL.NO = REL.NO;TMP.REL.QTY = REL.QTY
+        GOSUB ORDER_RESERVE_SEL
+        OSD.RECP.NO<1,LN> = RSV.NO
+        OSD.FI.QTY<1,LN> = RQTY
+        OSD.REL.NO<1,LN> = REL.NO
+        OSD.REL.QTY<1,LN> = REL.QTY
+        OSD.R.QTY<1,LN> = RTOT
+        IF MODE_EXIT # "EXIT" THEN
+           STATUS = RBO.setProperty("","DISPARR",DISPARR)
+           STATUS = RBO.setProperty("","RETARR",RET_ARR)
+           STATUS = RBO.setProperty("","INARR",SUBGRID_ARRAY)
+           RETURN  ;******* RETURN FOR S OPTION
+        END
+      END ELSE
+        RTOT = OSD.R.QTY<1,LN>
+        RQTY = OSD.FI.QTY<1,LN>
+        RSV.NO = OSD.RECP.NO<1,LN>
+        REL.NO = OSD.REL.NO<1,LN>
+        REL.QTY = OSD.REL.QTY<1,LN>
+        ERRMSG = 'Cannot select for Kitted item'
+        GOTO 91000
+      END
+    CASE 1
+      RTYPE = "B"
+      ORDNO = ORR.ORD
+      PDNO = OSD.PROD<1,LN>
+      WHNO = OSD.WHSE<1,LN>
+      PROD.SEQ = OSD.PROD.SEQ<1,LN> ; KIT.TYPE = OSD.KIT<1,LN>
+      IWH.ID=CONO:PDNO:"!":WHNO
+      MATREAD IWH.REC FROM INV.WHSE,IWH.ID THEN
+        ERR.FLG='';ERRMSG='';PERIOD='';OPEN.FLAG=1
+        CALL BUILD_IWH_FI(IWH.ID,MAT IWH.REC,PERIOD,ERR.FLG,ERRMSG,OPEN.FLAG)
+      END ELSE
+        MAT IWH.REC = ""
+      END
+      RTOT = OSD.R.QTY<1,LN>
+      RELQTY = INT(((VALUE / ICR.MT1) * ICR.DV1) * ICR.DV2 + .5)
+      RQTY = OSD.FI.QTY<1,LN>
+      RSV.NO = OSD.RECP.NO<1,LN>
+      REL.NO = OSD.REL.NO<1,LN>
+      REL.QTY = OSD.REL.QTY<1,LN>
+      ACTION = "S";CUSTNO = ORD.CUST;RESV.TOT = RTOT;PICK.QTY = ""
+      TMP.FI.QTY = RQTY;TMP.FI.NO = RSV.NO;TMP.REL.NO = REL.NO;TMP.REL.QTY = REL.QTY
+      GOSUB ORDER_RESERVE_SEL
+      OSD.RECP.NO<1,LN> = RSV.NO
+      OSD.FI.QTY<1,LN> = RQTY
+      OSD.REL.NO<1,LN> = REL.NO
+      OSD.REL.QTY<1,LN> = REL.QTY
+      OSD.R.QTY<1,LN> = RTOT
+  END CASE
+
+** INSERT HERE   
+   RQTY = 0; PTR = 1
+   LOOP
+      LOCATE RELNO IN OSD.REL.NO<1,LN>,PTR SETTING FND THEN
+         RQTY = RQTY + OSD.REL.QTY<1,LN,FND>
+      END ELSE
+	      PTR = 0
+      END
+   WHILE PTR DO
+      PTR = FND + 1
+   REPEAT
+   RETURN_ARR = ""
+   RETURN_ARR<1,1> = OCONV(INT(((RTOT / ICR.DV1) * ICR.MT1) / ICR.DV2 + .5),ICR.CNV1)
+   RETURN_ARR<1,2> = OCONV(INT(((RQTY / ICR.DV1) * ICR.MT1) / ICR.DV2 + .5),ICR.CNV1)
+   IF OSD.R.QTY<1,LN> > OSD.O.QTY<1,LN> THEN
+      RETURN_ARR<1,3> = "Reserve is more than required"
+   END
+   RETURN_ARR<1,4> = LN
+   MATBUILD OSDARRAY FROM ORD.DET.REC USING "ð"
+   STATUS = RBO.setProperty("","GRIDARR",OSDARRAY)
+   STATUS = RBO.setProperty("","RETARR",RETURN_ARR)
+RETURN
+
+ORDER_RESERVE_SEL:
+   TOP.LINES = DCOUNT(IWH.QTY.FI,VM)
+   ACTION = FIELD(ACTION,"-",1)
+   DLN = FIELD(ACTION,"-",2)+0
+   MATREAD FOS.REC FROM FNGD.ORDER.STATS, CONO:PDNO:"!":WHNO:"!":ORDNO:"!":PROD.SEQ:"!":KIT.TYPE ELSE
+     MAT FOS.REC = ""
+   END
+   MTOT.RSV = SUM(IWH.RSV.FI)
+   MTOT.QTY = SUM(IWH.QTY.FI)
+
+   *MATREAD ORD.DET.REC FROM ORDER.DETAIL, CONO:ORDNO:"!":SHPNO ELSE
+   *  MAT ORD.DET.REC = ""
+   *END
+   PTR = 1
+   LOOP
+     LOCATE PDNO IN OSD.PROD<1>,PTR SETTING PPTR ELSE PPTR = 0
+     BEGIN CASE
+       CASE PPTR = 0
+         PTR = 0
+       CASE (OSD.WHSE<1,PPTR> = WHNO) AND (OSD.PROD.SEQ<1,PPTR> = PROD.SEQ) AND (OSD.KIT<1,PPTR> = KIT.TYPE)
+         PTR = 0
+     END CASE
+   UNTIL PTR = 0 DO
+     PTR = PPTR + 1
+   REPEAT
+   ORIG.RSV.QTY = ""
+   IF PPTR > 0 THEN
+     RCNT = DCOUNT(OSD.RECP.NO<1,PPTR>,SM)
+     FOR RPTR = 1 TO RCNT
+       FREF = OSD.RECP.NO<1,PPTR,RPTR>
+       LOCATE FREF IN IWH.RECP.NO<1>,1 SETTING FPTR THEN
+         ORIG.RSV.QTY<1,FPTR> = ORIG.RSV.QTY<1,FPTR> + OSD.FI.QTY<1,PPTR,RPTR>
+       END
+     NEXT RPTR
+   END
+   *
+   RSV.QTY = ""
+   REL.FLG = ""
+   REL.NO  = ""
+   REL.DATE = ""
+   REL.QTY = ""
+   MIN.QTY = "";* T20852
+   RCNT = DCOUNT(TMP.FI.NO,SM)
+   FOR RPTR = 1 TO RCNT
+     FREF = TMP.FI.NO<1,1,RPTR>
+     LOCATE FREF IN IWH.RECP.NO<1>,1 SETTING FPTR THEN
+       RSV.QTY<1,FPTR> = RSV.QTY<1,FPTR> + TMP.FI.QTY<1,1,RPTR>
+       MIN.QTY<1,FPTR> = MIN.QTY<1,FPTR> + PICK.QTY<1,1,RPTR>;* T20852
+       P = DCOUNT(REL.FLG<1,FPTR>,SM)+ 1
+       REL.FLG<1,FPTR,P> = "X"
+       REL.NO<1,FPTR,P> = TMP.REL.NO<1,1,RPTR>
+       REL.QTY<1,FPTR,P> = TMP.REL.QTY<1,1,RPTR>
+       IF REL.NO<1,FPTR,P> = "" THEN
+         MAT ORR.REC = ""
+       END ELSE
+         MATREAD ORR.REC FROM ORDER.RELEASE, CONO:REL.NO<1,FPTR,P> ELSE
+           MAT ORR.REC = ""
+         END
+       END
+       REL.DATE<1,FPTR,P> = ORR.DATE
+     END
+   NEXT RPTR
+   *
+   FOR N = 1 TO TOP.LINES
+     BLN = DCOUNT(REL.FLG<1,N>,SM)
+     BEGIN CASE
+       CASE BLN = 0
+         REL.FLG<1,N> = "X"
+         REL.QTY<1,N> = RSV.QTY<1,N>
+       CASE REL.NO<1,N,BLN> = ""
+         REL.QTY<1,N,BLN> = ""
+         REL.QTY<1,N,BLN> = RSV.QTY<1,N> - SUM(REL.QTY<1,N>)
+       CASE 1
+         BLN = BLN + 1
+         REL.FLG<1,N,BLN> = "X"
+         REL.QTY<1,N,BLN> = RSV.QTY<1,N> - SUM(REL.QTY<1,N>)
+     END CASE
+   NEXT N
+   *
+   IF RTYPE = "B" THEN
+     IF ACTION = "R" THEN
+       GOSUB 2000
+       GOSUB 2500
+     END
+     IF ACTION = "S" THEN
+       RQTY = 0
+       FOR TLN = 1 TO TOP.LINES
+         BCNT = DCOUNT(REL.FLG<1,TLN>,SM)
+         FOR BLN = 1 TO BCNT
+           IF REL.NO<1,TLN,BLN> = RELNO THEN
+             RQTY = RQTY + REL.QTY<1,TLN,BLN>
+           END
+         NEXT BLN
+       NEXT TLN
+       IF RQTY = RELQTY THEN
+         GOTO 99999
+       END ELSE
+         FOR TLN = 1 TO TOP.LINES
+           BCNT = DCOUNT(REL.FLG<1,TLN>,SM)
+           FOR BLN = BCNT TO 1 STEP -1
+             IF REL.NO<1,TLN,BLN> = RELNO THEN
+               RQTY = REL.QTY<1,TLN,BLN>
+               REL.FLG  = DELETE(REL.FLG,1,TLN,BLN)
+               REL.NO   = DELETE(REL.NO,1,TLN,BLN)
+               REL.DATE = DELETE(REL.DATE,1,TLN,BLN)
+               REL.QTY  = DELETE(REL.QTY,1,TLN,BLN)
+               BCNT = BCNT - 1
+               REL.QTY<1,TLN,BCNT> = REL.QTY<1,TLN,BCNT> + RQTY
+             END
+           NEXT BLN
+         NEXT TLN
+         RQTY = RELQTY+0
+         FOR TLN = 1 TO TOP.LINES UNTIL RQTY = 0
+           BCNT = DCOUNT(REL.FLG<1,TLN>,SM)
+           AQTY = REL.QTY<1,TLN,BCNT>
+           BEGIN CASE
+             CASE AQTY >= RQTY
+               REL.QTY<1,TLN,BCNT> = REL.QTY<1,TLN,BCNT> - RQTY
+               REL.FLG  = INSERT(REL.FLG,1,TLN,BCNT,"X")
+               REL.NO   = INSERT(REL.NO,1,TLN,BCNT,RELNO)
+               REL.DATE = INSERT(REL.DATE,1,TLN,BCNT,"")
+               REL.QTY  = INSERT(REL.QTY,1,TLN,BCNT,RQTY)
+               RQTY = 0
+             CASE AQTY > 0
+               REL.QTY<1,TLN,BCNT> = 0
+               REL.FLG  = INSERT(REL.FLG,1,TLN,BCNT,"X")
+               REL.NO   = INSERT(REL.NO,1,TLN,BCNT,RELNO)
+               REL.DATE = INSERT(REL.DATE,1,TLN,BCNT,"")
+               REL.QTY  = INSERT(REL.QTY,1,TLN,BCNT,AQTY)
+               RQTY = RQTY - AQTY
+           END CASE
+         NEXT TLN
+       END
+       GOSUB 2500
+     END
+     GOTO 99999
+   END
+   DISPARR = ""
+   DISPARR<1,1> = MTOT.QTY - MTOT.RSV
+   DISPARR<1,2> = MTOT.RSV + SUM((ORIG.RSV.QTY)) - SUM((RSV.QTY))
+   DISPARR<1,3> = SUM(RSV.QTY)
+   DISPARR<1,4> = ""
+   FOR I = 1 TO 4
+     DISPARR<1,I> = OCONV(INT(((DISPARR<1,I>/ICR.DV1) * ICR.MT1) / ICR.DV2 +.5),ICR.CNV1)
+   NEXT I
+
+   GOSUB 1800
+   TLN = 1; LIMIT = TOP.LINES
+   FOR I = 1 TO LIMIT
+     IF IWH.RSV.FI<1,I> > 0 THEN
+       TLN = I; LIMIT = 0
+     END
+   NEXT I
+   TLN=1;TOP.START.LINE = 0; GOSUB 1900
+   GOSUB 7200
+   IF MODE_EXIT # "EXIT" THEN GOTO 99999
+
+   *---- Prompt line
+   MORE = 1
+   REL_CNT = ""
+   REL_INDX = 1
+   REL_CNT = DCOUNT(REL_DATA,VM)
+   LOOP
+     IF REL_INDX > REL_CNT THEN
+        ECD.RET.VALUE = "END"
+     END ELSE
+        ECD.RET.VALUE = REL_INDX
+     END
+     OPTION = ECD.RET.VALUE
+     BEGIN CASE
+       CASE OPTION = "END" OR OPTION = "E" OR OPTION = ""
+         GOSUB 2500
+         MORE = 0
+       CASE 1
+         FI.NO = DCOUNT(IWH.RSV.FI,VM)
+         TLN = FI.NO - OPTION + 1
+         AVL = IWH.RSV.FI<1,TLN> + ORIG.RSV.QTY<1,TLN> - RSV.QTY<1,TLN>
+         IF AVL < 1 THEN 
+           ERRMSG = 'There is nothing to reserve'
+           GOTO 999
+         END
+         BLN = DCOUNT(REL.FLG<1,TLN>,SM)
+         IF BLN = 0 OR REL.NO<1,TLN,BLN> # "" THEN
+           BLN = BLN + 1
+           REL.FLG<1,TLN,BLN> = "X"
+           REL.QTY<1,TLN,BLN> = ""
+           REL.QTY<1,TLN,BLN> = RSV.QTY<1,TLN> - SUM(REL.QTY<1,TLN>)
+         END
+         BLN = 1
+         BOT.LINES = DCOUNT(REL.FLG<1,TLN>, SM)
+         BOT.START.LINE = 0
+         *GOSUB 51900
+         GOSUB 6700
+         IF ACTION = "R" THEN
+           GOSUB 1000
+           IF VALUE # "END" THEN
+             BEGIN CASE
+               CASE RSV.QTY<1,TLN>+0 = 0
+                 REL.QTY<1,TLN> = ""
+                 REL.QTY<1,TLN,BOT.LINES> = 0
+                 BOT.START.LINE = 0
+                 *GOSUB 51900
+                 GOSUB 6700
+               CASE BOT.LINES = 1
+                 REL.QTY<1,TLN,1> = RSV.QTY<1,TLN>
+                 BOT.START.LINE = 0
+                 *GOSUB 51900
+                 GOSUB 6700
+                 IF REL.NO<1,TLN> # "" THEN
+                   OPT2 = ""
+                   GOSUB 5000
+                 END
+               CASE REL.NO<1,TLN> # ""
+                 OPT2 = ""
+                 GOSUB 5000
+             END CASE
+           END
+         END ELSE
+           OPT2 = ""
+           GOSUB 5000
+         END
+     END CASE
+   *
+   999*
+     REL_INDX = REL_INDX + 1
+   WHILE MORE DO REPEAT
+GOTO 99999
+
+*
+*---- Qty To Reserve
+1000*
+   AVL = IWH.RSV.FI<1,TLN> + ORIG.RSV.QTY<1,TLN> - RSV.QTY<1,TLN>
+   VALUE = REL_DATA<1,REL_INDX>
+   RSV.QTY<1,TLN> = INT(((VALUE/ICR.MT1)*ICR.DV1)*ICR.DV2+.5)
+   LINDX = TLN
+   GOSUB 7000 ;* Calculate already reseve on order per FIFO
+   GOSUB 1700
+   GOSUB 1800
+RETURN
+*
+*---- Display Total Reserve
+1700*
+   AVL.TOT = MTOT.RSV + SUM((ORIG.RSV.QTY)) - SUM((RSV.QTY))
+   RESV.TOT = SUM(RSV.QTY)
+RETURN
+*
+*---- Display Total Release
+1800*
+   REL.GTOT = 0
+   C1 = DCOUNT(REL.QTY,VM)
+   FOR N1 = 1 TO C1
+     C2 = DCOUNT(REL.QTY<1,N1>,SM)
+     FOR N2 = 1 TO C2
+       IF REL.NO<1,N1,N2> # "" THEN
+         REL.GTOT = REL.GTOT + REL.QTY<1,N1,N2>
+       END
+     NEXT N2
+   NEXT N1
+   DISPARR<1,4> = OCONV(INT(((REL.GTOT/ICR.DV1)*ICR.MT1)/ICR.DV2+.5),ICR.CNV1)
+RETURN
+
+*
+*---- Display scrolling lines
+1900*
+  CNT = 1;TMP_REC = "";ACT.FI=""
+  TMP_AVAIL = ""
+  FI.NO = DCOUNT(IWH.RSV.FI,VM)
+  FOR N = 1 TO TOP.LINES
+    ACT.FI = FI.NO - N + 1
+    AVL = IWH.RSV.FI<1,ACT.FI> + ORIG.RSV.QTY<1,ACT.FI> - RSV.QTY<1,ACT.FI>   ;* NA 03-01-94
+    QTY = IWH.QTY.FI<1,ACT.FI>   ;* NA 03-01-94
+    RSV = IWH.QTY.FI<1,ACT.FI> - IWH.RSV.FI<1,ACT.FI>   ;* NA 03-01-94
+    QTY = SUM(REL.QTY<1,ACT.FI>)
+    L = DCOUNT(REL.FLG<1,ACT.FI>,SM)
+    IF REL.NO<1,ACT.FI,L> = "" THEN
+      QTY = QTY - REL.QTY<1,ACT.FI,L>
+    END
+    RET_ARR<1,N,1> = IWH.PO.NO.FI<1,ACT.FI>
+    RET_ARR<1,N,2> = OCONV(IWH.COST.FI<1,ACT.FI>,"MD4")
+    RET_ARR<1,N,3> = OCONV(IWH.RECV.FI<1,ACT.FI>,"D2/")
+    RET_ARR<1,N,4> = OCONV(INT((RSV/ICR.DV1*ICR.MT1)/ICR.DV2+.5),ICR.CNV1)
+    RET_ARR<1,N,5> = OCONV(INT((AVL/ICR.DV1*ICR.MT1)/ICR.DV2+.5),ICR.CNV1)
+    RET_ARR<1,N,6> = OCONV(INT((RSV.QTY<1,ACT.FI>/ICR.DV1*ICR.MT1)/ICR.DV2+.5),ICR.CNV1)
+    RET_ARR<1,N,7> = OCONV(INT((QTY/ICR.DV1*ICR.MT1)/ICR.DV2+.5),ICR.CNV1)
+    TMP_AVAIL = IWH.RSV.FI<1,ACT.FI> + ORIG.RSV.QTY<1,ACT.FI> - RSV.QTY<1,ACT.FI>
+    RET_ARR<1,N,8> = INT(((MIN.QTY<1,ACT.FI>)/ICR.DV1*ICR.MT1)/ICR.DV2+.5)
+    RET_ARR<1,N,9> = INT(((RSV.QTY<1,ACT.FI>+TMP_AVAIL)/ICR.DV1*ICR.MT1)/ICR.DV2+.5)
+    CNT = CNT + 1
+  NEXT N
+1990*
+RETURN
+
+7200 *
+   SUBGRID_ARRAY = ""
+   FOR OPTION = 1 TO TOP.LINES
+      SUB_GRID = ""
+      FI.NO = DCOUNT(IWH.RSV.FI,VM)
+      TLN = FI.NO - OPTION + 1
+      AVL = IWH.RSV.FI<1,TLN> + ORIG.RSV.QTY<1,TLN> - RSV.QTY<1,TLN>
+      IF AVL < 1 THEN 
+         SUB_GRID = VM : VM
+      END ELSE
+        BLN = DCOUNT(REL.FLG<1,TLN>,SM)
+        IF BLN = 0 OR REL.NO<1,TLN,BLN> # "" THEN
+          BLN = BLN + 1
+          REL.FLG<1,TLN,BLN> = "X"
+          REL.QTY<1,TLN,BLN> = ""
+          REL.QTY<1,TLN,BLN> = RSV.QTY<1,TLN> - SUM(REL.QTY<1,TLN>)
+        END
+        BLN = 1
+        BOT.LINES = DCOUNT(REL.FLG<1,TLN>, SM)
+        BOT.START.LINE = 0
+        GOSUB 51900
+      END
+      SUBGRID_ARRAY := SUB_GRID : DELIM
+   NEXT
+   SUBGRID_ARRAY = SUBGRID_ARRAY[1,LEN(SUBGRID_ARRAY)-1]
+RETURN
+
+*---- Display scrolling lines
+51900*
+  CNT = 1
+  FOR N = 1 TO BOT.LINES
+    SUB_GRID<1,N,1> = REL.NO<1,TLN,N>
+    SUB_GRID<1,N,2> = OCONV(REL.DATE<1,TLN,N>,"D2/")
+    SUB_GRID<1,N,3> = OCONV(INT((REL.QTY<1,TLN,N>/ICR.DV1*ICR.MT1)/ICR.DV2+.5),ICR.CNV1)
+    MAXV = ""
+    MATREAD ORR.REC FROM ORDER.RELEASE,CONO:REL.NO<1,TLN,N> ELSE MAT ORR.REC = ""
+    BEGIN CASE
+       CASE ACTION = "S"
+          MAXV = OCONV(INT(((RELQTY/ICR.DV1)*ICR.MT1)/ICR.DV2+.5),ICR.CNV)
+       CASE DLN > 0
+          MAXV = OCONV(INT(((ORR.QTY<1,DLN>/ICR.DV1)*ICR.MT1)/ICR.DV2+.5),ICR.CNV)
+       CASE 1
+          MAXV = RSV.QTY<1,TLN>
+    END CASE
+    SUB_GRID<1,N,4> = MAXV  ;* MAX QTY
+    SUB_GRID<1,N,5> = 0     ;* MIN QTY
+    CNT = CNT + 1
+  NEXT N
+RETURN
+
+*---- Adjust reserve buckets
+2000*
+   RESV.DIF = RESV.TOT - SUM(RSV.QTY)
+   BEGIN CASE
+     CASE RESV.DIF > 0
+       LIMIT = TOP.LINES
+   *---- Adjust current buckets
+       FOR F = 1 TO LIMIT
+         AVL = IWH.RSV.FI<1,F> + ORIG.RSV.QTY<1,F> - RSV.QTY<1,F>   ;* NA 03-01-94
+         BEGIN CASE
+           CASE AVL < 1
+           CASE RSV.QTY<1,F> < 1
+           CASE AVL < RESV.DIF
+             RSV.QTY<1,F> = RSV.QTY<1,F> + AVL
+             RESV.DIF = RESV.DIF - AVL
+           CASE 1
+             RSV.QTY<1,F> = RSV.QTY<1,F> + RESV.DIF
+             RESV.DIF = 0; LIMIT = 0
+         END CASE
+       NEXT F
+   *---- Adjust new buckets
+       FOR F = 1 TO LIMIT
+         AVL = IWH.RSV.FI<1,F> + ORIG.RSV.QTY<1,F> - RSV.QTY<1,F>   ;* NA 03-01-94
+         BEGIN CASE
+           CASE AVL < 1
+           CASE AVL < RESV.DIF
+             RSV.QTY<1,F> = RSV.QTY<1,F> + AVL
+             RESV.DIF = RESV.DIF - AVL
+           CASE 1
+             RSV.QTY<1,F> = RSV.QTY<1,F> + RESV.DIF
+             RESV.DIF = 0; LIMIT = 0
+         END CASE
+       NEXT F
+     CASE RESV.DIF < 0
+       RESV.DIF = 0 - RESV.DIF
+       LIMIT = TOP.LINES
+       FOR F = LIMIT TO 1 STEP -1 UNTIL RESV.DIF = 0
+         BEGIN CASE
+           CASE RSV.QTY<1,F> < 1
+           CASE RSV.QTY<1,F> < RESV.DIF
+             RESV.DIF = RESV.DIF - RSV.QTY<1,F>
+             RSV.QTY<1,F> = 0
+           CASE 1
+             RSV.QTY<1,F> = RSV.QTY<1,F> - RESV.DIF
+             RESV.DIF = 0
+         END CASE
+       NEXT F
+   END CASE
+   RESV.TOT = SUM(RSV.QTY)
+RETURN
+*
+*---- REBUILD ORDER DETAIL DATA
+2500*
+   TMP.FI.NO = ""
+   TMP.FI.QTY = ""
+   TMP.REL.NO = ""
+   TMP.REL.QTY = ""
+   P = 0
+   FCNT = TOP.LINES
+   FOR FPTR = 1 TO FCNT
+     RQTY = RSV.QTY<1,FPTR>
+     IF RQTY > 0 THEN
+       RCNT = DCOUNT(REL.FLG<1,FPTR>,SM)
+       FOR RPTR = 1 TO RCNT            ;* NA 02-25-94
+         IF REL.NO<1,FPTR,RPTR> = "" THEN REL.QTY<1,FPTR,RPTR> = ""            ;* NA 02-25-94
+       NEXT RPTR            ;* NA 02-25-94
+       FOR RPTR = 1 TO RCNT         
+         P = P + 1
+         TMP.FI.NO<1,1,P> = IWH.RECP.NO<1,FPTR>
+         TMP.FI.QTY<1,1,P> = REL.QTY<1,FPTR,RPTR>
+         TMP.REL.NO<1,1,P> = REL.NO<1,FPTR,RPTR>
+         TMP.REL.QTY<1,1,P> = REL.QTY<1,FPTR,RPTR>
+         RQTY = RQTY - REL.QTY<1,FPTR,RPTR>
+       NEXT RPTR
+       IF RQTY > 0 THEN
+         TMP.FI.NO<1,1,P> = IWH.RECP.NO<1,FPTR>
+         TMP.FI.QTY<1,1,P> = TMP.FI.QTY<1,1,P> + RQTY
+       END
+     END
+   NEXT FPTR
+RETURN
+
+*---- Bottom Prompt line
+*
+5000*
+   BMORE = 1
+   RESV_CNT= "";RESV_INDX = 1
+   RESV_DATA = FIELD(RESV_ARRAY,DELIM,REL_INDX,1)
+   RESV_CNT = DCOUNT(RESV_DATA,VM)
+   LOOP
+     IF OPT2 = "" THEN
+       IF RESV_INDX > RESV_CNT THEN
+          ECD.RET.VALUE = "END"
+       END ELSE
+          ECD.RET.VALUE = RESV_INDX
+       END
+       OPT2 = ECD.RET.VALUE
+     END
+     BEGIN CASE
+       CASE OPT2 = "END" OR OPT2 = "E" OR OPT2 = ""
+         *IF SUM(REL.QTY<1,TLN>) <= RSV.QTY<1,TLN>+0 THEN
+           BMORE = 0
+           BLN = 1
+           *GOSUB 51900
+           GOSUB 6700
+         *END ELSE
+         *  ERRMSG = "Release quantity exceeds reserve quantity! "
+         *END
+       CASE 1
+         BLN = OPT2
+         IF ACTION = "S" AND REL.NO<1,TLN,BLN> # RELNO THEN
+           ERRMSG = "Cannot modify existing Release quantities"
+         END ELSE
+           GOSUB 6000
+         END
+     END CASE
+     OPT2 = ""
+     RESV_INDX = RESV_INDX + 1
+   WHILE BMORE DO REPEAT
+RETURN
+
+*---- Get release quantity
+*
+6000*
+   IF RELNO = "" THEN
+     ADDREL = 0
+   END ELSE
+     LOCATE RELNO IN REL.NO<1,TLN>,1 SETTING P THEN ADDREL = 0 ELSE ADDREL = 1
+   END
+   BEGIN CASE
+     CASE ACTION = "S" AND REL.NO<1,TLN,BLN> = "" AND ADDREL
+       TEMP.REL.NO = RELNO
+       TEMP.REL.DATE = ""
+       MAT ORR.REC = ""
+     CASE REL.NO<1,TLN,BLN> = ""
+       REL.QTY<1,TLN,BLN> = ""
+       REL.QTY<1,TLN,BLN> = RSV.QTY<1,TLN> - SUM(REL.QTY<1,TLN>)
+       IF REL.QTY<1,TLN,BLN> < 0 THEN REL.QTY<1,TLN,BLN> = 0
+   6010 TYP=1
+       VALUE = RESV_DATA<1,RESV_INDX,1>
+       LOCATE VALUE IN REL.NO<1,TLN>,1 SETTING P THEN
+         IF P # BLN THEN
+           ERRMSG = "Duplicate Release number. Try again! "
+         END
+       END
+       MATREAD ORR.REC FROM ORDER.RELEASE, CONO:VALUE ELSE
+         MAT ORR.REC = ""
+       END
+       TEMP.REL.NO = VALUE
+       TEMP.REL.DATE = ORR.DATE
+     CASE 1
+       TEMP.REL.NO = REL.NO<1,TLN,BLN>
+       TEMP.REL.DATE = REL.DATE<1,TLN,BLN>
+       MATREAD ORR.REC FROM ORDER.RELEASE, CONO:TEMP.REL.NO ELSE
+         MAT ORR.REC = ""
+       END
+   END CASE
+   TYP = ICR.TYPE; SCALER = ICR.SCAL
+   MINV = 0
+   BEGIN CASE
+     CASE ACTION = "S"
+       MAXV = OCONV(INT(((RELQTY/ICR.DV1)*ICR.MT1)/ICR.DV2+.5),ICR.CNV)
+     CASE DLN > 0
+       MAXV = OCONV(INT(((ORR.QTY<1,DLN>/ICR.DV1)*ICR.MT1)/ICR.DV2+.5),ICR.CNV)
+     CASE 1
+       MAXV = RSV.QTY<1,TLN>
+   END CASE
+   IF REL.QTY<1,TLN,BLN> > 0 THEN
+     O.R = "O"
+     DEFAULT = OCONV(INT(((REL.QTY<1,TLN,BLN>/ICR.DV1)*ICR.MT1)/ICR.DV2+.5),ICR.CNV)
+   END ELSE
+     BEGIN CASE
+       CASE ACTION = "S"
+         O.R = "O"
+         DEFAULT = OCONV(INT(((RELQTY/ICR.DV1)*ICR.MT1)/ICR.DV2+.5),ICR.CNV)
+       CASE DLN > 0
+         O.R = "O"
+         DEFAULT = OCONV(INT(((ORR.QTY<1,DLN>/ICR.DV1)*ICR.MT1)/ICR.DV2+.5),ICR.CNV)
+     END CASE
+   END
+   * GET THE REL QTY INPUT BY THE USER
+     REL.NO<1,TLN,BLN> = TEMP.REL.NO
+     REL.DATE<1,TLN,BLN> = TEMP.REL.DATE
+     VALUE = RESV_DATA<1,RESV_INDX,2>
+     REL.QTY<1,TLN,BLN> = INT(((VALUE/ICR.MT1)*ICR.DV1)*ICR.DV2+.5)
+   GOSUB 6700
+RETURN
+
+*---- Display Total Release
+*
+6700*
+   REL.TOT = SUM(REL.QTY<1,TLN>)
+   L = DCOUNT(REL.FLG<1,TLN>,SM)
+   IF REL.NO<1,TLN,L> = "" THEN
+     QTY = REL.TOT - REL.QTY<1,TLN,L>
+     XQTY = RSV.QTY<1,TLN> - QTY
+     IF XQTY # REL.QTY<1,TLN,L> THEN
+       IF XQTY >= 0 THEN
+         REL.QTY<1,TLN,L> = XQTY
+       END ELSE
+         REL.QTY<1,TLN,L> = 0
+       END
+       BOT.START.LINE = 0
+       *GOSUB 51900
+     END
+   END ELSE
+     QTY = REL.TOT
+   END
+   GOSUB 1800
+RETURN
+
+7000*
+   PTR = 1
+   LOOP
+     LOCATE PDNO IN ODQ.PROD<1>,PTR SETTING PINDX ELSE PINDX = 0
+     BEGIN CASE
+       CASE PINDX = 0
+         PTR = 0
+       CASE ODQ.WHSE<1,PINDX> = WHNO
+         PTR = 0
+     END CASE
+   UNTIL PTR = 0 DO
+     PTR = PTR + 1
+   REPEAT
+   FROM.BUCKET = 0
+   IF (PTR+PINDX) > 0 THEN
+     NUM.FI.BUCKETS = DCOUNT(ODQ.RECP.NO<1,1>,SVM)
+     FOR B = 1 TO NUM.FI.BUCKETS
+       IF ODQ.RECP.NO<1,1,B> = IWH.RECP.NO<1,LINDX> THEN
+         FROM.BUCKET =FROM.BUCKET + ODQ.FI.QTY<1,1,B>
+       END
+     NEXT B
+   END
+   AVL = IWH.RSV.FI<1,LINDX> + ORIG.RSV.QTY<1,LINDX> - RSV.QTY<1,LINDX>   ;* NA 03-01-94
+   AVL = AVL - FROM.BUCKET
+   IF AVL < 0 THEN AVL = 0
+RETURN
+
+99999*
+   RTOT      = RESV.TOT
+   RQTY      = TMP.FI.QTY
+   RSV.NO    = TMP.FI.NO
+   REL.NO    = TMP.REL.NO
+   REL.QTY   = TMP.REL.QTY
+RETURN
+
+91000*
+   STATUS = RBO.setProperty("","ServerStatus",1)
+   STATUS = RBO.setProperty("","ServerMessage",ERRMSG)
+RETURN

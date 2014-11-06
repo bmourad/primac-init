@@ -1,0 +1,239 @@
+OPEN "DEVDEVBP" TO DEVBP ELSE 
+  PRINT "UNABLE TO OPEN DEVBP IN DEV ACCT"
+  STOP
+END
+OPEN "REV10DEVBP" TO REV10DEVBP ELSE
+  PRINT "UNABLE TO OPEN REV10DEVBP IN REV ACCT"
+  STOP
+END
+INCLUDE INCS GLOBAL.EQUATES
+PLIST="APSBP"
+PLIST<-1>="ARSBP"
+PLIST<-1>="CBABP"                               
+PLIST<-1>="CNVBP"
+PLIST<-1>="EP4BP"
+PLIST<-1>="EPSBP"
+PLIST<-1>="FASBP"
+PLIST<-1>="GLSBP"
+PLIST<-1>="ICSBP"
+PLIST<-1>="JCSBP"                               
+PLIST<-1>="JESBP"
+PLIST<-1>="NDCBP"
+PLIST<-1>="OPSBP"
+PLIST<-1>="PMCBP"
+PLIST<-1>="POSBP"
+PLIST<-1>="PR4BP"
+PLIST<-1>="PRSBP"                               
+PLIST<-1>="PSSBP"
+PLIST<-1>="QPLBP"
+PLIST<-1>="SASBP"
+PLIST<-1>="UTLBP"
+PLIST<-1>="TRAN.BP"
+NUM.FILES = DCOUNT(PLIST,AM)
+*
+DIM FILE.ARRAY(30)
+MAT FILE.ARRAY = ''
+FILE.FAIL=''
+*
+PRINT "OPENING FILES"
+ERRMSG=''
+FOR I = 1 TO NUM.FILES
+  PRINT I:" OPENED ":PLIST<I>
+  OPEN "",PLIST<I> TO FILE.ARRAY(I) ELSE
+    PRINT "UNABLE TO OPEN ":PLIST<I>
+    ERRMSG='X'
+    FILE.FAIL<I>='1'
+  END
+NEXT I
+PRINT
+IF ERRMSG # "" THEN
+  PRINT "UNABLE TO OPEN A FILE"
+END
+*
+VERB = 'SSELECT DEVDEVBP'
+DONE = FALSE
+EXECUTE VERB
+DEVLIST=''
+PASSTWO=FALSE
+PRINT  "PROCESSING DEVBP "
+LOOP
+  READNEXT ID ELSE DONE=TRUE
+UNTIL DONE DO
+  IF ID[1,1] = "_" THEN
+    * do not process this item
+  END ELSE
+    PRINT "DEVBP ":ID
+    REVMISSING=0
+    LOCATE ID IN DEVLIST<1>,1 SETTING POS ELSE
+      DEVLIST=INSERT(DEVLIST,1,POS;ID)
+    END
+    READ DEVREC FROM DEVBP,ID THEN
+      READ REVREC FROM REV10DEVBP,ID THEN
+        GOSUB 1000 ;* process all other files for same item
+      END ELSE
+        REVMISSING=1
+        GOSUB 1000
+      END
+    END ELSE
+      * error condition the program should not fail from orig select
+      PRINTER ON
+      PRINT 'Unable to read DEVBP ':ID
+      PRINTER OFF
+    END
+  END
+REPEAT
+*
+REVMISSING=0
+PASSTWO=TRUE
+VERB = 'SSELECT REV10DEVBP'
+DONE = FALSE
+EXECUTE VERB
+PRINT "PROCESSING REV10"
+LOOP
+  READNEXT ID ELSE DONE=TRUE
+UNTIL DONE DO
+  SKIP.TO.NEXT=0
+  LOCATE ID IN DEVLIST<1>,1 SETTING POS THEN
+    SKIP.TO.NEXT=TRUE
+  END
+  IF ID[1,1] = "_" THEN 
+    SKIP.TO.NEXT=TRUE
+  END
+  IF NOT(SKIP.TO.NEXT) THEN
+    PRINT "REV10 ":ID
+    READ REVREC FROM REV10DEVBP,ID THEN
+      GOSUB 1000 ;* process all other files for same item
+    END ELSE
+      * error condition the program should not fail from orig select
+      PRINTER ON
+      PRINT 'Unable to read REV10DEVBP ':ID
+      PRINTER OFF
+    END
+  END
+REPEAT
+*
+*
+STOP
+*
+*
+1000 *
+*
+IF NOT(REVMISSING) THEN
+  IF NOT(PASSTWO) THEN
+    * situation where both rev10 and dev have the same pgm in devbp
+    *  compare for likeness three way 
+    *  1 devbp to devrev10bp
+    *  2 devbp to ...bp
+    *  3 devrev10bp to ...bp
+    REC1 = DEVREC
+    REC2 = REVREC
+    F1 = "DEVBP"
+    F2 = "REV10DEVBP"
+    GOSUB 2000 ;* PROCESS MESSAGE
+    GOSUB 3000 ;* PROCESS DEV AND ALL OTHERS
+    GOSUB 4000 ;* PROCESS REV10 AND ALL OTHERS
+  END ELSE
+    GOSUB 4000 ;* PROCESS REV10 AND ALL OTHERS
+  END
+END ELSE
+  IF NOT(PASSTWO) THEN
+    * no rev exist and dev exists
+    GOSUB 3000 ;* PROCESS DEVBP AND ALL OTHERS
+  END ELSE
+    ERRMSG = "Pass two and RevBP item missing :" : ID
+    PRINTER ON
+    PRINT ERRMSG
+    PRINTER OFF
+  END
+END
+*
+RETURN
+*
+2000 * process message check for match inputs are ID,F1,F2,REC1,REC2
+*
+IF REC1 # REC2 THEN
+  PRINTER ON
+  LID=LEN(ID)
+  PRINT "MISSMATCH ":F1:"/":F2:" ":ID
+  PRINTER OFF
+END ELSE
+  PRINTER ON
+  LID=LEN(ID)
+  PRINT "&&& MATCH ":F1:"/":F2:" ":ID
+  PRINTER OFF
+END  
+RETURN
+*
+3000 * process dev and all others
+*
+ADDMSG=''
+FOR I = 1 TO NUM.FILES
+  IF FILE.FAIL<I> # '1' THEN
+    READ REC2 FROM FILE.ARRAY(I),ID THEN
+      IF DEVREC # REC2 THEN
+        IF ADDMSG = "" THEN
+          ADDMSG="MISSMATCH DEVBP/":PLIST<I>:" ":ID
+        END ELSE
+          ADDMSG=ADDMSG:" MISSMATCH DEVBP/":PLIST<I>:" ":ID
+        END
+      END ELSE
+        IF ADDMSG = '' THEN
+          ADDMSG = "&&& MATCH DEVBP/":PLIST<I>:" ":ID
+        END ELSE
+          ADDMSG = ADDMSG:" MATCH DEVBP/":PLIST<I>:" ":ID
+        END
+      END
+    END
+  END
+NEXT I
+IF ADDMSG # "" THEN
+  PRINTER ON
+  IF LEN(ADDMSG) > 132 THEN
+    PRINT ADDMSG[1,132]
+    PRINT "  ":ADDMSG[133,130]
+  END ELSE
+    PRINT ADDMSG
+  END
+  PRINTER OFF
+END
+RETURN
+*
+4000 *
+****** process devrev10 and all others
+*
+ADDMSG=''
+FOR I = 1 TO NUM.FILES
+  IF FILE.FAIL<I> # '1' THEN
+    READ REC2 FROM FILE.ARRAY(I),ID THEN
+      IF REVREC # REC2 THEN
+        IF ADDMSG = "" THEN
+          ADDMSG="MISSMATCH REV10DEVBP/":PLIST<I>:" ":ID
+        END ELSE
+          ADDMSG=ADDMSG:" MISSMATCH REV10DEVBP/":PLIST<I>:" ":ID
+        END
+      END ELSE
+        IF ADDMSG = '' THEN
+          ADDMSG = "&&& MATCH REV10DEVBP/":PLIST<I>:" ":ID
+        END ELSE
+          ADDMSG = ADDMSG:" MATCH REV10DEVBP/":PLIST<I>:" ":ID
+        END
+      END
+    END
+  END
+NEXT I
+IF ADDMSG # "" THEN
+  PRINTER ON
+  IF LEN(ADDMSG) > 132 THEN
+    PRINT ADDMSG[1,132]
+    PRINT "  ":ADDMSG[133,130]
+  END ELSE
+    PRINT ADDMSG
+  END
+  PRINTER OFF
+END
+RETURN
+         
+    
+  
+  
+    

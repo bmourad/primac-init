@@ -1,0 +1,160 @@
+      SUBROUTINE TRANSACTION.START (CONO,REQDIV,TDESC,PSS.JOURNAL,PSS.LOCK,ERRMSG)
+**************************************************************************
+*
+* PROGRAM - TRANSACTION.START
+*
+* AUTHOR  - NICK AMENDOLA, NASTech, Inc.
+*
+* DATE    - 05/14/96
+*
+* DESCRIPTION
+*
+* This program is used to initiate a new transaction. The transaction #
+* is assigned and used to identify all subsequent database updates.
+*
+*    PARAM        DESCRIPTION
+*    -----------  --------------------------------------------------------
+*    CONO         Company ID.
+*    REQDIV       Division to be activated or "00" for all divisions.
+*    TDESC        Transaction description.
+*    PSS.JOURNAL  File variable of Journal file.
+*    PSS.LOCK     File variable or Lock file.
+*    ERRMSG       Status returned, NULL = OK else error message.
+*
+**************************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>PSS.CPYLIB>PSS.JOURNAL
+*COPY>CPYLIB>CHAR
+*
+*---- INITIALIZATION
+*
+      ERRMSG = ""
+      USER.ID = @LOGNAME
+*     PORT.NO = @TTY
+      PORT.NO = 'TTY'
+      CALL SYSVARS.SUB(PORT.NO)
+      CDATE = DATE()
+      CTIME = TIME()
+      IF CTIME < 10 THEN CDATE = DATE()
+*
+*---- MAIN PROCESSING
+*
+      READU REC FROM PSS.LOCK, CONO:"TP" ELSE NULL
+      JFOUND = 0
+      BEGIN CASE
+      CASE REQDIV = "00"
+         MATREADU JRNLC.REC FROM PSS.JOURNAL, CONO:"CONTROL!":REQDIV THEN
+            JFOUND = 1
+            IF JRNLC.PORT # PORT.NO THEN
+               ERRMSG = "All divisions activated by ":JRNLC.USER
+               GOTO 99999
+            END
+         END LOCKED
+            ERRMSG = "Division locked! "
+            GOTO 99999
+         END ELSE
+            SDONE = 0
+            SELECT PSS.JOURNAL
+            LOOP
+               READNEXT ID ELSE SDONE = 1
+            UNTIL SDONE DO
+               IF ID[1,3] = CONO AND ERRMSG = "" THEN
+                  READ JREC FROM PSS.JOURNAL, ID THEN
+                     ERRMSG = "Division ":FIELD(ID,"!",2):" disabled by ":JREC<4>
+                  END
+               END
+            REPEAT
+            IF ERRMSG # "" THEN GOTO 99999
+            PERFORM "LIST.READU" CAPTURING LMSG
+            LCNT = DCOUNT(LMSG,AM)
+            FOR LPTR = 1 TO LCNT
+               MSG = LMSG<LPTR>
+               P1 = INDEX(MSG,"PSS.LOCK",1)
+               IF P1 > 0 THEN
+                  P2 = INDEX(MSG,"[",1)
+                  P3 = INDEX(MSG,"]",1)
+                  IF P2 > P1 AND P3 > P2 THEN
+                     MSG = MSG[P2+1,P3-P2-1]
+                     LOCK.CONO = FIELD(MSG,",",1)
+                     LOCK.DIV = FIELD(MSG,",",2)
+                     LOCK.USER = FIELD(MSG,",",3,99)
+                     IF LOCK.CONO = CONO AND LOCK.USER # (@LOGNAME:" @ ":@TTY) THEN
+                        ERRMSG = "Process active for division ":LOCK.DIV:" by ":LOCK.USER
+                        GOTO 99999
+                     END
+                  END
+               END
+            NEXT LPTR
+         END
+      CASE 1
+         READU JREC FROM PSS.JOURNAL, CONO:"CONTROL!00" THEN
+            ERRMSG = "All divisions disabled by ":JREC<4>
+            GOTO 99999
+         END LOCKED
+            ERRMSG = "Division locked! "
+            GOTO 99999
+         END ELSE
+            MATREADU JRNLC.REC FROM PSS.JOURNAL, CONO:"CONTROL!":REQDIV THEN
+               JFOUND = 1
+               IF JRNLC.PORT # PORT.NO THEN
+                  ERRMSG = "Division ":REQDIV:" disabled by ":JRNLC.USER
+                  GOTO 99999
+               END
+            END LOCKED
+               ERRMSG = "Division locked! "
+               GOTO 99999
+            END
+            PERFORM "LIST.READU" CAPTURING LMSG
+            LCNT = DCOUNT(LMSG,AM)
+            FOR LPTR = 1 TO LCNT
+               MSG = LMSG<LPTR>
+               P1 = INDEX(MSG,"PSS.LOCK",1)
+               IF P1 > 0 THEN
+                  P2 = INDEX(MSG,"[",1)
+                  P3 = INDEX(MSG,"]",1)
+                  IF P2 > P1 AND P3 > P2 THEN
+                     MSG = MSG[P2+1,P3-P2-1]
+                     LOCK.CONO = FIELD(MSG,",",1)
+                     LOCK.DIV = FIELD(MSG,",",2)
+                     LOCK.USER = FIELD(MSG,",",3,99)
+                     IF LOCK.CONO = CONO AND LOCK.DIV = REQDIV AND LOCK.USER # (@LOGNAME:" @ ":@TTY) THEN
+                        ERRMSG = "Process active for division ":LOCK.DIV:" by ":LOCK.USER
+                        GOTO 99999
+                     END
+                  END
+               END
+            NEXT LPTR
+         END
+      END CASE
+      IF JFOUND THEN
+         TCNT = DCOUNT(JRNLC.TRAN,VM)
+         PTRAN = JRNLC.TRAN<1,TCNT>
+      END ELSE
+         MAT JRNLC.REC = ""
+         JRNLC.JPTR = 1
+         JRNLC.JCNT = 0
+         JRNLC.USER = USER.ID
+         JRNLC.PORT = PORT.NO
+         JRNLC.SDATE = CDATE
+         JRNLC.STIME = CTIME
+         TCNT = 0
+         PTRAN = 0
+      END
+      TCNT += 1
+      JRNLC.TRAN<1,TCNT> = PTRAN + 1
+      JRNLC.DATE<1,TCNT> = CDATE
+      JRNLC.TIME<1,TCNT> = CTIME
+      JRNLC.DESC<1,TCNT> = TDESC
+      JRNLC.TPTR<1,TCNT> = JRNLC.JPTR + JRNLC.JCNT
+      JRNLC.TCNT<1,TCNT> = 0
+      MATWRITE JRNLC.REC ON PSS.JOURNAL, CONO:"CONTROL!":REQDIV
+*
+*---- END OF PROGRAM
+*
+99999 *
+      RELEASE PSS.JOURNAL
+      RELEASE PSS.LOCK, CONO:"TP"
+      RETURN
+   END

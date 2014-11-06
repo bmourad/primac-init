@@ -1,0 +1,503 @@
+*COPY>CPYLIB>COM1
+*********************************************************************
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* Revision      - [11.B]
+* Revision Date - 09/11/98
+* System        - PRIMAC
+* Library       - JISBP/DOCUSET_TRN_DRV
+* Author        - Ziad Yamout, VERCOM Software, Inc.
+*********************************************************************
+*
+*---- Data Structure Libraries
+*
+*COPY>JIS.CPYLIB>DOCUSET_HDR_DEF
+*COPY>JIS.CPYLIB>DOCUSET_SFIS_DATA
+*COPY>JIS.CPYLIB>SYS_SCN_DEF
+*COPY>JIS.CPYLIB>SYS_TKT_DEF
+*COPY>JIS.CPYLIB>SYS_FIELDS
+*COPY>CPYLIB>GEN.XREF.SUB
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>TCC
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>CHAR
+*
+      FCNT_SIZE = 15
+      DIM SSD_MEM_REC(SSD.REC.SIZE,FCNT_SIZE)
+      DIM SCN_HDR_DEF(FCNT_SIZE)
+      DIM HDR_SAMPLE(DHD.REC.SIZE)
+      DIM DATA_SAMPLE(DSD.REC.SIZE)
+*
+      SYS.TYPE = 1; CALL SYSCOM(MAT SYSCOM.REC)
+*
+      OPEN "","DOCUSET_HDR_DEF" TO DOCUSET_HDR_DEF ELSE
+         ERRMSG = "Cannot locate the DOCUSET_HDR_DEF file"
+         GOTO 93000
+      END
+      OPEN "","DOCUSET_SFIS_TEMP" TO DOCUSET_SFIS_TEMP ELSE
+         ERRMSG = "Cannot locate the DOCUSET_SFIS_TEMP file"
+         GOTO 93000
+      END
+      OPEN "","SYS_TKT_DEF" TO SYS_TKT_DEF ELSE
+         ERRMSG = "Cannot locate the SYS_TKT_DEF file"
+         GOTO 93000
+      END
+      OPEN "","SYS_SCN_DEF" TO SYS_SCN_DEF ELSE
+         ERRMSG = "Cannot locate the SYS_SCN_DEF file"
+         GOTO 93000
+      END
+      OPEN "","SYS_FIELDS" TO SYS_FIELDS ELSE
+         ERRMSG = "Cannot locate the SYS_FIELDS file"
+         GOTO 93000
+      END
+      OPEN "","XREF.DATA" TO XREF.DATA ELSE
+         ERRMSG = "Cannot locate the XREF.DATA file"
+         GOTO 93000
+      END
+      OPEN "","PREFIX" TO PREFIX ELSE
+         ERRMSG = "Cannot locate the PREFIX file"
+         GOTO 93000
+      END
+*
+*---- Initialize EDIT.SUB
+*
+      MAT EDIT.COM = ""
+      TYP = 0; CALL EDIT.SUB; FILL = "#"
+*
+*---- Get Passed Parameters
+*
+      PROCREAD BUFFER ELSE
+         BUFFER = ""
+      END
+      DOCUSET_ID = TRIM(BUFFER<1>)
+      TRN_DATA = TRIM(BUFFER<2>)
+      IF DOCUSET_ID = "" THEN
+         MAT GEN.XREF.REC = ""
+         GXR.NAME = "SYS_TKT_DEF"
+         GXR.SORT.FILE = "SYS_TKT_DEF"; GXR.FILE = SYS_TKT_DEF
+         CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+         IF GXR.ID = "" THEN GOTO 99999
+         DOCUSET_ID = GXR.ID
+      END
+      MATREAD STKD.REC FROM SYS_TKT_DEF, DOCUSET_ID ELSE
+         ERRMSG = "Cannot locate Docuset # ":DOCUSET_ID
+         GOSUB 91000; GOTO 99999
+      END
+      IF TRN_DATA = "HEADER" THEN
+         FLD_NAMES = ""
+         TRN_FILE_ON = 0
+      END ELSE
+         READ FLD_NAMES FROM SYS_TKT_DEF, DOCUSET_ID:"*FLD" THEN
+            TRN_FILENAME = DOCUSET_ID:"_TRN"
+            OPEN "", TRN_FILENAME TO TRN_FILE THEN
+               TRN_FILE_ON = 1
+            END ELSE
+               TRN_FILE_ON = 0
+            END
+         END ELSE
+            FLD_NAMES = ""
+            TRN_FILE_ON = 0
+         END
+      END
+      FLD_TYPES = ""
+      FLDCNT = DCOUNT(FLD_NAMES,AM)
+      FOR FLDNO = 1 TO FLDCNT
+         MATREAD DFD.REC FROM SYS_FIELDS, FLD_NAMES<FLDNO> THEN
+            FLD_TYPES<FLDNO> = DFD_TYPE
+         END
+      NEXT FLDNO
+      FCNT = DCOUNT(STKD_SCN,VM)
+      IF FCNT < 1 OR FCNT > FCNT_SIZE THEN GOTO 99999
+      FOR FNO = 1 TO FCNT
+         FORM_NAME = STKD_SCN<1,FNO>
+         MATREAD SSD.REC FROM SYS_SCN_DEF, FORM_NAME THEN
+            FOR I = 1 TO SSD.REC.SIZE
+               SSD_MEM_REC(I,FNO) = SSD.REC(I)
+            NEXT I
+            OPEN "", SSD_SRC_FILE TO FORM_HDR_DEF THEN
+               READ SCN_HDR_DEF(FNO) FROM FORM_HDR_DEF, FORM_NAME:"_DEF" ELSE
+                  FCNT = 0
+               END
+            END ELSE
+               FCNT = 0
+            END
+         END ELSE
+            FCNT = 0
+         END
+      NEXT FNO
+      IF NOT(FCNT) THEN GOTO 99999
+*
+*---- Define / purge previous data
+*
+      SELECT DOCUSET_HDR_DEF
+      DATA = 1
+      LOOP
+         READNEXT ID ELSE DATA = 0
+      WHILE DATA DO
+         IF FIELD(ID,"_",1) = DOCUSET_ID THEN
+            READU ITEM FROM DOCUSET_HDR_DEF, ID THEN
+               DELETE DOCUSET_HDR_DEF, ID
+            END ELSE
+               RELEASE DOCUSET_HDR_DEF, ID
+            END
+         END
+      REPEAT
+*
+*---- Process collected data
+*
+SEQNO = 10000
+STNO = 0
+      FLD_PAGE = ""; FLD_TYPE = ""; FLD_MVNO = ""; FLD_SMVNO = ""
+      FOR FNO = 1 TO FCNT
+         FORM_NAME = STKD_SCN<1,FNO>
+*
+*---- Process header information (X,Y,Text)
+*
+         GOSUB 1100
+         HCNT = DCOUNT(SCN_HDR_DEF(FNO),AM)
+         FOR HNO = 1 TO HCNT
+            MAT DHD.REC = MAT HDR_SAMPLE
+            DHD_ROW = SCN_HDR_DEF(FNO)<HNO,1> * 1
+            DHD_COL = SCN_HDR_DEF(FNO)<HNO,2> * 1
+            DHD_TEXT = SCN_HDR_DEF(FNO)<HNO,3>
+            DHD_TEXT = CHANGE(DHD_TEXT,":"," ")
+            DHD_WIDTH = LEN(DHD_TEXT) * 1
+            BEGIN CASE
+            CASE TRIM(DHD_TEXT) = ""
+               GOTO 503
+*           CASE DHD_ROW > 1 AND DHD_ROW < 20
+            CASE DHD_ROW < 20
+               BEGIN CASE
+               CASE TRIM(CHANGE(DHD_TEXT,"-","")) = ""
+                  DHD_BACKCOLOR = "DarkGrey"
+                  DHD_BORDER = "3D Raised"
+                  DHD_TEXT = ""
+               CASE TRIM(CHANGE(DHD_TEXT,"=","")) = ""
+                  DHD_BACKCOLOR = "DarkGrey"
+                  DHD_BORDER = "3D Raised"
+                  DHD_TEXT = ""
+               CASE INDEX(DHD_TEXT,"---",1)
+                  DHD_TEXT = CHANGE(DHD_TEXT,"-"," ")
+                  DHD_BACKCOLOR = "DarkGrey"
+                  DHD_BORDER = "3D Raised"
+                  IF NOT(NUM(TRIM(DHD_TEXT)[1,1])) THEN
+                     DHD_ALIGN = "Center"
+                  END
+               CASE INDEX(DHD_TEXT,"==",1)
+                  DHD_TEXT = CHANGE(DHD_TEXT,"="," ")
+                  DHD_BACKCOLOR = "DarkGrey"
+                  DHD_BORDER = "3D Raised"
+                  IF NOT(NUM(TRIM(DHD_TEXT)[1,1])) THEN
+                     DHD_ALIGN = "Center"
+                  END
+               END CASE
+            CASE TRIM(CHANGE(DHD_TEXT,"-","")) = ""
+               GOTO 503
+            CASE TRIM(CHANGE(DHD_TEXT,"=","")) = ""
+               GOTO 503
+            END CASE
+            STNO = STNO + 1
+            DHD_NAME = DHD_CLASS : STNO
+            SEQNO = SEQNO + 1
+            MATWRITE DHD.REC ON DOCUSET_HDR_DEF, DOCUSET_ID:"_":SEQNO
+503*
+         NEXT HNO
+*
+*
+*---- Process Record ID
+*
+         FOR I = 1 TO SSD.REC.SIZE
+            SSD.REC(I) = SSD_MEM_REC(I,FNO)
+         NEXT I
+*
+         GOSUB 1200
+         MAT DHD.REC = MAT HDR_SAMPLE
+         IF FNO = 1 THEN
+            DHD_NAME = "MainID"
+         END ELSE
+            DHD_NAME = "SubID"
+         END
+         DHD_CLASS = "Sle"
+         DHD_COL = SSD_ID_X * 1
+         DHD_ROW = SSD_ID_Y * 1
+         DHD_HEIGHT = 69
+         DHD_WIDTH = FIELD(SSD_ID_FMT,"#",2) * 1
+         DHD_ALIGN = FIELD(SSD_ID_FMT,"#",1)
+         BEGIN CASE
+         CASE DHD_ALIGN = "L"
+            DHD_ALIGN = "Left"
+         CASE DHD_ALIGN = "R"
+            DHD_ALIGN = "Right"
+         CASE 1
+            DHD_ALIGN = "Justify"
+         END CASE
+         DHD_DATATYPE = "String"
+         DHD_BACKCOLOR = "ButtonFace"
+         SEQNO = SEQNO + 1
+         MATWRITE DHD.REC ON DOCUSET_HDR_DEF, DOCUSET_ID:"_":SEQNO
+*
+*---- Process Data fields
+*
+         VCNT = DCOUNT(SSD_FIELDS,VM)
+         FOR VNO = 1 TO VCNT
+            IF SSD_FLD_HIDE<1,VNO> # "" THEN GOTO 509
+            MAT DHD.REC = MAT HDR_SAMPLE
+            DHD_NAME = SSD_FIELDS<1,VNO>
+            DHD_COL = SSD_FLD_X<1,VNO> * 1
+            DHD_ROW = SSD_FLD_Y<1,VNO> * 1
+            DHD_WIDTH = FIELD(SSD_FLD_FMT<1,VNO>,"#",2)
+            LOCATE DHD_NAME IN FLD_NAMES,1 SETTING FLDNO THEN
+               DHD_DATATYPE = FLD_TYPES<FLDNO>
+            END ELSE
+               FLDNO = 0
+               DHD_DATATYPE = ""
+            END
+*CRT @(0,22):@(-4):"NAME=":DHD_NAME:"|TYPE=":DHD_DATATYPE:
+            BEGIN CASE
+            CASE DHD_DATATYPE = "C"
+               DHD_DATATYPE = SSD_FLD_FMT<1,VNO>[1,3]
+               BEGIN CASE
+               CASE DHD_DATATYPE = "MD1"
+                  DHD_DATATYPE = "Dec1"
+               CASE DHD_DATATYPE = "MD2"
+                  DHD_DATATYPE = "Dec2"
+               CASE DHD_DATATYPE = "MD3"
+                  DHD_DATATYPE = "Dec3"
+               CASE 1
+                  DHD_DATATYPE = "Decimal"
+               END CASE
+               GOSUB 1500
+            CASE DHD_DATATYPE = "N"
+               IF DHD_WIDTH < 4 THEN
+                  DHD_DATATYPE = "Integer"
+               END ELSE
+                  DHD_DATATYPE = "Long"
+               END
+               GOSUB 1500
+            CASE DHD_DATATYPE = "A"
+               DHD_DATATYPE = "String"
+               GOSUB 1500
+            CASE DHD_DATATYPE = "D"
+               DHD_DATATYPE = "Date"
+               GOSUB 1500
+            CASE DHD_DATATYPE = "L"
+               DHD_CLASS = "Cbx"
+               DHD_DATATYPE = "Boolean"
+               DHD_BACKCOLOR = "ButtonFace"
+               DHD_HEIGHT = 69
+            CASE DHD_DATATYPE = "P"
+               DHD_DATATYPE = "String"
+               GOSUB 1500
+            CASE 1
+               DHD_DATATYPE = "String"
+               GOSUB 1500
+            END CASE
+            IF FLDNO THEN
+               FLD_TYPE<FLDNO> = DHD_DATATYPE
+               LOCATE FNO IN FLD_PAGE<FLDNO>,1 SETTING PNO ELSE
+                  FLD_PAGE<FLDNO,PNO> = FNO
+                  FLD_MVNO<FLDNO,PNO> = SSD_FLD_MVNO<1,VNO>
+                  FLD_SMVNO<FLDNO,PNO> = SSD_FLD_SMVNO<1,VNO>
+               END
+            END ELSE
+               IF TRN_FILE_ON THEN
+                  GOTO 509
+               END
+            END
+            DHD_WIDTH = DHD_WIDTH * 1
+            DHD_ALIGN = FIELD(SSD_FLD_FMT<1,VNO>,"#",1)
+            BEGIN CASE
+            CASE DHD_ALIGN = "L"
+               DHD_ALIGN = "Left"
+            CASE DHD_ALIGN = "R"
+               DHD_ALIGN = "Right"
+            CASE 1
+               DHD_ALIGN = "Justify"
+            END CASE
+            SEQNO = SEQNO + 1
+            MATWRITE DHD.REC ON DOCUSET_HDR_DEF, DOCUSET_ID:"_":SEQNO
+*CRT @(0,23):@(-4):"TYPE=":DHD_DATATYPE:; INPUT XOXO :
+509*
+         NEXT VNO
+      NEXT FNO
+*
+*---- Build DOCUSET_SFIS_TEMP
+*
+      IF NOT(TRN_FILE_ON) THEN GOTO 99999
+      FLDCNT = DCOUNT(FLD_NAMES,AM)
+      GOSUB 2100
+      DATA = 1
+      SELECT TRN_FILE
+      LOOP
+         READNEXT TKT_ID ELSE DATA = 0
+      WHILE DATA DO
+         READ ITEM FROM TRN_FILE, TKT_ID ELSE GOTO 709
+         IF ITEM = "" THEN GOTO 709
+         MAT DSD.REC = MAT DATA_SAMPLE
+         DSD_IDNO = TKT_ID[4,999]
+         FOR FLDNO = 1 TO FLDCNT
+            PCNT = DCOUNT(FLD_PAGE<FLDNO>,VM)
+            DSD_NAME = FLD_NAMES<FLDNO>
+            FOR PNO = 1 TO PCNT
+               DSD_PAGE = FLD_PAGE<FLDNO,PNO>
+               DSD_FORM = STKD_SCN<1,DSD_PAGE>
+               MVNO = FLD_MVNO<FLDNO,PNO>
+               SMVNO = FLD_SMVNO<FLDNO,PNO>
+*
+*----- Temporary logic
+*
+               IF NOT(NUM(MVNO)) THEN MVNO = 0
+               IF NOT(NUM(SMVNO)) THEN SMVNO = 0
+*
+               BEGIN CASE
+               CASE MVNO > 0
+                  IF SMVNO > 0 THEN
+*CRT @(0,23):@(-4):DSD_NAME:"|MVNO=":MVNO:"|SMVNO=":SMVNO:"|ITEM=":ITEM<FLDNO>:;INPUT XOXO:
+                     DSD_MVNO = MVNO
+                     VALUE = ITEM<FLDNO,MVNO,SMVNO>
+                     VALUE = ITEM<FLDNO,1,1>
+                     GOSUB 3000
+                  END ELSE
+                     MVCNT = DCOUNT(ITEM<FLDNO,MVNO>,SVM)
+                     FOR DSD_MVNO = 1 TO MVCNT
+                        VALUE = ITEM<FLDNO,MVNO,DSD_MVNO>
+                        GOSUB 3000
+                     NEXT DSD_MVNO
+                  END
+               CASE SMVNO > 0
+                  MVCNT = DCOUNT(ITEM<FLDNO>,VM)
+                  FOR DSD_MVNO = 1 TO MVCNT
+                     VALUE = ITEM<FLDNO,DSD_MVNO,SMVNO>
+                     GOSUB 3000
+                  NEXT DSD_MVNO
+               CASE 1
+                  MVCNT = DCOUNT(ITEM<FLDNO>,VM)
+                  IF MVCNT = 1 THEN
+                     MVCNT = DCOUNT(ITEM<FLDNO,1>,SVM)
+                     FOR DSD_MVNO = 1 TO MVCNT
+                        VALUE = ITEM<FLDNO,1,DSD_MVNO>
+                        GOSUB 3000
+                     NEXT DSD_MVNO
+                  END ELSE
+                     FOR DSD_MVNO = 1 TO MVCNT
+                        VALUE = ITEM<FLDNO,DSD_MVNO,1>
+                        GOSUB 3000
+                     NEXT DSD_MVNO
+                  END
+            END CASE
+            NEXT PNO
+         NEXT FLDNO
+709*
+      REPEAT
+      GOTO 99999
+*
+*---- Set the HDR_SAMPLE array
+1100*
+      MAT DHD.REC = ""
+      DHD_DOCUSET = DOCUSET_ID
+      DHD_FORM = FORM_NAME
+      DHD_PAGE = FNO
+      DHD_CLASS = "St"
+      DHD_HEIGHT = 65
+      DHD_ALIGN = "Left"
+      DHD_FONTCLASS = "Fixedsys"
+      DHD_FONTSTYLE = "Regular"
+      DHD_FONTSIZE = 8
+      MAT HDR_SAMPLE = MAT DHD.REC
+      RETURN
+*
+*---- Set the HDR_SAMPLE array (Data)
+1200*
+      MAT DHD.REC = ""
+      DHD_DOCUSET = DOCUSET_ID
+      DHD_FORM = FORM_NAME
+      DHD_PAGE = FNO
+      DHD_FONTCLASS = "MS Sans Serif"
+      DHD_FONTSTYLE = "Regular"
+      DHD_FONTSIZE = 8
+      MAT HDR_SAMPLE = MAT DHD.REC
+      RETURN
+*
+*---- Process DHD Class, BackColor, & Height
+1500*
+      DHD_HEIGHT = SSD_FLD_LINES<1,VNO>
+      BEGIN CASE
+      CASE DHD_HEIGHT > 1
+         DHD_CLASS = "Mle"
+         DHD_BACKCOLOR = "ButtonFace"
+*     CASE VALD
+*        DHD_CLASS = "Ddlb""
+*        DHD_BACKCOLOR = "ButtonFace"
+      CASE 1
+         DHD_CLASS = "Sle"
+         DHD_BACKCOLOR = "ButtonFace"
+      END CASE
+      DHD_HEIGHT = 69 * DHD_HEIGHT
+      RETURN
+*
+*---- Set the DATA_SAMPLE array
+2100*
+      MAT DSD.REC = ""
+      DSD_DOCUSET = DOCUSET_ID
+      DSD_SMVNO = 1;* Do not handle Sub Multi Value
+      MAT DATA_SAMPLE = MAT DSD.REC
+      RETURN
+*
+*---- Update DOCUSET_SFIS_TEMP
+3000*
+*IF FLD_TYPE<FLDNO> # "String" THEN
+*CRT @(0,23):@(-4):"NAME=":DSD_NAME:"|TYPE=":FLD_TYPE<FLDNO>:"|VALUE=":VALUE:"|":; INPUT XOXO:
+*END
+      DSD_STRING = ""
+      DSD_INTEGER = ""
+      DSD_LONG = ""
+      DSD_DECIMAL = ""
+      DSD_DATE = ""
+      DSD_TIME = ""
+      DSD_BOOLEAN = ""
+      BEGIN CASE
+*---- Temporarly
+      CASE VALUE = ""
+         GOTO 3099
+*-----------------
+      CASE FLD_TYPE<FLDNO> = "String"
+         DSD_STRING = VALUE
+      CASE FLD_TYPE<FLDNO> = "Integer" AND NUM(VALUE)
+         DSD_INTEGER = VALUE
+      CASE FLD_TYPE<FLDNO> = "Long" AND NUM(VALUE)
+         DSD_LONG = VALUE
+      CASE FLD_TYPE<FLDNO> = "Date" AND NUM(ICONV(VALUE,"D2/"))
+         DSD_DATE = VALUE
+      CASE FLD_TYPE<FLDNO> = "Decimal" AND NUM(VALUE)
+         DSD_DECIMAL = VALUE
+      CASE FLD_TYPE<FLDNO> = "Dec3" AND NUM(VALUE)
+         DSD_DECIMAL = VALUE
+      CASE FLD_TYPE<FLDNO> = "Dec2" AND NUM(VALUE)
+         DSD_DECIMAL = VALUE
+      CASE FLD_TYPE<FLDNO> = "Dec1" AND NUM(VALUE)
+         DSD_DECIMAL = VALUE
+      CASE FLD_TYPE<FLDNO> = "Boolean"
+         BEGIN CASE
+         CASE VALUE = "1" OR VALUE = "Y"
+            DSD_BOOLEAN = 1
+         CASE VALUE = "N" OR VALUE = "0"
+            DSD_BOOLEAN = 0
+         CASE 1
+            DSD_STRING = VALUE
+         END CASE
+      CASE 1
+         DSD_STRING = VALUE
+      END CASE
+      DSD_ID = TKT_ID:"x":DSD_PAGE "R%2":FLDNO "R%3":DSD_MVNO "R%3"
+      MATWRITE DSD.REC ON DOCUSET_SFIS_TEMP, DSD_ID
+3099*
+      RETURN
+*
+*---- Error routines
+91000*
+      ERR.TYPE = 1; CALL SYSCOM(MAT SYSCOM.REC)
+      RETURN
+93000*
+      ERR.TYPE = 3; CALL SYSCOM(MAT SYSCOM.REC)
+99999*
+END

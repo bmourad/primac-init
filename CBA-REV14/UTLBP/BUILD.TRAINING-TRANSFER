@@ -1,0 +1,206 @@
+*********************************************************************
+* REVISION    - [08.0]
+* SOURCE      - UTLBP
+* PROGRAM     - BUILD.TRAINING-TRANSFER
+* BY          - WALID YAMOUT, COMPUTER BUSINESS ASSOCIATES
+* DATE        - 11/25/87
+* DESCRIPTION
+*       This program will get all items from CUST-TRANSFER file
+*       and build TRAINING-TRANSFER file.
+*       All items with key > 50 will be written to TRANSFER-REJECTS
+*       file.
+*********************************************************************
+*
+      CS = CHAR(12)
+      CL = CHAR(27):CHAR(75)
+*      ACCT.NO = FIELD(OCONV(0,"U50BB")," ",2)
+      ACCT.NO = SYSTEM(19)
+      PROCREAD INBUFF ELSE
+         ERRMSG = "MUST RUN FROM PROC"
+         GOSUB 90000
+         GOTO 99900
+      END
+      TRANSFER.FILE.NAME = INBUFF<1>
+*
+*---- OPEN ALL FILES
+*
+      OPEN "","MD" TO MD ELSE
+         ERRMSG = "CANNOT MASTER DICTIONARY"
+         GOSUB 90000
+         GOTO 99900
+      END
+      OPEN "","TRANSFER-REJECTS" TO TRANSFER.REJECTS ELSE
+         ERRMSG = "CANNOT OPEN TRANSFER-REJECTS FILE"
+         GOSUB 90000
+         GOTO 99900
+      END
+      OPEN "","TRAINING-TRANSFER" TO TRAINING.TRANSFER ELSE
+         ERRMSG = "CANNOT OPEN TRAINING-TRANSFER FILE"
+         GOSUB 90000
+         GOTO 99900
+      END
+*
+*---- INITIALIZATION
+*
+      PROMPT ""
+      SEL.CNT = 0
+      ERR.CNT = 0
+*
+*---- DISPLAY SCREEN
+*
+10*
+      IF ACCT.NO[1,3] # "CBA" THEN
+         ERRMSG = "MUST BE IN CBA(-XXX) ACCOUNT"
+         GOSUB 90000
+         GOTO 99900
+      END
+*
+*---- GET TRANSFER FILE NAME
+*
+20*
+      IF TRANSFER.FILE.NAME = "" OR TRANSFER.FILE.NAME = "END" THEN
+         GOTO 99900
+      END
+      READ REC FROM MD, TRANSFER.FILE.NAME ELSE
+         ERRMSG = "INVALID FILE NAME"
+         GOSUB 90000
+         GOTO 20
+      END
+      BEGIN CASE
+      CASE REC<1> = "Q"
+         FILE.NAME = REC<3>
+      CASE REC<1> = "D"
+         FILE.NAME = TRANSFER.FILE.NAME
+      CASE 1
+         ERRMSG = "INVALID FILE NAME"
+         GOSUB 90000
+         GOTO 20
+      END CASE
+      CUST.NAME = FIELD(FILE.NAME,"-",1)
+      SEC.NAME = FIELD(FILE.NAME,"-",2)
+      LEN.CUST = LEN(CUST.NAME)
+      BEGIN CASE
+      CASE CUST.NAME = ""
+         ERRMSG = "INVALID CUSTOMER NAME"
+         GOSUB 90000
+         GOTO 20
+      CASE SEC.NAME # "TRANSFER"
+         ERRMSG = "INVALID FILE NAME"
+         GOSUB 90000
+         GOTO 20
+      END CASE
+      OPEN "",TRANSFER.FILE.NAME TO TRANSFER.FILE ELSE
+         ERRMSG = "INVALID FILE NAME"
+         GOSUB 90000
+         GOTO 20
+      END
+      PRINT @(20,7):"Transfer File Name :":FILE.NAME
+30*
+      PRINT @(20,9):CL:"Clear TRAINING-TRANSFER File? :":
+      INPUT REPLY
+      BEGIN CASE
+      CASE REPLY = "END"
+         GOTO 99900
+      CASE REPLY = "Y"
+         CLEARFILE TRAINING.TRANSFER
+      CASE REPLY = "N"
+         NULL
+      CASE 1
+         GOTO 30
+      END CASE
+      CLEARFILE TRANSFER.REJECTS
+*
+*---- MAIN PROCESSING
+*
+100*
+      READNEXT ID ELSE
+         IF SEL.CNT = 0 THEN
+            ERRMSG = "SSELECT ":TRANSFER.FILE.NAME:" prior to execution."
+            GOSUB 90000
+            GOTO 99900
+         END
+         IF ERR.CNT > 0 THEN
+            ERRMSG = "PLEASE CHECK TRANSFER-REJECTS FILE"
+            GOSUB 90000
+         END
+         GOTO 99900
+      END
+      READ REC FROM TRANSFER.FILE, ID ELSE GOTO 100
+      SEL.CNT = SEL.CNT + 1
+      TO.ACCT = FIELD(ID,">",1)
+      TO.DICT = FIELD(ID,">",2)
+      TO.FILE = FIELD(ID,">",3)
+      TO.ITEM = FIELD(ID,">",4)
+      OW.FLAG = FIELD(ID,">",5)
+      XCNT = COUNT(ID,">")
+      IF TO.ACCT = "****COMMENT****" THEN
+         NEW.ID = ID
+         GOTO 188
+      END
+      IF XCNT < 4 OR OW.FLAG = "" THEN
+         GOTO 199
+      END
+*
+*--- BUILD NEW.ACCT
+*
+      BEGIN CASE
+      CASE TO.ACCT = "CBA-":CUST.NAME
+         NEW.ACCT = "CBA-TRAINING"
+      CASE TO.ACCT = CUST.NAME
+         NEW.ACCT = "TRAINING"
+      CASE TO.ACCT[1,LEN.CUST+1] = CUST.NAME : "-"
+         NEW.ACCT = "TRAINING" : TO.ACCT[LEN.CUST+1,99]
+      CASE 1
+         GOTO 199
+      END CASE
+*
+*--- CHANGE Q-POINTERS AND P-POINTERS
+*
+     BEGIN CASE
+     CASE TO.FILE # "MD"
+        GOTO 177
+     CASE REC<1> = "PQN"
+        GOTO 177
+     CASE REC<1> = "P" AND REC<2> = "10B4"
+        SEC.NAME = FIELD(REC<5>," ",2)
+        REC<5> = "CBA-TRAINING"
+        IF SEC.NAME # "" THEN
+           REC<5> = REC<5> : " " : SEC.NAME
+        END
+     CASE REC<1> = "Q"
+        BEGIN CASE
+        CASE REC<2> = "CBA-":CUST.NAME
+           REC<2> = "CBA-TRAINING"
+        CASE REC<2> = CUST.NAME
+           REC<2> = "TRAINING"
+        CASE REC<2>[1,LEN.CUST+1] = CUST.NAME : "-"
+           REC<2> = "TRAINING" : REC<2>[LEN.CUST+1,99]
+        CASE 1
+           GOTO 199
+        END CASE
+     END CASE
+177*
+      NEW.ID = NEW.ACCT :">": TO.DICT :">": TO.FILE :">": TO.ITEM :">": OW.FLAG
+      IF LEN(NEW.ID) > 50 THEN GOTO 199
+188*
+      WRITE REC ON TRAINING.TRANSFER, NEW.ID
+      GOTO 100
+199*
+      ERR.CNT = ERR.CNT + 1
+      WRITE REC ON TRANSFER.REJECTS, ID
+      GOTO 100
+*
+*---- ERROR ROUTINE
+*
+90000*
+      PRINT @(0,23):CL:ERRMSG:
+      INPUT REPLY,1:
+      PRINT @(0,23):CL:
+      RETURN
+*
+*---- END OF PROGRAM
+*
+99900*
+      PRINT @(-1)
+      STOP
+   END

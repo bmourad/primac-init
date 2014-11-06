@@ -1,0 +1,334 @@
+*********************************************************************
+*
+* PROGRAM  - COMM.LINKER
+*
+* AUTHOR   - NICK AMENDOLA, VERCOM SOFTWARE, INC.
+*
+* DATE     - 06/04/92
+*
+* DESCRIPTION
+*
+* This program will transmit specified items from the account and
+* file specified to the remote account and file specified.
+*
+* Data is transmitted via modem from local computer to remote
+* computer.
+*
+*     COMMLINK filename itemname (opt1,opt2)
+*     COMMLINK filename * (opt1,opt2)
+*     COMMLINK filename (opt1,opt2)
+*
+*   Options:  O = overwrite (not currently supported)
+*
+*********************************************************************
+*
+*---- DEFINE EQUATES
+*
+      EQU AM  TO CHAR(254)
+      EQU VM  TO CHAR(253)
+      EQU SM  TO CHAR(252)
+*
+*---- PRE-INITIALIZATION
+*
+      PROMPT ""
+      CUSTACCT = "TEST"
+      SP1 = SPACE(1)
+      SP2 = SPACE(2)
+      SP3 = SPACE(3)
+*
+      SYSTYPE = "U"
+      BEGIN CASE
+      CASE SYSTYPE = "U"
+         PORT = @TTY
+         IND.POS = INDEX(PORT,"/",1)
+         IF IND.POS = 0 THEN
+            PORT = PORT[4,LEN(PORT)-3]
+         END ELSE
+            PORT = PORT[4,IND.POS-4]
+         END
+         ACCT = @PATH
+      CASE 1
+         PORT = SYSTEM(18)
+         ACCT = SYSTEM(19)
+      END CASE
+*
+      PROCREAD INCMD ELSE INCMD = ""
+      LOCATE "TO" IN INCMD,1 SETTING TSP THEN
+         ICNT = DCOUNT(INCMD,AM)
+         CMD = ""
+         FOR N = 1 TO TSP-1
+            CMD<N> = INCMD<N>
+         NEXT N
+         TSPEC = ""
+         FOR N = TSP+1 TO ICNT
+            TSPEC<N-TSP> = INCMD<N>
+         NEXT N
+      END ELSE
+         CMD = INCMD
+         TSPEC = ""
+      END
+*
+      CALL PARSE.COMMAND("",1,CMD,FACCT,FDICT,FFILE,FITEM,FOPTS,ERRMSG)
+      IF ERRMSG # "" THEN GOTO 90000
+*
+      IF FFILE = "" THEN ERRMSG = "FILE NAME MISSING"; GOTO 90000
+      IF FACCT = "" THEN
+         FACCT = ACCT
+         OPEN FDICT,FFILE TO FVAR ELSE
+            ERRMSG = "INVALID FILE NAME"; GOTO 90000
+         END
+      END ELSE
+         BEGIN CASE
+         CASE SYSTYPE = "U"
+            OPEN "","VOC" TO MD ELSE
+               ERRMSG = "CANNOT OPEN VOC FILE"; GOTO 90000
+            END
+            BEGIN CASE
+            CASE LEN(FFILE) >= 2 AND FFILE[LEN(FFILE)-1,2] = "BP"
+               QREC = "DIR"
+            CASE LEN(FFILE) >= 6 AND FFILE[LEN(FFILE)-5,6] = "CPYLIB"
+               QREC = "DIR"
+            CASE 1
+               QREC = "F"
+            END CASE
+            QREC<2> = FACCT:"/":FFILE
+            QREC<3> = FACCT:"/D_":FFILE
+         CASE 1
+            OPEN "","MD" TO MD ELSE
+               ERRMSG = "CANNOT OPEN MASTER DICTIONARY"; GOTO 90000
+            END
+            QREC = "Q"
+            QREC<2> = FACCT
+            QREC<3> = FFILE
+         END CASE
+         QFILE = "QFILE*":PORT
+         WRITE QREC ON MD, QFILE
+         OPEN FDICT,QFILE TO FVAR THEN
+            DELETE MD, QFILE
+         END ELSE
+            DELETE MD, QFILE
+            ERRMSG = "INVALID FILE NAME"; GOTO 90000
+         END
+      END
+      BEGIN CASE
+      CASE FITEM = ""
+      CASE FITEM = "*"
+      CASE FIELD(FFILE,".",2) = "SCREENS"
+      CASE 1
+         READ REC FROM FVAR, FITEM ELSE
+            ERRMSG = "INVALID ITEM NAME"; GOTO 90000
+         END
+      END CASE
+*
+      OVR.FLAG = 0
+      OCNT = DCOUNT(FOPTS,VM)
+      FOR OPTR = 1 TO OCNT
+         OPT = FOPTS<1,OPTR>
+         BEGIN CASE
+         CASE OPT = "O"
+            OVR.FLAG = 1
+         CASE 1
+            ERRMSG = "INVALID OPTION - ":OPT
+            GOTO 90000
+         END CASE
+      NEXT OPTR
+*
+*---- GET DESTINATION SPECIFICATION
+*
+      IF TSPEC = "" THEN
+         PRINT "TO:":
+         INPUT TSPEC
+      END
+      CMD = TSPEC
+*
+      CALL PARSE.COMMAND("",2,CMD,TACCT,TDICT,TFILE,TITEM,TOPTS,ERRMSG)
+      IF ERRMSG # "" THEN GOTO 90000
+*
+*---- INITIALIZATION
+*
+      XMODE = ""
+      SYSDATE = OCONV(DATE(),"D2/")
+*
+*---- MAIN PROCESSING
+*
+100 *
+      FROM.ACCT = FACCT
+      FROM.DICT = FDICT
+      FROM.FILE = FFILE
+      FROM.ITEM = FITEM
+*
+      IF TACCT = "" THEN TO.ACCT = FROM.ACCT ELSE TO.ACCT = TACCT
+      IF TDICT = "" THEN TO.DICT = FROM.DICT ELSE TO.DICT = TDICT
+      IF TFILE = "" THEN TO.FILE = FROM.FILE ELSE TO.FILE = TFILE
+      IF FITEM = "" OR FITEM = "*" THEN
+         TO.ITEM = ""
+      END ELSE
+         IF TITEM = "" THEN TO.ITEM = FROM.ITEM ELSE TO.ITEM = TITEM
+      END
+*
+*---- PRINT VERIFICATION
+*
+      PL1 = "           "
+      PL2 = "Account ..."
+      PL3 = "File ......"
+      PL4 = "Item ......"
+*
+      PL1 = PL1:SP1:"------------- FROM -------------"
+      PL2 = PL2:SP1:FROM.ACCT"L#32"
+      PL3 = PL3:SP1:(TRIM(FROM.DICT:SP1:FROM.FILE))"L#32"
+      PL4 = PL4:SP1:FROM.ITEM"L#32"
+*
+      PL1 = PL1:SP3:"-------------- TO --------------"
+      PL2 = PL2:SP3:TO.ACCT
+      PL3 = PL3:SP3:(TRIM(TO.DICT:SP1:TO.FILE))
+      PL4 = PL4:SP3:TO.ITEM
+*
+      LOOP
+         PRINT
+         PRINT PL1
+         PRINT PL2
+         PRINT PL3
+         PRINT PL4
+         PRINT
+         PRINT "(A)bort, (C)ontinue : ":
+         INPUT REPLY
+      UNTIL REPLY = "C" OR REPLY = "A" DO
+      REPEAT
+      IF REPLY = "A" THEN ERRMSG = "Aborted"; GOTO 90000
+*
+      PRINT
+      PRINT "READY - SWITCH TO LINK! "
+      RQM 10
+      GOSUB 85000
+      ECHO OFF
+      IF STATUS = "" THEN SMSG = "COMPLETED" ELSE SMSG = "ABORTED"
+      PRINT SMSG:' - SWITCH TO HOST, ENTER "END" '
+      LOOP
+         INPUT REPLY:
+      UNTIL REPLY = "END" DO
+      REPEAT
+      ECHO ON
+      GOTO 99999
+*
+*---- FILE TRANSFER REQUEST
+*
+85000 *
+      STATUS = ""
+      BEGIN CASE
+      CASE FROM.ITEM = "" OR FROM.ITEM = "*"
+         IF FROM.ITEM = "*" THEN
+            SELECT FVAR
+         END
+         MORE = 1
+         LOOP
+            READNEXT ID ELSE MORE = 0
+         WHILE MORE DO
+            READ REC FROM FVAR, ID ELSE REC = ""
+            TO.ITEM = ID
+            BEGIN CASE
+            CASE REC = ""
+            CASE SYSTYPE = "U"
+               GOSUB 88000
+            CASE REC<1> = "D"   AND NUM(REC<2>)
+            CASE REC<1> = "DX"  AND NUM(REC<2>)
+            CASE REC<1> = "DY"  AND NUM(REC<2>)
+            CASE 1
+               IF TO.FILE = "MD" THEN GOSUB 86000
+               GOSUB 88000
+            END CASE
+            IF STATUS # "" THEN
+               LOOP
+                  READNEXT ID ELSE MORE = 0
+               WHILE MORE DO
+               REPEAT
+            END
+         REPEAT
+      CASE FIELD(FROM.FILE,".",2) = "SCREENS"
+         SELECT FVAR
+         MORE = 1
+         LOOP
+            READNEXT ID ELSE MORE = 0
+         WHILE MORE DO
+            IF FIELD(ID,"*",1) # FROM.ITEM THEN GOTO 85029
+            READ REC FROM FVAR, ID ELSE GOTO 85029
+            TO.ITEM = ID
+            GOSUB 88000
+            IF STATUS # "" THEN
+               LOOP
+                  READNEXT ID ELSE MORE = 0
+               WHILE MORE DO
+               REPEAT
+            END
+85029    REPEAT
+      CASE 1
+         ID = FROM.ITEM
+         READ REC FROM FVAR, ID ELSE REC = ""
+         BEGIN CASE
+         CASE REC = ""
+         CASE SYSTYPE = "U"
+            GOSUB 88000
+         CASE REC<1> = "D"  AND NUM(REC<2>)
+         CASE REC<1> = "DX" AND NUM(REC<2>)
+         CASE REC<1> = "DY" AND NUM(REC<2>)
+         CASE 1
+            IF TO.FILE = "MD" THEN GOSUB 86000
+            GOSUB 88000
+         END CASE
+      END CASE
+      RETURN
+*
+*---- MODIFY PROGRAM AND Q-POINTERS
+*
+86000 *
+      BEGIN CASE
+      CASE SYSTYPE = "U"
+      CASE SYSTYPE = "N" AND REC<1> = "P" AND REC<2> = "10B4"
+         BEGIN CASE
+         CASE CUSTACCT = "PRIMAC"
+            REC<5> = "CBA"
+         CASE CUSTACCT = "CATMAC"
+            REC<5> = "CATMAC-SYS"
+         CASE 1
+            REC<5> = "CBA":"-":CUSTACCT
+         END CASE
+      CASE REC<1> = "Q" AND REC<2> = "CBA"
+         IF CUSTACCT = "PRIMAC" THEN
+            REC<2> = "CBA"
+         END ELSE
+            REC<2> = "CBA":"-":CUSTACCT
+         END
+      CASE REC<1> = "Q" AND REC<2> = "PRIMAC"
+         REC<2> = CUSTACCT
+         IF CUSTACCT = "DEMO" THEN REC<2> = "PRIMAC-DEMO"
+      CASE REC<1> = "Q" AND REC<2> = "CATMAC"
+         IF CUSTACCT = "CATMAC" THEN
+            REC<2> = "CATMAC-SYS"
+         END ELSE
+            REC<2> = CUSTACCT
+         END
+      CASE REC<1> = "Q" AND FIELD(REC<2>,"-",1) = "PRIMAC"
+         REC<2> = CUSTACCT:"-":FIELD(REC<2>,"-",2)
+      CASE REC<1> = "Q" AND FIELD(REC<2>,"-",1) = "CATMAC"
+         REC<2> = CUSTACCT:"-":FIELD(REC<2>,"-",2)
+      CASE REC<1> = "Q" AND FIELD(REC<2>,"-",2) # ""
+         REC<2> = CUSTACCT:"-":FIELD(REC<2>,"-",2)
+      END CASE
+      RETURN
+*
+*---- TRANSFER ITEM TO REMOTE COMPUTER
+*
+88000 *
+      STATUS = ""
+      ERRCNT = 0
+      CALL COMM.LINK.SEND(XMODE,TO.ACCT,TO.DICT,TO.FILE,TO.ITEM,REC,STATUS,ERRCNT)
+      RETURN
+*
+*---- ERROR ROUTINE
+*
+90000 *
+      PRINT ERRMSG
+*
+*---- END OF PROGRAM
+*
+99999 *
+      END

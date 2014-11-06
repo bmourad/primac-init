@@ -1,0 +1,435 @@
+*
+* This pgm will go through each module and will find files and procs and
+*  will update the appropriate list in the AUTORELEASE file.  This pgm
+*  will also create a report rather than update the AUTORELEASE files
+*
+*
+* SET UP VARIABLES
+*
+OPEN "VOC" TO VOC ELSE PRINT "Unable to open VOC file" ; STOP
+OPEN "AUTORELEASE" TO AUTORELEASE ELSE
+  PRINT 'Unable to open AUTORELEASE file '
+  STOP
+END
+*
+*
+TRUE=1 ; FALSE=0
+EQU VM TO CHAR(253)
+EQU AM TO CHAR(254)
+ERRARRAY=''
+CBAHOMEPATH=@PATH
+OS = "OS"
+CALL SYSVARS.SUB(OS)
+IF OS[1,7] = 'Windows' THEN SLSH = "\" ELSE SLSH = '/'
+*
+DONE=FALSE
+* the line below will need to be updated with mv list of release numbers
+* as they become available
+VALID.RELEASE="REV10A":@VM:"REV10B":@VM:"REV11":@VM:"REV12":@VM:"REV12A":@VM:"REV14"
+LOOP
+UNTIL DONE DO
+  PRINT 'Enter Version number of RELEASE (eg REV10A) or "X"'
+  INPUT VERSION
+  IF VERSION = 'X' THEN
+    DONE=1
+  END ELSE
+    LOCATE VERSION IN VALID.RELEASE<1>,1 SETTING POS THEN
+      DONE=TRUE
+    END ELSE
+      PRINT "Invalid response"
+    END
+  END
+REPEAT
+IF VERSION = 'X' THEN STOP
+DONE=FALSE
+LOOP
+UNTIL DONE DO
+  PRINT 'Enter the path of the home account (eg /usr/ud/primac/rev10/basea/REV10A)'
+  INPUT HOMEPATH
+  PRINT "Is this correct :":HOMEPATH:" (Y/N/X) ":
+  INPUT RESP
+  IF RESP = 'Y' OR RESP = 'X' THEN
+    DONE=TRUE
+  END
+REPEAT
+IF RESP = 'X' THEN STOP
+*
+RPT.ONLY=TRUE
+DONE=FALSE
+LOOP
+UNTIL DONE DO
+  PRINT 'Do you want to update the Release List (Y/N/X)'
+  INPUT RESP
+  IF RESP = 'Y' OR RESP = 'X' THEN
+    RPT.ONLY=FALSE
+    DONE=TRUE
+  END ELSE
+    IF RESP='N' THEN DONE=TRUE
+  END
+REPEAT
+IF RESP = 'X' THEN STOP
+*
+RPT= "Report of Lines to add to Release lists :":VERSION
+*
+* set up list of accounts
+*
+ACCTLIST = "":VM:"APS":VM:"ARS":VM:"FAS":VM:"GLS":VM:"ICS":VM:"JCS":VM:"JES"
+*REMOVE THE GLS REFERENCE FOR THE BUILD RUN
+** ADD BACK ACCTLIST = "":VM:"APS":VM:"ARS":VM:"FAS":VM:"ICS":VM:"JCS":VM:"JES"
+ACCTLIST = ACCTLIST:VM:"OPS":VM:"POS":VM:"PRS":VM:"PSS":VM:"SAS"
+*
+PASSTYPES="BEFORE":VM:"":VM:"AFTER"
+*
+NUMPASSTYPES=DCOUNT(PASSTYPES,VM)
+*
+NUM.SLASH=DCOUNT(HOMEPATH,SLSH)
+BASEHOMEPATH=''
+BASEHOMENAME=FIELD(HOMEPATH,SLSH,NUM.SLASH)
+FOR I = 1 TO NUM.SLASH-1
+  BASEHOMEPATH=BASEHOMEPATH:FIELD(HOMEPATH,SLSH,I):SLSH
+NEXT I
+BASECBAPATH = BASEHOMEPATH:"CBA-":BASEHOMENAME
+*
+NUM.ACCT = DCOUNT(ACCTLIST,VM)
+FOR APTR = 1 TO NUM.ACCT
+  BCURRACCT = ACCTLIST<1,APTR>
+  IF BCURRACCT #'' THEN
+    CURRACCT="-":BCURRACCT
+  END ELSE
+    CURRACCT = BCURRACCT
+  END
+  XXXX= "Processing    ":CURRACCT
+  PRINT XXXX
+  RPT<-1>=XXXX
+  DELETE VOC, "SOURCEQPTR"
+* VERBA = "SETFILE ":HOMEPATH:CURRACCT:"/VOC SOURCEQPTR OVERWRITING"
+  VERBA = "SETFILE ":HOMEPATH:CURRACCT:SLSH:"VOC SOURCEQPTR OVERWRITING"
+  UDTEXECUTE VERBA CAPTURING JUNK
+  OPEN "SOURCEQPTR" TO SOURCEVOC THEN
+      * have both vocs open  process the list
+      *
+      GOSUB 500
+  END
+NEXT APTR
+*
+IF ERRARRAY # "" THEN
+  WRITE ERRARRAY ON AUTORELEASE,VERSION:".ERRLIST"
+  PRINT "THERE ARE ERRORS SEE AUTORELEASE :":VERSION:".ERRLIST"
+  INPUT RESP
+END
+*
+IF RPT.ONLY THEN
+  NUM.LINES = DCOUNT(RPT,AM)
+  PRINTER ON
+  PGNUM=1
+  PRINT CHAR(12):"PAGE ":PGNUM"L#5":"   Report of Release List Changes"
+  PRINT
+  FOR I = 1 TO NUM.LINES
+    IF REM(I,55)=0 THEN
+      PGNUM=PGNUM+1
+      PRINT CHAR(12):"PAGE ":PGNUM"L#5":"   Report of Release List Changes"
+      PRINT
+    END
+    PRINT RPT<I>
+  NEXT I
+  PRINTER OFF
+END
+*
+STOP
+*
+500 * Process the lists
+*
+READ LIST1 FROM AUTORELEASE,VERSION:"-":BCURRACCT:"-":"LIST1" ELSE LIST1 = ''
+*THEN
+  * process the base pointers
+  * line format is MDfilename vm REALfilename vm "D" or "F"
+  * --- EASY.MENUS]PRIMAC.MENUS]F
+  BASE.OR.RELATIVE='B'; PASS=1
+  CURRLIST=LIST1
+  XXXX = "        Processing List 1"
+  PRINT XXXX
+  RPT<-1>=XXXX
+  GOSUB 1000
+*END 
+READ LIST2 FROM AUTORELEASE,VERSION:"-":BCURRACCT:"-":"LIST2" ELSE LIST2=''
+  * process the relative pointers
+  * line format is MDfilename vm REALfilename vm "D" or "F"
+  * --- EASY.MENUS]PRIMAC.MENUS]F
+  BASE.OR.RELATIVE='R'; PASS=2
+  CURRLIST=LIST2
+  XXXX= "       Processing List 2"
+  PRINT XXXX
+  RPT<-1>=XXXX
+  GOSUB 1000
+***END
+READ LIST3 FROM AUTORELEASE,VERSION:"-":BCURRACCT:"-":"LIST3" ELSE LIST3=''
+  * process the PQN ITEMS
+  * line format is VOCitemname vm "O" or ""
+  * --- LIST.CUST.RPT]O   or LIST.CUST.RPT <-- will result in copy
+  *     ^will copy with overlay                w/o overlay
+  PASS=3
+  XXXX="        Processing List 3"
+  PRINT XXXX
+  RPT<-1>=XXXX
+  GOSUB 3000
+****END
+READ LIST4 FROM AUTORELEASE,VERSION:"-":BCURRACCT:"-":"LIST4" ELSE LIST4='*'
+  PASS = 4
+  XXXX="        Processing List 4"
+  PRINT XXXX
+  RPT<-1>=XXXX
+  GOSUB 4000
+*
+RETURN
+*
+1000 * process base ptrs
+*
+NUM.LINES = DCOUNT(CURRLIST,AM)
+FLIST=''
+FOR LPTR = 1 TO NUM.LINES
+  IF CURRLIST<LPTR>[1,1]='*' THEN
+    * this is a comment line do not process
+  END ELSE
+    IF FLIST='' THEN
+      FLIST=CURRLIST<LPTR,1>
+    END ELSE
+      LOCATE(CURRLIST<LPTR,1>,FLIST,1;POS;"AL") ELSE
+        FLIST=INSERT(FLIST,1,POS;CURRLIST<LPTR,1>)
+      END
+    END
+  END
+NEXT LPTR
+SELECT SOURCEVOC
+TDONE=FALSE
+CHG=FALSE
+LOOP
+  READNEXT TID ELSE TDONE=TRUE
+UNTIL TDONE DO
+  READ MDITEM FROM SOURCEVOC,TID THEN
+    IF (MDITEM<1>[1,1]='F' OR MDITEM<1>[1,1]='D') AND INDEX(MDITEM<2>,SLSH,1) THEN
+      * this is an F or D item and attr 2 forms a relative ptr 
+      RELATIVEFILE=FALSE ; ABSOLUTEFILE=FALSE
+      IF MDITEM<2>[1,3]= "..":SLSH AND PASS=2 THEN
+        RELATIVEFILE=TRUE
+      END ELSE
+        IF MDITEM<2>[1,1]=SLSH AND PASS=1 THEN
+          ABSOLUTEFILE=TRUE
+        END
+      END
+      IF RELATIVEFILE OR ABSOLUTEFILE THEN
+        LOCATE(TID,FLIST,1;POS;"AL") ELSE
+          *  this is where TID needs to get added to the Currlist
+          IF NOT(RPT.ONLY) THEN
+            LDONE=FALSE
+            LOOP
+            UNTIL LDONE DO
+              PRINT 'Module "':BCURRACCT:'"'
+              PRINT "Do you want to add ":TID:" to list ":PASS:" (Y/N)":
+*              INPUT RESP
+              RESP = 'Y'
+              IF RESP = 'Y' OR RESP = 'N' THEN
+                LDONE=TRUE
+              END ELSE
+                PRINT "Y or N only"
+              END
+            REPEAT
+          END ELSE
+            RESP='Y'
+          END
+          IF RESP = 'Y' THEN
+            IF RELATIVEFILE OR ABSOLUTEFILE THEN
+              INSDONE=FALSE
+              NUM.LINES=DCOUNT(CURRLIST,AM)
+              FOR II = 1 TO NUM.LINES WHILE NOT(INSDONE)
+                IF TID < CURRLIST<II,1> THEN
+                  GOSUB 1010
+                END
+              NEXT II
+              IF NOT(INSDONE) THEN
+                II = NUM.LINES+1
+                GOSUB 1010
+              END
+            END
+          END
+        END
+      END
+    END
+  END
+REPEAT
+IF CHG THEN
+  IF PASS=2 THEN
+    IF NOT(RPT.ONLY) THEN
+      WRITE CURRLIST ON AUTORELEASE,VERSION:"-":BCURRACCT:"-":"LIST2"
+    END
+  END ELSE
+    IF NOT(RPT.ONLY) THEN
+      WRITE CURRLIST ON AUTORELEASE,VERSION:"-":BCURRACCT:"-":"LIST1"
+    END
+  END
+END
+*
+RETURN
+*
+1010 *
+NUMFIELDS=DCOUNT(MDITEM<2>,SLSH)
+FD2 = FIELD(MDITEM<2>,SLSH,2)
+IF INDEX(FD2,"-",1) THEN
+  MODNAME1 = FIELD(FD2,"-",2)
+END ELSE
+  MODNAME1 =''
+END
+RNAME=FIELD(MDITEM<2>,SLSH,NUMFIELDS)
+IF RELATIVEFILE THEN
+  VALSTR=TID:VM:RNAME:VM:MDITEM<1>:VM:MODNAME1
+END ELSE
+  VALSTR=TID:VM:RNAME:VM:MDITEM<1>
+END
+IF NOT(RPT.ONLY) THEN
+  CURRLIST = INSERT(CURRLIST,II;VALSTR)
+END
+RPT<-1>="          Add to List ":PASS:" ":VALSTR
+INSDONE=TRUE
+CHG=TRUE
+RETURN
+*
+3000 * process pqn items
+*
+NUM.LINES = DCOUNT(LIST3,AM)
+PLIST=''
+FOR II = 1 TO NUM.LINES
+  CVAL = LIST3<II,1>
+  LOCATE(CVAL,PLIST,1;POS;"AL") ELSE
+    PLIST=INSERT(PLIST,1,POS;CVAL)
+  END
+NEXT II
+SELECT SOURCEVOC
+TDONE=FALSE
+CHG=FALSE
+L3CTR=0
+LOOP
+  READNEXT PID ELSE TDONE=TRUE
+UNTIL TDONE DO
+  L3CTR=L3CTR+1
+  IF REM(L3CTR,300)=0 THEN
+    XXXX ="       List3 items Processed :":L3CTR
+    PRINT XXXX
+    RPT<-1>=XXXX
+  END
+  READ REC FROM SOURCEVOC,PID THEN
+    IF REC<1>="PQN" THEN
+      LOCATE(PID,PLIST,1;POS;"AL") ELSE
+        NUM.LINES=DCOUNT(LIST3,AM)
+        DONEINS=FALSE
+        FOR II = 1 TO NUM.LINES WHILE NOT(DONEINS)
+          IF PID < LIST3<II> THEN
+            IF NOT(RPT.ONLY) THEN
+              LIST3=INSERT(LIST3,II;PID)
+            END
+            RPT<-1>="          Add to List 3 ":PID
+            CHG=TRUE
+            DONEINS=TRUE
+          END
+        NEXT II
+        IF NOT(DONEINS) THEN
+          II=NUM.LINES+1
+          IF NOT(RPT.ONLY) THEN
+            LIST3=INSERT(LIST3,II;PID)
+          END
+          RPT<-1>="          Add to List 3 ":PID
+          CHG=TRUE
+          DONEINS=TRUE
+        END
+      END
+    END
+  END
+REPEAT
+IF CHG THEN
+  IF NOT(RPT.ONLY) THEN
+    WRITE LIST3 ON AUTORELEASE,VERSION:"-":BCURRACCT:"-":"LIST3"
+  END
+END
+*
+RETURN
+*
+4000 * process create new files
+*
+NUM.LINES = DCOUNT(LIST4,AM)
+FLIST=''
+FOR LPTR = 1 TO NUM.LINES
+  IF LIST4<LPTR>[1,1]='*' THEN
+    * this is a comment line do not process
+  END ELSE
+    IF FLIST='' THEN
+      FLIST=LIST4<LPTR,1>
+    END ELSE
+      LOCATE(LIST4<LPTR,1>,FLIST,1;POS;"AL") ELSE
+        FLIST=INSERT(FLIST,1,POS;LIST4<LPTR,1>)
+      END
+    END
+  END
+NEXT LPTR
+SELECT SOURCEVOC
+TDONE=FALSE
+CHG=FALSE
+LOOP
+  READNEXT TID ELSE TDONE=TRUE
+UNTIL TDONE DO
+  READ MDITEM FROM SOURCEVOC,TID THEN
+    IF (MDITEM<1>[1,1]='F' OR MDITEM<1>[1,1]='D') AND NOT(INDEX(MDITEM<2>,SLSH,1))  AND MDITEM<2> = TID THEN
+      * this is an F or D item and attr 2 forms a local ptr 
+      LOCATE(TID,FLIST,1;POS;"AL") ELSE
+        *  this is where TID needs to get added to the Currlist
+        IF NOT(RPT.ONLY) THEN
+          LDONE=FALSE
+          LOOP
+          UNTIL LDONE DO
+            PRINT 'Module "':BCURRACCT:'"'
+            PRINT "Do you want to add ":TID:" to list 4 (Y/N)":
+*            INPUT RESP
+RESP = 'Y'
+            IF RESP = 'Y' OR RESP = 'N' THEN
+              LDONE=TRUE
+            END ELSE
+              PRINT "Y or N only"
+            END
+          REPEAT
+        END ELSE
+          RESP='Y'
+        END
+        IF RESP = 'Y' THEN
+          INSDONE=FALSE
+          NUM.LINES=DCOUNT(LIST4,AM)
+          FOR II = 1 TO NUM.LINES WHILE NOT(INSDONE)
+            IF TID < LIST4<II,1> THEN
+              VALSTR=TID:VM:MDITEM<1>[1,1]:VM:'1':VM:'19':VM:'Y'
+              IF NOT(RPT.ONLY) THEN
+                LIST4=INSERT(LIST4,II;VALSTR)
+              END
+              RPT<-1>="          Add to List 4 ":VALSTR
+              INSDONE=TRUE
+              CHG=TRUE
+            END
+          NEXT II
+          IF NOT(INSDONE) THEN
+            VALSTR=TID:VM:MDITEM<1>[1,1]:VM:'1':VM:'19':'Y'
+            IF NOT(RPT.ONLY) THEN
+              LIST4=INSERT(LIST4,II;VALSTR)
+            END
+            RPT<-1>="          Add to List 4 ":VALSTR
+            INSDONE=TRUE
+            CHG=TRUE
+          END
+        END
+      END
+    END
+  END
+REPEAT
+IF CHG THEN
+  IF NOT(RPT.ONLY) THEN
+    WRITE LIST4 ON AUTORELEASE,VERSION:"-":BCURRACCT:"-":"LIST4"
+  END
+END
+*
+RETURN
+*
+

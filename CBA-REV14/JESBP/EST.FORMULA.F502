@@ -1,0 +1,147 @@
+      SUBROUTINE EST.FORMULA.F502 (CONO, ACTION, EQTY, DEPT, COMP)
+***************************************************************************
+*
+* REVISION - [10.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+*
+* PROGRAM  - EST.FORMULA.F502
+*
+* AUTHOR   - NICK AMENDOLA, COMPUTER BUSINESS ASSOCIATES
+*
+* DATE     - 01/15/86
+*
+* DESCRIPTION
+*
+* This formula is used to calculate the factor to be used to modify the
+* press running standard.
+*
+* MODIFIED  - Graham Jarvis, Pacrim Software Pty Ltd
+*             Uses New Keys based on Run Eff Tables
+*
+***************************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>JES.CPYLIB>SCOMMON.ESTIMATE
+*COPY>JES.CPYLIB>ESTIMATE
+*COPY>JES.CPYLIB>ESTIMATE.RES
+*COPY>JES.CPYLIB>EQUIPMENT
+*COPY>JES.CPYLIB>ESTIMATE.RUN.EFF
+*COPY>JES.CPYLIB>ESTIMATE.TEMP
+*COPY>JES.CPYLIB>ESTIMATE.PAPER.GROUP
+*COPY>JES.CPYLIB>JES.FILE.VARS
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+MAT SYSCOM.REC =  ""; SYS.TYPE = 2
+*
+*---- INITIALIZATION
+*
+      OPEN '','EST.RES.FDIE.SPEEDS' TO EST.RES.FDIE.SPEEDS ELSE STOP
+      OPEN '','ESTIMATE.RES.RUN.EFF' TO ESTIMATE.RES.RUN.EFF ELSE STOP
+      DIE.GSET=''
+      DIE.TEETH=''
+      TEMP.FCTR = 1000
+      TYP = 0
+      MPTR=1
+      LOCATE TEMP.CCTR IN EST.RL.PRESS.CCTR<1,COMP>,1 SETTING MPTR ELSE MPTR=1
+      LOCATE EQTY IN EST.QTY<1>,1 SETTING QPTR ELSE QPTR = 1
+*
+* Calculate Number of Colours in Job
+*
+  NO.OF.COLS=0
+  NO.OF.COLS= EST.PROD.COLORS.1<1,COMP,MPTR>+NO.OF.COLS ;* colours front
+  NO.OF.COLS= EST.PROD.COLORS.2<1,COMP,MPTR>+NO.OF.COLS ;* colours back
+  NO.OF.COLS= EST.RL.ADHESIVE<1,COMP,MPTR>+NO.OF.COLS      ;* colours adhesive
+  NO.OF.COLS=(EST.RL.SSCREEN<1,COMP,MPTR>+0)+NO.OF.COLS
+  NO.OF.COLS=(EST.RL.GRAVURE<1,COMP,MPTR>+0)+NO.OF.COLS
+  IF EST.RL.FULL.SPOT<1,COMP,MPTR>='S' THEN
+     NO.OF.COLS=NO.OF.COLS+1
+  END
+*
+* Check If Foil Stamper in Use
+*
+      IF EST.RL.FOIL<1,COMP,MPTR>#'Y' AND EST.RL.FOIL<1,COMP,MPTR>#'N' THEN
+         EST.RL.FOIL<1,COMP,MPTR>='N'
+         FOIL.SET='N'
+      END
+      IF EST.RL.FOIL<1,COMP,MPTR>='Y' THEN
+         FOIL.SET='Y'
+      END ELSE
+         FOIL.SET='N'
+      END
+      IF EST.RL.FOIL.SPEED<1,COMP,MPTR>='Y' THEN
+         FOIL.SET='Y'
+      END
+*
+*--- Establish Die Details for 'S' type presses Max Speed Calculations
+*
+        DIE.TYPE=EST.RL.DIETYPE<1,COMP,MPTR>
+        DIE.GSET=EST.RL.DIE.CYL.ID<1,COMP,MPTR>[1,2]:'*':EST.RL.DIE.CYL.ID<1,COMP,MPTR>[3,4]
+        DIE.TEETH=EST.RL.DIE.CYL.ID<1,COMP,MPTR>[3,4]
+        IF DIE.TYPE='' THEN DIE.TYPE='F'
+*
+* Setup The Key To Access Run Efficiency table
+*
+1000 *
+      EFF.KEY=TEMP.CCTR:"*":DIE.TYPE:"*":NO.OF.COLS:"*":FOIL.SET
+      MATREAD REFF.REC FROM ESTIMATE.RES.RUN.EFF, CONO:EFF.KEY ELSE
+          NO.OF.COLS=NO.OF.COLS-1
+          IF NO.OF.COLS >=0 THEN
+            GO 1000
+          END
+            IF QPTR = 1 THEN
+               ERRMSG = "Cannot locate run efficiency table"
+               GOSUB 90000
+            END
+            TEMP.FCTR = 1000
+            GOTO 99999
+      END
+*
+*---- MAIN PROCESSING
+*
+      MF = EST.RL.KINDS<1,COMP,MPTR>+0
+      IMP=TEMP.QTY
+      IMP.PER.PASS = INT(IMP / MF + 0.5) ;* Reduce Qty by using No of Kinds (Varieties)
+      LOCATE IMP.PER.PASS IN REFF.QTY<1>,1 BY "AR" SETTING P ELSE NULL
+      BEGIN CASE
+      CASE P = 1
+         TEMP.FCTR = REFF.FCTR<1,P>
+      CASE P > COUNT(REFF.QTY,VM) + 1
+         TEMP.FCTR = REFF.FCTR<1,P-1>
+      CASE REFF.EXTR = "Y"
+         TEMP.FCTR = INT(REFF.FCTR<1,P>-(REFF.QTY<1,P>-IMP.PER.PASS)/(REFF.QTY<1,P>-REFF.QTY<1,P-1>)*(REFF.FCTR<1,P>-REFF.FCTR<1,P-1>)+0.5)
+      CASE 1
+         TEMP.FCTR = REFF.FCTR<1,P>
+      END CASE
+      IF TEMP.FCTR+0 <= 0 THEN TEMP.FCTR = 1000
+*
+*--- Check If Intermitant Press and Validate Maximum Speed
+*
+      IF DIE.TYPE='F' AND DIE.GSET='*' THEN
+         READV MAXSPEED FROM EST.RES.FDIE.SPEEDS,CONO:INT(DIE.TEETH/10000),1 ELSE MAXSPEED=0
+         IF MAXSPEED+0#0 THEN
+            CALCSPEED=TEMP.STD * (TEMP.FCTR/1000)
+            IF CALCSPEED > MAXSPEED THEN
+               TEMP.FCTR=INT((MAXSPEED/TEMP.STD)*1000)
+            END
+         END
+       END
+      RETURN
+*
+*---- ERROR ROUTINE
+*
+90000 ERR.TYPE=1;CALL SI_SYSCOM(MAT SYSCOM.REC);RETURN
+* 90000*
+*       PRINT @(0,23):CL:ERRMSG:
+*       INPUT REPLY,1:
+*       PRINT @(0,23):CL:
+*       RETURN
+*
+*---- END OF PROGRAM
+*
+99999*
+      RETURN
+   END

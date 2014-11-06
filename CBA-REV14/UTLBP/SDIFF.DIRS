@@ -1,0 +1,142 @@
+  PROGRAM SDIFF.DIRS
+********************************************************************
+* REVISION - [12.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM   - PRIMAC
+* SOURCE   - UTLBP
+* PROGRAM  - SDIFF.DIRS
+* BY       - Abdullah Jibaly, COMPUTER BUSINESS ASSOCIATES
+* DATE     - 09/04/02
+*
+* DESCRIPTION
+*
+* SDIFF 2 directories
+*
+*********************************************************************
+  ;*
+  ;* Initialization
+  ;*
+  LOG.FILE.NAME = "sdiff.log"
+  ;*
+  ;* Open files
+  ;*
+  OPEN "VOC" TO VOC ELSE
+    CRT "Unable to open VOC file."
+    RETURN
+  END
+  ;*
+  ;* Setup email
+  ;*
+  DEFFUN PMC_SEND_MAIL(MAIL.ADDRESS.LIST,MAIL.SUBJECT,MAIL.TEXT,MAIL.ATTACH)
+  MAIL.ADDR = ''
+  OPEN "SECURITY" TO SECURITY THEN
+    READV MAIL.ADDR FROM SECURITY, "001" : UPCASE(@LOGNAME), 29 ELSE NULL
+  END
+  ;*
+  ;* Get the left directory
+  ;*
+  PROMPT ""
+  CRT "Enter the left directory to process: " :
+  INPUT LEFT.DIR
+  IF TRIM(LEFT.DIR) = "" THEN RETURN
+  OPEN LEFT.DIR TO LEFT.FILE ELSE
+    CRT "That directory does not exist."
+    RETURN
+  END
+  READ REC FROM VOC, LEFT.DIR ELSE
+    CRT "That directory is not in the voc file."
+    RETURN
+  END
+  LEFT.DIR.PATH = REC<2>
+  ;*
+  ;* Get the right directory
+  ;*
+  PROMPT ""
+  CRT "Enter the right directory to process: " :
+  INPUT RIGHT.DIR
+  IF TRIM(RIGHT.DIR) = "" THEN RETURN
+  IF RIGHT.DIR = LEFT.DIR THEN RETURN
+  OPEN RIGHT.DIR TO RIGHT.FILE ELSE
+    CRT "That directory does not exist."
+    RETURN
+  END
+  READ REC FROM VOC, RIGHT.DIR ELSE
+    CRT "That directory is not in the voc file."
+    RETURN
+  END
+  RIGHT.DIR.PATH = REC<2>
+  ;*
+  ;* Get output mode
+  ;*
+  CRT "Output to (F)ile or (S)creen ? (F/s): " :
+  INPUT FILE.MODE
+  IF UPCASE(FILE.MODE) = "S" THEN FILE.MODE = 0 ELSE FILE.MODE = 1
+  ;*
+  ;* Start logging
+  ;*
+  DELETE LEFT.FILE, LOG.FILE.NAME
+  LOG.PATH = LEFT.DIR.PATH : '/' : LOG.FILE.NAME
+  LOG.STR  = "Date: " : OCONV(DATE(),'D2/')
+  LOG.STR := " Time: " : OCONV(TIME(),'MT:')
+  LOG.STR := " User: " : @LOGNAME
+  GOSUB LOGGER
+  LOG.STR  = "Starting sdiff on " : LEFT.DIR : " and " : RIGHT.DIR : " dirs."
+  GOSUB LOGGER
+  ;*
+  ;* Get the list of files in left dir
+  ;*
+  CMD = "SELECT " : LEFT.DIR : " WITH @ID UNLIKE _..."
+  UDTEXECUTE CMD CAPTURING JUNK RETURNING JUNK
+  ;*
+  ;* Loop through all the files in the left directory
+  ;*
+  LOOP
+    READNEXT FILE.ID ELSE EXIT
+    CMD = "!sdiff -s " : LEFT.DIR.PATH : "/" : FILE.ID
+    CMD:= " " : RIGHT.DIR.PATH : "/" : FILE.ID
+    UDTEXECUTE CMD CAPTURING CAP RETURNING RET
+    IF TRIM(CAP) = '' THEN
+      LOG.STR = "***** " : FILE.ID : " matches in both directories. *****"
+      GOSUB LOGGER
+      CONTINUE
+    END ELSE IF CAP[1,5] = "sdiff" OR CAP[1,4] = "diff" THEN
+      LOG.STR = "***** " : CAP<1> : " *****"
+      GOSUB LOGGER
+      CONTINUE
+    END
+    CMD = "!sdiff -W -B -l -w 132 " : LEFT.DIR.PATH : "/" : FILE.ID
+    CMD:= " " : RIGHT.DIR.PATH : "/" : FILE.ID
+    IF FILE.MODE THEN CMD:= " >> " : LEFT.DIR.PATH : "/" : LOG.FILE.NAME
+    LOG.STR = "***** " : CMD : " *****"
+    GOSUB LOGGER
+    UDTEXECUTE CMD
+  REPEAT
+  IF NOT(FILE.MODE) THEN
+    CRT "Completed."
+    RETURN
+  END
+  CRT "Completed. Please check the " : LOG.PATH : " log file."
+  ;*
+  ;* Send out log by email
+  ;*
+  IF MAIL.ADDR = '' THEN
+    CRT "Enter an email address for the log file: " :
+    INPUT MAIL.ADDR
+  END
+  IF MAIL.ADDR # '' THEN
+    MAIL.ATTACH = "ASCII"
+    MAIL.ATTACH<-1> = LOG.PATH
+    STATUS = PMC_SEND_MAIL(MAIL.ADDR,LOG.PATH,LOG.PATH,MAIL.ATTACH)
+    CRT "Log file sent."
+  END ELSE
+    CRT "No mail sent."
+  END
+  RETURN
+*
+*
+LOGGER:
+  LOG.CMD = "!echo " : QUOTE(LOG.STR)
+  IF FILE.MODE THEN LOG.CMD := " >> " : LOG.PATH
+  UDTEXECUTE LOG.CMD
+  LOG.STR = ''
+RETURN

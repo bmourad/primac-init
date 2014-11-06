@@ -1,0 +1,232 @@
+*
+* SET UP VARIABLES
+*
+OPEN "VOC" TO VOC ELSE PRINT "Unable to open VOC file" ; STOP
+OPEN "AUTORELEASE" TO AUTORELEASE ELSE
+  PRINT 'Unable to open AUTORELEASE file '
+  STOP
+END
+*
+OS = "OS"
+CALL SYSVARS.SUB(OS)
+IF OS[1,7] = "Windows" THEN SLSH = "\" ELSE SLSH = "/"
+OPEN "DEBUGFILE" TO DEBUGFILE ELSE PRINT "NO OPEN DEBUGFILE" ; STOP
+DEBUGCTR=0
+*
+TRUE=1 ; FALSE=0
+EQU VM TO CHAR(253)
+EQU AM TO CHAR(254)
+ERRARRAY=''
+CBAHOMEPATH=@PATH
+*
+* the permission.entries list is a sorted list of filenames to get permission
+*  before loading into an account.  Only happens if current entry is
+*  different thant the to be loaded entry   
+*    ****  This list is VM separated
+*
+PERMISSION.ENTRIES="EASY.MENUS":@VM:"REPORT.PROC.FILE"
+*PERMISSION.ENTRIES=""
+*
+*
+DONE=FALSE
+* the line below will need to be updated with mv list of release numbers
+* as they become available
+VALID.RELEASE="REV10A":@VM:"REV10B":@VM:"REV11":@VM:"REV12":@VM:"REV12A":@VM:"REV14"
+LOOP
+UNTIL DONE DO
+  PRINT 'Enter Version number of RELEASE (eg REV10A) or "X"'
+  INPUT VERSION
+  IF VERSION = 'X' THEN
+    DONE=1
+  END ELSE
+    LOCATE VERSION IN VALID.RELEASE<1>,1 SETTING POS THEN
+      DONE=TRUE
+    END ELSE
+      PRINT "Invalid response"
+    END
+  END
+REPEAT
+IF VERSION = 'X' THEN STOP
+DONE=FALSE
+LOOP
+UNTIL DONE DO
+  PRINT 'Enter the base path home account (eg /usr/ud/primac/rev10/basea/REV10A)'
+  INPUT HOMEPATH
+  PRINT "Is this correct :":HOMEPATH:" (Y/N/X) ":
+  INPUT RESP
+  IF RESP = 'Y' OR RESP = 'X' THEN
+    DONE=TRUE
+  END
+REPEAT
+IF RESP = 'X' THEN STOP
+DONE=FALSE
+LOOP
+UNTIL DONE DO
+  PRINT 'Enter the path of the to be fixed account (eg /vsi/cust/aetna/AETNA)'
+  INPUT DESTPATH
+  PRINT "Is this correct :":DESTPATH:" (Y/N/X) ":
+  INPUT RESP
+  IF RESP = 'Y' OR RESP = 'X' THEN
+    DONE=TRUE
+  END
+REPEAT
+IF RESP = 'X' THEN STOP
+DONE=FALSE
+LOOP
+UNTIL DONE DO
+  PRINT "Is this pgm being run on Vercom's Machine (Y/N/X)" :
+  INPUT RESP
+  IF RESP = 'Y' OR RESP = 'X' OR RESP = 'N' THEN
+    DONE=TRUE
+  END
+REPEAT
+IF RESP = 'X' THEN STOP
+IF RESP = 'Y' THEN
+  AT.VERCOM = 1
+END ELSE
+  AT.VERCOM = 0
+END
+*
+* set up list of accounts
+*
+ACCTLIST = "":VM:"APS":VM:"ARS":VM:"FAS":VM:"GLS":VM:"ICS":VM:"JCS":VM:"JES"
+ACCTLIST = ACCTLIST:VM:"OPS":VM:"POS":VM:"PRS":VM:"PSS":VM:"SAS"
+*
+NUM.SLASH=DCOUNT(DESTPATH,SLSH)
+BASEDESTPATH=''
+BASEDESTNAME=FIELD(DESTPATH,SLSH,NUM.SLASH)
+FOR I = 1 TO NUM.SLASH-1
+  BASEDESTPATH=BASEDESTPATH:FIELD(DESTPATH,SLSH,I):SLSH
+NEXT I
+NUM.SLASH=DCOUNT(HOMEPATH,SLSH)
+BASEHOMEPATH=''
+BASEHOMENAME=FIELD(HOMEPATH,SLSH,NUM.SLASH)
+FOR I = 1 TO NUM.SLASH-1
+  BASEHOMEPATH=BASEHOMEPATH:FIELD(HOMEPATH,SLSH,I):SLSH
+NEXT I
+BASECBAPATH = BASEHOMEPATH:"CBA-":BASEHOMENAME
+*
+NUM.ACCT = DCOUNT(ACCTLIST,VM)
+FOR APTR = 1 TO NUM.ACCT
+  PRINT "Processing ":ACCTLIST<1,APTR>
+  BCURRACCT = ACCTLIST<1,APTR>
+  IF BCURRACCT #'' THEN
+    CURRACCT="-":BCURRACCT
+  END ELSE
+    CURRACCT = BCURRACCT
+  END
+  DELETE VOC,"SOURCEQPTR"
+  DELETE VOC,"DESTQPTR"
+*  VERBA = "SETFILE ":HOMEPATH:CURRACCT:"/VOC SOURCEQPTR OVERWRITING"
+  VERBA = "SETFILE ":HOMEPATH:CURRACCT:SLSH:"VOC SOURCEQPTR OVERWRITING"
+*  VERBB = "SETFILE ":DESTPATH:CURRACCT:"/VOC DESTQPTR OVERWRITING"
+  VERBB = "SETFILE ":DESTPATH:CURRACCT:SLSH:"VOC DESTQPTR OVERWRITING"
+  UDTEXECUTE VERBA CAPTURING JUNK
+  UDTEXECUTE VERBB CAPTURING JUNK
+  OPEN "SOURCEQPTR" TO SOURCEVOC THEN
+    OPEN "DESTQPTR" TO DESTVOC THEN
+      * have both vocs open  process the list
+      *
+      READ LIST1 FROM AUTORELEASE,VERSION:"-":BCURRACCT:"-":"LIST1" THEN
+        * process the base pointers
+        * line format is MDfilename vm REALfilename vm "D" or "F"
+        * --- EASY.MENUS]PRIMAC.MENUS]F
+        BASE.OR.RELATIVE='B'; PASS=1
+        CURRLIST=LIST1
+        GOSUB 1000
+        PRINT "   Processing list 1"
+      END 
+      READ LIST2 FROM AUTORELEASE,VERSION:"-":BCURRACCT:"-":"LIST2" THEN
+        * process the relative pointers
+        * line format is MDfilename vm REALfilename vm "D" or "F"
+        * --- ESTIMATE]ESTIMATE]F
+        BASE.OR.RELATIVE='R'; PASS=2
+        CURRLIST=LIST2
+        GOSUB 1000
+        PRINT "   Processing list 2"
+      END
+    END
+  END
+NEXT APTR
+*
+IF ERRARRAY # "" THEN
+  WRITE ERRARRAY ON AUTORELEASE,VERSION:".PATHERRLIST"
+  PRINT "THERE ARE ERRORS SEE AUTORELEASE :":VERSION:".PATHERRLIST"
+  INPUT RESP
+END
+*
+STOP
+*
+1000 * process base ptrs
+*
+NUM.LINES = DCOUNT(CURRLIST,AM)
+FOR LPTR = 1 TO NUM.LINES
+  IF CURRLIST<LPTR>[1,1]='*' THEN
+    * this is a comment line do not process
+  END ELSE
+    FINAME = CURRLIST<LPTR,1> ;* Actual MD file name in mv1
+    PTNAME = CURRLIST<LPTR,2> ;* Pointer name for path in mv2
+    D.OR.F = CURRLIST<LPTR,3> ;* is this ptr an "F" or "D"
+    IF D.OR.F = "D" THEN D.OR.F = "DIR"
+    MODNAME= CURRLIST<LPTR,4> ;* module name for ptr
+    IF FINAME='' OR PTNAME='' OR D.OR.F = '' THEN
+      ERRARRAY<-1>=BCURRACCT:VM:PASS:VM:FINAME:VM:" missing part on line ":LPTR
+    END ELSE
+      IF BASE.OR.RELATIVE = 'B' THEN
+        TPATH = BASECBAPATH:SLSH:PTNAME
+        TDPATH = BASECBAPATH:SLSH:"D_":PTNAME
+      END ELSE
+        IF MODNAME # "" THEN MODNAME = "-":MODNAME
+        TPATH = "..":SLSH:BASEDESTNAME:MODNAME:SLSH:PTNAME
+        TDPATH = "..":SLSH:BASEDESTNAME:MODNAME:SLSH:"D_":PTNAME
+      END
+      READ VOCENTRY FROM DESTVOC,FINAME THEN
+        * item already exist in dest voc check for errors
+        LOCATE(FINAME,PERMISSION.ENTRIES,1;POS) THEN
+          IN.LIST = 1
+        END ELSE
+          IN.LIST = 0
+        END
+        IF TPATH = VOCENTRY<2> AND TDPATH = VOCENTRY<3> AND NOT(IN.LIST) THEN
+          * this entry is ok matches what would be built
+        END ELSE
+          IF VOCENTRY<1>[1,1] = 'F' OR VOCENTRY<1>[1,1] = "D" THEN
+            VOCENTRY=D.OR.F
+            VOCENTRY<2> = TPATH
+            VOCENTRY<3> = TDPATH      
+*
+            LOCATE(FINAME,PERMISSION.ENTRIES,1;POS) THEN
+*              PRINT FINAME:" IN ":BCURRACCT:" Write it (Y/N)":
+*              INPUT ERESP
+              ERESP='Y'
+              IF ERESP[1,1] = 'Y' OR ERESP[1,1]='y' THEN
+                IF AT.VERCOM THEN
+                  IF FINAME = "EASY.MENUS" THEN
+                    WORKFINAME = "PRIMAC.MENUS"
+                  END ELSE
+                    WORKFINAME = FINAME
+                  END
+                  WORKPATH = BASEDESTPATH:"CBA-":BASEDESTNAME:SLSH
+                  VOCENTRY<2> = WORKPATH:WORKFINAME
+                  VOCENTRY<3> = WORKPATH:"D_":WORKFINAME
+                END
+                WRITE VOCENTRY ON DESTVOC,FINAME
+              END
+            END ELSE
+              WRITE VOCENTRY ON DESTVOC,FINAME
+            END
+          END
+        END
+      END ELSE
+        VOCENTRY=D.OR.F
+        VOCENTRY<2> = TPATH
+        VOCENTRY<3> = TDPATH      
+*
+        WRITE VOCENTRY ON DESTVOC,FINAME
+      END
+    END
+  END
+NEXT LPTR
+* ***
+RETURN
+

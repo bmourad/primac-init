@@ -1,0 +1,154 @@
+*COPY>CPYLIB>COM1
+*********************************************************************
+* REVISION    - [10.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - CNVBP
+* PROGRAM     - FIX.AP.PRIOR.REV10AX
+* BY          - L ROSS, C.B.A
+* DATE        - 03/07/95
+* DESCRIPTION - This program is used to create the values in the OAP,
+*               VOUCHERS and MCD files for the AP Accruals where the new
+*               REV10A is installed at a site already using the APS func-
+*               tion. Before running make sure that the SQV file has the
+*               DICT named F41 on file.
+*ENDDOC
+*********************************************************************
+*
+***** INSERT FILE EQUATE
+*
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>GLTABLE
+*COPY>PMC.CPYLIB>COA
+*COPY>APS.CPYLIB>OAP
+*COPY>APS.CPYLIB>SQV
+*COPY>APS.CPYLIB>VOUCHERS
+*COPY>APS.CPYLIB>MCD
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+DIM HOLD.REC(50)
+*
+**** INTITIALIZATION
+*
+     MAT FILE.VARS=''
+     MAT EDIT.COM.DRIVER=''
+*
+***** SETUP ERRMSG ROUTINE
+*
+     SYS.TYPE=1
+     CALL SYSCOM(MAT SYSCOM.REC)
+*
+***** OPEN FILES
+*
+     OPEN '','COMPANY' TO COMPANY ELSE ERRMSG='COMPANY FILE MISSING';GOTO 93000
+     OPEN '','CONTROL' TO CONTROL ELSE ERRMSG='CONTROL FILE MISSING';GOTO 93000
+     OPEN '','OAP' TO OAP ELSE ERRMSG='OAP FILE IS MISSING';GOTO 93000
+     OPEN '','SQV' TO SQV ELSE ERRMSG='SQV FILE IS MISSING';GOTO 93000
+     OPEN '','VOUCHERS' TO VOUCHERS ELSE ERRMSG='VOUCHERS FILE IS MISSING';GOTO 93000
+     OPEN '','VOUCHERS.TAG' TO VOUCHERS.TAG ELSE ERRMSG='VOUCHERS.TAG FILE IS MISSING';GOTO 93000
+     OPEN '','MCD' TO MCD ELSE ERRMSG='MCD FILE IS MISSING';GOTO 93000
+     OPEN '','MCD.TAG' TO MCD.TAG ELSE ERRMSG='MCD.TAG FILE IS MISSING';GOTO 93000
+     OPEN '','COA' TO COA ELSE ERRMSG='COA FILE IS MISSING';GOTO 93000
+*
+***** GET CONO
+*
+     CONO = ''
+     MAT COMP.REC = ''
+     CALL GET.CONO(CONO,MAT COMP.REC)
+     IF CONO = 'END' THEN GOTO 99999
+     MATREAD GLTABLE.REC FROM CONTROL, CONO:'GLTABLE' ELSE
+        ERRMSG = 'CANNOT LOCATE CONTROL, GLTABLE'
+        GOTO 93000
+     END
+     READV CURR.PER FROM CONTROL, CONO:"APVFISCAL",1 ELSE
+        ERRMSG = 'APVFISCAL CONTROL RECORD IS MISSING FOR COMPANY ':CONO
+        GOTO 93000
+     END
+     MATREAD COA.REC FROM COA, CONO : GLTB.AP ELSE
+       ERRMSG= 'COA RECORD FOR ':GLTB.AP:' IS MISSING'; GOTO 93000
+     END
+     STMT='SSELECT SQV WITH CO_ = "':CONO:'" AND WITH F41 = ""'
+     UDTEXECUTE STMT
+     DATA = 1
+     LOOP
+        READNEXT ID ELSE DATA = 0
+     WHILE DATA DO
+        IF CONO # ID[1,3] THEN GOTO 999
+        PRINT @(0,23) : CL : 'NOW PROCESSING SQV NUMBER - ' : ID[4,99] "L#10" :
+        MATREADU SQV.REC FROM SQV, ID THEN
+          SQV.AP.ACCT = GLTB.AP
+          SQV.AP.AMT = (SQV.GRS.AMT) * (-1)
+          MATWRITE SQV.REC ON SQV, ID
+        END ELSE RELEASE SQV, ID; GOTO 999
+        MATREADU OAP.REC FROM OAP, ID THEN
+          OAP.AP.ACCT = GLTB.AP
+          OAP.AP.AMT = (OAP.GRS.AMT) * (-1)
+          MATWRITE OAP.REC ON OAP, ID
+        END ELSE RELEASE OAP, ID; MAT OAP.REC = ''
+* NOW CHECK FOR VOUCHERS TO BE CREATED
+        SEQ = 1
+        MORE = 1
+        LOOP
+          MATREADU VCH.REC FROM VOUCHERS, ID:SEQ ELSE MORE = 0
+        WHILE MORE DO
+          MAT HOLD.REC = MAT VCH.REC
+          RELEASE VOUCHERS, ID:SEQ
+          SEQ = SEQ + 1
+        REPEAT
+        IF SEQ # 1 THEN
+           FOR I = 1 TO VCH.REC.SIZE
+             VCH.REC(I) = HOLD.REC(I)
+           NEXT I
+           VCH.ACCT = GLTB.AP
+           VCH.DIST.AMT = SQV.AP.AMT
+           MATWRITE VCH.REC ON VOUCHERS, ID:SEQ
+           WRITE "" ON VOUCHERS.TAG, ID:SEQ
+        END ELSE RELEASE VOUCHERS, ID:SEQ
+* NOW CHECK FOR MCD REQUIRED
+        IF SQV.PAID.AMT + 0 # 0 THEN
+           SCNT = DCOUNT(SQV.CHK.NO<1>,VM)
+           FOR S = 1 TO SCNT
+             MCD.ID = "A":SQV.DISB.ACCT<1,S>:SQV.PAID.DATE<1,S>:SQV.CHK.NO<1,S>
+             MATREAD MCD.REC FROM MCD, CONO:MCD.ID THEN
+               LOCATE ID[4,6] IN MCD.VOUCH<1>,1 SETTING VFND THEN
+                 AMT = (SUM(MCD.VOUCH.GRS<1,VFND>) * (-1))
+                 MATREADU HOLD.REC FROM MCD, CONO:"A":GLTB.AP:SQV.PAID.DATE<1,S>:SQV.CHK.NO<1,S> ELSE
+                     MAT HOLD.REC = MAT MCD.REC
+                     HOLD.REC(1) = SQV.CHK.NO<1,S>
+                     HOLD.REC(2) = GLTB.AP
+                     HOLD.REC(4) = ''
+                     HOLD.REC(6) = ''
+                     FOR I = 15 TO 18; HOLD.REC(I) = ''; NEXT I
+                 END
+                 HOLD.REC(4) = HOLD.REC(4) + AMT
+                 HOLD.REC(6) = HOLD.REC(6) + AMT
+                 LOCATE ID[4,6] IN HOLD.REC(15)<1>,1 SETTING VFND ELSE
+                   INS ID[4,6] BEFORE HOLD.REC(15)<1,VFND>
+                   INS "0" BEFORE HOLD.REC(16)<1,VFND>
+                   INS "" BEFORE HOLD.REC(17)<1,VFND>
+                   INS "0" BEFORE HOLD.REC(18)<1,VFND>
+                 END
+                 HOLD.REC(16)<1,VFND> = HOLD.REC(16)<1,VFND> + AMT
+                 HOLD.REC(18)<1,VFND> = HOLD.REC(18)<1,VFND> + AMT
+                 FOR I = 1 TO MCD.REC.SIZE
+                   MCD.REC(I) = HOLD.REC(I)
+                 NEXT I
+                 MATWRITE MCD.REC ON MCD, CONO:"A":GLTB.AP:SQV.PAID.DATE<1,S>:SQV.CHK.NO<1,S>
+                 WRITE "" ON MCD.TAG, CONO:"A":GLTB.AP:SQV.PAID.DATE<1,S>:SQV.CHK.NO<1,S>
+               END
+             END
+           NEXT S
+        END
+*
+999     *
+     REPEAT
+     GOTO 99999
+91000 ERR.TYPE = 1
+     CALL SYSCOM(MAT SYSCOM.REC)
+     RETURN
+93000 ERR.TYPE = 3; CALL SYSCOM(MAT SYSCOM.REC)
+99000 *
+*** END OF JOB ***
+99999 END

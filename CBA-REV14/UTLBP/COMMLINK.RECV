@@ -1,0 +1,206 @@
+***************************************************************************
+*
+* PROGRAM  - COMMLINK.RECV
+*
+* AUTHOR   - NICK AMENDOLA, COMPUTER BUSINESS ASSOCIATES
+*
+* DATE     - 07/06/87
+*
+* DESCRIPTION
+*
+* This program is used to receive data from CBA's host computer. Programs,
+* screens, dictionaries etc may be transmitted from CBA and stored in the
+* specified file.
+*
+*   Message formats
+*
+*     c\FD\acct,dict,file
+*     c\ID\item ID
+*     c\n,s\ddddddddddddddd
+*     c\n,s,C\eeeeeeeeeeee
+*
+*   where c  = checksum for data error checking
+*         FD = data is file definition
+*         ID = data is item ID
+*         n  = attribute number
+*         s  = segment number
+*         d  = transmitted data
+*         C  = compressed data follows
+*         e  = decimal equivalent of data (3 digit per char)
+*
+***************************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>CPYLIB>CHAR
+*
+*---- OPEN ALL FILES
+*
+      OPEN "","MD" TO MD ELSE
+         PRINT "CANNOT OPEN MASTER DICTIONARY"
+         STOP
+      END
+*
+*---- INITIALIZATION
+*
+      PROMPT ""
+      QREC = "";QREC<1>="Q";QREC<9>="L";QREC<10>="10"
+*      PORT.ACCT = OCONV(0,"U50BB")
+*      PORT = FIELD(PORT.ACCT," ",1)
+      PORT = SYSTEM(18)
+      ACCT = SYSTEM(19)
+      PORT.ACCT = PORT:" ":ACCT
+      QFILE = "QFILE":PORT
+      REC = ""
+      PREV.LN = ""
+      PREV.SG = ""
+      READ PREC FROM MD, "COMM.CAT" ELSE
+         PREC = "PQN"
+      END
+      PQP = COUNT(PREC,AM) + (PREC # "")
+      DUMMY = OCONV(0,"U80E0")         ;* ECHO OFF
+      PRINT "READY"
+*
+*---- MAIN PROCESSING
+*
+100*
+      INPUT MSG:
+      IF MSG = "" THEN GOTO 100
+      IF MSG = CHAR(27) THEN GOTO 99990
+*
+      P1 = INDEX(MSG,"\",1)
+      IF P1 = 0 THEN PRINT "E1"; GOTO 100
+*
+      CSUM = 0
+      L2 = LEN(MSG)
+      FOR L = P1 TO L2
+         CSUM = CSUM + SEQ(MSG[L,1])
+      NEXT L
+      IF CSUM # MSG[1,P1-1] THEN PRINT "E1"; GOTO 100
+*
+      P2 = INDEX(MSG,"\",2)
+      IF P2 = 0 THEN PRINT "E1"; GOTO 100
+*
+      GOSUB 200
+      GOTO 100
+*
+*---- Process Valid Message
+*
+200*
+      DIR = MSG[P1+1,P2-P1-1]
+      ERRMSG = ""
+      BEGIN CASE
+      CASE DIR = "FD"
+         DEF = MSG[P2+1,999]
+         RACCT = FIELD(DEF,",",1)
+         RDICT = FIELD(DEF,",",2)
+         IF RDICT # "" THEN RDICT = "DICT"
+         RFILE = FIELD(DEF,",",3)
+         QREC<2> = RACCT
+         QREC<3> = RFILE
+         WRITE QREC ON MD, QFILE
+         OPEN RDICT,QFILE TO FNAME ELSE
+            DELETE MD,QFILE
+            ERRMSG = "E2"
+         END
+         REC = ""
+         PREV.LN = ""
+         PREV.SG = ""
+      CASE DIR = "ID"
+         RITEM = MSG[P2+1,999]
+         IF REC # "" THEN
+            WRITE REC ON FNAME,RITEM
+            DELETE MD,QFILE
+            REC = ""
+            IF RITEM[1,1] = "$" AND RDICT = "" THEN
+               PQP = PQP + 1
+               PREC<PQP> = "H CATALOG ":RFILE:" ":RITEM[2,99]
+               PQP = PQP + 1
+               PREC<PQP> = "P"
+               WRITE PREC ON MD, "COMM.CAT"
+            END
+         END
+      CASE DIR = "MSG"
+         GOTO 299
+      CASE NUM(DIR[1,1])
+         LN = FIELD(DIR,",",1)
+         SG = FIELD(DIR,",",2)
+         TP = FIELD(DIR,",",3)
+         BEGIN CASE
+         CASE LN = 1 AND SG = 1
+            REC = ""
+         CASE LN # PREV.LN AND SG # 1
+            ERRMSG = "E1"
+            GOTO 290
+         CASE LN = PREV.LN AND SG = PREV.SG
+            GOTO 290
+         CASE LN = PREV.LN AND SG # PREV.SG+1
+            ERRMSG = "E1"
+            GOTO 290
+         END CASE
+         TEXT = MSG[P2+1,999]
+*
+         BEGIN CASE
+         CASE TP = ""
+            REC<LN> = REC<LN> : TEXT
+         CASE 1
+            TL = LEN(TEXT)
+            P = 0
+            LOOP
+               P = P + 1
+            UNTIL P > TL DO
+               CHR = TEXT[P,1]
+               BEGIN CASE
+               CASE CHR = "a"
+                  P = P + 1
+                  CHR = TEXT[P,1]
+                  CHR = CHAR(SEQ(CHR)-32)
+               CASE CHR = "b"
+                  P = P + 1
+                  CHR = TEXT[P,1]
+                  CHR = CHAR(SEQ(CHR)+64)
+               CASE CHR = "c"
+                  P = P + 1
+                  CHR = TEXT[P,1]
+                  CHR = CHAR(SEQ(CHR)+96)
+               CASE CHR = "d"
+                  P = P + 1
+                  CHR = TEXT[P,1]
+                  CHR = CHAR(SEQ(CHR)+160)
+               CASE CHR = "e"
+                  CHR = ""
+               END CASE
+               REC<LN> = REC<LN> : CHR
+            REPEAT
+         END CASE
+         PREV.LN = LN
+         PREV.SG = SG
+      CASE 1
+         ERRMSG = "E1"
+      END CASE
+290*
+      IF ERRMSG = "" THEN
+         PRINT DIR
+      END ELSE
+         PRINT ERRMSG
+      END
+299   RETURN
+*
+*---- END OF PROGRAM
+*
+99990*
+      DUMMY = OCONV(0,"U70E0")         ;* ECHO ON
+      PRINT @(-1):
+99995*
+      IF PQP > 1 THEN
+         PRINT "CATALOG PROGRAMS (Y/N): ":
+         INPUT REPLY
+         IF REPLY # "Y" AND REPLY # "N" THEN GOTO 99995
+         IF REPLY = "Y" THEN
+            CHAIN "COMM.CAT"
+         END
+         PRINT
+         PRINT "Type COMM.CAT to catalog programs. Delete when done!"
+      END
+      STOP
+   END

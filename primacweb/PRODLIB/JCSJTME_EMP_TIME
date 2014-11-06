@@ -1,0 +1,126 @@
+SUBROUTINE JCSJTME_EMP_TIME
+********************************************************************************
+*   Program name :- JCSJTME_EMP_TIME
+*   Created:- 9/15/2005
+*   By :- S.Zahoor Ahmed
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE CPYLIB CHAR
+
+OPEN '','CONTROL' TO CONTROL ELSE ERRMSG='CONTROL FILE IS MISSING'; GOTO 93000
+
+*Initialisation
+
+STATUS=RBO.getProperty('','DTM_TYPE',DTM_TYPE)
+STATUS=RBO.getProperty('','DTM_TIME_ST',DTM_TIME_ST)
+STATUS=RBO.getProperty('','DTM_TIME',DTM_TIME)
+STATUS=RBO.getProperty('','DTM_TIME_CODE',DTM_TIME_CODE)
+STATUS=RBO.getProperty('','DTM_STATUS',DTM_STATUS)
+
+*-- CALCULATE TIME DATA
+*
+   DTM_REG_TIME=""
+   DTM_OVR_TIME=""
+   DTM_DUB_TIME=""
+   DTM_LAPS_TIME=""
+   TTYPE_COUNT=DCOUNT(DTM_TYPE,VM)
+   FOR LP=1 TO TTYPE_COUNT
+      TYPE=DTM_TYPE<1,LP>
+      BEGIN CASE
+          * CASE TYPE="L"     ;*T25688
+         CASE TYPE="M"
+         CASE 1
+            STIME=DTM_TIME_ST<1,LP>
+            ETIME=DTM_TIME<1,LP>
+            IF ETIME < STIME THEN ETIME=ETIME+2400
+            ELAP.MIN=(INT(ETIME/100)*60+MOD(ETIME,100))-(INT(STIME/100)*60+MOD(STIME,100))
+            ELAP.HRS=INT(ELAP.MIN*100/60+0.5)
+            TC=DTM_TIME_CODE<1,LP>
+            BEGIN CASE
+               CASE TC="01"
+                  DTM_REG_TIME<1,LP>=ELAP.HRS
+               CASE TC="02"
+                  DTM_OVR_TIME<1,LP>=ELAP.HRS
+               CASE TC="03"
+                  DTM_DUB_TIME<1,LP>=ELAP.HRS
+               CASE 1                              ; * T22689 Added this line
+*T26415 v             DTM.REG.TIME<1,LP>=ELAP.HRS       ; * T22689 Added this line
+                  IF TYPE # 'L' THEN DTM_REG_TIME<1,LP>=ELAP.HRS       ; * T22689 Added this line
+            END CASE
+            DTM_LAPS_TIME<1,LP>=ELAP.HRS
+      END CASE
+   NEXT LP
+
+
+*-- CALCULATE ACTIVE, IDLE AND TOTAL TIME
+   TTYPE=DTM_TYPE
+   STIME=DTM_TIME_ST
+   ETIME=DTM_TIME
+   
+   ATIME=0
+   ITIME=0
+   TTIME=0
+   OVERLAP=0
+   CALL CALC.EMP.TIME (TTYPE, STIME, ETIME, ATIME, ITIME, TTIME, OVERLAP)
+ATIME=OCONV(ATIME,"MD0Z")
+ITIME=OCONV(ITIME,"MD0Z")
+TTIME=OCONV(TTIME,"MD0Z")
+IF NOT(OVERLAP) THEN
+      DTM_CONC_TIME=""
+END ELSE
+	GOSUB CONCTIME
+END
+
+STATUS=RBO.setProperty('','A_TIME',ATIME)
+STATUS=RBO.setProperty('','I_TIME',ITIME)
+STATUS=RBO.setProperty('','T_TIME',TTIME)
+STATUS=RBO.setProperty('','DTM_REG_TIME',DTM_REG_TIME)
+STATUS=RBO.setProperty('','DTM_OVR_TIME',DTM_OVR_TIME)
+STATUS=RBO.setProperty('','DTM_DUB_TIME',DTM_DUB_TIME)
+STATUS=RBO.setProperty('','DTM_LAPS_TIME',DTM_LAPS_TIME)
+STATUS=RBO.setProperty('','DTM_CONC_TIME',DTM_CONC_TIME)
+STATUS=RBO.setProperty('','DTM_STATUS',DTM_STATUS)
+RETURN
+
+*-- CALCULATE CONCURRENT TIME
+CONCTIME:
+   TTYPE=DTM_TYPE
+   STIME=DTM_TIME_ST
+   ETIME=DTM_TIME
+   CTIME=""
+   ESTAT=""
+   CALL CALC.CONC.TIME (TTYPE,STIME,ETIME,CTIME,ESTAT)
+   DTM_CONC_TIME=CTIME
+   DFLG = 0
+   FOR TP=1 TO TTYPE_COUNT 
+     IF DTM_TYPE<1,TP>="L" OR DTM_TYPE<1,TP>="I" THEN
+         BEGIN CASE
+            CASE ESTAT<1,TP>="" AND DTM_STATUS<1,TP> # ""
+               DTM_STATUS<1,TP>=""
+               DFLG=1
+            CASE ESTAT<1,TP> # "" AND DTM_STATUS<1,TP>=""
+               DTM_STATUS<1,TP>="CONC ERROR"
+               DFLG=1
+         END CASE
+      END
+   NEXT TP
+RETURN
+
+93000*
+STATUS = RBO.setProperty('','ServerStatus',1)
+STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+
+
+* End of method code
+RETURN
+

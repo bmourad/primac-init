@@ -1,0 +1,225 @@
+*COPY>CPYLIB>COM1
+********************************************************************
+* REVISION    - [08.1]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SOURCE        - OPSBP
+* PROGRAM       - PICK.TICKET.REPRINT
+* BY            - JULIANNE RIVERA, VERCOM SOFTWARE INC.
+* DATE          - 04/01/92
+* DESCRIPTION   -
+*T25122 renee 05/03/2000 * Since order numbers are allowed to have
+*                          dashes, we need to use the last occurence of
+*                          a dash insted of the first to distinguish the
+*                          order number from the pick ticket sequence
+*                          number. 
+*T25640 epitka 02/01/02  * REV12
+*T25882 cm 06/22/2001 * Change pallet # to job #.
+*T26493 cmykleb 04/03/2002 * Change pgm to get the rpt # from the proc.
+*T27831 cmykleb 12/11/2003 * Add a form # in the heading of the pick
+*                            ticket to make it ISO complient".
+********************************************************************
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>PMC.CPYLIB>COMP.OPS
+*COPY>OPS.CPYLIB>PICK.TICKET
+*COPY>OPS.CPYLIB>ORDER
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>SHIP.TO
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>ICS.CPYLIB>INV_RECEIPTS
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+   MAT SYSCOM.REC =  ""; SYS.TYPE = 2
+*
+*---- PROCREAD
+*
+   PROCREAD BUFFER ELSE
+      ERRMSG = "MUST RUN FROM A PROC"
+      GOTO 93000
+   END
+   CONO = BUFFER<1>
+*
+*---- OPEN FILES
+*
+   OPEN '','COMPANY' TO COMPANY ELSE ERRMSG = "COMPANY FILE IS MISSING"; GOTO 93000
+   OPEN '','CONTROL' TO CONTROL ELSE ERRMSG = "CONTROL FILE IS MISSING"; GOTO 93000
+   OPEN '','ORDER' TO ORDER ELSE ERRMSG = "ORDER FILE IS MISSING"; GOTO 93000
+   OPEN '','CUSTOMER' TO CUSTOMER ELSE ERRMSG = "CUSTOMER FILE IS MISSING"; GOTO 93000
+   OPEN '','SHIP.TO' TO SHIP.TO ELSE ERRMSG = "SHIP.TO FILE IS MISSING";GOTO 93000
+   OPEN '','INVENTORY' TO INVENTORY ELSE ERRMSG = "INVENTORY FILE IS MISSING";GOTO 93000
+   OPEN '','PICK.TICKET' TO PICK.TICKET ELSE ERRMSG = "PICK.TICKET FILE IS MISSING";GOTO 93000
+   IF FILEINFO(INV_RECEIPTS,0)=0 THEN                  
+      OPEN '','INV_RECEIPTS' TO INV_RECEIPTS ELSE       
+         ERRMSG="INV_RECEIPTS FILE IS MISSING";GOTO 93000
+      END                                               
+   END                                                 
+*
+   MAT COMP.REC = ''
+   CONO = ''
+   CALL GET.CONO(CONO, MAT COMP.REC)
+   IF CONO = 'END' THEN GOTO 99999
+   MATREAD OPCO.REC FROM CONTROL, CONO:"OPS" ELSE
+      MAT OPCO.REC = ""
+   END
+*T26493 v
+*  REPORT.NAME = "PICK TICKET REPRINT"
+*  REPORT.NUMBER = "XXXX"
+   CONO.NAME = ""
+   REPORT.NAME = ""
+   REPORT.NUMBER = BUFFER<2>
+*T26493 ^
+   REPORT.DATE = DATE()
+   HD1 = "" ; HD2 = ""
+   CALL GET.PROG.HEAD(CONO,CONO.NAME,REPORT.NAME,REPORT.NUMBER,REPORT.DATE,HD1,HD2)
+   HD2[105,6] = "PT-002" ; * T27831
+   S.HD1 = "JOB NUMBER     LOC             PRODUCT / DESCRIPTION              WHSE UM   ORD / REL   SHIPPED   AVAILABLE    PICK"
+*T25882 ^
+   S.UN1 = "-------------- ---- --------------------------------------------- ---- --- ---------- ---------- ---------- ----------"
+*
+*---- INITIALIZE
+*
+   GEN.SHPNO = "000"
+   PAGE.NO = 0
+   LINE.CNT = 99
+   SP1 = SPACE(1)
+*
+*---- MAIN PROCESSING
+*
+10 *
+   DONE = 0
+   PRINTER ON
+   LOOP
+      READNEXT ID ELSE DONE = 1
+   UNTIL DONE DO
+      PKTNO = ID[4,99]
+      DASH.FOUND = 0
+      CHARCNT = LEN(ID)
+      FOR XX = CHARCNT TO 1 STEP (-1) UNTIL DASH.FOUND
+         IF ID[XX,1] = "-" THEN
+            ORDNO = ID[1,XX-1]
+            ORDNO = ORDNO[4,99]
+            DASH.FOUND = 1
+         END
+      NEXT XX
+      MATREAD PKT.REC FROM PICK.TICKET, ID ELSE GOTO 99
+      MATREAD ORD.REC FROM ORDER, CONO:ORDNO ELSE MAT ORD.REC = ""
+      MATREAD CUST.REC FROM CUSTOMER, CONO:ORD.CUST ELSE MAT CUST.REC = ""
+      GOSUB 100
+      LINE.CNT = 99
+      PRODCNT = DCOUNT(PKT.PROD,VM)
+      FOR T = 1 TO PRODCNT
+         GOSUB 3000
+      NEXT T
+99 *
+   REPEAT
+   GOTO 99999
+*
+*---- Ship to
+100 *
+   IF PKT.SHIP.TO = GEN.SHPNO THEN
+      MAT SPT.REC = ""
+      SPT.NAME = CUST.NAME
+      SPT.ADDR1 = CUST.ADDR1
+      SPT.ADDR2 = CUST.ADDR2
+      SPT.STATE = TRIM(FIELD(CUST.ADDR4,",",2))
+      SPT.CITY = TRIM(FIELD(CUST.ADDR4,",",1))
+      SPT.ZIP = CUST.ZIP
+      SPT.TAX.JUR = CUST.TAX.JUR
+      SPT.TAXABLE = CUST.TAXABLE
+      SPT.EXEMPT = CUST.EXEMPT
+      SPT.EXMT.DATE = CUST.EXMT.DATE
+      SPT.SLSMN = CUST.SALESMAN
+      SPT.FOB = CUST.ADDL.OPS<1,3>
+      SPT.SHP.TERMS = CUST.ADDL.OPS<1,4>
+   END ELSE
+      MATREAD SPT.REC FROM SHIP.TO, CONO:ORD.CUST:"!":PKT.SHIP.TO ELSE MAT SPT.REC = ""
+   END
+   RETURN
+*
+*---- Display a single line
+*
+3000 *
+   MATREAD INV.REC FROM INVENTORY, CONO:PKT.PROD<1,T> ELSE
+      MAT INV.REC = ""; INV.FULL.DESC = "Unknown"
+   END
+   IF INV.SUBS # "" AND INV.BASE.SKU = "" THEN
+      GOTO 3999
+   END
+   CCNT = DCOUNT(PKT.COMMENT<1,T>,SVM)
+   PALCNT = DCOUNT(PKT.R.QTY<1,T>,SVM)
+   IF PALCNT = 0 THEN PALCNT = 1
+   IF LINE.CNT + CCNT + (PALCNT * 2) > 55 THEN
+      GOSUB 4000
+   END
+   GOSUB 9000
+   FOR P = 1 TO PALCNT
+      INVR.ID=CONO:PKT.RECP.NO<1,T,P>                
+      MATREAD INVR.REC FROM INV_RECEIPTS,INVR.ID THEN
+         JOB.NO=INVR.JOB                              
+      END ELSE                                       
+         JOB.NO="????"                                
+      END                                            
+      P.LINE = JOB.NO'L#14':SP1
+      P.LINE = P.LINE : PKT.RS.LOC<1,T,P> "L#4"
+      P.LINE = P.LINE : SP1 : PKT.PROD<1,T> "L#15" : SPACE(30)
+      P.LINE = P.LINE : SP1 : PKT.WHSE<1,T> "L#4"
+      P.LINE = P.LINE : SP1 : INV.UNIT<1,3> "L#3"
+      P.LINE = P.LINE : SP1 : OCONV(INT(((PKT.O.QTY<1,T,P> / ICR.DV1) * ICR.MT1) / ICR.DV2 + .5),ICR.CNV1:"Z") "R#10"
+      P.LINE = P.LINE : SP1 : OCONV(INT(((PKT.S.QTY<1,T,P> / ICR.DV1) * ICR.MT1) / ICR.DV2 + .5),ICR.CNV1:"Z") "R#10"
+      P.LINE = P.LINE : SP1 : OCONV(INT(((PKT.R.QTY<1,T,P> / ICR.DV1) * ICR.MT1) / ICR.DV2 + .5),ICR.CNV1:"Z") "R#10"
+      PRINT P.LINE
+      P.LINE = ""
+      P.LINE = SPACE(20) : INV.FULL.DESC "L#45"
+      PRINT P.LINE
+      LINE.CNT = LINE.CNT + 2
+   NEXT P
+   FOR C = 1 TO CCNT
+* CSF 22566
+      IF PKT.COMMENT<1,T,C> # "" THEN
+         P.LINE = ""
+         P.LINE = SPACE(20):PKT.COMMENT<1,T,C>"L#65"
+         PRINT P.LINE
+         LINE.CNT = LINE.CNT + 1
+      END
+   NEXT C
+* CSF 22566
+   PRINT
+   LINE.CNT = LINE.CNT + 1
+*
+3999 *
+   RETURN
+*
+*---- PRINT HEADINGS
+4000 *
+   PRINT CHAR(12)
+   PAGE.NO = PAGE.NO + 1
+   PRINT HD1:PAGE.NO
+   PRINT HD2
+   PRINT SPACE(104):OCONV(REPORT.DATE,'D2/') ; * T27831
+   SHD = "ORDER       : " : ORDNO"L#7" : SPACE(2)
+   SHD = SHD : "CUSTOMER : " : ORD.CUST"L#7" : SPACE(20)
+   SHD = SHD : "SHIP TO  : " : PKT.SHIP.TO"R#3"
+   PRINT SHD
+   SHD = "PICK TICKET : ":PKTNO "L#10":SPACE(10)
+   SHD = SHD:CUST.NAME "L#25":SPACE(13):SPT.NAME
+   PRINT SHD
+   SHD = SPACE(34):CUST.ADDR1 "L#25":SPACE(13):SPT.ADDR1
+   PRINT SHD
+   CUST.ADDR4 = CUST.ADDR4:', ':CUST.ZIP
+   SHD = SPACE(34):CUST.ADDR4 "L#25":SPACE(13)
+   SHD = SHD:SPT.CITY:", ":SPT.STATE:SP1:SPT.ZIP
+   PRINT SHD
+   PRINT
+   PRINT S.HD1
+   PRINT S.UN1
+   LINE.CNT = 10
+   RETURN
+9000 *
+*COPY>ICSBP>INV.UM.CNV
+   RETURN
+91000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+93000 ERR.TYPE=3;CALL SYSCOM(MAT SYSCOM.REC)
+99999 *
+   PRINTER OFF
+END

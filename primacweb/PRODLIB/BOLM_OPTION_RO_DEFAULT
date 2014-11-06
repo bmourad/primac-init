@@ -1,0 +1,144 @@
+SUBROUTINE BOLM_OPTIONS
+********************************************************************************
+*   Program name :- BOLM_OPTIONS
+*   Created:- 08/26/2003
+*   Authors :- Mohammed Abdul Malik  
+* Use this method to get the RO option bydefault when readData fired( ment for testing)
+* Valid Options are: 'RO' - Review Order from shipment definition screen.
+
+*-------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+***************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE ICS.CPYLIB FNGD.BOM
+$INCLUDE OPS.CPYLIB ORDER.DETAIL
+$INCLUDE OPS.CPYLIB ORDER.DETAIL.INQ
+$INCLUDE OPS.CPYLIB BOL
+$INCLUDE OPS.CPYLIB PICK.TICKET
+$INCLUDE OPS.CPYLIB ORDER.RELEASE
+$INCLUDE PMC.CPYLIB CUSTOMER
+$INCLUDE PMC.CPYLIB SHIP.VIA
+$INCLUDE PMC.CPYLIB FOB
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB INV.CNV
+$INCLUDE ICS.CPYLIB ICS.ID
+$INCLUDE CPYLIB CHAR
+DIM ORD.DET.SUM(50,500)
+*----
+MAT ORR.REC = ''
+MAT PKT.REC = ''
+MAT ORD.DET.SUM = ''
+MAT BOL.REC = ''
+
+IF FILEINFO(CONTROL,0)=0 THEN
+  OPEN '','CONTROL' TO CONTROL ELSE
+    ERRMSG='CONTROL file is missing!'
+    GOTO 93000
+  END
+END
+OPEN "","DAILY.BOL" TO DAILY.BOL ELSE
+  ERRMSG = "Cannot locate the DAILY.BOL file"; GOTO 93000
+END
+OPEN "","BOL" TO BOL ELSE
+  ERRMSG = "Cannot locate the BOL file"; GOTO 93000
+END
+OPEN "","BOL_TAG" TO BOL_TAG ELSE
+  ERRMSG = "Cannot locate the BOL_TAG file"; GOTO 93000
+END
+OPEN "","PICK.TICKET" TO PICK.TICKET ELSE
+  ERRMSG = "Cannot locate the PICK.TICKET file"; GOTO 93000
+END
+OPEN "","FNGD.BOM" TO FNGD.BOM ELSE
+  ERRMSG = "Cannot locate the FNGD.BOM file"; GOTO 93000
+END
+OPEN "","ORDER.DETAIL" TO ORDER.DETAIL ELSE
+  ERRMSG = "Cannot locate the ORDER.DETAIL file"; GOTO 93000
+END
+ OPEN "","ORDER.RELEASE" TO ORDER.RELEASE ELSE
+  ERRMSG = "Cannot locate the ORDER.RELEASE file"; GOTO 93000
+END
+OPEN "","SECURITY" TO SECURITY ELSE ERRMSG = "SECURITY FILE MISSING"; GOTO 93000
+OPEN "","CUSTOMER" TO CUSTOMER ELSE ERRMSG = "CUSTOMER FILE MISSING"; GOTO 93000
+OPEN "","SHIP.VIA" TO SHIP.VIA ELSE ERRMSG = "SHIP.VIA FILE MISSING"; GOTO 93000
+OPEN "","FOB" TO FOB ELSE ERRMSG = "FOB FILE MISSING"; GOTO 93000
+OPEN "","INVENTORY" TO INVENTORY ELSE ERRMSG = "INVENTORY FILE MISSING"; GOTO 93000
+*
+DEFFUN CalcStkQty(COST.QTY,MAT INV.CNV.REC,ROND,LN)
+*
+STATUS=RBO.getProperty('','ID',ID)
+CONO=ID[1,3]
+STATUS=RBO.getProperty('','BOL_ORDER',BOL.ORDER)
+STATUS=RBO.getProperty('','BOL_SHIP_TO',BOL.SHIP.TO)
+STATUS=RBO.getProperty('','OPTION',OPTION)
+
+BOLNO=ID[4,7]
+CUSTNO=BOL.CUST
+ORDNO=BOL.ORDER<1,1>
+SHPNO=BOL.SHIP.TO
+
+*
+*---- Option
+*
+BEGIN CASE
+  CASE OPTION = "END" OR OPTION = "E"
+    IF BOLNO # "N" THEN
+      RELEASE DAILY.BOL, CONO:BOLNO
+    END
+  CASE BOL.PROD = "" AND (OPTION="F" OR OPTION= "P" OR OPTION = "U")
+    ERRMSG = "Invalid request. No detail data present."
+    GOTO 93000
+  CASE OPTION = 'RO'
+    MATREAD ORD.DET.REC FROM ORDER.DETAIL, CONO:ORDNO:"!":SHPNO ELSE
+      MAT ORD.DET.REC = ""
+    END
+    PROD.DESCS=''
+    UNIT.OF.MEAS=''
+    FOR N = 1 TO DCOUNT(OSD.PROD,VM)
+      MATREAD INV.REC FROM INVENTORY, CONO:OSD.PROD<1,N> ELSE
+        MAT INV.REC = ""; INV.FULL.DESC = "Unknown"
+      END
+      PROD.DESCS<1,N> = INV.FULL.DESC
+      UNIT.OF.MEAS<1,N> = INV.UNIT<1,3>
+      $INCLUDE ICSBP INV.UM.CNV
+      OSD.G.QTY<1,N> = CalcStkQty(OSD.G.QTY<1,N>,MAT INV.CNV.REC,'','')
+      OSD.G.QTY<1,N> = OCONV(OSD.G.QTY<1,N>,ICR.CNV1)'R#10'
+      OSD.R.QTY<1,N> = CalcStkQty(OSD.R.QTY<1,N>,MAT INV.CNV.REC,'','')
+      OSD.R.QTY<1,N> = OCONV(OSD.R.QTY<1,N>,ICR.CNV1)'R#10'
+      OSD.S.QTY<1,N> = CalcStkQty(OSD.S.QTY<1,N>,MAT INV.CNV.REC,'','')
+      OSD.S.QTY<1,N> = OCONV(OSD.S.QTY<1,N>,ICR.CNV1)'R#10'
+      IF OSD.JOB<1,N,2> # "" THEN
+        OSD.JOB<1,N> = 'MULTI'
+      END
+    NEXT N
+
+    STATUS=RBO.setProperty('','OSD_PO',OSD.PO)
+    STATUS=RBO.setProperty('','OSD_PROD',OSD.PROD)
+    STATUS=RBO.setProperty('','ProdDescs',PROD.DESCS)
+    STATUS=RBO.setProperty('','OSD_WHSE',OSD.WHSE)
+    STATUS=RBO.setProperty('','Ums',UNIT.OF.MEAS)
+    STATUS=RBO.setProperty('','OSD_G_QTY',OSD.G.QTY)
+    STATUS=RBO.setProperty('','OSD_R_QTY',OSD.R.QTY)
+    STATUS=RBO.setProperty('','OSD_S_QTY',OSD.S.QTY)
+    STATUS=RBO.setProperty('','OSD_JOB',OSD.JOB)
+  CASE 1
+    ERRMSG = "Invalid entry, please re-enter"
+    GOTO 93000
+END CASE
+RETURN
+*
+*Subroutines
+*---- Error
+*
+93000
+STATUS = RBO.setProperty('','ServerStatus',1)        
+STATUS = RBO.setProperty('','ServerMessage',ERRMSG) 
+
+RETURN

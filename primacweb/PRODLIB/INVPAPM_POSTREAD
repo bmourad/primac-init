@@ -1,0 +1,234 @@
+SUBROUTINE INVPAPM_POSTREAD
+********************************************************************************
+*   Program name :- INVPAPM_POSTREAD
+*   Created:- 11/14/2002
+*------------------------------------------------------------------------------*
+*
+*  This server event is triggered from within the {m:WW:uObject=ReadData}, {m- *
+*  :WW:uObject=DeleteData} and {m:WW:uObject=WriteData} server events. In eac- *
+*  h case, this {m:WW:uObject=PostRead} event occurs after the physical datab- *
+*  ase read, but before values are extracted from the database record. This p- *
+*  rovides a window of opportunity in which the database values may be direct- *
+*  ly manipulated. The API functions
+*  RBO.setDBVals() and RBO.getDBVals() are - *
+*  used to do this.
+*  
+*                - *
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE CPYLIB CHAR
+$INCLUDE ICS.CPYLIB INV.WHSE
+$INCLUDE ICS.CPYLIB INV.WHSE.LOC
+$INCLUDE ICS.CPYLIB INV.STATS
+$INCLUDE ICS.CPYLIB CATEGORY
+
+;* open files
+
+ERRMSG=''
+IF FILEINFO(INVENTORY,0)=0 THEN
+  OPEN '','INVENTORY' TO INVENTORY ELSE
+    ERRMSG<1,-1>='INVENTORY FILE IS MISSING'
+   END
+END
+IF FILEINFO(CATEGORY,0)=0 THEN
+  OPEN '','CATEGORY' TO CATEGORY ELSE
+    ERRMSG<1,-1>='CATEGORY FILE IS MISSING'
+   END
+END
+IF FILEINFO(INV.WHSE,0)=0 THEN
+  OPEN '','INV.WHSE' TO INV.WHSE ELSE
+    ERRMSG<1,-1>='INV.WHSE FILE IS MISSING'
+  END
+END
+IF FILEINFO(INV.WHSE.LOC,0)=0 THEN
+  OPEN '','INV.WHSE.LOC' TO INV.WHSE.LOC ELSE
+    ERRMSG<1,-1>='INV.WHSE.LOC FILE IS MISSING'
+  END
+END
+IF FILEINFO(INV.STATS,0)=0 THEN
+  OPEN '','INV.STATS' TO INV.STATS ELSE
+    ERRMSG<1,-1>='INV.STATS FILE IS MISSING'
+  END
+END
+IF ERRMSG#'' THEN GOTO 93000
+
+;* initialize
+
+ROF='' ;*read only fields
+
+;* get ID
+
+STATUS=RBO.getProperty('','ID',INV.ID)
+CONO=INV.ID[1,3]
+PDNO=INV.ID[4,99]
+
+;* get database values
+
+NAMES='' ; VALUES=''
+NAMES<1>='INV_FACTOR'
+NAMES<2>='INV_PAP_TYPE'
+NAMES<3>='INV_WHSE_CODE'
+NAMES<4>='INV_LINE'
+NAMES<5>='INV_M_LINE'
+STATUS=RBO.getDBVals(NAMES,VALUES)
+INV.FACTOR=VALUES<1>
+INV.PAP.TYPE=VALUES<2>
+INV.WHSE.CODE=VALUES<3>
+INV.LINE=VALUES<4>
+INV.M.LINE=VALUES<5>
+IF INV.PAP.TYPE='REGULAR' OR INV.M.LINE='FNGD' THEN
+  ERRMSG='This is not a paper product'
+  GOTO 93000
+END
+GOSUB SetInvFactor
+GOSUB SetCatgVars
+GOSUB GetQtyOnhand  
+GOSUB CheckCustomerQtys
+GOSUB SetReadOnlyFields
+  
+GOTO 99999
+
+*******************************************************************************
+*
+*************
+SetInvFactor:
+*************
+*
+STATUS=RBO.getProperty('','CatgTrkLvl',CatgTrkLvl)
+IF CatgTrkLvl='S' AND INV.FACTOR#''THEN                                   
+  IF INV.PAP.TYPE='ROLL' THEN                                       
+    FLEN = LEN(INV.FACTOR)                                              
+    IF FLEN > 5 THEN                                                    
+      INV.FACTOR= INV.FACTOR[1,FLEN-5]:".":INV.FACTOR[FLEN-4,5]                                                                       
+    END ELSE                                                            
+      INV.FACTOR = "0.":STR("0",5-FLEN):INV.FACTOR       
+    END
+  END                                                                 
+  IF INV.PAP.TYPE='LROLL' OR INV.PAP.TYPE='PCOAT' THEN              
+    INV.FACTOR=OCONV(INV.FACTOR,"MD2")                  
+  END
+  STATUS=RBO.setProperty('','InvFactor',INV.FACTOR)
+END
+RETURN
+*
+**************
+SetCatgVars:
+**************
+*
+CATG.ID=CONO:INV.LINE
+MATREAD CATG.REC FROM CATEGORY,CATG.ID THEN
+  STATUS=RBO.setProperty('','CatgTrkLvl',CATG.TRK.LVL)
+  STATUS=RBO.setProperty('','CatgType',CATG.TYPE)
+  STATUS=RBO.setProperty('','CatgMLine',CATG.MAJ.LINE)
+END ELSE
+  ERRMSG<1,-1>='Category is not on file'
+  GOTO 93000
+END
+RETURN
+*
+**************
+GetQtyOnhand:
+**************
+*
+QTY.OH=0
+WCNT = DCOUNT(INV.WHSE.CODE,VM)                            
+FOR W = 1 TO WCNT                                          
+  IWH.ID = CONO:PDNO:"!":INV.WHSE.CODE<1,W>               
+  MATREAD IWH.REC FROM INV.WHSE, IWH.ID THEN              
+    IF IWH.ON.HAND > 0 THEN                              
+      QTY.OH = 1
+      EXIT                  
+    END ELSE                                             
+      MATREAD INV.STAT.REC FROM INV.STATS, IWH.ID THEN  
+        IF SUM(ISTAT.PO.QTY) > 0 OR ISTAT.JOB # "" THEN
+          QTY.OH = 1
+          EXIT                         
+        END ELSE
+         LOC.CNT = DCOUNT(IWH.LOC,VM)                    
+         FOR DL = LOC.CNT TO 1 STEP -1                                       
+           IWLO.ID=IWH.ID:"!":IWH.LOC<1,DL>
+           MATREAD IWLO.REC FROM INV.WHSE.LOC, IWLO.ID THEN  
+             IF IWLO.LOC.ON.HAND+0#0 THEN
+               QTY.OH=1
+               EXIT
+             END
+           END                                                        
+         NEXT DL 
+         IF QTY.OH THEN EXIT  
+        END                                                
+      END                                               
+    END                                                  
+  END                                                     
+NEXT W                                                
+RETURN
+*
+*******************
+CheckCustomerQtys:
+*******************
+*
+CUST.QTY.FLAG = ''                                                     
+IF INV.CUST # '' THEN                                                  
+  WHSE.CNT = DCOUNT(INV.WHSE.CODE,VM)           
+  IF WHSE.CNT = 0 THEN RETURN                                         
+  FOR A = WHSE.CNT TO 1 STEP -1 
+    IWH.ID= CONO:PDNO:"!":INV.WHSE.CODE<1,A>             
+    MATREAD IWH.REC FROM INV.WHSE,IWH.ID ELSE MAT IWH.REC=''                 
+    MATREAD INV.STAT.REC FROM INV.STATS, IWH.ID ELSE MAT INV.STAT.REC=''                                             
+    PO.QTY = SUM(ISTAT.PO.QTY)                                       
+    IF PO.QTY # 0 AND PO.QTY # '' THEN
+      CUST.QTY.FLAG=1
+      EXIT
+    END             
+    PJQ = 0                                                          
+    PJQ.CNT = DCOUNT(ISTAT.PO,VM)                                    
+    FOR PJQ.POS = 1 TO PJQ.CNT                                       
+      PJQ += SUM(ISTAT.PO.JOB.QTY<1,PJQ.POS>)                       
+    NEXT PJQ.POS                                                     
+    IF PJQ # 0 AND PJQ # '' THEN
+      CUST.QTY.FLAG = 1                   
+      EXIT
+    END
+    IF IWH.RESV+0 # 0  THEN
+      CUST.QTY.FLAG = 1          
+      EXIT
+    END
+    IF IWH.INPRCS # 0 AND IWH.INPRCS # '' THEN
+      CUST.QTY.FLAG = 1                                                            
+      EXIT
+    END
+  NEXT A                                                              
+END                                                               
+RETURN
+*
+******************
+SetReadOnlyFields:
+******************
+*
+IF (QTY.OH) THEN
+  ROH<1,-1>="INV_LINE"
+  ROH<1,-1>="INV_BAS_WT"
+  ROH<1,-1>="INV_COST_WT"
+  ROH<1,-1>="INV_M_WT"
+END
+IF CUST.QTY.FLAG=1 THEN
+   ROF<1,-1>='INV_CUST'  
+END
+STATUS=RBO.setProperty('','ReadOnlyFields',ROF)
+RETURN
+
+93000 
+STATUS = RBO.setProperty('','ServerStatus',1)        
+STATUS = RBO.setProperty('','ServerMessage',ERRMSG)  
+RETURN
+99999
+RETURN
+

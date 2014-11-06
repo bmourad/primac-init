@@ -1,0 +1,466 @@
+SUBROUTINE COURIER_IMPOSITION(CONO,ERRMSG,I_FNAME,I_FPTR,I_VNAME,I_VREC,I_SNAME,I_SREC,SHOW_IMP)
+*
+*COPY>CPYLIB>COM1
+*
+******************************************************************************
+*                 written for Courier Corporation
+*  
+*  Revision Date -  10/10/98
+*
+*  Library       -  JISBP/COURIER_CALC_IMP
+*
+*  Author        -  Dave Markell
+*
+******************************************************************************
+*
+*  For use by JIS for Courier Prep Job Ticket Screen 3
+*  to show the imposition for up to 36 signature books         
+*
+*  Has numerous restrictions - otherwise places "not calculated" message
+*  with reason in the area that normall show the impostion
+*
+*  The routine will not do calculation if:
+*    - the Calculate Imposition Flag is set to "N"
+*    - the Component type is not "TEXT"
+*    - if the specific Division (i.e. plant) is not set up or if the
+*       pages per form is not one of the division's acceptable values
+*    - if the number of signatures is greater than 36
+*    - if any odd form number of pages calculated by subtracting the
+*        result of multiplying the number of pages per form by the number
+*        of forms does not produce a form size that is valid for the division
+*
+*  There are other limitations as well.
+*  The user should set the calculate imposition flag to "N" if:
+*    - the job is being printed on sheet fed printer(s)
+*    - a form is not equivalent to a signature  (i.e. no 2-ups)
+*    - the odd form is not to be run with just the calculated odd form size
+*    - the entire text component for the subjob does not represent all
+*       the numbered pages
+*    - any odd form is not to be bound in as the next to last signature
+*
+*  NOTE:
+*    Any change in valid form sizes for a plant will need to be reflected
+*     in the plant specific array of valid form sizes for each plant
+*     used in the setup routine
+*
+*  The following fields must be on the JIS form that utilizes this subroutine
+*  with Sequence Numbers lower than that of the field that will hold the
+*  imposition results of this subroutine.
+*
+*  They must be placed in the Passing Field Names section of the
+*  Screen Subroutine Definition form and are:
+*
+*     JOB_DIV -  the division (i.e. plant) in which the sub job is being done
+*                     (JOB record attribute 6)
+*
+*     COURIER_FLD_011 - the component type (e.g. TEXT, COVER, JACKET)
+*                          (COURIER_TKT record attribute 11
+*                            from the Header ticket screen)
+*
+*     COURIER_FLD_059 - the Calc Impositions Flag (Y or N)
+*                          (COURIER_TKT record attribute 59 
+*                            from the Prep ticket screen 2)
+*     PROJ_PG_CNT     - the total Page Count
+*                          (PROJECTION record attribute 2)
+*
+*     COURIER_FLD_053 - Pages Per Form
+*                           (COURIER_TKT record attribute 53
+*                             from the Prep ticket screen 3)
+*
+*     COURIER_FLD_054 - Front Matter Pages
+*                           (COURIER_TKT record attribute 54
+*                             from the Prep ticket screen 3)
+*
+*
+*  This routine does no file I/O so no file names should be placed
+*  in the Passing File Names section of the Screen Subroutine Definition form.
+*
+*
+******************************************************************************
+*
+*
+*---  Data Structure Libraries  ---
+*
+* no files are accessed directly by this routine so no file CPYLIB's are used
+*
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*
+*
+      VNAME    = "JOB_DIV"
+      VNAME<2> = "COURIER_FLD_011"
+      VNAME<3> = "COURIER_FLD_059"
+      VNAME<4> = "PROJ_PG_CNT"
+      VNAME<5> = "COURIER_FLD_053"
+      VNAME<6> = "COURIER_FLD_054"
+      VCNT = 6
+      DIM VREC(VCNT)
+      EQU COUR_DIV           TO VREC(1)
+      EQU COMP_TYPE          TO VREC(2)
+      EQU CALC_FLAG          TO VREC(3)
+      EQU TOT_PAGES          TO VREC(4)
+      EQU PAGES_PER_FORM     TO VREC(5)
+      EQU FRONT_MATTER_PAGES TO VREC(6)
+*
+* set up blank PRIMAC error message field
+*
+      ERRMSG = ""
+*
+* set up array to return with results
+*  but stuff with blanks & "not calculated" message
+*    to use if no calc flag set or above parameters don't pass validation
+*  
+      DIM IMP_TEXT(10)
+      IMP_TEXT(1) =  SPACE(1)
+      IMP_TEXT(2) =  SPACE(25) : "-- NO IMPOSITION CALCULATED --" : SPACE(25)
+      FOR N = 3 TO 10 STEP 1
+        IMP_TEXT(N) =  SPACE(1)
+      NEXT N
+      IMP_TEXT_LEN = 4
+*
+* scan array of field names passed on Screen Subroutine Definition
+*   for each field name in VNAME dynamic array
+*
+      ICNT = 1
+      FOR I = 1 TO VCNT
+        LOCATE VNAME<I> IN I_VNAME,1 SETTING FND THEN
+          VREC(I) = I_VREC<FND>
+        END ELSE
+          ERRMSG = "Missing Data Field (":VNAME<I>:") is required for this Subroutine"
+          IMP_TEXT(4) = "INVALID JIS SUBROUTINE SETUP - NOTIFY SYSTEMS SUPPORT"
+          ICNT = 0
+        END
+      NEXT I
+      IF ICNT = 0 THEN
+        GOTO 99999
+      END
+*
+* now that have all the passed arguments established execute the logic
+*
+* see if should return without calculating imposition
+      IF CALC_FLAG = "N"   THEN
+        IMP_TEXT(4) = "Calculate imposition flag set to NO"
+        GOTO 99999
+      END
+
+      IF COMP_TYPE NE "TEXT" THEN
+        IMP_TEXT(4) = "Not the TEXT component"
+        GOTO 99999
+      END
+
+      PGS_REM = MOD(TOT_PAGES,4)
+      IF PGS_REM NE 0  THEN
+        IMP_TEXT(4) = "Total page count not multiple of 4 !!"
+        GOTO 99999
+      END
+*
+* NOTE:  the following arrays of valid pages per form for each plant
+*         needs to be maintained if press configurations change
+*
+* arrays of valid form sizes by plant (i.e. Division)
+*
+      WF_VAL_CT = 5
+      DIMENSION WF_VAL_FORM(5)
+        WF_VAL_FORM(1) = 32
+        WF_VAL_FORM(2) = 24
+        WF_VAL_FORM(3) = 16
+        WF_VAL_FORM(4) = 12
+        WF_VAL_FORM(5) =  8
+*  
+      ST_VAL_CT = 4
+      DIMENSION ST_VAL_FORM(4)
+        ST_VAL_FORM(1) = 48
+        ST_VAL_FORM(2) = 32
+        ST_VAL_FORM(3) = 16
+        ST_VAL_FORM(4) =  8
+
+*
+*      DIMENSION KV_VAL_FORM(1)
+*        KV_VAL_FORM(1) = -1
+  
+*      DIMENSION BM_VAL_FORM(1)  
+*        BM_VAL_FORM(1) = -1
+*
+      VAL_CT = 0
+      BEGIN CASE
+        CASE COUR_DIV = 10         ;*  Westford      
+           VAL_CT = WF_VAL_CT
+           DIMENSION VAL_FORM (VAL_CT)
+           FOR N = 1 TO VAL_CT STEP 1
+             VAL_FORM(N) = WF_VAL_FORM(N)
+           NEXT N
+*
+        CASE COUR_DIV = 20         ;*  Kendallville
+           IMP_TEXT(4) = "Imposition routine not ready for Kendallville" 
+           GOTO 99999
+*
+        CASE COUR_DIV = 30         ;*  North Chelmsford
+           IMP_TEXT(4) = "Imposition routine not used for North Chelmsford"
+           GOTO 99999
+*
+        CASE COUR_DIV = 40         ;*  Stoughton
+           VAL_CT = ST_VAL_CT
+           DIMENSION VAL_FORM (VAL_CT)
+           FOR N = 1 TO VAL_CT STEP 1
+             VAL_FORM(N) = WF_VAL_FORM(N)
+           NEXT N
+*
+        CASE COUR_DIV = 50         ;*  Book Mart
+           IMP_TEXT(4) = "Imposition routine not used for BookMart" 
+           GOTO 99999
+* 
+      END CASE
+*  
+      IF VAL_CT = 0 THEN
+        IMP_TEXT(4) = "Can't process imposition for Division " : COUR_DIV
+        GOTO 99999
+      END
+*
+      FORM_SIZE_OK = "N"
+*
+      FOR N = 1 TO  VAL_CT STEP 1 WHILE FORM_SIZE_OK = "N"
+        IF PAGES_PER_FORM =  VAL_FORM(N) THEN
+          FORM_SIZE_OK = "Y"
+        END
+      NEXT N
+      IF FORM_SIZE_OK = "N" THEN
+        IMP_TEXT(4) = "Specified form size (" : PAGES_PER_FORM : " pages) not valid for plant"
+        GOTO 99999
+      END
+*
+* calculate number of forms of the basic form size
+      TOT_FORMS = INT(TOT_PAGES / PAGES_PER_FORM)
+*
+*  calculate any remainder as the "odd form"
+      PAGES_ODD_FORM = TOT_PAGES - (TOT_FORMS * PAGES_PER_FORM)
+      IF PAGES_ODD_FORM > 0 THEN
+        FORM_SIZE_OK = "N"
+        FOR N = 1 TO  VAL_CT STEP 1 WHILE FORM_SIZE_OK = "N"
+          IF PAGES_PER_FORM =  VAL_FORM(N) THEN
+            FORM_SIZE_OK = "Y"
+          END 
+        NEXT N
+        IF FORM_SIZE_OK = "N" THEN
+          IMP_TEXT(4) = "Odd form's " : PAGES_ODD_FORM : " pages not valid for plant"
+          GOTO 99999
+        END
+        TOT_FORMS = TOT_FORMS + 1
+      END
+*
+      IF FRONT_MATTER_PAGES > 96 THEN
+        IMP_TEXT(4) = "Front matter pages greater than 96"
+        GOTO 99999
+      END
+*
+* passed validation
+*  so set up multi-value array of impostion with column headings, etc.  
+*
+      C_IMP_COL_HDG = "Sig #" : SPACE(15)
+      IMP_TEXT(1) =  C_IMP_COL_HDG : C_IMP_COL_HDG : C_IMP_COL_HDG : C_IMP_COL_HDG
+      IMP_TEXT(2) =  SPACE(1)
+      IMP_TEXT_LEN = 10
+*
+*  set up conversion tables for front matter pages (up to 96 pages only)
+*
+      DIM FM_UNITS(9)
+       FM_UNITS(1) = "i" 
+       FM_UNITS(2) = "ii" 
+       FM_UNITS(3) = "iii" 
+       FM_UNITS(4) = "iv" 
+       FM_UNITS(5) = "v" 
+       FM_UNITS(6) = "vi" 
+       FM_UNITS(7) = "vii" 
+       FM_UNITS(8) = "viii" 
+       FM_UNITS(9) = "ix" 
+      DIM FM_TENS(10)
+       FM_TENS(1)  = "x"          ;* 10
+       FM_TENS(2)  = "xx"         ;* 20
+       FM_TENS(3)  = "xxx"        ;* 30
+       FM_TENS(4)  = "xl"         ;* 40
+       FM_TENS(5)  = "l"          ;* 50
+       FM_TENS(6)  = "lx"         ;* 60
+       FM_TENS(7)  = "lxx"        ;* 70
+       FM_TENS(8)  = "lxxx"       ;* 80
+       FM_TENS(9)  = "xl"         ;* 90
+*
+* set up arrays to hold form specific information to be calculated
+*
+      DIM I_NBR_PAGES(36)  
+      DIM I_FM_PAGES(36)
+      DIM I_TEXT_PAGES(36)
+      DIM T_FROM_PAGE(36)
+      DIM T_SEP(36)
+      DIM T_TO_PAGE(36)
+*
+      FOR N = 1 TO 36 STEP 1
+        I_NBR_PAGES(N) = 0
+        I_FM_PAGES(N)  = 0
+        I_TEXT_PAGES(N) = 0
+        T_FROM_PAGE(N) = SPACE(5)
+        T_SEP(N)       = SPACE(3)
+        T_TO_PAGE(N)   = SPACE(5)
+      NEXT N
+*
+*  set total number of front matter & text pages to be spread across forms
+*  and set up values for front matter & text pages printed prior forms
+*
+      FM_PAGES_LEFT = FRONT_MATTER_PAGES
+      TEXT_PAGES_LEFT = TOT_PAGES - FRONT_MATTER_PAGES
+      FM_PRINTED = 0                ;*  frnt matter pages printed prev forms
+      TEXT_PRINTED = 0              ;*  text pages printed prev forms
+*
+      FOR N = 1 TO TOT_FORMS STEP 1
+*
+*        generate number of pages for each form required
+*        any odd form is set up as the next to last form
+*
+        IF PAGES_ODD_FORM > 0 AND N = (TOT_FORMS - 1) THEN
+          I_NBR_PAGES(N) = PAGES_ODD_FORM
+        END ELSE
+          I_NBR_PAGES(N) = PAGES_PER_FORM
+        END
+*
+*        track front matter & text pages to be printed in this form
+*
+        IF FM_PAGES_LEFT > 0 THEN
+          GOSUB 2000
+        END ELSE
+          I_TEXT_PAGES(N) = I_NBR_PAGES(N)
+        END
+*
+*         calculate beginning / ending page numbers
+*
+        GOSUB 4000
+
+*
+      NEXT N
+*
+*   now can generate the actual imposition print lines using the
+*    from/to pages in the T_FROM_PAGE / T_TO_PAGE arrays
+*
+       C1 = " 1. ":T_FROM_PAGE(1) "R#5":T_SEP(1):T_TO_PAGE(1) "L#5":SPACE(3)
+       C2 = "10. ":T_FROM_PAGE(10) "R#5":T_SEP(10):T_TO_PAGE(10) "L#5":SPACE(3)
+       C3 = "19. ":T_FROM_PAGE(19) "R#5":T_SEP(19):T_TO_PAGE(19) "L#5":SPACE(3)
+       C4 = "28. ":T_FROM_PAGE(28) "R#5":T_SEP(28):T_TO_PAGE(28) "L#5"
+      IMP_TEXT(2) = C1:C2:C3:C4
+       C1 = " 2. ":T_FROM_PAGE(2) "R#5":T_SEP(2):T_TO_PAGE(2) "L#5":SPACE(3)
+       C2 = "11. ":T_FROM_PAGE(11) "R#5":T_SEP(11):T_TO_PAGE(11) "L#5":SPACE(3)
+       C3 = "20. ":T_FROM_PAGE(20) "R#5":T_SEP(20):T_TO_PAGE(20) "L#5":SPACE(3)
+       C4 = "29. ":T_FROM_PAGE(29) "R#5":T_SEP(29):T_TO_PAGE(29) "L#5"
+      IMP_TEXT(3) = C1:C2:C3:C4
+       C1 = " 3. ":T_FROM_PAGE(3) "R#5":T_SEP(3):T_TO_PAGE(3) "L#5":SPACE(3)
+       C2 = "12. ":T_FROM_PAGE(12) "R#5":T_SEP(12):T_TO_PAGE(12) "L#5":SPACE(3)
+       C3 = "21. ":T_FROM_PAGE(21) "R#5":T_SEP(21):T_TO_PAGE(21) "L#5":SPACE(3)
+       C4 = "30. ":T_FROM_PAGE(30) "R#5":T_SEP(30):T_TO_PAGE(30) "L#5"
+      IMP_TEXT(4) = C1:C2:C3:C4
+       C1 = " 4. ":T_FROM_PAGE(4) "R#5":T_SEP(4):T_TO_PAGE(4) "L#5":SPACE(3)
+       C2 = "13. ":T_FROM_PAGE(13) "R#5":T_SEP(13):T_TO_PAGE(13) "L#5":SPACE(3)
+       C3 = "22. ":T_FROM_PAGE(22) "R#5":T_SEP(22):T_TO_PAGE(22) "L#5":SPACE(3)
+       C4 = "31. ":T_FROM_PAGE(31) "R#5":T_SEP(31):T_TO_PAGE(31) "L#5"
+      IMP_TEXT(5) = C1:C2:C3:C4
+       C1 = " 5. ":T_FROM_PAGE(5) "R#5":T_SEP(5):T_TO_PAGE(5) "L#5":SPACE(3)
+       C2 = "14. ":T_FROM_PAGE(14) "R#5":T_SEP(14):T_TO_PAGE(14) "L#5":SPACE(3)
+       C3 = "23. ":T_FROM_PAGE(23) "R#5":T_SEP(23):T_TO_PAGE(23) "L#5":SPACE(3)
+       C4 = "32. ":T_FROM_PAGE(32) "R#5":T_SEP(32):T_TO_PAGE(32) "L#5"
+      IMP_TEXT(6) = C1:C2:C3:C4
+       C1 = " 6. ":T_FROM_PAGE(6) "R#5":T_SEP(6):T_TO_PAGE(6) "L#5":SPACE(3)
+       C2 = "15. ":T_FROM_PAGE(15) "R#5":T_SEP(15):T_TO_PAGE(15) "L#5":SPACE(3)
+       C3 = "24. ":T_FROM_PAGE(24) "R#5":T_SEP(24):T_TO_PAGE(24) "L#5":SPACE(3)
+       C4 = "33. ":T_FROM_PAGE(33) "R#5":T_SEP(33):T_TO_PAGE(33) "L#5"
+      IMP_TEXT(7) = C1:C2:C3:C4
+       C1 = " 7. ":T_FROM_PAGE(7) "R#5":T_SEP(7):T_TO_PAGE(7) "L#5":SPACE(3)
+       C2 = "16. ":T_FROM_PAGE(16) "R#5":T_SEP(16):T_TO_PAGE(16) "L#5":SPACE(3)
+       C3 = "25. ":T_FROM_PAGE(25) "R#5":T_SEP(25):T_TO_PAGE(25) "L#5":SPACE(3)
+       C4 = "34. ":T_FROM_PAGE(34) "R#5":T_SEP(34):T_TO_PAGE(34) "L#5"
+      IMP_TEXT(8) = C1:C2:C3:C4
+       C1 = " 8. ":T_FROM_PAGE(8) "R#5":T_SEP(8):T_TO_PAGE(8):SPACE(3)
+       C2 = "17. ":T_FROM_PAGE(17) "R#5":T_SEP(17):T_TO_PAGE(17) "L#5":SPACE(3)
+       C3 = "26. ":T_FROM_PAGE(26) "R#5":T_SEP(26):T_TO_PAGE(26) "L#5":SPACE(3)
+       C4 = "35. ":T_FROM_PAGE(35) "R#5":T_SEP(35):T_TO_PAGE(35) "L#5"
+      IMP_TEXT(9) = C1:C2:C3:C4
+       C1 = " 9. ":T_FROM_PAGE(9) "R#5":T_SEP(9):T_TO_PAGE(9) "L#5":SPACE(3)
+       C2 = "18. ":T_FROM_PAGE(18) "R#5":T_SEP(18):T_TO_PAGE(18) "L#5":SPACE(3)
+       C3 = "27. ":T_FROM_PAGE(27) "R#5":T_SEP(27):T_TO_PAGE(27) "L#5":SPACE(3)
+       C4 = "36. ":T_FROM_PAGE(36) "R#5":T_SEP(36):T_TO_PAGE(36) "L#5"
+      IMP_TEXT(10) = C1:C2:C3:C4
+*
+      GOTO 99999                    ;*  goto exit point
+*
+* ---------------------------------------------------------------------------
+*                    Internal Subroutines
+* ---------------------------------------------------------------------------
+*
+*    routine to calculate number of front matter & text pages for this form
+2000*
+        IF FM_PAGES_LEFT > I_NBR_PAGES(N) THEN
+          I_FM_PAGES(N) = I_NBR_PAGES(N)
+          FM_PAGES_LEFT = FM_PAGES_LEFT - I_NBR_PAGES(N)
+        END ELSE
+          I_FM_PAGES(N) = FM_PAGES_LEFT
+          I_TEXT_PAGES(N) = I_NBR_PAGES(N) - FM_PAGES_LEFT
+          FM_PAGES_LEFT = 0
+        END
+        RETURN
+*
+*     routine to calculate beginning / ending page numbers
+4000*
+        IF I_FM_PAGES(N) > 0 THEN
+          N_FIRST = FM_PRINTED + 1
+          NBR_TO_CVT = N_FIRST
+          ROMAN_NBR = ""
+          GOSUB 6000
+          T_FROM_PAGE(N) = ROMAN_NBR "R#5"
+        END ELSE
+          N_FIRST = TEXT_PRINTED + 1
+          T_FROM_PAGE(N) = OCONV(N_FIRST,"MD") "R#5"
+        END
+*
+        FM_PRINTED = FM_PRINTED + I_FM_PAGES(N)
+        TEXT_PRINTED = TEXT_PRINTED + I_TEXT_PAGES(N)
+*
+        T_SEP(N) = " - "       ;*  " - " between from/to pages
+*
+        IF I_TEXT_PAGES(N) > 0 THEN
+          T_TO_PAGE(N) = OCONV(TEXT_PRINTED,"MD") "L#5"
+        END ELSE
+          NBR_TO_CVT = FM_PRINTED
+          ROMAN_NBR = ""
+          GOSUB 6000
+          T_TO_PAGE(N) = ROMAN_NBR "L#5"
+        END
+*
+        RETURN
+*
+*     routine to convert beg/end page number in FM pages to roman numerals
+6000*
+        UNIT_S = MOD(NBR_TO_CVT,10)
+        IF NBR_TO_CVT > 9 THEN
+          TEN_S = INT (NBR_TO_CVT / 10)
+        END ELSE
+          TEN_S = 0
+        END
+        IF TEN_S > 0 THEN
+          ROMAN_NBR = FM_TENS(TEN_S)
+        END
+        IF UNIT_S > 0 THEN
+          ROMAN_NBR = ROMAN_NBR:FM_UNITS(UNIT_S)
+        END
+        RETURN
+*
+* ---------------------------------------------------------------------------
+*
+*    common exit point
+*
+*       copy used elements in IMP_TEXT 
+*         into dynamic array SHOW_IMP  - the returned value for
+*                                         ticket file MV field
+*
+99999*
+*
+       SHOW_IMP = ""
+       FOR N = 1 TO IMP_TEXT_LEN
+         SHOW_IMP<1,N> = IMP_TEXT(N)
+       NEXT
+*
+      RETURN
+      END

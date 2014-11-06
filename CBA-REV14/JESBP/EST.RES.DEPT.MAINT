@@ -1,0 +1,1406 @@
+   SUBROUTINE EST.RES.DEPT.MAINT (CONO, ACTION, EST.KEY, DREF, CREF, EQTY, STATUS)
+*********************************************************************
+*
+* REVISION - [08.1]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+*
+* PROGRAM  - EST.RES.DEPT.MAINT
+*
+* AUTHOR   - NICK AMENDOLA, COMPUTER BUSINESS ASSOCIATES
+*
+* DATE     - 11/25/85
+*
+* DESCRIPTION
+*
+* This subroutine provides for entry and maintenance of departmental
+* estimate data.
+*
+*T21177 diane 11/21/1996 * REV10B UPG
+*T21526 diane 01/30/1997 * Use EST.DEPT.GROUP instead OF
+*                          EST.RES.DEPT.GROUP.
+*T22078 gat 07/16/1997 * Correct display of Target Sale Amount
+*T24067 cm 06/18/1999 Correct display error in Insert mode.
+*T24120 diane 07/09/1999 * Fix screen clear data
+*T24513 alex 11/04/1999 * MODS TO DISPLAY ESTIMATE QTY ON THE MENU BAR.
+*T25849 cm 05/23/2001 When qty prompts that call for user input are
+*                     executing from regular matl maint the user is
+*                     prompted twice.
+*T26138 cm 09/19/2001 Expand estimate qty from 8 to 9 digits.
+*T25978 adelgado 02/19/2002 * Add the use of prompts (S,SR,SB,ST).
+*T26588 thompson 05/10/2002 * Correct totals at top of screen.
+*T27250 epitka 01/29/2003 * Check the platform.
+*T27684 cmykleb 09/08/2003 * Change echo $UDTHOME to call SYSVARS.SUB
+*********************************************************************
+*
+*-- COPY STATEMENTS
+*
+*COPY>JES.CPYLIB>SCOMMON.ESTIMATE
+*COPY>PMC.CPYLIB>DEPARTMENT
+*COPY>PMC.CPYLIB>COST.CNTR
+*COPY>JCS.CPYLIB>OPERATION
+*COPY>JES.CPYLIB>ESTIMATE
+*COPY>JES.CPYLIB>ESTIMATE.DEPT
+*COPY>JES.CPYLIB>ESTIMATE.TEMP
+*COPY>JES.CPYLIB>ESTIMATE.GRP
+*COPY>JES.CPYLIB>ESTIMATE.GRP.XREF
+*COPY>JES.CPYLIB>ESTIMATE.MATL
+*COPY>JES.CPYLIB>EQUIPMENT
+*COPY>PMC.CPYLIB>VEND
+*COPY>ICS.CPYLIB>CATEGORY
+*COPY>JCS.CPYLIB>CATEGORY.OSP
+*COPY>PMC.CPYLIB>SHIP.VIA
+*COPY>CPYLIB>SCREEN.COM
+*COPY>CPYLIB>FILE.VARS
+*COPY>JES.CPYLIB>JES.FILE.VARS
+*COPY>CPYLIB>GEN.XREF.SUB
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+   MAT SYSCOM.REC =  ""; SYS.TYPE = 2
+*
+*-- OPEN ALL FILES
+*
+   OPEN "","VOC" TO VOC ELSE RETURN
+*
+*
+*-- INITIALIZATION
+*
+*T27684 v
+*  PLATFORM=SYSTEM(33)                          
+*  IF PLATFORM='UNIX' THEN                      
+*     PERFORM "!echo $UDTHOME" CAPTURING UDTDIR  
+*  END ELSE                                     
+*     PERFORM "!echo %UDTHOME%" CAPTURING UDTDIR 
+*  END                                          
+   UDTDIR = "UDTHOME"
+   CALL SYSVARS.SUB (UDTDIR)
+*T27684 ^
+   UDTDIR = UDTDIR<1>:"/sys/CTLG/e/"
+   DATA.FLAG=0
+   VALID.OPS="L":VM:"G":VM:"M":VM:"I":VM:"P":VM:"PM":VM:"PC":VM:"PT":VM:"S":VM:"O"
+* T21526
+*      SCREEN DEFINE;EST.RES.DEPT.MAINT
+   SCREEN DEFINE;EST.DEPT.MAINT
+* T21526
+   SCREEN FORMAT
+   SCREEN COUNT;;3
+   XREF.LINE.COUNT=S$LCNT
+   XREF.LINE.SPACE=S$LSPC
+   SCREEN COUNT;;9
+   LINE.COUNT=S$LCNT
+   LINE.SPACE=S$LSPC
+   CCTR.CURR.REF.NO=""
+   OPER.CURR.REF.NO=""
+   CURR.REF.NO=""
+   DEPT.CNT=DCOUNT(EST.DEPT,VM)
+   EXIT=0
+   EST.COMPONENT.CNT=1
+   FOR DPTR=1 TO DEPT.CNT UNTIL EXIT
+      IF DREF="ALL" OR DREF=DPTR THEN
+         FOR COMP=1 TO EST.COMPONENT.CNT UNTIL EXIT
+            IF CREF="ALL" OR CREF=COMP THEN
+               IF ACTION="A" OR EST.COMP.FLAG<1,DPTR,COMP> # "" THEN
+                  DEPT=EST.DEPT<1,DPTR>
+                  GOSUB 100
+               END
+            END
+         NEXT COMP
+      END
+   NEXT DPTR
+   GOTO 99999
+*
+*-- MAIN PROCESSING
+*
+100 *
+   IF DATA.FLAG THEN
+      SCREEN CLEAR
+      DATA.FLAG=0
+   END
+   IF DEPT="CON" THEN
+      MAT DEPT.REC=""
+      DEPT.DESC="CONSOLIDATED"
+   END ELSE
+      MATREAD DEPT.REC FROM DEPARTMENT,CONO:DEPT ELSE
+         ERRMSG="Invalid department - ":DEPT
+         GOSUB 90000
+         RETURN
+      END
+   END
+   READV ESTGX.GRP FROM ESTIMATE.GRP.XREF,CONO:DEPT,1 ELSE ESTGX.GRP=""
+   NEW.REC=0
+   ESTD.ID=DPTR:"!":COMP:"!":EQTY
+   IF ACTION="A" OR ACTION="M" THEN
+      MATREADU ESTD.REC FROM ESTIMATE.DEPT,CONO:EST.KEY:"!":ESTD.ID ELSE
+         NEW.REC=1
+         MAT ESTD.REC=""
+      END
+   END ELSE
+      MATREAD ESTD.REC FROM ESTIMATE.DEPT,CONO:EST.KEY:"!":ESTD.ID ELSE
+         NEW.REC=1
+         MAT ESTD.REC=""
+      END
+   END
+   IF (ACTION="A" OR ACTION="M") AND EQTY # EST.QTY<1,1> AND NEW.REC THEN
+      CALL EST.RES.QTY.CALC (CONO,"E",EST.KEY,DPTR,COMP,EQTY)
+      NEW.REC=0
+      MATREADU ESTD.REC FROM ESTIMATE.DEPT,CONO:EST.KEY:"!":ESTD.ID ELSE
+         RELEASE ESTIMATE.DEPT,CONO:EST.KEY:"!":ESTD.ID
+         RETURN
+      END
+   END
+   DDESC=EST.DEPT.DESC<1,DPTR>
+   S$DATA(1)<S$SCR>=SPACE((20-LEN(DDESC))/2):DDESC
+   S$DATA(22)<S$SCR>=EST.KEY
+*S$DATA(23)<S$SCR>=COMP
+*T26138 v
+*  S$DATA(24)<S$SCR>=EQTY
+   S$DATA(24)<S$SCR>=OCONV(EQTY,'MD0,')
+*T26138 ^
+      *T24513 TOP
+   IF S$GUIFORM THEN
+      P_TITLE = "ESTIMATE DEPARTMENT MAINTENANCE             Comp: "
+*T26138 v
+*     P_TITLE = P_TITLE : COMP "L#2" : "   Qty: " : EQTY "L#9"
+      P_TITLE = P_TITLE : COMP "L#2" : " Qty: " : OCONV(EQTY,"MD0,")"L#11"
+*T26138 ^
+      CALL VSI_SI_PTITLE(P_TITLE,ERROR)
+   END
+      *T24513
+   GOSUB 80100
+   CCTR.CNT=DCOUNT(DEPT.CCTRS,VM)
+   DEPT.CCTRS.DESC=""
+   XREF.REF.NO=1
+   XREF.CURR.REF.NO=""
+   XREF.DESC=""
+   MODE1=""
+   MODE2=""
+   MOD.FLAG=0
+   SAVE.OSP=EST.DEPT.OSP
+   SAVE.OSP.ID=EST.DEPT.OSP.ID
+   SAVE.OSP.UM=EST.DEPT.OSP.UM
+   SAVE.OSP.QTY=EST.DEPT.OSP.QTY
+   SAVE.OSP.PRICE=EST.DEPT.OSP.PRICE
+   IF NEW.REC THEN
+      LINE.CNT=0
+      CURR.REF.NO=1
+      OPTION="A"
+      GOTO 510
+   END ELSE
+      DATA.FLAG=1
+      XREF.CNT=CCTR.CNT
+      GOSUB 41000
+      LINE.CNT=DCOUNT(ESTD.TYPE,VM)
+      GOSUB 80000
+      REF.NO=1
+      CURR.REF.NO=""
+      GOSUB 50000
+   END
+   GOSUB 900
+*
+*-- GET OPERATOR REPLY
+*
+500 *
+   IF ACTION="A" OR ACTION="M" THEN
+      SCREEN FIELD;;20
+      SCREEN INPUT;;20
+   END ELSE
+      SCREEN FIELD;;32
+      SCREEN INPUT;;32
+   END
+   OPTION=S$VALUE
+510 *
+   BEGIN CASE
+      CASE OPTION="A" AND LINE.CNT < 99
+         DATA.FLAG=1
+         MODE1="A"
+         REF.NO=LINE.CNT
+         DONE=0
+         LOOP
+            REF.NO=REF.NO+1
+         UNTIL LINE.CNT >=  99 OR DONE DO
+            GOSUB 50000
+            MODE2="A"
+            GOSUB 1000
+            IF S$VALUE="END" THEN
+               DONE=1
+               FOR REF.NO=REF.NO TO LINE.CNT+1
+                  GOSUB 700
+               NEXT REF.NO
+            END ELSE
+               LINE.CNT=REF.NO
+* GOSUB 900
+               MOD.FLAG=1
+            END
+         REPEAT
+* IF LINE.CNT=0 THEN
+* OPTION="E"
+* GOTO 510
+* END
+         REF.NO=LINE.CNT
+         CURR.REF.NO=""
+         GOSUB 50000
+         GOSUB 900
+         GOTO 500
+      CASE OPTION="C" AND LINE.CNT > 0
+         MODE1="C"
+         MODE2="C"
+         GOSUB 600
+         IF S$VALUE # "" AND S$VALUE # "END" THEN
+            REF.NO=S$VALUE
+            CTYP=ESTD.TYPE<1,REF.NO>
+            IF CTYP="MS" OR CTYP="MR" OR CTYP="MI" OR CTYP="MC" THEN GOTO 500
+            GOSUB 1000
+            IF S$VALUE="END" THEN
+               GOSUB 80000
+               CURR.REF.NO=""
+               GOSUB 50000
+            END ELSE
+               MOD.FLAG=1
+            END
+            GOSUB 900
+         END
+         GOTO 500
+      CASE OPTION="D" AND LINE.CNT > 0
+         MODE1="D"
+         MODE2=""
+         GOSUB 600
+         IF S$VALUE # "" AND S$VALUE # "END" THEN
+            REF.NO=S$VALUE
+            IF ESTD.TYPE<1,REF.NO>="G" THEN
+               GOSUB 650
+               GOSUB 700
+               LINE.CNT=LINE.CNT-1
+            END ELSE
+               GOSUB 700
+               LINE.CNT=LINE.CNT-1
+            END
+            IF REF.NO > LINE.CNT THEN REF.NO=REF.NO-1
+            CURR.REF.NO=""
+            GOSUB 50000
+            GOSUB 900
+            MOD.FLAG=1
+         END
+         GOTO 500
+      CASE OPTION="I" AND LINE.CNT > 0
+         MODE1="I"
+         MODE2="A"
+         GOSUB 600
+         IF S$VALUE # "" AND S$VALUE # "END" THEN
+            REF.NO=S$VALUE
+            LINE.CNT=LINE.CNT+1;*T24067
+            GOSUB 800
+*              LINE.CNT=LINE.CNT+1;*T24067
+            CURR.REF.NO=""
+            GOSUB 50000
+            GOSUB 1000
+            IF S$VALUE="END" THEN
+               GOSUB 700
+               LINE.CNT=LINE.CNT-1
+               CURR.REF.NO=""
+               GOSUB 50000
+            END ELSE
+               GOSUB 50000
+               GOSUB 900
+               MOD.FLAG=1
+            END
+         END
+         GOTO 500
+      CASE OPTION="P"
+         SCREEN FIELD;;31
+         SCREEN INPUT;;31
+         IF S$VALUE # "Y" THEN GOTO 500
+         IF EQTY=EST.QTY<1,1> THEN
+            EST.COMP.FLAG<1,DPTR,COMP>=""
+         END
+         DC=DCOUNT(EST.DEPT.COMP,VM)
+         FOR DP=DC TO 1 STEP -1
+            ESTD.ID=EST.DEPT.COMP<1,DP>
+            IF FIELD(ESTD.ID,"!",1)=DPTR THEN
+               IF FIELD(ESTD.ID,"!",2)=COMP THEN
+                  THIS.QTY=FIELD(ESTD.ID,"!",3)
+                  IF EQTY=EST.QTY<1,1> OR THIS.QTY=EQTY THEN
+                     DELETE ESTIMATE.DEPT,CONO:EST.KEY:"!":ESTD.ID
+                     EST.DEPT.COMP=DELETE(EST.DEPT.COMP,1,DP,0)
+                     EST.DEPT.COMP.HRS=DELETE(EST.DEPT.COMP.HRS,1,DP,0)
+                     EST.DEPT.COMP.DCOST=DELETE(EST.DEPT.COMP.DCOST,1,DP,0)
+                     EST.DEPT.COMP.COST=DELETE(EST.DEPT.COMP.COST,1,DP,0)
+                     EST.DEPT.COMP.SALE=DELETE(EST.DEPT.COMP.SALE,1,DP,0)
+                     EST.DEPT.COMP.TSALE=DELETE(EST.DEPT.COMP.TSALE,1,DP,0)
+                     EST.DEPT.COMP.VSALE=DELETE(EST.DEPT.COMP.VSALE,1,DP,0)
+                     EST.DEPT.COMP.VCOST=DELETE(EST.DEPT.COMP.VCOST,1,DP,0)
+                     CALL EST.OSP.UPD(CONO,"P",DPTR,COMP,EQTY,"")
+                  END
+               END
+            END
+         NEXT DP
+      CASE OPTION="S" OR OPTION="SF"
+         REF.NO=CURR.REF.NO+LINE.COUNT
+         IF REF.NO > LINE.CNT THEN REF.NO=1
+         GOSUB 50000
+         GOTO 500
+      CASE OPTION="ST"
+         REF.NO=1
+         GOSUB 50000
+         GOTO 500
+      CASE OPTION="SB"
+         REF.NO=LINE.CNT
+         GOSUB 50000
+         GOTO 500
+      CASE OPTION="SR"
+         REF.NO=REF.NO-LINE.COUNT
+         IF REF.NO < 1 THEN REF.NO=1
+         GOSUB 50000
+         GOTO 500
+      CASE OPTION="E" OR OPTION="END" OR OPTION="EX"
+         IF MOD.FLAG THEN
+            SCREEN FIELD;;33
+            SCREEN INPUT;;33
+            IF S$VALUE # "Y" THEN GOTO 500
+         END
+         IF NEW.REC THEN
+            EST.COMP.FLAG<1,DPTR,COMP>=""
+         END
+         EST.DEPT.OSP=SAVE.OSP
+         EST.DEPT.OSP.ID=SAVE.OSP.ID
+         EST.DEPT.OSP.UM=SAVE.OSP.UM
+         EST.DEPT.OSP.QTY=SAVE.OSP.QTY
+         EST.DEPT.OSP.PRICE=SAVE.OSP.PRICE
+         IF OPTION="EX" THEN EXIT=1
+      CASE OPTION="F"
+         EST.COMP.FLAG<1,DPTR,COMP>="Y"
+         ESTD.DEPT=EST.DEPT<1,DPTR>
+         ESTD.DEPT.TYPE=EST.DEPT.TYPE<1,DPTR>
+         ESTD.ID=DPTR:"!":COMP:"!":EQTY
+         MATWRITE ESTD.REC ON ESTIMATE.DEPT,CONO:EST.KEY:"!":ESTD.ID
+         IF EST.DEPT.COMP="" THEN EST.BASE.QTY=EQTY
+         LOCATE ESTD.ID IN EST.DEPT.COMP<1>,1 SETTING P ELSE
+            EST.DEPT.COMP<1,P>=ESTD.ID
+         END
+         EST.DEPT.COMP.HRS<1,P>=TOTAL.HRS
+         EST.DEPT.COMP.DCOST<1,P>=TOTAL.DCOST
+         EST.DEPT.COMP.COST<1,P>=TOTAL.COST
+         EST.DEPT.COMP.SALE<1,P>=TOTAL.SALE
+         EST.DEPT.COMP.TSALE<1,P>=TOTAL.TSALE
+         EST.DEPT.COMP.VSALE<1,P>=TOTAL.VSALE
+         EST.DEPT.COMP.VCOST<1,P>=TOTAL.VCOST
+   END CASE
+   RETURN
+*
+*-- GET LINE REFERENCE NUMBER
+*
+600 *
+   SCREEN FIELD;;21
+   S$MINV=CURR.REF.NO
+   S$MAXV=S$MINV+LINE.COUNT-1
+   IF S$MAXV > LINE.CNT THEN S$MAXV=LINE.CNT
+   SCREEN INPUT;;21
+   RETURN
+*
+*-- DELETE GROUP DATA
+*
+650 *
+   GRP.ID=ESTD.GRP.ID<1,REF.NO>
+   FOR LPTR=LINE.CNT TO REF.NO+1 STEP -1
+      IF ESTD.GRP.ID<1,LPTR>=GRP.ID THEN
+         IF ESTD.TYPE<1,LPTR>[1,1]="P" THEN
+            CALL EST.OSP.UPD(CONO,"D",DPTR,COMP,EQTY,LPTR)
+         END
+         FOR A=ESTD.FIRST.MV TO ESTD.LAST.MV
+            ESTD.REC(A)=DELETE(ESTD.REC(A),1,LPTR,0)
+         NEXT A
+         LINE.CNT=LINE.CNT-1
+      END
+   NEXT LPTR
+   RETURN
+*
+*-- DELETE MULTI-LINE DATA
+*
+700 *
+   IF ESTD.TYPE<1,REF.NO>[1,1]="P" THEN
+      CALL EST.OSP.UPD(CONO,"D",DPTR,COMP,EQTY,REF.NO)
+   END
+   FOR A=ESTD.FIRST.MV TO ESTD.LAST.MV
+      ESTD.REC(A)=DELETE(ESTD.REC(A),1,REF.NO,0)
+   NEXT A
+   GOSUB 80000
+   RETURN
+*
+*-- INSERT MULTI-LINE-DATA
+*
+800 *
+   FOR A=ESTD.FIRST.MV TO ESTD.LAST.MV
+      ESTD.REC(A)=INSERT(ESTD.REC(A),1,REF.NO,0,"")
+   NEXT A
+   GOSUB 80000
+   RETURN
+*
+*-- CALCULATE TOTALS
+*
+900 *
+   TOTAL.HRS=""
+   TOTAL.LABOR=""
+   TOTAL.MATL=""
+   TOTAL.OSP=""
+   TOTAL.SHIP=""
+   TOTAL.MISC=""
+   TOTAL.DCOST=""
+   TOTAL.COST=""
+   TOTAL.SALE=0
+   TOTAL.SALE=0
+   TOTAL.TSALE=0
+   TOTAL.VSALE=0
+   TOTAL.VCOST=0
+   FOR L=1 TO LINE.CNT
+      LTYPE=ESTD.TYPE<1,L>
+      BEGIN CASE
+         CASE LTYPE[1,1]="L"
+            TOTAL.HRS=TOTAL.HRS+ESTD.HRS<1,L>
+            TOTAL.LABOR=TOTAL.LABOR+ESTD.TSALE<1,L>; *T26588
+         CASE LTYPE[1,1]="M"
+            TOTAL.MATL=TOTAL.MATL+ESTD.TSALE<1,L>; *T26588
+         CASE LTYPE[1,1]="I"
+            TOTAL.MATL=TOTAL.MATL+ESTD.TSALE<1,L>; *T26588
+         CASE LTYPE[1,1]="P"
+            TOTAL.OSP=TOTAL.OSP+ESTD.TSALE<1,L>; *T26588
+         CASE LTYPE[1,1]="S"
+            TOTAL.SHIP=TOTAL.SHIP+ESTD.TSALE<1,L>; *T26588
+         CASE LTYPE[1,1]="O"
+            TOTAL.MISC=TOTAL.MISC+ESTD.TSALE<1,L>; *T26588
+      END CASE
+      TOTAL.DCOST=TOTAL.DCOST+ESTD.DCOST<1,L>
+      TOTAL.COST=TOTAL.COST+ESTD.COST<1,L>
+      TOTAL.SALE=TOTAL.SALE+ESTD.SALE<1,L>
+      TOTAL.TSALE=TOTAL.TSALE+ESTD.TSALE<1,L>
+      IF ESTD.VSALE<1,L>="Y" THEN
+         TOTAL.VSALE=TOTAL.VSALE+ESTD.TSALE<1,L>
+         TOTAL.VCOST=TOTAL.VCOST+ESTD.COST<1,L>
+      END
+   NEXT L
+*T26138 v
+*  S$DATA(25)<S$SCR>=TOTAL.LABOR
+*  S$DATA(26)<S$SCR>=TOTAL.MATL
+*  S$DATA(27)<S$SCR>=TOTAL.OSP
+*  S$DATA(28)<S$SCR>=TOTAL.SHIP
+*  S$DATA(29)<S$SCR>=TOTAL.MISC
+*  S$DATA(30)<S$SCR>=TOTAL.SALE
+   S$DATA(25)<S$SCR>=OCONV(TOTAL.LABOR,'MD2,')
+   S$DATA(26)<S$SCR>=OCONV(TOTAL.MATL,'MD2,')
+   S$DATA(27)<S$SCR>=OCONV(TOTAL.OSP,'MD2,')
+   S$DATA(28)<S$SCR>=OCONV(TOTAL.SHIP,'MD2,')
+   S$DATA(29)<S$SCR>=OCONV(TOTAL.MISC,'MD2,')
+   S$DATA(30)<S$SCR>=OCONV(TOTAL.TSALE,'MD2,'); *T26588
+*T26138 ^
+   GOSUB 80100
+   RETURN
+*
+*-- GET MULTI-LINE DATA
+*
+1000 *
+   MAT ESTD.TEMP=""
+   MAT ESTG.REC=""
+   MAT ESTM.REC=""
+   EST.FORMULA.VAR=""
+   MT.PTR=0
+* IF MODE1="A" AND ESTD.TYPE<1,REF.NO> # "" THEN
+* MODE2="C"
+* END
+   IF MODE2="C" THEN
+      FOR A=ESTD.FIRST.MV TO ESTD.LAST.MV
+         ESTD.TEMP(A)=ESTD.REC(A)<1,REF.NO>
+      NEXT A
+      TEMP.QTY=TEMP.QTY/100
+      IF TEMP.QTY=INT(TEMP.QTY) THEN TEMP.QTY=INT(TEMP.QTY)
+      BEGIN CASE
+         CASE TEMP.TYPE="G"
+            MATREAD ESTG.REC FROM ESTIMATE.GRP,CONO:DEPT:"!":TEMP.OPV ELSE
+               MAT ESTG.REC=""
+            END
+            TEMP.STD=""
+            TEMP.GRP.QTY=""
+         CASE 1
+            TEMP.STD=TEMP.STD/100
+            IF TEMP.STD=INT(TEMP.STD) THEN TEMP.STD=INT(TEMP.STD)
+            TEMP.GRP.QTY=TEMP.GRP.QTY/100
+            IF TEMP.GRP.QTY=INT(TEMP.GRP.QTY) THEN TEMP.GRP.QTY=INT(TEMP.GRP.QTY)
+      END CASE
+      IF TEMP.TYPE[1,1]="M" THEN
+         MATREAD ESTM.REC FROM ESTIMATE.MATL,CONO:TEMP.TYPE[2,1] ELSE
+            MAT ESTM.REC=""
+         END
+      END
+      GOTO 1400
+   END
+   S$VAL=REF.NO
+   SCREEN DISPLAY;;8
+*-- GET TRANSACTION TYPE
+1100 *
+   PREV.TYPE=ESTD.TYPE<1,REF.NO>
+1110 *
+   S$VAL=REF.NO
+   SCREEN FIELD;;9
+   IF ESTGX.GRP="" OR MODE1="I" THEN S$DEFAULT="L"
+   SCREEN INPUT;;9;RETURN
+   BEGIN CASE
+      CASE S$VALUE="G"
+* IF MODE1="I" THEN
+* ERRMSG="Group insertion not allowed. Try again! "
+* GOSUB 90000
+* GOTO 1110
+* END
+         IF ESTGX.GRP="" THEN
+            ERRMSG="No groups defined for this department. Try again! "
+            GOSUB 90000
+            GOTO 1110
+         END
+      CASE S$VALUE="MS"
+      CASE S$VALUE="MR"
+      CASE S$VALUE[1,1]="M"
+         MATREAD ESTM.REC FROM ESTIMATE.MATL,CONO:S$VALUE[2,1] ELSE
+            ERRMSG="No materials defined for this type. Try again! "
+            GOSUB 90000
+            GOTO 1110
+         END
+      CASE 1
+         LOCATE S$VALUE IN VALID.OPS<1>,1 SETTING P ELSE
+            ERRMSG='Invalid type. Enter "?" for valid options'
+            GOSUB 90000
+            GOTO 1110
+         END
+   END CASE
+   TEMP.TYPE=S$VALUE
+   IF TEMP.TYPE # PREV.TYPE THEN MODE2="A"
+*-- GET COST CENTER
+1200 *
+   IF TEMP.TYPE="G" THEN GOTO 1300
+   PREV.CCTR=ESTD.CCTR<1,REF.NO>
+   XREF.REF.NO=999
+   XREF.CURR.REF.NO=""
+   XREF.DESC=DEPT.CCTRS.DESC
+   XREF.CNT=CCTR.CNT
+   XREF.REF.NO=1
+   GOSUB 41000
+1210 *
+   S$VAL=REF.NO
+   S$DATA(10)<S$SCR,REF.NO>=ESTD.CCTR<1,REF.NO>
+   IF ESTD.CCTR<1,REF.NO>="" AND REF.NO > 1 THEN
+      S$DATA(10)<S$SCR,REF.NO>=ESTD.CCTR<1,REF.NO-1>
+   END ELSE
+      S$DATA(10)<S$SCR,REF.NO>=ESTD.CCTR<1,REF.NO>
+   END
+   IF S$DATA(10)<S$SCR,REF.NO>="" AND XREF.CNT=1 THEN
+      S$DATA(10)<S$SCR,REF.NO>=DEPT.CCTRS
+   END
+   SCREEN FIELD;;10
+   SCREEN INPUT;;10;RETURN
+   BEGIN CASE
+      CASE S$VALUE="S"
+         XREF.REF.NO=XREF.REF.NO+XREF.LINE.COUNT
+         IF XREF.REF.NO > XREF.CNT THEN XREF.REF.NO=1
+         GOSUB 41000
+         GOTO 1210
+    * T25978 v
+      CASE S$VALUE = 'SR'
+         XREF.REF.NO -= XREF.LINE.COUNT
+         IF XREF.REF.NO < 1 THEN XREF.REF.NO = 1
+         GOSUB 41000 ; GOTO 1210
+      CASE S$VALUE = 'ST'
+         XREF.REF.NO = 1
+         GOSUB 41000 ; GOTO 1210
+      CASE S$VALUE = 'SB'
+         XREF.REF.NO = XREF.CNT
+         GOSUB 41000 ; GOTO 1210
+    * T25978 ^
+      CASE 1
+         IF DEPT # "CON" THEN
+            LOCATE S$VALUE IN DEPT.CCTRS<1>,1 SETTING CC.PTR ELSE
+               ERRMSG="Invalid cost center for this department. Try again! "
+               GOSUB 90000
+               GOTO 1210
+            END
+         END
+         MATREAD CCTR.REC FROM COST.CNTR,CONO:S$VALUE ELSE
+            ERRMSG="Invalid Cost Center. Try again! "
+            GOSUB 90000
+            GOTO 1210
+         END
+         MATREAD EQUIPMENT.REC FROM EQUIPMENT,CONO:S$VALUE ELSE
+            MAT EQUIPMENT.REC=""
+         END
+   END CASE
+   TEMP.CCTR=S$VALUE
+   TEMP.CCTR.TYPE=EQP.TYPE
+   IF TEMP.CCTR # PREV.CCTR THEN MODE2="A"
+*-- GET GROUP, OPERATION, PRODUCT OR VENDOR
+1300 *
+   XREF.REF.NO=999
+   XREF.CURR.REF.NO=""
+   XREF.DESC=""
+   BEGIN CASE
+      CASE TEMP.TYPE[1,1]="G"
+         PREV.OPV=ESTD.OPV<1,REF.NO>
+         XREF.REF.NO=999
+         XREF.CURR.REF.NO=""
+         XREF.DESC=""
+         XREF.CNT=DCOUNT(ESTGX.GRP,VM)
+         XREF.REF.NO=1
+         GOSUB 44000
+1302 *
+         S$VAL=REF.NO
+         S$DATA(11)<S$SCR,REF.NO>=ESTD.OPV<1,REF.NO>
+         IF S$DATA(11)<S$SCR,REF.NO>="" AND XREF.CNT=1 THEN
+            S$DATA(11)<S$SCR,REF.NO>=ESTGX.GRP
+         END
+         SCREEN FIELD;;11
+         SCREEN INPUT;;11;RETURN
+         BEGIN CASE
+            CASE S$VALUE="S"
+               XREF.REF.NO=XREF.REF.NO+XREF.LINE.COUNT
+               IF XREF.REF.NO > XREF.CNT THEN XREF.REF.NO=1
+               GOSUB 44000
+               GOTO 1302
+    * T25978 v
+            CASE S$VALUE = 'SR'
+               XREF.REF.NO -= XREF.LINE.COUNT
+               IF XREF.REF.NO < 1 THEN XREF.REF.NO = 1
+               GOSUB 44000 ; GOTO 1302
+            CASE S$VALUE = 'ST'
+               XREF.REF.NO = 1
+               GOSUB 44000 ; GOTO 1302
+            CASE S$VALUE = 'SB'
+               XREF.REF.NO = XREF.CNT
+               GOSUB 44000 ; GOTO 1302
+    * T25978 ^
+            CASE 1
+               LOCATE S$VALUE IN ESTGX.GRP<1>,1 SETTING GPTR ELSE
+                  ERRMSG="Invalid group for this department. Try again! "
+                  GOSUB 90000
+                  GOTO 1302
+               END
+               MATREAD ESTG.REC FROM ESTIMATE.GRP,CONO:DEPT:"!":S$VALUE ELSE
+                  ERRMSG="Cannot locate selected group. Try again! "
+                  GOSUB 90000
+                  GOTO 1302
+               END
+               TEMP.OPV=S$VALUE
+               TEMP.DESC=ESTG.DESC
+         END CASE
+      CASE TEMP.TYPE[1,1]="L" OR TEMP.TYPE[1,1]="S" OR TEMP.TYPE[1,1]="O"
+         PREV.OPV=ESTD.OPV<1,REF.NO>
+         XREF.CNT=DCOUNT(CCTR.OPER,VM)
+         XREF.REF.NO=1
+         GOSUB 42000
+1310 *
+         S$VAL=REF.NO
+         S$DATA(11)<S$SCR,REF.NO>=ESTD.OPV<1,REF.NO>
+         IF S$DATA(11)<S$SCR,REF.NO>="" AND XREF.CNT=1 THEN
+            S$DATA(11)<S$SCR,REF.NO>=CCTR.OPER
+         END
+         SCREEN FIELD;;11
+         SCREEN INPUT;;11;RETURN
+         BEGIN CASE
+            CASE S$VALUE="S"
+               XREF.REF.NO=XREF.REF.NO+XREF.LINE.COUNT
+               IF XREF.REF.NO > XREF.CNT THEN XREF.REF.NO=1
+               GOSUB 42000
+               GOTO 1310
+    * T25978 v
+            CASE S$VALUE = 'SR'
+               XREF.REF.NO -= XREF.LINE.COUNT
+               IF XREF.REF.NO < 1 THEN XREF.REF.NO = 1
+               GOSUB 42000 ; GOTO 1310
+            CASE S$VALUE = 'ST'
+               XREF.REF.NO = 1
+               GOSUB 42000 ; GOTO 1310
+            CASE S$VALUE = 'SB'
+               XREF.REF.NO = XREF.CNT
+               GOSUB 42000 ; GOTO 1310
+    * T25978 ^
+            CASE 1
+               LOCATE S$VALUE IN CCTR.OPER<1>,1 SETTING OP.PTR ELSE
+                  ERRMSG="Invalid operation for specified cost center. Try again! "
+                  GOSUB 90000
+                  GOTO 1310
+               END
+               MATREAD OPER.REC FROM OPERATION,CONO:S$VALUE ELSE
+                  ERRMSG="Cannot locate selected operation. Try again! "
+                  GOSUB 90000
+                  GOTO 1310
+               END
+               TEMP.OPV=S$VALUE
+               TEMP.OPV.TYPE=CCTR.OPER.TYPE<1,OP.PTR>
+               IF CCTR.OPER.STD.IMP<1,OP.PTR>+0=0 THEN TEMP.OPV.TYPE="F"
+               TEMP.FCTR=1000
+               BEGIN CASE
+                  CASE TEMP.TYPE[1,1]="L"
+                     IF TEMP.OPV.TYPE="F" THEN
+                        TEMP.STD=CCTR.OPER.STD.HRS<1,OP.PTR>/100
+                        TEMP.STD.TYPE="HR/OP"
+                     END ELSE
+                        TEMP.STD=CCTR.OPER.STD.IMP<1,OP.PTR>
+                        TEMP.STD.TYPE="OP/HR"
+                     END
+                  CASE 1
+                     TEMP.STD=CCTR.OPER.HR.RATE<1,OP.PTR>/100
+                     TEMP.STD.TYPE="$/EA"
+               END CASE
+               IF TEMP.STD+0=0 THEN TEMP.STD=""
+               TEMP.RATE=CCTR.OPER.HR.RATE<1,OP.PTR>
+               TEMP.IND.1=CCTR.FOH.TYPE<1,1>:CCTR.FOH.PCT<1,1>
+               TEMP.IND.2=CCTR.FOH.TYPE<1,2>:CCTR.FOH.PCT<1,2>
+               TEMP.IND.3=CCTR.FOH.TYPE<1,3>:CCTR.FOH.PCT<1,3>
+               TEMP.IND.4=CCTR.FOH.TYPE<1,4>:CCTR.FOH.PCT<1,4>
+               TEMP.MARKUP=CCTR.OPER.MARKUP<1,OP.PTR>
+               TEMP.DESC=OPER.DESC
+         END CASE
+      CASE TEMP.TYPE[1,1]="M"
+* NOT USED IN ROLL LABEL PER SUSAN
+*            SCREEN FIELD;;35
+*            SCREEN INPUT;;35
+*            IF S$VALUE[1,1] = "A" THEN
+*               TEMP.GRP.QCALC = S$VALUE[1,1]
+*               TEMP.GRP.QPARAM = S$VALUE[2,3]
+*               TEMP.GRP.QOR = "X"
+*               TEMP.GRP.FCALC = S$VALUE[1,1]
+*               TEMP.GRP.FPARAM = S$VALUE[2,3]
+*               TEMP.GRP.FOR = "X"
+*            END
+         PREV.OPV=ESTD.OPV<1,REF.NO>
+         BEGIN CASE
+            CASE TEMP.TYPE[2,1]="I" AND EST.PROD.INK.ID<1,COMP> # ""
+               GOSUB 700
+               REF.NO=REF.NO-1
+               CALL EST.RES.INSERT.INK (CONO,EQTY,DPTR,COMP,REF.NO)
+               LINE.CNT=DCOUNT(ESTD.TYPE,VM)
+               GOSUB 80000
+               CURR.REF.NO=""
+* GOSUB 50000
+               RETURN
+            CASE TEMP.TYPE[2,1]="C" AND EST.BIND.COVER.STYLE="C"
+               GOSUB 700
+               REF.NO=REF.NO-1
+               CALL EST.INSERT.CASE (CONO,EQTY,DPTR,COMP,REF.NO)
+               LINE.CNT=DCOUNT(ESTD.TYPE,VM)
+               GOSUB 80000
+               CURR.REF.NO=""
+* GOSUB 50000
+               RETURN
+            CASE TEMP.TYPE="MS" OR TEMP.TYPE="MR"
+               GOSUB 700
+               REF.NO=REF.NO-1
+               CALL EST.RES.INSERT.STK (CONO,EQTY,DPTR,COMP,REF.NO)
+               LINE.CNT=DCOUNT(ESTD.TYPE,VM)
+               GOSUB 80000
+               CURR.REF.NO=""
+* GOSUB 50000
+               RETURN
+         END CASE
+         XREF.CNT=DCOUNT(ESTM.PROD,VM)
+         XREF.REF.NO=1
+         GOSUB 43000
+1320 *
+         S$VAL=REF.NO
+         S$DATA(11)<S$SCR,REF.NO>=ESTD.OPV<1,REF.NO>
+         IF S$DATA(11)<S$SCR,REF.NO>="" AND XREF.CNT=1 THEN
+            S$DATA(11)<S$SCR,REF.NO>=ESTM.PROD
+         END
+         SCREEN FIELD;;11
+         SCREEN INPUT;;11;RETURN
+         BEGIN CASE
+            CASE S$VALUE="S"
+               XREF.REF.NO=XREF.REF.NO+XREF.LINE.COUNT
+               IF XREF.REF.NO > XREF.CNT THEN XREF.REF.NO=1
+               GOSUB 43000
+               GOTO 1320
+    * T25978 v
+            CASE S$VALUE = 'SR'
+               XREF.REF.NO -= XREF.LINE.COUNT
+               IF XREF.REF.NO < 1 THEN XREF.REF.NO = 1
+               GOSUB 43000 ; GOTO 1320
+            CASE S$VALUE = 'ST'
+               XREF.REF.NO = 1
+               GOSUB 43000 ; GOTO 1320
+            CASE S$VALUE = 'SB'
+               XREF.REF.NO = XREF.CNT
+               GOSUB 43000 ; GOTO 1320
+    * T25978 ^
+            CASE TEMP.TYPE="MO"
+               GOSUB 700
+               REF.NO=REF.NO-1
+               TEMP.OPV=S$VALUE
+               FRM.FLG=1
+               CALL EST.INSERT.MATL (CONO,EQTY,DPTR,COMP,REF.NO,FRM.FLG)
+*T21667           IF FRM.FLG=0 THEN GOTO 1390
+               IF FRM.FLG=0 THEN REF.NO +=1; GOTO 1320
+               LINE.CNT=COUNT(ESTD.TYPE,VM)+(ESTD.TYPE # "")
+               CURR.REF.NO=''
+               GOSUB 80000
+*T21667                  GOTO 1900
+               GOTO 1390
+            CASE 1
+               LOCATE S$VALUE IN ESTM.PROD<1>,1 SETTING MT.PTR ELSE
+                  ERRMSG="Invalid material ID. Try again! "
+                  GOSUB 90000
+                  GOTO 1320
+               END
+               TEMP.OPV=S$VALUE
+               TEMP.FCTR=1000
+               TEMP.STD=ESTM.COST<1,MT.PTR>/100
+               BEGIN CASE
+                  CASE TEMP.TYPE="MS"
+                     TEMP.STD.TYPE="$/SQM"
+                     TEMP.UM=1000
+                     TEMP.IND.1=ESTM.FOH.PCT<1,MT.PTR>
+                     TEMP.MARKUP=ESTM.MARKUP<1,MT.PTR>
+                  CASE TEMP.TYPE="MR"
+                     TEMP.STD.TYPE="$/SQM"
+*TEMP.UM=ESTM.COST.WT<1,MT.PTR>
+                     TEMP.UM=1000
+                     TEMP.IND.1=ESTM.FOH.PCT<1,MT.PTR>
+                     TEMP.MARKUP=ESTM.MARKUP<1,MT.PTR>
+                  CASE 1
+                     TEMP.STD.TYPE="$/":ESTM.UM<1,MT.PTR>
+                     TEMP.UM=ESTM.COST.UNIT<1,MT.PTR>
+                     TEMP.IND.1=ESTM.FOH.PCT<1,MT.PTR>
+                     TEMP.MARKUP=ESTM.MARKUP<1,MT.PTR>
+               END CASE
+               TEMP.DESC=TRIM(ESTM.FULL.DESC<1,MT.PTR>)
+         END CASE
+      CASE TEMP.TYPE[1,1]="I"
+      CASE TEMP.TYPE[1,1]="P"
+1340 *
+         S$DATA(11)<S$SCR,REF.NO>=TEMP.OPV
+         S$VAL=REF.NO
+         SCREEN FIELD;;11
+* S$O.R="O"
+         SCREEN INPUT;;11;RETURN
+         IF S$VALUE="???" THEN
+*               FLD=11;FREF=REF.NO;XTYPE="VENDOR";XFILE=VENDOR;XFLD=1;GOSUB 49000
+            FLD=11;FREF=REF.NO;XTYPE="VEND";XFILE=VEND;XFLD=1;GOSUB 49000
+            IF XCODE="" THEN GOTO 1340
+         END
+         IF S$VALUE="" THEN
+            MAT VEND.REC=""
+         END ELSE
+            MATREAD VEND.REC FROM VEND,CONO:S$VALUE ELSE
+               ERRMSG="Invalid Vendor ID. Try again! "
+               GOSUB 90000
+               GOTO 1340
+            END
+         END
+         TEMP.OPV=S$VALUE
+         TEMP.FCTR=1000
+         BEGIN CASE
+            CASE TEMP.TYPE="PM"
+               TEMP.STD.TYPE="$/M"
+               TEMP.UM=1000
+            CASE TEMP.TYPE="PC"
+               TEMP.STD.TYPE="$/C"
+               TEMP.UM=100
+            CASE TEMP.TYPE="PT"
+               TEMP.STD.TYPE="$/TTL"
+               TEMP.UM=1
+            CASE 1
+               TEMP.STD.TYPE="$/EA"
+               TEMP.UM=1
+         END CASE
+         IF TEMP.DESC="" THEN TEMP.DESC=VEND.DESC
+   END CASE
+1390 *
+   S$VAL=REF.NO
+   S$DATA(12)<S$SCR,REF.NO>=TEMP.CODE
+   SCREEN DISPLAY;;12
+   S$VAL=REF.NO
+   S$DATA(13)<S$SCR,REF.NO>=TEMP.QTY
+   SCREEN DISPLAY;;13
+   S$VAL=REF.NO
+   S$DATA(14)<S$SCR,REF.NO>=TEMP.FCTR
+   SCREEN DISPLAY;;14
+   S$VAL=REF.NO
+   S$DATA(15)<S$SCR,REF.NO>=TEMP.STD
+   SCREEN DISPLAY;;15
+   S$VAL=REF.NO
+   S$DATA(16)<S$SCR,REF.NO>=TEMP.STD.TYPE
+   SCREEN DISPLAY;;16
+   S$VAL=REF.NO
+   S$DATA(18)<S$SCR,REF.NO>=""
+   SCREEN DISPLAY;;18
+   S$VAL=REF.NO
+   S$DATA(19)<S$SCR,REF.NO>=TEMP.DESC
+   SCREEN DISPLAY;;19
+* IF MODE1="A" AND TEMP.TYPE="MS" AND TEMP.QTY # "" THEN GOTO 1800
+*-- GET TRANSACTION CODE
+1400 *
+   BEGIN CASE
+      CASE TEMP.TYPE[1,1]="G"
+      CASE TEMP.TYPE[1,1]="L"
+      CASE TEMP.TYPE[1,1]="M"
+      CASE TEMP.TYPE[1,1]="I"
+      CASE TEMP.TYPE[1,1]="P"
+1440 *
+         S$DATA(12)<S$SCR,REF.NO>=TEMP.CODE
+         PREV.CODE=TEMP.CODE
+         S$VAL=REF.NO
+         SCREEN FIELD;;12
+         SCREEN INPUT;;12;RETURN
+         IF S$VALUE="???" THEN
+            FLD=12;FREF=REF.NO;XTYPE="CATEGORY.OSP";XFILE=CATEGORY.OSP;XFLD=1;GOSUB 49000
+            IF XCODE="" THEN GOTO 1440
+         END
+         MATREAD CAOS.REC FROM CATEGORY.OSP,CONO:S$VALUE ELSE
+            ERRMSG="Invalid O/P category code. Try again! "
+            GOSUB 90000
+            GOTO 1440
+         END
+         TEMP.CODE=S$VALUE
+         TEMP.IND.1=CAOS.FOH.PCT
+         TEMP.MARKUP=CAOS.MARKUP
+         IF TEMP.CODE # PREV.CODE THEN TEMP.DESC=CAOS.DESC
+      CASE TEMP.TYPE[1,1]="S"
+1450 *
+         S$DATA(12)<S$SCR,REF.NO>=TEMP.CODE
+         S$VAL=REF.NO
+         SCREEN FIELD;;12
+         SCREEN INPUT;;12;RETURN
+         IF S$VALUE="???" THEN
+            FLD=12;FREF=REF.NO;XTYPE="SHIP.VIA";XFILE=SHIP.VIA;XFLD=1;GOSUB 49000
+            IF XCODE="" THEN GOTO 1450
+         END
+         MATREAD SHIP.VIA.REC FROM SHIP.VIA,CONO:S$VALUE ELSE
+            ERRMSG="Invalid carrier ID. Try again! "
+            GOSUB 90000
+            GOTO 1450
+         END
+         TEMP.CODE=S$VALUE
+         TEMP.DESC=SHPV.DESC
+   END CASE
+*-- GET DESCRIPTION
+   BEGIN CASE
+      CASE TEMP.TYPE[1,1]="G"
+* CASE TEMP.TYPE[1,1]="L" AND MODE1="A" AND MODE2="C"
+      CASE TEMP.TYPE[1,1]="I"
+* CASE TEMP.TYPE[1,1]="M" AND MODE1="A" AND MODE2="C"
+      CASE 1
+         S$DATA(19)<S$SCR,REF.NO>=TEMP.DESC
+         S$VAL=REF.NO
+         SCREEN FIELD;;19
+         SCREEN INPUT;;19;RETURN
+         TEMP.DESC=S$VALUE
+   END CASE
+*-- GET QUANTITY
+1500 *
+   BEGIN CASE
+      CASE (MODE1="A" OR MODE1="I") AND TEMP.TYPE[1,1]="G" AND ESTG.QFLAG # "Y"
+         TEMP.QTY=1
+* CASE MODE1="A" AND TEMP.GRP.QOR="N"
+      CASE TEMP.GRP.QOR="X" AND TEMP.GRP.QCALC # "F"
+      CASE 1
+         IF TEMP.GRP.QCALC="F" THEN
+            S$VALUE="Q":TEMP.GRP.QPARAM
+         END ELSE
+            S$VAL=REF.NO
+            SCREEN FIELD;;13
+            IF ESTG.HMSG # "" THEN S$HMSG=ESTG.HMSG
+            SCREEN INPUT;;13;RETURN
+         END
+         BEGIN CASE
+            CASE NUM(S$VALUE)
+               TEMP.QTY=S$VALUE
+            CASE S$VALUE[1,1] = "A"
+               IF S$VALUE # "A100" AND S$VALUE # "A200" AND S$VALUE # "A300" THEN
+                  ERRMSG="Invalid formula ID. Try again !"
+                  GOSUB 90000
+                  GOTO 1500
+               END
+               TEMP.QTY=0
+               TEMP.FCTR=""
+               TEMP.GRP.QCALC = S$VALUE[1,1]
+               TEMP.GRP.QPARAM = S$VALUE[2,3]
+               TEMP.GRP.QOR = "X"
+               TEMP.GRP.FCALC = S$VALUE[1,1]
+               TEMP.GRP.FPARAM = S$VALUE[2,3]
+               TEMP.GRP.FOR = "X"
+            CASE 1
+               SUB.ID=S$VALUE[2,99]
+               SUB.NAME="EST.FORMULA.Q":SUB.ID
+               FORMULA.FOUND = 0
+               READ DUMMY FROM VOC,SUB.NAME THEN
+                  IF DUMMY<1> = "C" THEN
+                     OSREAD DUMMY FROM DUMMY<2> THEN FORMULA.FOUND = 1
+                  END
+               END ELSE
+                  OSREAD DUMMY FROM (UDTDIR:SUB.NAME) THEN FORMULA.FOUND = 1
+               END
+               IF NOT(FORMULA.FOUND) THEN
+                  ERRMSG="Invalid formula ID. Try again !"
+                  GOSUB 90000
+                  GOTO 1500
+               END
+               TEMP.FPTR=REF.NO
+*T25849 v
+*              CALL @SUB.NAME (CONO,"",EQTY,DPTR,COMP)
+               IF MODE1 = 'C' OR TEMP.QTY + 0 LE 1 THEN
+                  CALL @SUB.NAME (CONO,"",EQTY,DPTR,COMP)
+               END
+*T25849 ^
+               IF TEMP.QTY="" THEN
+                  TEMP.GRP.QCALC=""
+                  TEMP.GRP.QPARAM=""
+                  TEMP.GRP.QOR=""
+                  GOTO 1500
+               END
+               TEMP.GRP.QCALC="F"
+               TEMP.GRP.QPARAM=SUB.ID
+               TEMP.GRP.QOR="X"
+               S$VAL=REF.NO
+               S$DATA(13)<S$SCR,REF.NO>=TEMP.QTY
+               SCREEN DISPLAY;;13
+               IF SUB.ID = '901' THEN
+                  S$DATA(14)<S$SCR,REF.NO>=TEMP.FCTR
+                  S$DATA(15)<S$SCR,REF.NO>=TEMP.STD
+                  S$VAL=REF.NO
+                  SCREEN DISPLAY;;14
+                  S$VAL=REF.NO
+                  SCREEN DISPLAY;;15
+               END
+         END CASE
+   END CASE
+*-- GET FACTOR
+1600 *
+   PREV.FCTR=TEMP.FCTR
+   BEGIN CASE
+      CASE (MODE1="A" OR MODE1="I") AND TEMP.TYPE[1,1]="G" AND ESTG.FFLAG # "Y"
+         TEMP.FCTR=1000
+* CASE MODE1="A" AND TEMP.GRP.FOR="N"
+      CASE TEMP.GRP.FOR="X" AND TEMP.GRP.FCALC # "F" AND TEMP.GRP.FCALC # "T"
+      CASE TEMP.TYPE[1,1]="L" OR TEMP.TYPE[1,1]="G"
+         BEGIN CASE
+            CASE TEMP.GRP.FCALC="F"
+               S$VALUE="F":TEMP.GRP.FPARAM
+            CASE TEMP.GRP.FCALC="T"
+               S$VALUE="T":TEMP.GRP.FPARAM
+            CASE 1
+               S$VAL=REF.NO
+               S$DATA(14)<S$SCR,REF.NO>=OCONV(S$DATA(14)<S$SCR,REF.NO>,"MD3Z")
+               SCREEN FIELD;;14
+               S$TYP=7
+               SCREEN INPUT;;14;RETURN
+         END CASE
+         BEGIN CASE
+            CASE NUM(S$VALUE)
+               TEMP.FCTR=S$VALUE*1000
+               S$DATA(14)<S$SCR,REF.NO>=TEMP.FCTR
+               GOTO 1700
+            CASE S$VALUE[1,1]="F"
+               SUB.ID=S$VALUE[2,99]
+               SUB.NAME="EST.FORMULA.F":SUB.ID
+               FORMULA.FOUND = 0
+               READ DUMMY FROM VOC,SUB.NAME THEN
+                  IF DUMMY<1> = "C" THEN
+                     OSREAD DUMMY FROM DUMMY<2> THEN FORMULA.FOUND = 1
+                  END
+               END ELSE
+                  OSREAD DUMMY FROM (UDTDIR:SUB.NAME) THEN FORMULA.FOUND = 1
+               END
+               IF NOT(FORMULA.FOUND) THEN
+                  ERRMSG="Invalid formula ID. Try again !"
+                  GOSUB 90000
+                  GOTO 1600
+               END
+               TEMP.FPTR=REF.NO
+               CALL @SUB.NAME (CONO,"",EQTY,DPTR,COMP)
+            CASE S$VALUE[1,1]="T"
+               SUB.ID=S$VALUE[2,99]
+               CALL EST.TABLE.FCTR (CONO,SUB.ID,TEMP.GRP.FCTR)
+            CASE 1
+               ERRMSG="Invalid entry. Try again !"
+               GOSUB 90000
+               GOTO 1600
+         END CASE
+         IF TEMP.FCTR="" THEN
+            TEMP.GRP.FCALC=""
+            TEMP.GRP.FPARAM=""
+            TEMP.GRP.FOR=""
+            GOTO 1600
+         END
+         TEMP.GRP.FCALC=S$VALUE[1,1]
+         TEMP.GRP.FPARAM=SUB.ID
+         TEMP.GRP.FOR="X"
+         S$VAL=REF.NO
+         S$DATA(14)<S$SCR,REF.NO>=TEMP.FCTR
+         SCREEN DISPLAY;;14
+   END CASE
+*-- GET STANDARD
+1700 *
+   BEGIN CASE
+      CASE TEMP.TYPE[1,1]="G"
+* CASE MODE1="A" AND TEMP.GRP.FOR="N"
+      CASE TEMP.GRP.FOR="X"
+      CASE TEMP.FCTR=PREV.FCTR OR TEMP.STD+0=0
+         S$VAL=REF.NO
+         SCREEN FIELD;;15
+         SCREEN INPUT;;15;RETURN
+         IF S$VALUE # TEMP.STD THEN
+            IF TEMP.STD+0 # 0 AND TEMP.TYPE[1,1]="L" THEN
+               TEMP.FCTR=INT(S$VALUE/TEMP.STD*1000+0.5)
+               S$VAL=REF.NO
+               S$DATA(14)<S$SCR,REF.NO>=TEMP.FCTR
+               SCREEN DISPLAY;;14
+               S$VAL=REF.NO
+               S$DATA(15)<S$SCR,REF.NO>=TEMP.STD
+               SCREEN DISPLAY;;15
+            END ELSE
+               TEMP.STD=S$VALUE
+            END
+         END
+   END CASE
+*-- CALCULATE HOURS, COST AND SALE AMOUNTS
+1800 *
+   BEGIN CASE
+      CASE TEMP.TYPE[1,1]="G"
+         GOTO 1900
+      CASE 1
+         CALL EST.RES.CALC.COST (CONO,EQTY,DPTR)
+   END CASE
+   S$VAL=REF.NO
+* T22078
+   S$DATA(18)<S$SCR,REF.NO>=TEMP.TSALE
+* T22078
+   SCREEN DISPLAY;;18
+*-- SAVE ALL VALUES
+1900 *
+   BEGIN CASE
+      CASE TEMP.TYPE[1,1]="M"
+         GOSUB 30000
+      CASE (MODE1="A" OR MODE1="I") AND TEMP.TYPE="G"
+         TEMP.CCTR="GRP"
+         ESTD.GRP.SEQ=ESTD.GRP.SEQ+1
+         TEMP.GRP.ID=TEMP.OPV:"*":ESTD.GRP.SEQ
+         GOSUB 30000
+         GOSUB 31000
+         IF MODE1="I" THEN GOSUB 50000
+      CASE TEMP.TYPE="G"
+         GOSUB 30000
+         GOSUB 32000
+      CASE TEMP.TYPE[1,1]="P"
+         CALL EST.OSP.UPD(CONO,MODE1,DPTR,COMP,EQTY,REF.NO)
+         GOSUB 30000
+      CASE 1
+         GOSUB 30000
+   END CASE
+   RETURN
+*
+*-- STORE OPERATION RELATED DATA
+*
+30000 *
+   FOR A=ESTD.FIRST.MV TO ESTD.LAST.MV
+      ESTD.REC(A)<1,REF.NO>=ESTD.TEMP(A)
+   NEXT A
+   ESTD.QTY<1,REF.NO>=TEMP.QTY*100
+   IF ESTD.TYPE<1,REF.NO>="G" THEN
+      ESTD.STD<1,REF.NO>=""
+   END ELSE
+      ESTD.STD<1,REF.NO>=TEMP.STD*100
+      ESTD.GRP.QTY<1,REF.NO>=TEMP.GRP.QTY*100
+   END
+   RETURN
+*
+*-- INSERT GROUP RELATED DATA
+*
+31000 *
+   SAVE.REF.NO=REF.NO
+   CALL EST.RES.INSERT.GROUP (CONO,EQTY,DPTR,COMP,REF.NO,MAT ESTG.REC)
+   REF.NO=SAVE.REF.NO
+   LINE.CNT=DCOUNT(ESTD.TYPE,VM)
+   GOSUB 80000
+   CURR.REF.NO=""
+*T21526 v
+*CALL EST.RES.DEPT.GROUP (CONO,ACTION,LINE.CNT,REF.NO,CURR.REF.NO,MD,EQTY,DPTR)
+   CALL EST.DEPT.GROUP (CONO,ACTION,LINE.CNT,REF.NO,CURR.REF.NO,VOC,COMP,EQTY,DPTR)
+*T21526 ^
+   RETURN
+*
+*-- CHANGE GROUP RELATED DATA
+*
+32000 *
+   CALL EST.CHANGE.GROUP (CONO,EQTY,DPTR,COMP,REF.NO)
+   GOSUB 80000
+   CURR.REF.NO=""
+   GOSUB 50000
+   RETURN
+*
+*-- DISPLAY COST CENTERS
+*
+41000 *
+   START.REF.NO=1+INT((XREF.REF.NO-1)/XREF.LINE.COUNT)*XREF.LINE.COUNT
+   IF START.REF.NO=XREF.CURR.REF.NO THEN RETURN
+   XREF.CURR.REF.NO=START.REF.NO
+   IF START.REF.NO=1 THEN
+      S$DATA(2)<S$SCR>="Cctr"
+      SCREEN DISPLAY;;2
+      S$DATA(3)<S$SCR>=DEPT.CCTRS
+   END
+   IF XREF.DESC<1,START.REF.NO>="" THEN
+      FOR N=1 TO XREF.LINE.COUNT
+         NN=START.REF.NO+N-1
+         READV DESC FROM COST.CNTR,CONO:DEPT.CCTRS<1,NN>,1 ELSE DESC="??????????"
+         XREF.DESC<1,NN>=DESC
+      NEXT N
+      DEPT.CCTRS.DESC=XREF.DESC
+   END
+   S$DATA(4)<S$SCR>=XREF.DESC
+   S$VAL=START.REF.NO
+   S$CNT=XREF.CNT
+   SCREEN MULTI;;S;3;4
+   RETURN
+*
+*-- DISPLAY OPERATIONS
+*
+42000 *
+   START.REF.NO=1+INT((XREF.REF.NO-1)/XREF.LINE.COUNT)*XREF.LINE.COUNT
+   IF START.REF.NO=XREF.CURR.REF.NO THEN RETURN
+   XREF.CURR.REF.NO=START.REF.NO
+   IF START.REF.NO=1 THEN
+      S$DATA(2)<S$SCR>="Oper"
+      SCREEN DISPLAY;;2
+      S$DATA(3)<S$SCR>=CCTR.OPER
+   END
+   IF XREF.DESC<1,START.REF.NO>="" THEN
+      FOR N=1 TO XREF.LINE.COUNT
+         NN=START.REF.NO+N-1
+         READV DESC FROM OPERATION,CONO:CCTR.OPER<1,NN>,1 ELSE DESC="??????????"
+         XREF.DESC<1,NN>=DESC
+      NEXT N
+   END
+   S$DATA(4)<S$SCR>=XREF.DESC
+   S$VAL=START.REF.NO
+   S$CNT=XREF.CNT
+   SCREEN MULTI;;S;3;4
+   RETURN
+*
+*-- DISPLAY MATERIALS
+*
+43000 *
+   START.REF.NO=1+INT((XREF.REF.NO-1)/XREF.LINE.COUNT)*XREF.LINE.COUNT
+   IF START.REF.NO=XREF.CURR.REF.NO THEN RETURN
+   XREF.CURR.REF.NO=START.REF.NO
+   IF START.REF.NO=1 THEN
+      S$DATA(2)<S$SCR>="Prod"
+      SCREEN DISPLAY;;2
+   END
+   IF XREF.DESC<1,START.REF.NO>="" THEN
+      MATREAD ESTM.REC FROM ESTIMATE.MATL,CONO:TEMP.TYPE[2,1] ELSE
+         MAT ESTM.REC=""
+      END
+      S$DATA(3)<S$SCR>=ESTM.PROD
+      XREF.DESC=ESTM.FULL.DESC
+      S$DATA(4)<S$SCR>=XREF.DESC
+   END
+   S$VAL=START.REF.NO
+   S$CNT=XREF.CNT
+   SCREEN MULTI;;S;3;4
+   RETURN
+*
+*-- DISPLAY GROUPS
+*
+44000 *
+   START.REF.NO=1+INT((XREF.REF.NO-1)/XREF.LINE.COUNT)*XREF.LINE.COUNT
+   IF START.REF.NO=XREF.CURR.REF.NO THEN RETURN
+   XREF.CURR.REF.NO=START.REF.NO
+   IF START.REF.NO=1 THEN
+      S$DATA(2)<S$SCR>="Group"
+      SCREEN DISPLAY;;2
+   END
+   S$DATA(3)<S$SCR>=""
+   S$DATA(4)<S$SCR>=""
+   FOR N=1 TO XREF.LINE.COUNT
+      NN=START.REF.NO+N-1
+      READV DESC FROM ESTIMATE.GRP,CONO:DEPT:"!":ESTGX.GRP<1,NN>,1 ELSE DESC="??????????"
+      S$DATA(3)<S$SCR,NN>=ESTGX.GRP<1,NN>
+      S$DATA(4)<S$SCR,NN>=DESC
+   NEXT N
+   S$VAL=START.REF.NO
+   S$CNT=XREF.CNT
+   SCREEN MULTI;;S;3;4
+   RETURN
+*
+*---- CODE SELECTION
+*
+49000 *
+*      CALL GEN.CODE.XREF (CONO,XTYPE,XFILE,XFLD,XCODE)
+   MAT GEN.XREF.REC = ""
+   GXR.CO = CONO
+   GXR.ID = ""
+   GXR.NAME = "GEN.CODE"
+   GXR.FILE = XFILE
+   GXR.SORT.FILE = XTYPE
+   CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+   XCODE = GXR.ID
+   SCREEN FORMAT
+   S$VALUE=XCODE
+   S$DATA(FLD)<S$SCR,FREF>=XCODE
+   GOSUB 80100
+   CURR.REF.NO=""
+   GOSUB 50000
+   RETURN
+*
+*-- DISPLAY MULTI-LINE DATA
+*
+50000 *
+   START.REF.NO=1+INT((REF.NO-1)/LINE.COUNT)*LINE.COUNT
+   IF START.REF.NO=CURR.REF.NO THEN RETURN
+   CURR.REF.NO=START.REF.NO
+   S$VAL=START.REF.NO
+   S$CNT=COUNT(S$DATA(9)<S$SCR>,VM)+(S$DATA(9)<S$SCR>#"")
+   SCREEN MULTI;;C;8;9;10;11;12;13;14;15;16;18;19
+   RETURN
+*
+*-- LOAD SCREEN DATA
+*
+80000 *
+   S$DATA(9)<S$SCR>=ESTD.TYPE
+   S$DATA(10)<S$SCR>=ESTD.CCTR
+   S$DATA(11)<S$SCR>=ESTD.OPV
+   S$DATA(12)<S$SCR>=ESTD.CODE
+   S$DATA(14)<S$SCR>=ESTD.FCTR
+   S$DATA(16)<S$SCR>=ESTD.STD.TYPE
+* T22078
+   S$DATA(18)<S$SCR>=ESTD.TSALE
+* T22078
+*      S$DATA(18)<S$SCR>=ESTD.COST
+   S$DATA(19)<S$SCR>=ESTD.DESC
+   FOR NN=1 TO LINE.CNT
+      TQ=ESTD.QTY<1,NN>
+      IF INT(TQ/100)=TQ/100 THEN
+         S$DATA(13)<S$SCR,NN>=INT(TQ/100)
+      END ELSE
+         S$DATA(13)<S$SCR,NN>=TQ/100
+      END
+      IF ESTD.TYPE<1,NN>#"G" THEN
+         TS=ESTD.STD<1,NN>
+         IF INT(TS/100)=TS/100 THEN
+            S$DATA(15)<S$SCR,NN>=INT(TS/100)
+         END ELSE
+            S$DATA(15)<S$SCR,NN>=TS/100
+         END
+      END
+   NEXT NN
+80100 *
+   SCREEN DISPLAY;;ALL
+   RETURN
+*
+*-- ERROR ROUTINE
+*
+90000 ERR.TYPE=1;CALL SI_SYSCOM(MAT SYSCOM.REC);RETURN
+* 90000 *
+*       PRINT @(0,23):CL:ERRMSG:
+*       INPUT REPLY,1:
+*       PRINT @(0,23):CL:
+*       RETURN
+*
+*-- END OF PROGRAM
+*
+99999 *
+*      SCREEN CLEAR;;D
+*T24120 v
+   SCREEN CLEAR;;D
+   RETURN
+END

@@ -1,0 +1,189 @@
+SUBROUTINE SERIAL.SEL(CONO,DIV,PROD.NUM,WHSE,LOC,KEY,TRK.LVL)
+*COPY>CPYLIB>COM1
+*************************************************************
+* REVISION    - [12.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - ICSBP
+* PROGRAM     - SERIAL.SEL
+* BY          - EDVARD PITKA
+* DATE        - O8/15/01
+* DESCRIPTION -
+*T25740 edvard 08/15/2001 * REV12
+*ENDDOC
+*************************************************************
+*
+*---- FILE EQUATES
+*
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>SYSCOM
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>ICS.CPYLIB>INV_SERIAL
+*COPY>ICS.CPYLIB>WAREHOUSE
+*COPY>ICS.CPYLIB>CATEGORY
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>GEN.XREF.SUB
+*COPY>CPYLIB>CHAR
+*
+*---- SETUP FOR SYSTEM ERROR MESSAGES
+*
+SYS.TYPE = 1
+CALL SYSCOM(MAT SYSCOM.REC)
+*
+PROD.DESC = ""
+IF PROD.NUM = "" THEN
+  ECD.SCRN.NO = 2
+  ECD.ACTION = 2;CALL SCRN.EDIT
+  ECD.RET.VALUE = ""
+  GOSUB ENT.PROD.DESC
+  IF ECD.RET.VALUE # "END" THEN GOSUB ENT.OPTION
+END ELSE
+  READV PROD.DESC FROM INVENTORY,CONO:PROD.NUM,1 ELSE PROD.DESC = ""
+  GOSUB PROCESS.XREF
+END
+GOTO 99999
+*
+**************************************************************************
+*
+************
+ENT.OPTION: 
+************
+*
+MORE = 1
+LOOP
+  ECD.NUM = 4;ECD.ACTION = 4;CALL SCRN.EDIT
+  OPTION = ECD.RET.VALUE
+  BEGIN CASE
+    CASE OPTION = 'END' OR OPTION = 'E'
+      KEY = "";MORE = 0
+    CASE OPTION = 'P'
+      GOSUB PROCESS.XREF
+      IF KEY # "" THEN MORE = 0 ELSE MORE = 1
+    CASE NUM(OPTION) AND OPTION > 0 AND OPTION < 2
+      ON OPTION GOSUB ENT.PROD.DESC
+  END CASE
+WHILE MORE DO REPEAT
+RETURN
+*
+*************
+PROCESS.XREF: 
+*************
+*
+KEY=''; TRK.LVL=''
+MAT GEN.XREF.REC = ""
+GXR.NAME = "INVENTORY"
+GXR.XREF=INVENTORY.XREF
+GXR.FILE=INVENTORY
+GXR.SRCH.ID=PROD.DESC
+GXR.CO=CONO
+CALL GEN.XREF.SUB(MAT GEN.XREF.REC,PREFIX,XREF.DATA)
+ECD.ACTION=2;CALL SCRN.EDIT
+ECD.ACTION=3;CALL SCRN.EDIT
+IF GXR.ID#"" THEN
+  PROD.NUM = GXR.ID
+  ERR=0
+  MATREAD INV.REC FROM INVENTORY, CONO:PROD.NUM THEN
+    IF WHSE # "" THEN
+      MATREAD IWH.REC FROM INV.WHSE, CONO:PROD.NUM:"!":WHSE ELSE
+        ERRMSG = "WAREHOUSE ":WHSE:" IS NOT VALID FOR PRODUCT ":PROD.NUM
+        GOSUB 91000 ; ERR=1
+      END
+    END
+    IF NOT(ERR) THEN
+      MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE THEN
+        TRK.LVL=CATG.TRK.LVL
+*          GXR.SRCH.ID = PROD.DESC
+        BEGIN CASE
+          CASE TRK.LVL = 'S'
+            EOP=0
+            LOOP
+              MAT GEN.XREF.REC = ""
+              CMD = 'SSELECT INV_SERIAL WITH CONO = "':CONO
+              CMD :='" AND WITH ISTK_PROD = "':PROD.NUM
+              IF WHSE # "" THEN
+                CMD :='" AND WITH ISTK_WHSE = "':WHSE
+              END ELSE
+                IF DIV # "" THEN
+                  CMD :='" AND WITH DIV = "':DIV
+                END
+              END
+              IF LOC # "" THEN
+                CMD :='" AND WITH ISTK_LOC = "':LOC
+              END
+              CMD :='" AND WITH ISTK_CURR_QTY > "0"'
+              CMD :=' AND WITH ISTK_LOC # "" BY DIV BY ISTK_WHSE BY ISTK_LOC'
+              PERFORM CMD RTNLIST IDLIST CAPTURING ERR
+              DATA = 1;XXX = 0
+              GXR.IDLIST=''
+              LOOP
+                READNEXT ISTK.ID FROM IDLIST ELSE DATA = 0
+              WHILE DATA DO
+                XXX = XXX + 1
+                GXR.IDLIST<1,XXX> = ISTK.ID[4,99]
+              REPEAT
+              IF XXX>0 THEN
+                GXR.CO = CONO
+                GXR.SRCH.ID=PROD.NUM
+                GXR.NAME = "INV.SERIAL"
+                GXR.FILE = INV_SERIAL
+                CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+                ECD.ACTION = 2;CALL SCRN.EDIT
+                IF GXR.ID # "" THEN
+                  MATREADU ISTK.REC FROM INV_SERIAL, CONO:GXR.ID THEN
+                    EOP=1
+                    KEY = GXR.ID
+                  END ELSE
+                    RELEASE INV_SERIAL, CONO:GXR.ID
+                    ECD.ACTION = 2;CALL SCRN.EDIT
+                    ERRMSG = "Cannot locate Serial # ":GXR.ID
+                    GOSUB 91000
+                  END
+                END ELSE
+                  EOP=1
+                  PROD.NUM = ""
+                END
+              END ELSE
+                ERRMSG='NO SERIALS FOUND FOR THE SELECTED PRODUCT.'
+                GOSUB 91000 ; EOP=1
+              END
+            UNTIL (EOP) DO REPEAT
+          CASE TRK.LVL='G' 
+            ERRMSG='THIS PRODUCT IS NOT SERIALLY TRACKED PRODUCT.'
+            GOSUB 91000
+        END CASE
+      END ELSE
+        ERRMSG = "PRODUCT LINE ":INV.LINE:" IS NOT ON FILE"
+        GOSUB 91000
+      END
+    END
+  END ELSE
+    ERRMSG = "PRODUCT ":PROD.NUM:" IS NOT ON FILE"
+    GOSUB 91000
+  END
+  RETURN
+*
+**************
+ENT.PROD.DESC: 
+**************
+*
+  ECD.NUM = 1;ECD.ACTION = 4;CALL SCRN.EDIT
+  IF ECD.RET.VALUE # "END" THEN
+    PROD.DESC = ECD.RET.VALUE
+  END
+  RETURN
+*
+*---- CALLS FOR SYSCOM
+*
+91000* 
+  ERR.TYPE = 1
+  CALL SYSCOM(MAT SYSCOM.REC)
+  RETURN
+93000* 
+  ERR.TYPE = 3
+  CALL SYSCOM(MAT SYSCOM.REC)
+99999* 
+ECD.ACTION=99 ; CALL SCRN.EDIT
+  RETURN
+END

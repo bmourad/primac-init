@@ -1,0 +1,188 @@
+SUBROUTINE ESTQLP_PRINT_REPORT
+********************************************************************************
+*   Program name :- ESTQLP_PRINT_REPORT
+*   Created:- 4/13/2005 (By ZahoorAhmed)
+*   Description:- This program will print the client letter.
+*
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE JES.CPYLIB ESTIMATE.RPT
+$INCLUDE JES.CPYLIB ESTIMATE
+$INCLUDE PMC.CPYLIB COMPANY
+$INCLUDE CPYLIB CHAR
+$INCLUDE PMC.CPYLIB SECURITY
+*
+*---- OPEN ALL FILES
+*
+OPEN '','SECURITY' TO SECURITY ELSE
+      MESG = 'Cannot open SECURITY file!'
+      STATUS = RBO.setProperty('', 'ServerStatus', 1)
+      STATUS = RBO.setProperty('', 'ServerMessage', MESG)
+      RETURN
+END
+OPEN '','QUOTE.PRT' TO QUOTE.PRT ELSE
+      MESG = 'Cannot open QUOTE.PRT file!'
+      STATUS = RBO.setProperty('', 'ServerStatus', 1)
+      STATUS = RBO.setProperty('', 'ServerMessage', MESG)
+      RETURN
+END
+OPEN '','WIN.PRINTERS' TO WIN.PRINTERS ELSE
+      MESG = 'Cannot open WIN.PRINTERS file!'
+      STATUS = RBO.setProperty('', 'ServerStatus', 1)
+      STATUS = RBO.setProperty('', 'ServerMessage', MESG)
+      RETURN
+END
+
+OPEN '','CONTROL' TO CONTROL ELSE
+      MESG = 'Cannot open CONTROL file!'
+      STATUS = RBO.setProperty('', 'ServerStatus', 1)
+      STATUS = RBO.setProperty('', 'ServerMessage', MESG)
+      RETURN
+END
+*
+*---- INITIALIZATION
+*
+ESTR_EST_ID=""
+ESTR_CUST_NAME=""
+STATUS = RBO.getProperty('', 'ESTIMATE_ID', PPSD_ID)
+STATUS=RBO.getProperty('','PMCProperty',PMCProperty)
+STATUS=RBO.getProperty('','ESTR_EST_ID',ESTR.EST.ID)
+STATUS=RBO.getProperty('','ESTR_CUST_NAME',ESTR.CUST.NAME)
+STATUS=RBO.getProperty('','EST_QUOTE_DATE',QUOTE.DATE)
+*
+*TO RETURN IF NO DATA
+*
+IF (ESTR.EST.ID=0 OR ESTR.EST.ID="") THEN
+	RETURN
+END
+
+CONO= PMCProperty<1,4>
+SCOUNT = DCOUNT(ESTR.EST.ID,VM)
+SP2 = SPACE(2)
+PAGE.NO = 0
+CURR.REF.NO = ""
+REF.NO = 1
+UserID = FIELD(PPSD_ID, "!", 1) ;* User ID
+MATREAD SEC.REC FROM SECURITY, CONO:UPCASE(UserID) ELSE
+      ERRMSG = "USER ":UserID:" NOT ON FILE"
+      STATUS = RBO.setProperty('', 'ServerStatus', 1)
+      STATUS = RBO.setProperty('', 'ServerMessage', ERRMSG)
+      RETURN
+END
+
+   CALL SYSVARS.SUB(PORT_NO)
+   OS.TYPE = UPCASE(SYSTEM(33))
+
+SETPTR_QUEUE = SEC.DFLT.QUEUE
+SETPTR_CMD = ""
+*
+*--- SET PRINTER
+*
+ BEGIN CASE
+   CASE OS.TYPE[1,7] = "WINDOWS"	
+  	READ WIN.PRINTERS.REC FROM WIN.PRINTERS,SETPTR_QUEUE THEN
+         SETPTR_FORMATSTR = "Orientation=":WIN.PRINTERS.REC<5>:","
+         SETPTR_FORMATSTR := "Font=":WIN.PRINTERS.REC<6>:","
+         SETPTR_FORMATSTR := "FontSize=":WIN.PRINTERS.REC<7>:","
+         SETPTR_FORMATSTR := "TopMargin=":WIN.PRINTERS.REC<8>:","
+         SETPTR_FORMATSTR := "BottomMargin=":WIN.PRINTERS.REC<9>
+*
+         SETPTR_CMD = 'SETPTR 0,132,,,,1,AT '
+         SETPTR_CMD := WIN.PRINTERS.REC<3>
+         SETPTR_CMD := ',"':SETPTR_FORMATSTR:'",NHEAD,BRIEF'
+      END
+   CASE OS.TYPE[1,7] = "UNIX"
+      	  SETPTR_CMD = 'SETPTR ,,,,,,NHEAD,BRIEF,DEST '
+      	  SETPTR_CMD := SETPTR_QUEUE:',NOMESSAGE'
+ END CASE
+       UDTEXECUTE SETPTR_CMD CAPTURING JUNK
+*
+*****
+*
+       PRINTER ON
+	FOR REF = 1 TO SCOUNT
+        	EST.KEY = ESTR.EST.ID<1,REF>
+        	FND = 1
+        	READ QUOTE FROM QUOTE.PRT, CONO:EST.KEY ELSE FND = 0
+        	IF FND THEN
+          	GOSUB 5000
+        	END
+        	IF QUOTE<4> # "Y" THEN DELETE QUOTE.PRT, CONO:EST.KEY
+       NEXT REF
+       DELETE QUOTE.PRT, CONO
+       PRINTER CLOSE
+       PRINTER OFF 
+*
+****
+*
+RETURN
+
+99999*
+PRINTER OFF
+PRINTER CLOSE
+STATUS = RBO.setProperty('','ServerStatus',1)
+STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+
+RETURN
+
+*
+*---- PRINT ESTIMATE REPORT
+*
+5000*
+  FOR I = 1 TO 8
+    PRINT
+  NEXT I
+  PRINT SP2:"ESTIMATE: ":QUOTE<1> "L#35 ":" DATE:  ":OCONV(QUOTE.DATE,"D2/")
+  IF QUOTE<2> = "Y" THEN
+    PRINT SPACE(15):QUOTE<3> "L#23 ":SPACE(18):"(Budget Quote)"
+  END ELSE
+    PRINT SPACE(15):QUOTE<3> "L#23 "
+  END
+  PRINT
+  LN.CNT = 12
+  PAGE.CNT = 1
+  QCNT = DCOUNT(QUOTE,AM)
+  NIL = ""
+  LOCATE NIL IN QUOTE,1 SETTING NEXT.NULL ELSE NULL
+  FOR I = 5 TO (QCNT-2)
+    BEGIN CASE
+      CASE QUOTE<I> = ""
+        LOCATE NIL IN QUOTE,I SETTING NEXT.NULL ELSE NULL
+        IF ((LN.CNT + 1) + (I-NEXT.NULL)) > 50 THEN
+          PAGE.CNT = PAGE.CNT + 1
+          PRINT
+          PRINT SP2:"Estimate #":EST.KEY "L#15":"SEE PAGE ":PAGE.CNT
+          LN.CNT = LN.CNT + 2
+          FOR Q = LN.CNT TO 66
+            PRINT
+          NEXT Q
+          FOR Q = 1 TO 10
+            PRINT
+          NEXT Q
+          LN.CNT = 11
+        END
+        PRINT
+      CASE QUOTE<I,2> = ""
+        PRINT SP2:QUOTE<I,1> "L#65"
+      CASE 1
+        PRINT SP2:QUOTE<I,1> "L#23":QUOTE<I,2>"L#56"
+    END CASE
+    LN.CNT = LN.CNT + 1
+  NEXT I
+  FOR X = LN.CNT TO 50
+    PRINT
+    LN.CNT = LN.CNT + 1
+  NEXT X
+  FOR X = I TO QCNT
+    PRINT SP2:QUOTE<I,1> "L#65"
+    LN.CNT = LN.CNT + 1
+    I = I +1
+  NEXT X
+  FOR I = LN.CNT TO 60
+    PRINT
+  NEXT I
+  FOR I = 1 TO 6
+    PRINT
+  NEXT I
+RETURN
+

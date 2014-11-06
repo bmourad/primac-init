@@ -1,0 +1,682 @@
+*COPY>CPYLIB>COM1
+********************************************************************
+* REVISION    - [08.1]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SOURCE        - OPSBP
+* PROGRAM       - PICK.TICKET.PRINT
+* BY            - JULIANNE RIVERA, VERCOM SOFTWARE INC.
+* DATE          - 04/01/92
+* DESCRIPTION   -
+* CSF 21339     - 12/08/94 MJB
+* TASK 
+*    18606 LLH KITTING
+*
+*T20852 doug 08/20/1996 * Pick ticket tracking
+*T21177 diane 11/06/1996 * Rev11 UPG
+*T23580 renee 01/25/1999 * Changed dictionary PRINT.DATE to look at
+*                          release request date to qualify for pick
+*                          ticket print, if a release(s) exists. If not,
+*                          the use order due date. This program needs
+*                          verify that each release date or the order
+*                          date falls within the date range entered,
+*                          otherwise do not print a pick ticket for that
+*                          particular release.
+*T24647 alex 12/27/1999 * Printing the wrong ordered qty for a kit.
+*T25187 edvard 05/26/2000 * Change the pointer to the pick ticket
+*                           comment line. It was misspelled (C25163)
+*T25882 cm 06/22/2001 * Change "pallet number" to "job number"
+*T25740 edvard 01/17/02 * Rev12
+*T26493 cmykleb 04/03/2002 * Change pgm to get the rpt # from the proc.
+*T27831 cmykleb 12/11/2003 * Add a form # in the heading of the pick
+*                            ticket to make it ISO complient".
+********************************************************************
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>PMC.CPYLIB>COMP.OPS
+*COPY>OPS.CPYLIB>PICK.TICKET
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>SHIP.TO
+*COPY>OPS.CPYLIB>ORDER
+*COPY>OPS.CPYLIB>ORDER.DETAIL
+*COPY>OPS.CPYLIB>ORDER.RELEASE
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>INV.WHSE.LOC
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>ICS.CPYLIB>FNGD.ORDER.STATS
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+*COPY>ICS.CPYLIB>INV_SERIAL
+*COPY>ICS.CPYLIB>INV_RECEIPTS
+*COPY>ICS.CPYLIB>INV_RECP_WHSE
+*
+   DEFFUN CALC.STK.QTY (COST.QTY,MAT INV.CNV.REC,ROND,LN)
+*
+*--- SETUP SYSTEM ERROR MESSAGES
+*
+   SYS.TYPE = 1
+   CALL SYSCOM(MAT SYSCOM.REC)
+*
+*
+*---- PROCREAD
+*
+   PROCREAD BUFFER ELSE
+      ERRMSG = "MUST RUN FROM A PROC"
+      GOTO 93000
+   END
+   CONO = BUFFER<1>
+   ST.DATE = ICONV(BUFFER<3>,"D2/")                   ; * T23580
+   IF BUFFER<3> = "ALL" THEN ST.DATE = "0"            ; * T23580
+   END.DATE = ICONV(BUFFER<4>,"D2/")                  ; * T23580
+   IF BUFFER<4> = "ALL" THEN END.DATE = "99999"       ; * T23580
+   WHNOS = BUFFER<9>
+*
+*---- OPEN FILES
+*
+   OPEN '','COMPANY' TO COMPANY ELSE
+      ERRMSG = "COMPANY FILE IS MISSING"; GOTO 93000
+   END
+   OPEN '','CONTROL' TO CONTROL ELSE
+      ERRMSG = "CONTROL FILE IS MISSING"; GOTO 93000
+   END
+   OPEN '','CUSTOMER' TO CUSTOMER ELSE
+      ERRMSG = "CUSTOMER FILE IS MISSING"; GOTO 93000
+   END
+   OPEN '','SHIP.TO' TO SHIP.TO ELSE
+      ERRMSG = "SHIP.TO FILE IS MISSING";GOTO 93000
+   END
+   OPEN '','ORDER' TO ORDER ELSE
+      ERRMSG = "ORDER FILE IS MISSING";GOTO 93000
+   END
+   OPEN '','ORDER.DETAIL' TO ORDER.DETAIL ELSE
+      ERRMSG = "ORDER.DETAIL FILE IS MISSING";GOTO 93000
+   END
+   OPEN '','ORDER.RELEASE' TO ORDER.RELEASE ELSE
+      ERRMSG = "ORDER.RELEASE FILE IS MISSING";GOTO 93000
+   END
+   OPEN '','INVENTORY' TO INVENTORY ELSE
+      ERRMSG = "INVENTORY FILE IS MISSING";GOTO 93000
+   END
+   OPEN '','FNGD.ORDER.STATS' TO FNGD.ORDER.STATS ELSE
+      ERRMSG = "FNGD.ORDER.STATS FILE IS MISSING";GOTO 93000
+   END
+   OPEN '','PICK.TICKET' TO PICK.TICKET ELSE
+      ERRMSG = "PICK.TICKET FILE IS MISSING";GOTO 93000
+   END
+   OPEN '','PICK.TICKET.PRT' TO PICK.TICKET.PRT ELSE
+      ERRMSG = "PICK.TICKET.PRT FILE IS MISSING";GOTO 93000
+   END
+   IF FILEINFO(INV_RECEIPTS,0)=0 THEN                           
+      OPEN '','INV_RECEIPTS' TO INV_RECEIPTS ELSE                
+         ERRMSG="INV_RECEIPTS FILE IS MISSING";GOTO 93000         
+      END                                                        
+   END                                                          
+   IF FILEINFO(INV_RECEIPTS_TEMP,0)=0 THEN                      
+      OPEN '','INV_RECEIPTS_TEMP' TO INV_RECEIPTS_TEMP ELSE      
+         ERRMSG="INV_RECEIPTS_TEMP FILE IS MISSING";GOTO 93000    
+      END                                                        
+   END                                                          
+   IF FILEINFO(INV_RECP_WHSE,0)=0 THEN                          
+      OPEN '','INV_RECP_WHSE' TO INV_RECP_WHSE ELSE              
+         ERRMSG="INV_RECP_WHSE FILE IS MISSING";GOTO 93000        
+      END                                                        
+   END                                                          
+   IF FILEINFO(INV_RECP_WHSE_TEMP,0)=0 THEN                     
+      OPEN '','INV_RECP_WHSE_TEMP' TO INV_RECP_WHSE_TEMP ELSE    
+         ERRMSG="INV_RECP_WHSE_TEMP FILE IS MISSING";GOTO 93000   
+      END                                                        
+   END                                                          
+   IF FILEINFO(INV_SERIAL,0)=0 THEN                         
+      OPEN '','INV_SERIAL' TO INV_SERIAL ELSE                
+         ERRMSG="INV_SERIAL FILE  IS MISSING";GOTO 93000      
+      END                                                    
+   END                                                      
+   IF FILEINFO(INV_SERIAL_TEMP,0)=0 THEN                    
+      OPEN '','INV_SERIAL_TEMP' TO INV_SERIAL_TEMP ELSE      
+         ERRMSG="INV_SERIAL_TEMP FILE IS MISSING";GOTO 93000  
+      END                                                    
+   END                                                      
+*
+*---- GET COMPANY
+*
+   MAT COMP.REC = ''
+   CONO = ''
+   CALL GET.CONO(CONO,MAT COMP.REC)
+   IF CONO = 'END' THEN GOTO 99999
+   MATREAD OPCO.REC FROM CONTROL, CONO:"OPS" ELSE
+      MAT OPCO.REC = ""
+   END
+*
+*T26493 v
+*  REPORT.NAME = "PICK TICKET"
+*  REPORT.NUMBER = "XXXX"
+   CONO.NAME = ""
+   REPORT.NAME = ""
+   REPORT.NUMBER = BUFFER<2>
+*T26493 ^
+   REPORT.DATE = DATE()
+   HD1 = "" ; HD2 = ""
+   CALL GET.PROG.HEAD(CONO,CONO.NAME,REPORT.NAME,REPORT.NUMBER,REPORT.DATE,HD1,HD2)
+   HD2[105,6] = "PT-002" ; * T27831
+   S.HD1 = "  JOB  NUMBER  LOC             PRODUCT / DESCRIPTION              WHSE UM   ORD / REL   SHIPPED   AVAILABLE    PICK"
+   S.UN1 = "-------------- ---- --------------------------------------------- ---- --- ---------- ---------- ---------- ----------"
+*
+*---- INITIALIZE
+*
+   GEN.SHPNO = "000"
+   PAGE.NO = 0
+   LINE.CNT = 99
+   SP1 = SPACE(1)
+   TODAY = DATE()
+   PTR = 0
+*
+*---- MAIN PROCESSING
+*
+10 *
+   DONE = 0
+   PRINTER ON
+   LOOP
+      READNEXT ID ELSE DONE = 1
+   UNTIL DONE DO
+      CONO = ID[1,3]
+      ORDNO = FIELD(ID,"!",1)[4,99]
+      SHPTO = FIELD(ID,"!",2)
+      WHNO = FIELD(ID,"!",3)
+      MATREADU ORD.REC FROM ORDER, CONO:ORDNO ELSE
+         RELEASE ORDER, CONO:ORDNO
+         GOTO 99
+      END
+* T23580 v Check release req date if release exists else use order due dt
+      IF ORD.REL.NO = "" THEN
+* T23580 ^
+         IF ORD.DUE + 0 > 0 AND OPCO.PKTKT.DUE + 0 > 0 THEN
+            IF (ORD.DUE - OPCO.PKTKT.DUE) > TODAY THEN GOTO 99
+         END
+      END    ; * T23580
+      IF OPCO.SHP.FRM = "R" AND ORD.REL.NO = "" THEN
+         RELEASE ORDER, CONO:ORDNO
+         GOTO 99
+      END
+      MATREAD CUST.REC FROM CUSTOMER, CONO:ORD.CUST ELSE
+         MAT CUST.REC = ""
+      END
+      OSD.ID = CONO:ORDNO:"!":SHPTO
+      MATREADU ORD.DET.REC FROM ORDER.DETAIL, OSD.ID ELSE
+         RELEASE ORDER, CONO:ORDNO
+         RELEASE ORDER.DETAIL, OSD.ID
+         GOTO 99
+      END
+      WRITE.FLG = 0
+      RELS.PRINTED = ""       ; * T23580
+      READ RELNOS FROM PICK.TICKET.PRT, ID ELSE RELNOS = ""
+      IF RELNOS # "" THEN
+         OK.TO.DELETE = 1      ; * T23580
+         RCNT = DCOUNT(RELNOS,AM)
+         FOR R = 1 TO RCNT
+            RELNO = RELNOS<R>
+            MATREADU ORR.REC FROM ORDER.RELEASE, CONO:RELNO ELSE
+               RELEASE ORDER.RELEASE, CONO:RELNO
+               RELEASE ORDER, CONO:ORDNO
+               RELEASE ORDER.DETAIL, OSD.ID
+               GOTO 29
+            END
+* T23580 v Verify release request date falls within selected date range
+            IF ORR.REQ.DATE < ST.DATE OR ORR.REQ.DATE > END.DATE THEN
+               OK.TO.DELETE = 0
+               GOTO 29
+            END
+            IF ORR.REQ.DATE + 0 > 0 AND OPCO.PKTKT.DUE + 0 > 0 THEN
+               IF (ORR.REQ.DATE - OPCO.PKTKT.DUE) > TODAY THEN GOTO 29
+            END
+* T23580 ^
+            GOSUB 100
+            MAT PKT.REC = ""
+            PKT.ID = CONO:RELNO
+            PKT.KEY = RELNO
+            PKT.SHIP.TO = SHPTO
+            GOSUB 200
+            GOSUB 2000
+            RELS.PRINTED<1,-1> = RELNO      ; * T23580
+29 *
+         NEXT R
+      END ELSE
+         GOSUB 100
+         PKT.SHIP.TO = SHPTO
+         GOSUB 200
+         GOSUB 1000
+         OK.TO.DELETE = 1   ; * T23580
+      END
+      IF WRITE.FLG THEN
+         MATWRITE ORD.REC ON ORDER, CONO:ORDNO
+         MATWRITE ORD.DET.REC ON ORDER.DETAIL, OSD.ID
+      END
+      IF OK.TO.DELETE THEN                ; * T23580
+         DELETE PICK.TICKET.PRT, ID
+* T23580 v Delete release numbers that were printed out of picking ticket
+*          queue record. If all of them were printed, then delete record.
+      END ELSE
+         RCNT = DCOUNT(RELS.PRINTED,VM)
+         FOR XX = RCNT TO 1 STEP (-1)
+            LOCATE RELS.PRINTED<1,XX> IN RELNOS,1 SETTING REL.FOUND THEN
+               DEL RELNOS<REL.FOUND>
+            END
+         NEXT XX
+         IF RELNOS = "" THEN
+            DELETE PICK.TICKET.PRT,ID
+         END ELSE
+            WRITE RELNOS ON PICK.TICKET.PRT,ID
+         END
+      END
+* T23580 ^
+99 *
+   REPEAT
+   GOTO 99999
+*
+*---- Get next ticket number
+*
+100 *
+   REVNO = 0
+   FND = 0
+   LOOP
+   UNTIL FND DO
+      REVNO = REVNO + 1
+      IF REVNO > 99 THEN REVNO = 1
+      PKT.ID = CONO:ORDNO:"-":STR('0',2-LEN(REVNO)):REVNO
+      PKT.KEY = ORDNO:"-":STR('0',2-LEN(REVNO)):REVNO
+      MATREADU PKT.REC FROM PICK.TICKET, PKT.ID THEN
+         RELEASE PICK.TICKET, PKT.ID
+      END ELSE
+         MAT PKT.REC = ""
+         FND = 1
+      END
+   REPEAT
+   RETURN
+*
+*---- Ship to
+200 *
+   IF SHPTO = GEN.SHPNO THEN
+      MAT SPT.REC = ""
+      SPT.NAME = CUST.NAME
+      SPT.ADDR1 = CUST.ADDR1
+      SPT.ADDR2 = CUST.ADDR2
+      SPT.STATE = TRIM(FIELD(CUST.ADDR4,",",2))
+      SPT.CITY = TRIM(FIELD(CUST.ADDR4,",",1))
+      SPT.ZIP = CUST.ZIP
+      SPT.TAX.JUR = CUST.TAX.JUR
+      SPT.TAXABLE = CUST.TAXABLE
+      SPT.EXEMPT = CUST.EXEMPT
+      SPT.EXMT.DATE = CUST.EXMT.DATE
+      SPT.SLSMN = CUST.SALESMAN
+      SPT.FOB = CUST.ADDL.OPS<1,3>
+      SPT.SHP.TERMS = CUST.ADDL.OPS<1,4>
+   END ELSE
+      MATREAD SPT.REC FROM SHIP.TO, CONO:ORD.CUST:"!":SHPTO ELSE
+         MAT SPT.REC = ""
+         GOTO 199
+      END
+   END
+   CUST.STATE = TRIM(FIELD(CUST.ADDR4,",",2))
+   CUST.CITY = TRIM(FIELD(CUST.ADDR4,",",1))
+199 *
+   RETURN
+*
+*---- PRINT FROM ORDER INFO
+1000 *
+   FIN = 0 ; REL=0
+   PPTR = 0
+   OCNT = DCOUNT(OSD.WHSE,VM)
+   FOR OPTR = 1 TO OCNT
+      IF (WHNO = OSD.WHSE<1,OPTR>) THEN
+         FPTR = 0
+         FIRST = 1
+         FCNT = DCOUNT(OSD.RECP.NO<1,OPTR>,SVM)
+         IF FCNT = 0 THEN
+            IF OSD.KIT<1,OPTR> = "K" THEN
+               IF FIRST THEN 
+                  PPTR = PPTR + 1
+                  PKT.PROD<1,PPTR> = OSD.PROD<1,OPTR>
+                  PKT.WHSE<1,PPTR> = OSD.WHSE<1,OPTR>
+                  PKT.KIT<1,PPTR>  = OSD.KIT<1,OPTR>
+                  PKT.SEQ<1,PPTR>  = OSD.PROD.SEQ<1,OPTR>
+                  PKT.O.QTY<1,PPTR> = OSD.O.QTY<1,OPTR>
+                  PKT.S.QTY<1,PPTR> = OSD.S.QTY<1,OPTR>
+                  PKT.COMMENT<1,PPTR> = OSD.COMMENT<1,OPTR> ; *25163
+                  FIRST = 0
+               END
+            END
+         END
+         FOR F = 1 TO FCNT 
+            PICK.QTY = OSD.FI.QTY<1,OPTR,F> - OSD.P.QTY<1,OPTR,F>
+            IF PICK.QTY>0 THEN
+               IF FIRST THEN
+                  PPTR = PPTR + 1
+                  PKT.PROD<1,PPTR> = OSD.PROD<1,OPTR>
+                  PKT.WHSE<1,PPTR> = OSD.WHSE<1,OPTR>
+                  PKT.KIT<1,PPTR>  = OSD.KIT<1,OPTR>
+                  PKT.SEQ<1,PPTR>  = OSD.PROD.SEQ<1,OPTR>
+                  PKT.O.QTY<1,PPTR> = OSD.O.QTY<1,OPTR>
+                  PKT.S.QTY<1,PPTR> = OSD.S.QTY<1,OPTR>
+                  PKT.COMMENT<1,PPTR> = OSD.COMMENT<1,OPTR> ; * 25163
+                  FIRST = 0
+               END
+               ORD.FLAG=1
+               GOSUB RESERVE.LOCATION
+            END
+         NEXT F
+      END
+   NEXT OPTR
+   GOSUB 2500
+   RETURN
+*
+*---- PRINT FROM RELEASE INFO
+2000 *
+   FIN = 0 ; REL=1
+   PPTR = 0
+   OCNT = DCOUNT(OSD.WHSE,VM)
+   FOR OPTR = 1 TO OCNT
+      IF (WHNO = OSD.WHSE<1,OPTR>) THEN
+         FPTR = 0
+         FIRST = 1
+         FCNT = DCOUNT(OSD.RECP.NO<1,OPTR>,SVM)
+         IF FCNT = 0 THEN
+            IF OSD.KIT<1,OPTR> = "K" THEN
+               IF FIRST THEN 
+                  PPTR = PPTR + 1
+                  PKT.PROD<1,PPTR> = OSD.PROD<1,OPTR>
+                  PKT.WHSE<1,PPTR> = OSD.WHSE<1,OPTR>
+                  PKT.KIT<1,PPTR>  = OSD.KIT<1,OPTR>
+                  PKT.SEQ<1,PPTR>  = OSD.PROD.SEQ<1,OPTR>
+                  PKT.O.QTY<1,PPTR> = OSD.O.QTY<1,OPTR>
+                  PKT.S.QTY<1,PPTR> = OSD.S.QTY<1,OPTR>
+                  PKT.COMMENT<1,PPTR> = OSD.COMMENT<1,OPTR> ; * 25163
+                  FIRST = 0
+               END
+            END
+         END
+         FOR F = 1 TO FCNT
+            PICK.QTY = OSD.REL.QTY<1,OPTR,F> - OSD.P.QTY<1,OPTR,F>
+            IF ((RELNO = OSD.REL.NO<1,OPTR,F>) OR (OSD.REL.NO<1,OPTR,F> = "" AND OSD.KIT<1,OPTR,F> = "K")) AND (PICK.QTY > 0) THEN
+               IF FIRST THEN
+                  PPTR = PPTR + 1
+                  PKT.PROD<1,PPTR> = OSD.PROD<1,OPTR>
+                  PKT.WHSE<1,PPTR> = OSD.WHSE<1,OPTR>
+                  PKT.KIT<1,PPTR>  = OSD.KIT<1,OPTR>
+                  PKT.SEQ<1,PPTR>  = OSD.PROD.SEQ<1,OPTR>
+                  PKT.S.QTY<1,PPTR> = OSD.S.QTY<1,OPTR>
+                  PKT.COMMENT<1,PPTR> = OSD.COMMENT<1,OPTR> ; * 25163
+                  FIRST = 0
+               END
+               PKT.O.QTY<1,PPTR> = PKT.O.QTY<1,PPTR> + OSD.REL.QTY<1,OPTR,F>
+               ORD.FLAG=0 ;*this is release 
+               GOSUB RESERVE.LOCATION
+               OSD.P.QTY<1,OPTR,F> = OSD.REL.QTY<1,OPTR,F> - PICK.QTY
+            END
+         NEXT F
+      END
+   NEXT OPTR
+   GOSUB 2500
+   RETURN
+*
+*---- Display a single line
+*
+3000 *
+   IF PKT.KIT<1,T> # "K" THEN
+      IF PKT.O.QTY<1,T> + 0 = 0 THEN
+         RETURN
+      END
+   END
+   MATREAD INV.REC FROM INVENTORY, CONO:PKT.PROD<1,T> ELSE
+      MAT INV.REC = ""; INV.FULL.DESC = "Unknown"
+   END
+   IF INV.SUBS # "" AND INV.BASE.SKU = "" THEN
+      GOTO 3999
+   END
+   CCNT = DCOUNT(PKT.COMMENT<1,T>,SVM)
+   PALCNT = DCOUNT(PKT.R.QTY<1,T>,SVM)
+   IF PKT.O.QTY<1,T,2> + 0 = 0 AND PKT.KIT<1,T> = "K" THEN
+      IF LINE.CNT + CCNT + (1 * 2) > 55 THEN
+         GOSUB 4000
+      END
+      GOSUB 9000
+      P.LINE = "KIT" "L#20":INV.FULL.DESC "L#55"
+      TMP=CALC.STK.QTY(OSD.KIT.O.QTY<1,T>,MAT INV.CNV.REC,"","")
+      TMP=OCONV(TMP,ICR.CNV1:"Z")"R#10"
+      P.LINE :=TMP
+      PRINT P.LINE
+      FOR C = 1 TO CCNT
+         IF PKT.COMMENT<1,T,C> # "" THEN
+            P.LINE = ""
+            P.LINE = SPACE(20):PKT.COMMENT<1,T,C>"L#65"
+            PRINT P.LINE
+            LINE.CNT = LINE.CNT + 1
+         END
+      NEXT C
+      P.LINE = ""
+      PRINT P.LINE
+      LINE.CNT = LINE.CNT + 2
+      IF SUM(PKT.O.QTY<1,T>) LE 0 THEN
+         GOTO 3999
+      END
+   END
+   CCNT = DCOUNT(PKT.COMMENT<1,T>,SVM)
+   PALCNT = DCOUNT(PKT.R.QTY<1,T>,SVM)
+   IF PALCNT = 0 THEN PALCNT = 1
+   IF LINE.CNT + CCNT + (PALCNT * 2) > 55 THEN
+      GOSUB 4000
+   END
+   GOSUB 9000
+   FOR P = 1 TO PALCNT
+      INVR.ID=CONO:PKT.RECP.NO<1,T,P>
+      MATREAD INVR.REC FROM INV_RECEIPTS,INVR.ID THEN
+         JOB.NO=INVR.JOB
+      END ELSE
+         JOB.NO="????"
+      END
+      P.LINE = JOB.NO'L#14':SP1
+      P.LINE = P.LINE : PKT.SERIAL.LOC<1,T,P> "L#4"
+      P.LINE = P.LINE : SP1 : PKT.PROD<1,T> "L#15" : SPACE(30)
+      P.LINE = P.LINE : SP1 : PKT.WHSE<1,T> "L#4"
+      P.LINE = P.LINE : SP1 : INV.UNIT<1,3> "L#3"
+      P.LINE = P.LINE : SP1
+      TMP=CALC.STK.QTY(PKT.O.QTY<1,T,P>,MAT INV.CNV.REC,"","")
+      TMP=OCONV(TMP,ICR.CNV1:"Z")"R#10"
+      P.LINE:=TMP
+      P.LINE = P.LINE : SP1 
+      TMP=CALC.STK.QTY(PKT.S.QTY<1,T,P>,MAT INV.CNV.REC,'','')
+      TMP=OCONV(TMP,ICR.CNV1:"Z")"R#10"
+      P.LINE:=TMP
+      P.LINE = P.LINE : SP1 
+      TMP=CALC.STK.QTY(PKT.R.QTY<1,T,P>,MAT INV.CNV.REC,'','')
+      TMP=OCONV(TMP,ICR.CNV1:"Z")"R#10"
+      P.LINE:=TMP
+      PRINT P.LINE
+      P.LINE = ""
+      P.LINE = SPACE(20) : INV.FULL.DESC "L#45"
+      PRINT P.LINE
+      LINE.CNT = LINE.CNT + 2
+3009*
+   NEXT P
+*
+3010*
+*
+   IF OSD.KIT<1,T> # "K" THEN
+      FOR C = 1 TO CCNT
+         IF PKT.COMMENT<1,T,C> # "" THEN
+            P.LINE = ""
+            P.LINE = SPACE(20):PKT.COMMENT<1,T,C>"L#65"
+            PRINT P.LINE
+            LINE.CNT = LINE.CNT + 1
+         END
+      NEXT C
+   END
+   IF OSD.KIT<1,T> = "M" THEN
+      INDX = T + 1
+      IF OSD.KIT<1,INDX> # "M" THEN
+         IF LINE.CNT + 1 < 55 THEN
+            PRINT 
+            LINE.CNT = LINE.CNT + 1
+         END
+      END
+   END
+3999 *
+   RETURN
+*
+******************
+RESERVE.LOCATION: 
+******************
+*
+   RSVBLE.QTY = 0;RSVD.QTY=0
+   RECP.NO=OSD.RECP.NO<1,OPTR,F>
+   INVR.ID=CONO:RECP.NO
+   IF RECORDLOCKED(INV_RECEIPTS_TEMP,INVR.ID)=0 THEN    
+      DELETE INV_RECEIPTS_TEMP,INVR.ID                   
+   END                                                  
+   MATREADU INVR.REC FROM INV_RECEIPTS_TEMP,INVR.ID ELSE
+      MATREADU INVR.REC FROM INV_RECEIPTS,INVR.ID THEN   
+         IRW.ID=CONO:RECP.NO:"!":WHNO
+         IF RECORDLOCKED(INV_RECP_WHSE_TEMP,IRW.ID)=0 THEN      
+            DELETE INV_RECP_WHSE_TEMP,IRW.ID                     
+         END                                                    
+         MATREADU IRW.REC FROM INV_RECP_WHSE_TEMP,IRW.ID ELSE   
+            MATREADU IRW.REC FROM INV_RECP_WHSE,IRW.ID THEN      
+               SCNT=DCOUNT(IRW.SERIAL.NO,VM)
+               FOR S=1 TO SCNT WHILE PICK.QTY>0
+                  RSVBLE.QTY=0 ; RSVD.QTY=0
+                  ISTK.ID=CONO:IRW.SERIAL.NO<1,S>
+                  IF RECORDLOCKED(INV_SERIAL_TEMP,ISTK.ID)=0 THEN      
+                     DELETE INV_SERIAL_TEMP,ISTK.ID                     
+                  END                                               
+                  MATREAD ISTK.REC FROM INV_SERIAL_TEMP,ISTK.ID ELSE
+                     MATREADU ISTK.REC FROM INV_SERIAL,ISTK.ID THEN       
+                        RSVBLE.QTY=ISTK.RSVB.QTY
+                        IF RSVBLE.QTY > 0 THEN
+                           FPTR = FPTR + 1
+                           PKT.SERIAL<1,PPTR,FPTR>=IRW.SERIAL.NO<1,S>
+                           PKT.SERIAL.LOC<1,PPTR,FPTR>=ISTK.LOC
+                           IF PICK.QTY > RSVBLE.QTY THEN
+                              PKT.R.QTY<1,PPTR,FPTR> = RSVBLE.QTY
+                              ISTK.RSVB.QTY=0
+                              PICK.QTY = PICK.QTY - RSVBLE.QTY
+                              OIDX=DCOUNT(ISTK.ORDER<1>,VM)
+                              RIDX=DCOUNT(ISTK.RELNO<1>,VM)
+                              IF OIDX>=RIDX THEN IDX=OIDX ELSE IDX=RIDX
+                              IDX+=1
+                              IF NOT(ORD.FLAG) THEN
+                                 OIDX=DCOUNT(ISTK.RELNO<1>,VM)+1
+                                 ISTK.RELNO<1,IDX>=RELNO
+                                 ISTK.RRSVD.QTY<1,IDX>=RSVBLE.QTY
+                                 ISTK.ORDER<1,IDX>=''
+                                 ISTK.ORSVD.QTY<1,IDX>=''
+                              END ELSE
+                                 ISTK.ORDER<1,OIDX>=ORDNO
+                                 ISTK.ORSVD.QTY<1,OIDX>=RSVBLE.QTY
+                                 ISTK.RELNO<1,OIDX>=''
+                                 ISTK.RRSVD.QTY<1,OIDX>=''
+                              END
+                           END ELSE
+                              PKT.R.QTY<1,PPTR,FPTR> = PICK.QTY
+                              ISTK.RSVB.QTY -=PICK.QTY
+                              OIDX=DCOUNT(ISTK.ORDER<1>,VM)             
+                              RIDX=DCOUNT(ISTK.RELNO<1>,VM)             
+                              IF OIDX>=RIDX THEN IDX=OIDX ELSE IDX=RIDX 
+                              IDX+=1                                    
+                              IF NOT(ORD.FLAG) THEN
+                                 ISTK.RELNO<1,IDX>=RELNO
+                                 ISTK.RRSVD.QTY<1,IDX>=PICK.QTY
+                                 ISTK.ORDER<1,IDX>=''
+                                 ISTK.ORSVD.QTY<1,IDX>=''
+                              END ELSE
+                                 ISTK.ORDER<1,IDX>=ORDNO
+                                 ISTK.ORSVD.QTY<1,IDX>=PICK.QTY
+                                 ISTK.RELNO<1,IDX>=''
+                                 ISTK.RRSVD.QTY<1,IDX>=''
+                              END
+                              PICK.QTY = 0
+                           END
+                           MATWRITE ISTK.REC ON INV_SERIAL,ISTK.ID
+                           PKT.RECP.NO<1,PPTR,FPTR> = OSD.RECP.NO<1,OPTR,F>
+                           FIN = 1
+                        END
+                     END
+                     RELEASE INV_SERIAL,ISTK.ID
+                  END
+                  RELEASE INV_SERIAL_TEMP,ISTK.ID
+               NEXT S
+               IF (ORD.FLAG) THEN  
+                  OSD.P.QTY<1,OPTR,F> = OSD.FI.QTY<1,OPTR,F> - PICK.QTY
+               END ELSE
+                  OSD.P.QTY<1,OPTR,F> = OSD.REL.QTY<1,OPTR,F> - PICK.QTY
+               END
+            END
+            RELEASE INV_RECP_WHSE,IRW.ID
+         END
+         RELEASE INV_RECP_WHSE_TEMP,IRW.ID
+      END                                                
+      RELEASE INV_RECEIPTS,INVR.ID
+   END                                                  
+   RELEASE INV_RECEIPTS_TEMP, INVR.ID
+   RETURN
+*
+***********
+2500: 
+***********
+*
+   IF FIN THEN
+      ORD.PRINT = "P"
+      WRITE.FLG = 1
+      LOCATE PKT.KEY IN ORD.PICK.NO<1>,1 SETTING FND ELSE
+         ORD.PICK.NO<1,FND> = PKT.KEY
+      END
+      LINE.CNT = 99
+      PRODCNT = DCOUNT(PKT.PROD,VM)
+      FOR T = 1 TO PRODCNT
+         GOSUB 3000
+      NEXT T
+      PKT.PRINT.DATE = TODAY
+      IF (REL) THEN
+         PKT.REL.NO = RELNO
+      END
+      MATWRITE PKT.REC ON PICK.TICKET, PKT.ID
+   END
+   RETURN
+*
+*
+*---- PRINT HEADINGS
+4000 *
+   PRINT CHAR(12)
+   PAGE.NO = PAGE.NO + 1
+   PRINT HD1:PAGE.NO
+   PRINT HD2
+   PRINT SPACE(104):OCONV(REPORT.DATE,'D2/') ; * T27831
+   SHD = "ORDER       : " : ORDNO"L#7" : SPACE(2)
+   SHD = SHD : "CUSTOMER : " : ORD.CUST"L#6" : SPACE(21)
+   SHD = SHD : "SHIP TO  : " : SHPTO"R#3"
+   PRINT SHD
+   SHD = "PICK TICKET : ":PKT.KEY "L#12":SPACE(8)
+   SHD = SHD:CUST.NAME "L#25":SPACE(13):SPT.NAME
+   PRINT SHD
+   SHD = SPACE(34):CUST.ADDR1 "L#25":SPACE(13):SPT.ADDR1
+   PRINT SHD
+   CUST.ADDR4 = CUST.CITY:", ":CUST.STATE:SP1:CUST.ZIP
+   SHD = SPACE(34):CUST.ADDR4 "L#25":SPACE(13)
+   SHD = SHD:SPT.CITY:", ":SPT.STATE:SP1:SPT.ZIP
+   PRINT SHD
+   PRINT
+   PRINT S.HD1
+   PRINT S.UN1
+   LINE.CNT = 10
+   RETURN
+9000 *
+*COPY>ICSBP>INV.UM.CNV
+   RETURN
+*
+*--- CALLS FOR SYSCOM
+*
+91000 *
+   ERR.TYPE = 1;CALL SYSCOM(MAT SYSCOM.REC); RETURN
+92000 *
+   ERR.TYPE = 2;CALL SYSCOM(MAT SYSCOM.REC); RETURN
+93000 *
+   ERR.TYPE = 3;CALL SYSCOM(MAT SYSCOM.REC)
+99999 *
+   PRINTER OFF
+END

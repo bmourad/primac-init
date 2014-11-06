@@ -1,0 +1,476 @@
+      SUBROUTINE ASSETS.HIST.SUB
+*COPY>CPYLIB>COM1
+*COPY>FAS.CPYLIB>COM.ASSETS
+*********************************************************************
+* REVISION    - [08.1]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - FASBP
+* PROGRAM     - ASSETS.HIST.SUB
+* BY          - Ziad Yamout, Vercom Software, Inc.
+* DATE        - 09/25/88
+* DESCRIPTION - Fixed Assets Maintenance Program
+******* renee 08/18/1997 * Adding changes made to this program only in
+*                          Rev10b, to Rev11 for T21907 and C28633. (see
+*                          below)
+*T21907 larryt 05/20/1997 * CHANGE THE MAX PERIODS FROM 12 TO NUM
+*                           ACCT.PERIODS IN CONTROL FILE
+*********************************************************************
+*
+*COPY>FAS.CPYLIB>ASSETS
+*COPY>FAS.CPYLIB>DISPOSAL
+*COPY>PMC.CPYLIB>COA
+*COPY>PMC.CPYLIB>FISCAL
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+MAT SYSCOM.REC =  ""; SYS.TYPE = 2
+* T21907 v Open Control File, Read in Number of Accounting Periods
+OPEN "CONTROL" TO CONTROL ELSE
+  ERRMSG = "MISSING CONTROL FILE"
+  GOSUB 91000
+  STOP
+END
+READ NUM.PERIODS FROM CONTROL, CONO:"ACCT.PERIODS" ELSE NUM.PERIODS = 12
+NUM.PERIODS = NUM.PERIODS<1,1>
+IF NUM.PERIODS < 1 OR NUM.PERIODS > 99 THEN NUM.PERIODS = 12
+* T21907 ^
+      DIM F.DATE(4)
+      UPD.MON = 0
+      IF ONFILE THEN
+         SCV.REC(3)<ECD.SCRN.NO> = AST.FISCAL.MON
+         SCV.REC(4)<ECD.SCRN.NO> = AST.LAST.POST
+         FOR BT = 1 TO 2
+            BT1 = (BT * 2 - 1)
+            SCV.REC(BT+6)<ECD.SCRN.NO> = AST.BONUS.FLG<1,BT>
+            SCV.REC(BT+8)<ECD.SCRN.NO> = AST.BONUS.AMT<1,BT>
+            SCV.REC(BT+10)<ECD.SCRN.NO> = AST.BONUS.MON<1,BT>
+            SCV.REC(BT1+12)<ECD.SCRN.NO> = AST.BONUS.DATE<1,BT>
+            SCV.REC(BT1+13)<ECD.SCRN.NO> = AST.BONUS.PER<1,BT>
+         NEXT BT
+         SCV.REC(17)<ECD.SCRN.NO> = AST.DEPR.ALLOW ACCT.MASK
+         IF AST.DEPR.ALLOW AND GLS.FLG = "Y" THEN
+            MATREAD COA.REC FROM COA,CONO:AST.DEPR.ALLOW ELSE
+               COA.DESC = AST.DEPR.ALLOW ACCT.MASK
+            END
+         END ELSE
+            COA.DESC = AST.DEPR.ALLOW ACCT.MASK
+         END
+         SCV.REC(18)<ECD.SCRN.NO> = COA.DESC
+         SCV.REC(19)<ECD.SCRN.NO> = AST.DEPR.EXP ACCT.MASK
+         IF AST.DEPR.EXP AND GLS.FLG = "Y" THEN
+            MATREAD COA.REC FROM COA,CONO:AST.DEPR.EXP ELSE
+               COA.DESC = AST.DEPR.EXP ACCT.MASK
+            END
+         END ELSE
+            COA.DESC = AST.DEPR.EXP ACCT.MASK
+         END
+         SCV.REC(20)<ECD.SCRN.NO> = COA.DESC
+         SCV.REC(21)<ECD.SCRN.NO> = AST.DISP.DATE
+         SCV.REC(22)<ECD.SCRN.NO> = AST.DISPOSAL
+         IF AST.DISPOSAL # "" THEN
+            MATREAD DIS.REC FROM DISPOSAL,CONO:AST.DISPOSAL ELSE
+               DIS.DESC = "UNKNOWN"
+            END
+            SCV.REC(23)<ECD.SCRN.NO> = DIS.DESC
+         END
+         SCV.REC(24)<ECD.SCRN.NO> = AST.DISP.AMT
+         SCV.REC(25)<ECD.SCRN.NO> = AST.INVST.CRDT
+         ECD.ACTION = 3; CALL SCRN.EDIT
+         IF ONFILE > 1 AND AST.FISCAL.MON # "" THEN UPD.MON = 1
+      END ELSE
+         ECD.ACTION = 3; CALL SCRN.EDIT
+         FOR OPTION = 1 TO 3 WHILE ECD.RET.VALUE # "END"
+            ON OPTION GOSUB 1600,1700,2100
+         NEXT OPTION
+         IF ECD.RET.VALUE = "END" THEN
+            ONFILE = "END"; GOTO 99999
+         END
+      END
+*
+*--- Prompt line prompt
+      LOOP
+         ECD.NUM = 26; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ""
+         ECD.ACTION = 4; CALL SCRN.EDIT
+         OPTION = ECD.RET.VALUE
+         BEGIN CASE
+         CASE OPTION = "END" OR OPTION = "E" OR OPTION = ""
+            OPTION = "END"
+         CASE OPTION = "B"
+            BT = 1; BT1 = 1
+            GOSUB 500
+         CASE OPTION = "T"
+            BT = 2; BT1 = 3
+            GOSUB 500
+         CASE NOT(NUM(OPTION))
+            ERRMSG = "*** Invalid selection ***"; GOSUB 91000
+         CASE OPTION = 1
+            IF UPD.MON THEN
+               ERRMSG = "Asset already posted"; GOSUB 91000
+            END ELSE
+               GOSUB 1100
+            END
+         CASE OPTION < 6 OR OPTION > 11
+            ERRMSG = "*** Out of range ***"; GOSUB 91000
+         CASE 1
+            OPTION = OPTION - 5
+            ON OPTION GOSUB 1600,1700,1800,1900,2000,2100
+         END CASE
+      WHILE OPTION # "END" DO REPEAT
+      GOTO 99999
+*
+*--- BOOK or TAX control prompt
+500*
+      BEGIN CASE
+      CASE AST.FST.PER<1,BT> = ""
+         ERRMSG = "The depreciation start up period is not established"
+         GOSUB 91000; GOTO 509
+      CASE AST.DEPR.METHOD<1,BT>[1,1] = "U"
+      CASE AST.LST.PER<1,BT> = ""
+         ERRMSG = "The depreciation last up period is not established"
+         GOSUB 91000; GOTO 509
+      END CASE
+      LOOP
+         ECD.NUM = 27; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ""
+         ECD.ACTION = 4; CALL SCRN.EDIT
+         RESPOND = ECD.RET.VALUE
+         BEGIN CASE
+         CASE RESPOND = "END" OR RESPOND = "" OR RESPOND = "E"
+            RESPOND = "END"
+         CASE NOT(NUM(RESPOND))
+            ERRMSG = "*** Invalid selection ***"; GOSUB 91000
+         CASE RESPOND > 1 AND RESPOND < 6
+            RESPOND = RESPOND - 1
+            ON RESPOND GOSUB 1200,1300,1400,1500
+         CASE RESPOND > 101 AND RESPOND < 106
+            RESPOND = RESPOND - 101
+            ON RESPOND GOSUB 1200,1300,1400,1500
+         CASE 1
+            ERRMSG = "*** Out of range ***"; GOSUB 91000
+         END CASE
+      WHILE RESPOND # "END" DO REPEAT
+509*
+      RETURN
+*
+*--- Last posted period
+1100*
+      ECD.MINV = FR.CURR.PER[1,4]:"01"
+      BEGIN CASE
+      CASE AST.LST.PER<1,1>=AST.LST.PER<1,2> AND AST.LST.PER<1,1> > 0
+         ECD.MAXV = AST.LST.PER<1,1>
+      CASE AST.LST.PER<1,1> > AST.LST.PER<1,2>
+         ECD.MAXV = AST.LST.PER<1,1>
+      CASE AST.LST.PER<1,2> > AST.LST.PER<1,1>
+         ECD.MAXV = AST.LST.PER<1,2>
+      CASE 1
+         ECD.MAXV = 999912
+      END CASE
+      ECD.NUM = 3; ECD.ACTION = 4; CALL SCRN.EDIT
+      BEGIN CASE
+      CASE ECD.RET.VALUE = "END"
+      CASE ECD.RET.VALUE = ""
+         AST.FISCAL.MON = ""
+         AST.LAST.POST = ""
+         ECD.NUM = 4; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ""
+         ECD.ACTION = 5; CALL SCRN.EDIT
+      CASE ECD.RET.VALUE[5,2] < 1 OR ECD.RET.VALUE[5,2] > 12
+         ERRMSG = "Fiscal month is out of range"
+         GOSUB 91000; GOTO 1100
+      CASE 1
+         AST.FISCAL.MON = ECD.RET.VALUE
+*
+*--- Last posted date
+         MN = AST.FISCAL.MON[5,2]
+         ECD.DEFAULT = M.D.Y<MN,1>:"/":M.D.Y<MN,2>:"/":M.D.Y<MN,3>
+         ECD.DEFAULT = ICONV(ECD.DEFAULT,"D/")
+         ECD.NUM = 4; ECD.ACTION = 4; CALL SCRN.EDIT
+         IF ECD.RET.VALUE # "END" THEN
+            AST.LAST.POST = ECD.RET.VALUE
+         END
+      END CASE
+      RETURN
+*--- Bonus depreciation (BOOK & TAX)
+1200*
+      IF AST.BONUS.FLG<1,BT> = "" AND AST.BONUS.FLG<1,1> # "" THEN
+         ECD.DEFAULT = AST.BONUS.FLG<1,1>
+      END
+      ECD.NUM = BT + 6; ECD.ACTION = 4; CALL SCRN.EDIT
+      BEGIN CASE
+      CASE ECD.RET.VALUE = "END"
+         GOTO 1209
+      CASE ECD.RET.VALUE = "N"
+         AST.BONUS.FLG<1,BT> = ECD.RET.VALUE
+         AST.BONUS.AMT<1,BT> = ""
+         ECD.NUM = BT + 8; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ""
+         ECD.ACTION = 5; CALL SCRN.EDIT
+         AST.BONUS.MON<1,BT> = ""
+         ECD.NUM = BT + 10; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ""
+         ECD.ACTION = 5; CALL SCRN.EDIT
+         AST.BONUS.DATE<1,BT> = ""
+         ECD.NUM = BT1 + 12; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ""
+         ECD.ACTION = 5; CALL SCRN.EDIT
+         BEGIN CASE
+         CASE AST.BONUS.PER<1,BT> = ""
+         CASE AST.BONUS.PER<1,BT>[1,4]:"12" <= AST.FISCAL.MON
+         CASE 1
+            IF AST.BONUS.PER<1,BT> > AST.FISCAL.MON THEN
+               LIMIT = AST.BONUS.PER<1,BT>[5,2]
+            END ELSE
+               LIMIT = AST.FISCAL.MON[5,2] + 1
+            END
+            YR = AST.BONUS.PER<1,BT>[1,4] - AST.FST.PER<1,BT>[1,4] + 1
+            FOR P = 12 TO LIMIT STEP -1
+               D.REC(YR,BT) = DELETE(D.REC(YR,BT),P+12,0,0)
+            NEXT P
+         END CASE
+         AST.BONUS.PER<1,BT> = ""
+         ECD.NUM = 13 + BT1; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ""
+         ECD.ACTION = 5; CALL SCRN.EDIT
+      CASE AST.BONUS.FLG<1,BT> = ECD.RET.VALUE
+      CASE ECD.RET.VALUE # "Y"
+         ERRMSG = "Only year end will set this field as depreciated"
+         GOSUB 91000; GOTO 1200
+      CASE 1
+         AST.BONUS.FLG<1,BT> = "Y"
+         FOR OPTION = 1 TO 3 WHILE ECD.RET.VALUE # "END"
+            ON OPTION GOSUB 1300,1400,1500
+         NEXT OPTION
+         IF ECD.RET.VALUE = "END" THEN
+            AST.BONUS.FLG<1,BT> = "N"; GOTO 1200
+         END
+      END CASE
+1209*
+      RETURN
+*--- Yearly bonus depreciation amount (BOOK & TAX)
+1300*
+   IF AST.BONUS.FLG<1,BT> # "Y" THEN GOTO 1309
+1301*
+      IF AST.BONUS.AMT<1,BT> < 1 AND AST.BONUS.AMT<1,1> > 0 THEN
+         ECD.DEFAULT = AST.BONUS.AMT<1,1>
+      END
+      ECD.NUM = BT + 8; ECD.ACTION = 4; CALL SCRN.EDIT
+      BEGIN CASE
+      CASE ECD.RET.VALUE = "END"
+         GOTO 1309
+      CASE AST.BONUS.PER<1,BT> # ""
+         TEMP = AST.BONUS.AMT<1,BT>; AST.BONUS.AMT<1,BT> = ECD.RET.VALUE
+         O.B.PER = AST.BONUS.PER<1,BT>; CALL ASSETS.BONUS.SUB
+         IF O.B.PER = "END" THEN
+            AST.BONUS.AMT<1,BT> = TEMP; GOTO 1301
+         END
+      CASE 1
+         AST.BONUS.AMT<1,BT> = ECD.RET.VALUE
+      END CASE
+1309*
+   RETURN
+*--- Monthly or yearly (BOOK & TAX)
+1400*
+   IF AST.BONUS.FLG<1,BT> # "Y" THEN GOTO 1409
+1401*
+      IF AST.BONUS.MON<1,BT> = "" AND AST.BONUS.MON<1,1> # "" THEN
+         ECD.DEFAULT = AST.BONUS.MON<1,1>
+      END
+      ECD.NUM = BT + 10; ECD.ACTION = 4; CALL SCRN.EDIT
+*CSF 28633 v
+      BEGIN CASE
+      CASE ECD.RET.VALUE = 'M' OR ECD.RET.VALUE = 'END'
+      CASE NUM(ECD.RET.VALUE)
+        IF ECD.RET.VALUE >= 1 AND ECD.RET.VALUE <= NUM.PERIODS THEN GOTO 1402
+      CASE 1
+      END CASE
+      ERRMSG = 'INVALID INPUT'
+      GOSUB 91000
+      GOTO 1401
+      1402*
+*CSF 28633 ^
+      BEGIN CASE
+      CASE ECD.RET.VALUE = "END"
+         GOTO 1409
+      CASE AST.BONUS.PER<1,BT> # ""
+         TEMP = AST.BONUS.MON<1,BT>; AST.BONUS.MON<1,BT> = ECD.RET.VALUE
+         O.B.PER = AST.BONUS.PER<1,BT>; CALL ASSETS.BONUS.SUB
+         IF O.B.PER = "END" THEN
+            AST.BONUS.MON<1,BT> = TEMP; GOTO 1401
+         END
+      CASE 1
+         AST.BONUS.MON<1,BT> = ECD.RET.VALUE
+      END CASE
+1409*
+      RETURN
+*--- Bonus acquisition date (BOOK & TAX)
+1500*
+   IF AST.BONUS.FLG<1,BT> # "Y" THEN GOTO 1509
+1501*
+      IF AST.BONUS.DATE<1,BT> = "" AND AST.BONUS.DATE<1,1> # "" THEN
+         ECD.DEFAULT = AST.BONUS.DATE<1,1>
+      END
+      ECD.NUM = BT1 + 12; ECD.ACTION = 4; CALL SCRN.EDIT
+      IF ECD.RET.VALUE = "END" THEN GOTO 1509
+      ODATE = OCONV(ECD.RET.VALUE,"D/")
+      F.DATE(1) = ODATE[1,2]
+      F.DATE(2) = ODATE[4,2]
+      F.DATE(3) = ODATE[7,4]
+      F.DATE(4) = 31
+      LOOP WHILE F.DATE(1) # OCONV(ICONV(F.DATE(1):"/":F.DATE(4):"/":F.DATE(3),"D/"),"D/")[1,2] DO
+         F.DATE(4) = F.DATE(4) - 1
+      REPEAT
+      FST.MON = 0; PTR = 12
+      FOR I = 1 TO 12 WHILE FST.MON = 0
+         IF M.D.Y<PTR,1> > M.D.Y<I,1> THEN
+            PRIORXX = M.D.Y<I,1> - 1
+         END ELSE
+            PRIORXX = M.D.Y<PTR,1>
+         END
+         IF F.DATE(1) > PRIORXX AND F.DATE(1) <= M.D.Y<I,1> THEN
+            FST.MON = I
+         END
+         PTR = I
+      NEXT I
+      IF FST.MON = 0 THEN
+         ERRMSG = "Cannot locate the bonus month in sales dates"
+         GOSUB 91000; ECD.RET.VALUE = "END"; GOTO 1509
+      END
+      DIF.YRS = F.DATE(3) - M.D.Y<FST.MON,3>
+      FST.MON = 0; FYR.DATES = ""
+*--- NOTE : Dates in the salesdates should be in ascending order
+      FOR I = 1 TO 12 WHILE FST.MON = 0
+         IF E.O.M<I> > M.D.Y<I,1> THEN
+            FYR.DATES<I> = ICONV((M.D.Y<I,1>+1):"/1/":(M.D.Y<I,3> + DIF.YRS),"D/") - 1
+         END ELSE
+            FYR.DATES<I> = ICONV(M.D.Y<I,1>:"/":M.D.Y<I,2>:"/":(M.D.Y<I,3> + DIF.YRS),"D/")
+         END
+         IF ECD.RET.VALUE <= FYR.DATES<I> THEN
+            FST.MON = I
+         END
+      NEXT I
+      IF FST.MON = 0 THEN
+         ERRMSG = "Cannot determine the period of the bonus month"
+         GOSUB 91000; ECD.RET.VALUE = "END"; GOTO 1509
+      END
+      TEMP = ECD.RET.VALUE; O.B.PER = AST.BONUS.PER<1,BT>
+      AST.BONUS.PER<1,BT>=(FR.CURR.PER[1,4]+DIF.YRS):(FST.MON "R%2")
+      CALL ASSETS.BONUS.SUB
+      IF O.B.PER = "END" THEN GOTO 1501
+      AST.BONUS.DATE<1,BT> = TEMP
+      ECD.NUM = BT1 + 13
+      SCV.REC(ECD.NUM)<ECD.SCRN.NO> = AST.BONUS.PER<1,BT>
+      ECD.ACTION = 5; CALL SCRN.EDIT
+1509*
+      RETURN
+*
+*--- Depreciation allowance account
+1600  ECD.NUM = 17; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ""
+      ECD.ACTION = 5; CALL SCRN.EDIT
+      ECD.MAXL = IN.ACCT.LEN; ECD.PATRN = ACCT.MATCH
+      SCV.REC(ECD.NUM)<ECD.SCRN.NO> = AST.DEPR.ALLOW
+      IF AST.AUTO.POST # "Y" THEN ECD.O.R = "O"
+      ECD.ACTION = 4; CALL SCRN.EDIT
+      BEGIN CASE
+      CASE ECD.RET.VALUE = "END"
+         GOTO 1609
+      CASE ECD.RET.VALUE AND GLS.FLG = "Y"
+         MATREAD COA.REC FROM COA, CONO : ECD.RET.VALUE ELSE
+            ERRMSG = "Cannot locate account - " : ECD.RET.VALUE
+            GOSUB 91000; GOTO 1600
+         END
+      CASE 1
+         COA.DESC = ECD.RET.VALUE ACCT.MASK
+      END CASE
+      AST.DEPR.ALLOW = ECD.RET.VALUE
+      SCV.REC(ECD.NUM)<ECD.SCRN.NO> = AST.DEPR.ALLOW ACCT.MASK
+      ECD.ACTION = 5; CALL SCRN.EDIT
+      ECD.NUM = 18; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = COA.DESC
+      ECD.ACTION = 5; CALL SCRN.EDIT
+1609  RETURN
+*
+*--- Depreciation expense account
+1700  ECD.NUM = 19; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ""
+      ECD.ACTION = 5; CALL SCRN.EDIT
+      ECD.MAXL = IN.ACCT.LEN; ECD.PATRN = ACCT.MATCH
+      SCV.REC(ECD.NUM)<ECD.SCRN.NO> = AST.DEPR.EXP
+      IF AST.AUTO.POST # "Y" THEN ECD.O.R = "O"
+      ECD.ACTION = 4; CALL SCRN.EDIT
+      BEGIN CASE
+      CASE ECD.RET.VALUE = "END"
+         GOTO 1709
+      CASE ECD.RET.VALUE AND GLS.FLG = "Y"
+         MATREAD COA.REC FROM COA, CONO : ECD.RET.VALUE ELSE
+            ERRMSG = "Cannot locate account - " : ECD.RET.VALUE
+            GOSUB 91000; GOTO 1700
+         END
+      CASE 1
+         COA.DESC = ECD.RET.VALUE ACCT.MASK
+      END CASE
+      AST.DEPR.EXP = ECD.RET.VALUE
+      SCV.REC(ECD.NUM)<ECD.SCRN.NO> = AST.DEPR.EXP ACCT.MASK
+      ECD.ACTION = 5; CALL SCRN.EDIT
+      ECD.NUM = 20; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = COA.DESC
+      ECD.ACTION = 5; CALL SCRN.EDIT
+1709  RETURN
+*
+*--- Disposal date
+1800  ECD.NUM = 21; ECD.MAXV = DATE() + 365
+      ECD.MINV = AST.ACQUIRE.DATE; ECD.MAXV = DATE() + 364
+      ECD.ACTION = 4; CALL SCRN.EDIT
+      BEGIN CASE
+      CASE ECD.RET.VALUE = "END"
+         GOTO 1809
+      CASE ECD.RET.VALUE # ""
+         TEMP = ECD.RET.VALUE
+         FOR OPTION = 1 TO 2 WHILE ECD.RET.VALUE # "END"
+            ON OPTION GOSUB 1901,2001
+         NEXT OPTION
+         IF ECD.RET.VALUE = "END" THEN GOTO 1800
+         AST.DISP.DATE = TEMP
+      CASE 1
+         AST.DISP.DATE = ""
+         AST.DISPOSAL = ""
+         ECD.NUM = 22; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ""
+         ECD.ACTION = 5; CALL SCRN.EDIT
+         ECD.NUM = 23; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ""
+         ECD.ACTION = 5; CALL SCRN.EDIT
+         AST.DISP.AMT = ""
+         ECD.NUM = 24; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ""
+         ECD.ACTION = 5; CALL SCRN.EDIT
+      END CASE
+1809  RETURN
+*
+*--- Disposal code
+1900  IF AST.DISP.DATE = "" THEN GOTO 1909
+1901  ECD.NUM = 22; ECD.ACTION = 4; CALL SCRN.EDIT
+      IF ECD.RET.VALUE = "END" THEN GOTO 1909
+      MATREAD DIS.REC FROM DISPOSAL,CONO:ECD.RET.VALUE ELSE
+         ERRMSG = "Cannot locate Disposal code - ":ECD.RET.VALUE
+         GOSUB 91000; GOTO 1901
+      END
+      AST.DISPOSAL = ECD.RET.VALUE
+      ECD.NUM = 23; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = DIS.DESC
+      ECD.ACTION = 5; CALL SCRN.EDIT
+1909  RETURN
+*
+*--- Disposal proceeds
+2000  IF AST.DISP.DATE = "" THEN GOTO 2009
+2001  ECD.NUM = 24; ECD.ACTION = 4; CALL SCRN.EDIT
+      IF ECD.RET.VALUE = "END" THEN GOTO 2009
+      AST.DISP.AMT = ECD.RET.VALUE
+2009  RETURN
+*
+*--- Investment credit
+2100  IF AST.INVST.CRDT = "T" OR AST.INVST.CRDT = "A" THEN GOTO 2109
+      ECD.NUM = 25; ECD.ACTION = 4; CALL SCRN.EDIT
+      IF ECD.RET.VALUE # "END" THEN AST.INVST.CRDT = ECD.RET.VALUE
+2109  RETURN
+*
+*--- Error message routine
+*
+91000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+* 91000 PRINT @(0,23) : ERRMSG : CL :
+*       INPUT REPLY :
+*       PRINT @(0,23) : CL :
+*       RETURN
+99999 *
+ECD.ACTION = 99 ; CALL SCRN.EDIT
+RETURN
+   END

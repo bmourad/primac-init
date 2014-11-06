@@ -1,0 +1,945 @@
+SUBROUTINE BOLM_CalAmount
+********************************************************************************
+*   Program name :- BOLM_CalAmount
+*   Created:- 09/25/2003
+*   Author:- Mohammed Abdul Malik 
+
+* method to do edit checks and determine possible fiscal periods for BOL.
+* must get properties: BOL_NO, BOL_ORDER, BOL_RELEASE & BOL_PKTKT.
+* Also, gets line-item data from 'O'RDER.DETAIL, 'P'ICK.TICKET or 'R'ELEASE
+* records depending upon ID entered; i.e., (N or O), P or R.
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE OPS.CPYLIB ORDER
+$INCLUDE PMC.CPYLIB COMP.OPS
+$INCLUDE PMC.CPYLIB CUSTOMER
+$INCLUDE ICS.CPYLIB FNGD.BOM
+$INCLUDE PMC.CPYLIB SHIP.TO
+$INCLUDE PMC.CPYLIB SHIP.VIA
+$INCLUDE PMC.CPYLIB FISCAL
+$INCLUDE PMC.CPYLIB SALESDATES
+$INCLUDE PMC.CPYLIB FOB
+$INCLUDE OPS.CPYLIB ORDER.DETAIL
+$INCLUDE OPS.CPYLIB BOL
+$INCLUDE OPS.CPYLIB PICK.TICKET
+$INCLUDE OPS.CPYLIB ORDER.RELEASE
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB INV.WHSE
+$INCLUDE ICS.CPYLIB CATEGORY
+$INCLUDE ICS.CPYLIB INV_SERIAL       
+$INCLUDE ICS.CPYLIB INV_RECEIPTS     
+$INCLUDE ICS.CPYLIB INV_RECP_WHSE    
+$INCLUDE ICS.CPYLIB INV.CNV    
+$INCLUDE CPYLIB CHAR
+MAT BOL.REC = ''
+LN = 1
+FIRST = 0
+TEMP.DESC = ""
+TEMP.AVAIL = ""
+TEMP.SID = ""
+TEMP.LOC.AVAIL = "" ; *used only to pass qty. avail to BOL.LOC.SUB
+NUM.ON.SCRN = ""
+ROND=''
+OLD.RELNO=''; OLD.PKTKT=''
+MAT ORR.REC = ''
+MAT PKT.REC = ''
+
+IF FILEINFO(CONTROL,0)=0 THEN
+  OPEN '','CONTROL' TO CONTROL ELSE
+    ERRMSG='CONTROL file is missing!'
+    GOTO 93000
+  END
+END
+IF FILEINFO(ORDER,0)=0 THEN
+  OPEN '','ORDER' TO ORDER ELSE
+    ERRMSG='ORDER file is missing!'
+    GOTO 93000
+  END
+END
+OPEN "","SHIP.TO" TO SHIP.TO ELSE
+  ERRMSG = "Cannot locate the SHIP.TO file"; GOTO 93000
+END
+OPEN "","DAILY.BOL" TO DAILY.BOL ELSE
+  ERRMSG = "Cannot locate the DAILY.BOL file"; GOTO 93000
+END
+OPEN "","BOL" TO BOL ELSE
+  ERRMSG = "Cannot locate the BOL file"; GOTO 93000
+END
+OPEN "","PICK.TICKET" TO PICK.TICKET ELSE
+  ERRMSG = "Cannot locate the PICK.TICKET file"; GOTO 93000
+END
+OPEN "","FOB" TO FOB ELSE
+  ERRMSG = "Cannot locate the FOB file"; GOTO 93000
+END
+OPEN "","FNGD.BOM" TO FNGD.BOM ELSE
+  ERRMSG = "Cannot locate the FNGD.BOM file"; GOTO 93000
+END
+OPEN "","INV.FNGD" TO INV.FNGD ELSE
+  ERRMSG = "Cannot locate the INV.FNGD file"; GOTO 93000
+END
+OPEN "","ORDER.DETAIL" TO ORDER.DETAIL ELSE
+  ERRMSG = "Cannot locate the ORDER.DETAIL file"; GOTO 93000
+END
+OPEN "","INV.HIST" TO INV.HIST ELSE
+  ERRMSG = "Cannot locate the INV.HIST file"; GOTO 93000
+END
+OPEN "","INVENTORY" TO INVENTORY ELSE
+  ERRMSG = "Cannot locate the INVENTORY file"; GOTO 93000
+END
+OPEN "","INV.WHSE" TO INV.WHSE ELSE
+  ERRMSG = "Cannot locate the INV.WHSE file"; GOTO 93000
+END
+OPEN "","CATEGORY" TO CATEGORY ELSE
+  ERRMSG = "Cannot locate the CATEGORY file"; GOTO 93000
+END
+OPEN "","SECURITY" TO SECURITY ELSE ERRMSG = "SECURITY FILE MISSING"; GOTO 93000
+OPEN "","CUSTOMER" TO CUSTOMER ELSE ERRMSG = "CUSTOMER FILE MISSING"; GOTO 93000
+OPEN "","ORDER.RELEASE" TO ORDER.RELEASE ELSE ERRMSG = "ORDER.RELEASE FILE MISSING"; GOTO 93000
+IF FILEINFO(INV_RECEIPTS,0)=0 THEN                           
+  OPEN '','INV_RECEIPTS' TO INV_RECEIPTS ELSE                
+    ERRMSG="INV_RECEIPTS FILE IS MISSING";GOTO 93000         
+  END                                                        
+END                                                          
+IF FILEINFO(INV_RECEIPTS_TEMP,0)=0 THEN                      
+  OPEN '','INV_RECEIPTS_TEMP' TO INV_RECEIPTS_TEMP ELSE      
+    ERRMSG="INV_RECEIPTS_TEMP FILE IS MISSING";GOTO 93000    
+  END                                                        
+END                                                          
+IF FILEINFO(INV_RECP_WHSE,0)=0 THEN                          
+  OPEN '','INV_RECP_WHSE' TO INV_RECP_WHSE ELSE              
+    ERRMSG="INV_RECP_WHSE FILE IS MISSING";GOTO 93000        
+  END                                                        
+END                                                          
+IF FILEINFO(INV_RECP_WHSE_TEMP,0)=0 THEN                     
+  OPEN '','INV_RECP_WHSE_TEMP' TO INV_RECP_WHSE_TEMP ELSE    
+    ERRMSG="INV_RECP_WHSE_TEMP FILE IS MISSING";GOTO 93000   
+  END                                                        
+END                                                          
+IF FILEINFO(INV_SERIAL_TEMP,0)=0 THEN                     
+  OPEN '','INV_SERIAL_TEMP' TO INV_SERIAL_TEMP ELSE    
+    ERRMSG="INV_SERIAL_TEMP FILE IS MISSING";GOTO 93000   
+  END                                                        
+END                                                          
+IF FILEINFO(INV_SERIAL,0)=0 THEN                     
+  OPEN '','INV_SERIAL' TO INV_SERIAL ELSE    
+    ERRMSG="INV_SERIAL FILE IS MISSING";GOTO 93000   
+  END                                                        
+END                                                          
+*
+DEFFUN DIVISION.POSITION(CONO,CONTROL.FILE,DIV.CODE)        
+DEFFUN CURRENT.PERIOD(CONO,CONTROL.FILE,DIV.POS,FISCAL.FLAG)
+DEFFUN CalcStkQty(COST.QTY,MAT INV.CNV.REC,ROND,LN)
+*
+STATUS=RBO.getProperty('','ID',ID)
+STATUS=RBO.getProperty('','BOL_ORDER',BOL.ORDER)
+STATUS=RBO.getProperty('','BOL_PKTKT',BOL.PKTKT)
+STATUS=RBO.getProperty('','BOL_RELEASE',BOL.RELEASE)
+CONO=ID[1,3]
+ITYPE=ID[4,1]
+BOLNO=ID[4,7]
+ORDNO=BOL.ORDER<1,1>
+PKTKTNO=BOL.PKTKT<1,1>
+RELNO=BOL.RELEASE<1,1>
+MATREAD FISCAL.REC FROM CONTROL, CONO:"OPFISCAL" ELSE
+  ERRMSG = "Cannot locate Order Processing Fiscal Period !!"
+  GOTO 93000
+END
+MATREAD SALESDATES.REC FROM CONTROL, CONO:"SALESDATES" ELSE
+  ERRMSG = "Cannot locate the Sales period ending dates !!"
+  GOTO 93000
+END
+READ PERIOD.REC FROM CONTROL, CONO:"ACCT.PERIODS" ELSE
+  PERIOD.REC = ""
+  PERIOD.REC<1> = 12
+END
+NUM.PERIODS = PERIOD.REC<1>
+READ DIVISION.REC FROM CONTROL, CONO:"DIVISIONS" ELSE
+  ERRMSG = "DIVISIONS CONTROL RECORD IS MISSING"
+  GOTO 93000
+END
+*
+READ SECURITY.REC FROM CONTROL, CONO:"DIV.SECURITY" ELSE
+  ERRMSG = "DIV.SECURITY CONTROL RECORD IS MISSING"; GOTO 93000
+END
+MATREAD OPCO.REC FROM CONTROL, CONO:'OPS' ELSE
+  MAT OPCO.REC = ''
+END
+*
+*
+BEGIN CASE
+  CASE PKTKTNO # "" OR ITYPE = 'P'
+    ITYPE = "T"
+    ICODE = PKTKTNO
+  CASE RELNO # "" OR ITYPE = 'R'
+    ITYPE = "R"
+    ICODE = RELNO
+  CASE (ORDNO # "" OR ITYPE = 'N' OR ITYPE = 'O') AND OPCO.SHP.FRM # "R"
+    ITYPE = "O"
+    ICODE = ORDNO
+  CASE 1
+    ITYPE = ""
+    ICODE = ""
+END CASE
+IF NUM(BOLNO) THEN
+  MATREAD BOL.REC FROM DAILY.BOL,ID ELSE
+    ERRMSG='Cannot locate DAILY.BOL record ':ID
+    GOTO 93000
+  END
+  NEWREC = 0
+  SHPNO = BOL.SHIP.TO
+  ORDNO = BOL.ORDER<1,1>
+  MATREAD ORD.REC FROM ORDER,CONO:BOL.ORDER<1,1> ELSE
+    ERRMSG='Cannot locate ORDER record ':CONO:BOL.ORDER
+    GOTO 93000
+  END
+  DIV.CODE = ORD.DIV
+  OLD.RELNO = BOL.RELEASE
+  OLD.PKTKT = BOL.PKTKT
+  ITYPE = BOL.TYPE<1,1>
+  BEGIN CASE
+  CASE ITYPE='O'
+    ICODE=ORDNO
+  CASE ITYPE='R'
+    ICODE=BOL.RELEASE<1,1>
+    MATREAD ORR.REC FROM ORDER.RELEASE,CONO:ICODE ELSE
+      ERRMSG='Cannot locate ORDER.RELEASE record ':CONO:ICODE
+      GOTO 93000
+    END
+    RELNO=ICODE
+  CASE ITYPE='T'
+    ICODE=BOL.PKTKT<1,1>
+    MATREAD PKT.REC FROM PICK.TICKET,CONO:ICODE ELSE
+      ERRMSG='Cannot locate PICK.TICKET record ':CONO:ICODE
+      GOTO 93000
+    END
+    PKTKTNO=ICODE
+  END CASE
+  CUSTNO = ORD.CUST
+END ELSE
+  NEWREC=1; BOLNO='N'
+  IF ITYPE = 'T' THEN
+    MATREAD PKT.REC FROM PICK.TICKET,CONO:PKTKTNO ELSE
+      ERRMSG='Cannot locate PICK.TICKET record ':CONO:PKTKTNO
+      GOTO 93000
+    END
+    ORDNO = FIELD(PKTKTNO,'-',1)
+    SHPNO = PKT.SHIP.TO
+  END
+  IF ITYPE = 'R' THEN
+    MATREAD ORR.REC FROM ORDER.RELEASE,CONO:RELNO ELSE
+      ERRMSG='Cannot locate ORDER.RELEASE record ':CONO:RELNO
+      GOTO 93000
+    END
+    ORDNO = ORR.ORD
+    SHPNO = ORR.SHIP.TO
+  END
+  IF ORDNO = '' THEN
+    ERRMSG='Invalid Order No. ':'"':ORDNO:'"'
+    GOTO 93000
+  END
+  MATREAD ORD.REC FROM ORDER, CONO:ORDNO ELSE
+    ERRMSG='Cannot read ORDER record ':CONO:ORDNO
+    GOTO 93000
+  END
+  CUSTNO=ORD.CUST
+  DIV.CODE=ORD.DIV
+  MATREAD CUST.REC FROM CUSTOMER, CONO:CUSTNO ELSE
+    ERRMSG='Cannot read CUSTOMER record ':CONO:CUSTNO
+    GOTO 93000
+  END
+  IF ORD.STATUS<1,1> = "CLOSED" OR ORD.STATUS<1,1> = "CANCEL" THEN
+    ERRMSG = "Order has either been closed or cancelled"
+    GOTO 93000
+  END
+  IF ITYPE = 'O' THEN
+    IF OPCO.SHP.FRM ='R' THEN
+      ERRMSG='Must use a Release to ship this Order.'
+      GOTO 93000
+    END
+    STATUS=RBO.getProperty('','BOL_SHIP_TO',SHPNO)
+  END
+  IF ITYPE = 'R' THEN
+    IF OPCO.SHP.FRM ='O' THEN
+      ERRMSG='Shipment from Release not allowed!'
+      GOTO 93000
+    END
+  END
+  IF SHPNO='' OR SHPNO = '000' THEN
+    ERRMSG='Invalid Ship-To ':'"':SHPNO:'"'
+    GOTO 93000
+  END
+END ;* ADDED
+MATREAD ORD.DET.REC FROM ORDER.DETAIL, CONO:ORDNO:"!":SHPNO ELSE
+  ERRMSG='Cannot locate ORDER.DETAIL record ':CONO:ORDNO:"!":SHPNO
+  GOTO 93000
+END
+GOSUB 4000
+IF ERRMSG # "" THEN GOTO 93000
+LINES = DCOUNT(BOL.PROD,VM) 
+IF LINES > 0 THEN
+  FOR REF = 1 TO LINES
+    PROD = BOL.PROD<1,REF>
+    WHSE = BOL.WHSE<1,REF>
+    ORDNO = BOL.ORDER<1,REF>
+    RECP = BOL.RECP.NO<1,REF,1>
+    KIT   = BOL.KIT<1,REF>
+    PROD.SEQ = BOL.SEQ<1,REF>
+    TEMP.SID<1,REF> = PROD:"!":WHSE:"!":ORDNO:"!":RECP
+    PTR = 1
+    LOOP
+      LOCATE PROD IN OSD.PROD<1>,PTR SETTING PLOC THEN
+        IF (OSD.WHSE<1,PLOC> = WHSE) AND (OSD.KIT<1,PLOC> = KIT) AND (OSD.PROD.SEQ<1,PLOC> = PROD.SEQ) THEN PTR = 0
+      END ELSE
+        PTR = 0; PLOC = 0
+      END
+    WHILE PTR > 0 DO
+      PTR = PLOC+1
+    REPEAT
+    IF PLOC > 0 THEN
+      GOSUB 7650
+      LCNT = DCOUNT(BOL.LOC<1,REF>,SM)
+      PREV.RECP.NO = 0       ;*T24732
+      FOR LPTR = 1 TO LCNT
+        WLOC = BOL.LOC<1,REF,LPTR>
+        RECP = BOL.RECP.NO<1,REF,LPTR>
+        LOCATE RECP IN OSD.RECP.NO<1,PLOC>,1 SETTING P ELSE NULL
+        AQTY = OSD.FI.QTY<1,PLOC,P>+0
+        IF PREV.RECP.NO = 0 OR PREV.RECP.NO # RECP THEN                  
+          TEMP.AVAIL<1,REF> = TEMP.AVAIL<1,REF> + AQTY
+        END             
+        BOL.QTY<1,REF,LPTR> = CalcStkQty(BOL.QTY<1,REF,LPTR>,MAT INV.CNV.REC,ROND,LN)
+        RSVBLE.QTY=0;RSVD.QTY=0
+        ISTK.ID=CONO:"R":RECP:"!":WHSE:"!":WLOC             
+        IF RECORDLOCKED(INV_SERIAL_TEMP,ISTK.ID)=0 THEN     
+          DELETE INV_SERIAL_TEMP,ISTK.ID                    
+        END                                                 
+        MATREADU ISTK.REC FROM INV_SERIAL_TEMP,ISTK.ID ELSE 
+          MATREADU ISTK.REC FROM INV_SERIAL,ISTK.ID THEN    
+            IF (RELNO='') THEN                              
+              LOCATE ORDNO IN ISTK.ORDER<1> SETTING OPOS THEN  
+                RSVD.QTY=ISTK.ORSVD.QTY<1,OPOS>              
+              END                                           
+            END ELSE                                        
+              LOCATE RELNO IN ISTK.RELNO<1> SETTING RELPOS THEN
+                RSVD.QTY=ISTK.RRSVD.QTY<1,RELPOS>            
+              END                                           
+            END                                             
+            ;* return back quantity that has been reserved  
+            ;* for this order/release into reservable qty   
+            RSVBLE.QTY=ISTK.RSVB.QTY+RSVD.QTY                
+          END                                               
+          RELEASE INV_SERIAL,ISTK.ID                        
+        END                                                 
+        RELEASE INV_SERIAL_TEMP,ISTK.ID                     
+*       TEMP.LOC.AVAIL<1,REF,LPTR>=TEMP.LOC.AVAIL<1,REF,LPTR>+RSVBLE.QTY
+        TEMP.LOC.AVAIL<1,REF,LPTR>=RSVBLE.QTY
+        TEMP.LOC.AVAIL<1,REF,LPTR> = CalcStkQty(TEMP.LOC.AVAIL<1,REF,LPTR>,MAT INV.CNV.REC,ROND,LN)
+        PREV.RECP.NO = RECP
+      NEXT LPTR
+      TEMP.AVAIL<1,REF> = CalcStkQty(TEMP.AVAIL<1,REF>,MAT INV.CNV.REC,ROND,LN)
+    END ELSE
+      TEMP.AVAIL<1,REF> = 0
+    END
+  NEXT REF
+  K = 0
+  FOR I = 1 TO LINES
+    IF TEMP.AVAIL<1,I> > 0 THEN
+      K = K + 1
+      NUM.ON.SCRN<1,K> = I
+    END
+  NEXT I
+  LINES = DCOUNT(NUM.ON.SCRN,VM)  ;*T24647
+END ELSE
+  FIRST = 1
+*   If ITYPE = null then must prompot for it... cannot be null.
+  TEMP.TYPE = ITYPE
+*7020 *
+  UPDCNT = 0
+  BEGIN CASE
+    CASE TEMP.TYPE = "O"
+      ICODE = ORDNO
+      GOSUB 7500
+    CASE TEMP.TYPE = "T"
+      GOSUB 7510
+    CASE TEMP.TYPE = "R"
+      GOSUB 7520
+  END CASE
+  NUM.ON.SCRN = ""
+  K = 0
+  NUM.PROD = DCOUNT(BOL.PROD,VM)
+  FOR I = 1 TO NUM.PROD
+    IF TEMP.AVAIL<1,I> > 0 THEN
+      K = K + 1
+      NUM.ON.SCRN<1,K> = I
+    END
+  NEXT I
+  BEGIN CASE
+  CASE UPDCNT = 1
+    LINES = DCOUNT(BOL.PROD,VM)
+  CASE UPDCNT > 1
+    LINES = DCOUNT(NUM.ON.SCRN,VM)
+  END CASE
+END
+IF NEWREC THEN
+
+  STATUS=RBO.setProperty('','ID',CONO:BOLNO)
+  STATUS=RBO.setProperty('','BOL_NO',BOLNO)
+  STATUS=RBO.setProperty('','BOL_CUST',CUSTNO)
+  STATUS=RBO.setProperty('','BOL_SHIP_TO',SHPNO)
+  STATUS=RBO.setProperty('','BOL_FOB',BOL.FOB)
+  STATUS=RBO.setProperty('','BOL_TAX_JUR',BOL.TAX.JUR)
+  STATUS=RBO.setProperty('','SPT_NAME',SPT.NAME)
+  STATUS=RBO.setProperty('','SPT_ADDR1',SPT.ADDR1)
+  STATUS=RBO.setProperty('','SPT_ADDR2',SPT.ADDR2)
+  STATUS=RBO.setProperty('','SPT_CITY',SPT.CITY)
+  STATUS=RBO.setProperty('','SPT_STATE',SPT.STATE)
+  STATUS=RBO.setProperty('','SPT_ZIP',SPT.ZIP)
+  STATUS=RBO.setProperty('','BOL_TAX_JUR',SPT.TAX.JUR)
+  STATUS=RBO.setProperty('','BOL_FOB',SPT.FOB)
+  STATUS=RBO.setProperty('','BOL_TYPE',BOL.TYPE)
+  STATUS=RBO.setProperty('','BOL_PROD',BOL.PROD)
+  STATUS=RBO.setProperty('','BOL_WHSE',BOL.WHSE)
+  STATUS=RBO.setProperty('','BOL_LOC',BOL.LOC)
+  STATUS=RBO.setProperty('','BOL_KIT',BOL.KIT)
+  STATUS=RBO.setProperty('','BOL_SEQ',BOL.SEQ)
+  STATUS=RBO.setProperty('','BOL_BOM_NUM',BOL.BOM.NUM)
+  STATUS=RBO.setProperty('','BOL_RECP_NO',BOL.RECP.NO)
+  STATUS=RBO.setProperty('','BOL_SHP_WT',BOL.SHP.WT)
+  STATUS=RBO.setProperty('','BOL_CRTN_CNT',BOL.CRTN.CNT)
+  STATUS=RBO.setProperty('','BOL_SHP_AMT',BOL.SHP.AMT)
+  STATUS=RBO.setProperty('','BOL_SKD_CNT',BOL.SKD.CNT)
+END
+
+STATUS=RBO.setProperty('','BOL_PKTKT',PKTKTNO)
+STATUS=RBO.setProperty('','BOL_RELEASE',RELNO)
+STATUS=RBO.setProperty('','BOL_ORDER',ORDNO)
+STATUS=RBO.setProperty('','BOL_QTY',BOL.QTY)
+STATUS=RBO.setProperty('','DEFAULT_PERIOD',DEFAULT.PERIOD)
+STATUS=RBO.setProperty('','VALDAT_PERIODS',VALDAT.PERIODS)
+STATUS=RBO.setProperty('','ITYPE',ITYPE)
+STATUS=RBO.setProperty('','ICODE',ICODE)
+STATUS=RBO.setProperty('','LINES',LINES)
+STATUS=RBO.setProperty('','TEMP_SID',TEMP.SID)
+STATUS=RBO.setProperty('','TEMP_AVAIL',TEMP.AVAIL)
+STATUS=RBO.setProperty('','TEMP_LOC_AVAIL',TEMP.LOC.AVAIL)
+STATUS=RBO.setProperty('','NUM_ON_SCRN',NUM.ON.SCRN)
+STATUS=RBO.setProperty('','OLD_RELNO',OLD.RELNO)
+STATUS=RBO.setProperty('','OLD_PKTKT',OLD.PKTKT)
+
+RETURN
+*
+*Subroutines
+*
+4000*
+ERRMSG = ""
+BEGIN CASE
+  CASE PKTKTNO # ""
+    BEGIN CASE
+      CASE SUM(PKT.SHIP.QTY) > 0
+        ERRMSG = "Ticket has already been shipped"
+        GOTO 4099
+      CASE PKT.BOL # "" AND PKT.BOL # BOLNO
+        ERRMSG = "Ticket is on Bill of Lading ":PKT.BOL
+        GOTO 4099
+    END CASE
+    IF PKT.REL.NO # "" THEN
+      MATREAD ORR.REC FROM ORDER.RELEASE, CONO:PKT.REL.NO ELSE
+        ERRMSG = "Cannot locate Release # ":PKT.REL.NO
+        GOTO 4099
+      END
+      IF NEWREC AND ORR.STATUS<1,1> # "" THEN
+        ERRMSG = "Release ":PKT.REL.NO:" ":ORR.STATUS<1,1>
+        GOTO 4099
+      END
+      RELNO = PKT.REL.NO
+    END
+    GOSUB 4100
+    IF ERRMSG # "" THEN GOTO 4099
+    IF PKT.REL.NO = "" THEN
+      IF ORD.REL.NO # "" THEN
+        ERRMSG = "Release required for shipment! "
+        GOTO 4099
+      END
+    END ELSE
+      LOCATE PKT.REL.NO IN ORD.REL.NO<1>,1 SETTING FND ELSE
+        ERRMSG = "Cannot locate ticket release # on order! "
+        GOTO 4099
+      END
+    END
+    AVL.PROD = ""; AVL.WHSE = ""; AVL.QTY = ""
+    FOR PDNO = PDCNT TO 1 STEP -1
+      PNO = PDPTR<PDNO>; PPOS = 1
+      LOOP
+        LOCATE OSD.PROD<1,PNO> IN PKT.PROD<1>,PPOS SETTING PLOC THEN
+          IF (OSD.WHSE<1,PNO> = PKT.WHSE<1,PLOC>) AND (OSD.KIT<1,PNO> = PKT.KIT<1,PLOC>) AND (OSD.PROD.SEQ<1,PNO> = PKT.SEQ<1,PLOC>) THEN
+            PPOS = 0
+            QCNT = DCOUNT(QTYPTR<PDNO>,VM)
+            FOR QNO = QCNT TO 1 STEP -1
+              RNO = QTYPTR<PDNO,QNO>
+              IF OSD.REL.NO<1,PNO,RNO> # RELNO THEN
+                QTYPTR = DELETE(QTYPTR,PDNO,QNO,0)
+              END ELSE
+                LOCATE OSD.RECP.NO<1,PNO,RNO> IN PKT.RECP.NO<1,PLOC>,1 SETTING FND ELSE
+                  QTYPTR = DELETE(QTYPTR,PDNO,QNO,0)
+                END
+              END
+            NEXT QNO
+            IF QTYPTR<PDNO> = "" THEN
+              PDPTR = DELETE(PDPTR,PDNO,0,0)
+              QTYPTR = DELETE(QTYPTR,PDNO,0,0)
+            END
+          END
+        END ELSE
+          PDPTR = DELETE(PDPTR,PDNO,0,0)
+          QTYPTR = DELETE(QTYPTR,PDNO,0,0)
+          PPOS = 0
+        END
+      WHILE PPOS DO
+        PPOS = PLOC + 1
+      REPEAT
+    NEXT PDNO
+    PDCNT = DCOUNT(PDPTR,AM)
+    IF PDCNT < 1 THEN
+      ERRMSG = "Cannot locate any available quantity for this Pick Ticket ":PKTKTNO
+    END
+  CASE RELNO # ""
+    IF NEWREC AND ORR.STATUS<1,1> # "" THEN
+      ERRMSG = "Release ":RELNO:" ":ORR.STATUS<1,1>
+      GOTO 4099
+    END
+    GOSUB 4100
+    IF ERRMSG # "" THEN GOTO 4099
+    IF ORD.PICK.NO # "" THEN
+      ERRMSG = "Picking Ticket # required for this order."
+      GOTO 4099
+    END
+    FOR PDNO = PDCNT TO 1 STEP -1
+      PNO = PDPTR<PDNO>
+      QCNT = DCOUNT(QTYPTR<PDNO>,VM)
+      FOR QNO = QCNT TO 1 STEP -1
+        RNO = QTYPTR<PDNO,QNO>
+        IF OSD.REL.NO<1,PNO,RNO> # RELNO THEN
+          QTYPTR = DELETE(QTYPTR,PDNO,QNO,0)
+        END
+      NEXT QNO
+      IF QTYPTR<PDNO> = "" THEN
+        PDPTR = DELETE(PDPTR,PDNO,0,0)
+        QTYPTR = DELETE(QTYPTR,PDNO,0,0)
+      END
+    NEXT PDNO
+    PDCNT = DCOUNT(PDPTR,AM)
+*   IF PDCNT < 1 THEN
+*     ERRMSG = "Cannot locate any available quantity for Release # ":RELNO
+*     ERRMSG = ''      ;*T24815
+*   END
+  CASE 1
+    GOSUB 4100
+END CASE
+4099*
+RETURN
+4100*
+DIV.CODE = ORD.DIV; USER.ID = UPCASE(@LOGNAME); ERRMSG = ''
+CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+IF ERRMSG # '' THEN GOTO 4199
+GOSUB 6000
+IF ERRMSG # '' THEN GOTO 4199
+LOCATE SHPNO IN ORD.SHIP.TO<1>,2 SETTING SLOC ELSE
+  ERRMSG = "Cannot associate ship to (":SHPNO:") with order # ":ORDNO
+  GOTO 4199
+END
+MATREAD SPT.REC FROM SHIP.TO, CONO:CUSTNO:"!":SHPNO ELSE
+  ERRMSG = "Cannot locate ship to # ":SHPNO
+  GOTO 4199
+END
+PCNT = DCOUNT(OSD.PROD,VM)
+PDPTR = ""; QTYPTR = ""
+PRODPTR = ""
+FOR PNO = 1 TO PCNT
+  RCNT = DCOUNT(OSD.FI.QTY<1,PNO>,SVM)
+  FOR RNO = 1 TO RCNT
+*
+    IF OSD.KIT<1,PNO> # "N" THEN
+      IF OSD.KIT<1,PNO> = "K" THEN
+        IF OSD.FI.QTY<1,PNO,RNO> > 0 THEN
+          LOCATE PNO IN PDPTR,1 SETTING PLOC ELSE
+            PDPTR<PLOC> = PNO
+          END
+          QTYPTR<PLOC,-1> = RNO
+        END ELSE
+          LOCATE PNO IN PDPTR,1 SETTING PLOC ELSE
+            PDPTR<PLOC> = PNO
+          END
+          QTYPTR<PLOC,-1> = RNO + 1
+        END
+      END ELSE
+        IF OSD.FI.QTY<1,PNO,RNO> > 0 THEN
+          LOCATE PNO IN PDPTR,1 SETTING PLOC ELSE
+            PDPTR<PLOC> = PNO
+          END
+          QTYPTR<PLOC,-1> = RNO
+        END
+      END
+    END ELSE
+      IF OSD.FI.QTY<1,PNO,RNO> > 0 THEN
+        LOCATE PNO IN PDPTR,1 SETTING PLOC ELSE
+          PDPTR<PLOC> = PNO
+        END
+        QTYPTR<PLOC,-1> = RNO
+      END
+    END
+  NEXT RNO
+NEXT PNO
+PDCNT = DCOUNT(PDPTR,AM)
+IF PDCNT < 1 THEN
+  ERRMSG = "Cannot locate any available quantity for this Order/Ship to ":ORDNO:" / ":SHPNO
+END
+4199*
+RETURN
+6000*
+DIV.POS=DIVISION.POSITION(CONO,CONTROL,DIV.CODE)                       
+IF DIV.POS<1,1>='' THEN                                                
+  DIV.POS=DIV.POS<1,2>
+  CUR.PERIOD=CURRENT.PERIOD(CONO,CONTROL,DIV.POS,'OP')
+  IF CUR.PERIOD<1,1>='' THEN
+    CUR.PERIOD=CUR.PERIOD<1,2>
+    ERR.FLG='' ; ERRMSG='' ; NEXT.PERIOD=''
+    CALL GET.NEXT.PERIOD(CONO,DIV.CODE,'OP',NEXT.PERIOD,ERR.FLG,ERRMSG)
+    VALDAT.PERIODS=''
+    VALDAT.PERIODS<1>=CUR.PERIOD:VM:NEXT.PERIOD
+*   VALDAT.PR=CONVERT(VM,',',VALDAT.PR)
+    TODAY=DATE()
+    DEFAULT.PERIOD=CUR.PERIOD
+  END ELSE
+    ERRMSG=CUR.PERIOD<1,2>
+  END
+END ELSE                                                               
+  ERRMSG=DIV.POS<1,2>
+END                                                                    
+6099*
+RETURN
+*
+*--- Get data from ORDER DETAIL
+7500 *
+ICODE = ""
+IF ITYPE = "" THEN
+  IPTR = DCOUNT(BOL.PROD,VM)
+END ELSE
+  IPTR = LN-1
+END
+PCNT = DCOUNT(OSD.PROD,VM)
+FOR PPTR = 1 TO PCNT
+  PROD = OSD.PROD<1,PPTR>
+  WHSE = OSD.WHSE<1,PPTR>
+  KIT  = OSD.KIT<1,PPTR>
+  PSEQ = OSD.PROD.SEQ<1,PPTR>
+  BOM.NUMBER = OSD.BOM.NUM<1,PPTR>
+  GOSUB 7650
+  IF NOT(BAD.PROD) THEN
+    RCNT = DCOUNT(OSD.RECP.NO<1,PPTR>,SM)
+    IF RCNT = 0 THEN RCNT = 1
+    FOR RPTR = 1 TO RCNT
+      RECP = OSD.RECP.NO<1,PPTR,RPTR>
+      RELNO = OSD.REL.NO<1,PPTR,RPTR>   ;*T24693
+      PKTKT=""; WLOC=""; WGHT=""
+      RQTY = OSD.FI.QTY<1,PPTR,RPTR>+0
+      AQTY = RQTY
+      GOSUB 7550
+    NEXT RPTR
+  END ELSE GOTO 93000
+NEXT PPTR
+RETURN
+*
+*--- Get data from PICK TICKET
+7510 *
+VALUE = ICODE
+ICODE = ""
+MATREAD PKT.REC FROM PICK.TICKET, CONO:VALUE ELSE
+  ERRMSG = "Pick Ticket is not on File"
+  GOTO 93000
+END
+PKTKT = VALUE
+RELNO = PKT.REL.NO
+IF RELNO # "" THEN
+  MATREAD ORR.REC FROM ORDER.RELEASE, CONO:RELNO ELSE
+    ERRMSG = "Release is NOT on File"
+    GOTO 93000
+  END
+  IF (ORR.STATUS<1,1> # "") AND (ORR.BOL # BOLNO) THEN
+    ERRMSG = "Release ":RELNO:" ":ORR.STATUS<1,1>
+    GOTO 93000
+  END
+END
+IPTR = LN-1
+PCNT = DCOUNT(OSD.PROD,VM)
+FOR PPTR = 1 TO PCNT
+  PROD = OSD.PROD<1,PPTR>
+  WHSE = OSD.WHSE<1,PPTR>
+  PROD.SEQ = OSD.PROD.SEQ<1,PPTR>
+  PSEQ     = OSD.PROD.SEQ<1,PPTR>
+  KIT      = OSD.KIT<1,PPTR>
+  BOM.NUMBER = OSD.BOM.NUM<1,PPTR>
+  PTR = 1
+  LOOP
+    LOCATE PROD IN PKT.PROD<1>,PTR SETTING TPTR THEN
+      IF (PKT.WHSE<1,TPTR> = WHSE) AND (PKT.KIT<1,TPTR> = KIT) AND (PKT.SEQ<1,TPTR> = PROD.SEQ) THEN PTR = 0
+    END ELSE
+      TPTR=0; PTR=0
+    END
+  UNTIL PTR = 0 DO
+    PTR = TPTR+1
+  REPEAT
+  IF TPTR = 0 THEN GOTO 7519
+  IF PKT.SHIP.QTY<1,TPTR> > 0 THEN GOTO 7519
+  GOSUB 7650
+  IF NOT(BAD.PROD) THEN
+    RCNT = DCOUNT(PKT.RECP.NO<1,TPTR>,SM)
+    IF RCNT = 0 THEN RCNT = 1
+    LOCATE RELNO IN OSD.REL.NO<1,PPTR> SETTING REL.POS ELSE REL.POS = 0
+    FOR RPTR = 1 TO RCNT
+      RECP = PKT.RECP.NO<1,TPTR,RPTR>
+      IF ((KIT="K" OR KIT="M") AND OSD.REL.NO<1,PPTR,RPTR>="") OR (REL.POS) THEN      ;*T24693
+        WLOC=""; WGHT=""
+        WLOC = PKT.SERIAL.LOC<1,TPTR,RPTR>;* T20852
+        RQTY = PKT.R.QTY<1,TPTR,RPTR>+0;* T20852
+        AQTY = RQTY
+        GOSUB 7550
+      END
+7518 NEXT RPTR
+  END ELSE GOTO 93000
+7519 NEXT PPTR
+RETURN
+*
+*--- Get data from RELEASE
+7520 *
+  VALUE = ICODE
+  ICODE = ""
+MATREAD ORR.REC FROM ORDER.RELEASE, CONO:VALUE ELSE
+  ERRMSG = "Release is NOT on File"
+  GOTO 93000
+END
+IF ORR.ORD # BOL.ORDER<1,1> AND BOL.ORDER<1,1> # "" THEN
+  ERRMSG = "Release is NOT for the Same Order"
+  GOTO 93000
+END
+IF ORR.SHIP.TO # BOL.SHIP.TO THEN
+  ERRMSG = "Release is NOT for the Same Ship-To."
+  GOTO 93000
+END
+IF (ORR.STATUS<1,1> # "") AND (ORR.BOL # BOLNO) THEN
+  ERRMSG = "Release ":VALUE:" ":ORR.STATUS<1,1>
+  GOTO 93000
+END
+RELNO = VALUE
+IPTR = LN-1
+PCNT = DCOUNT(OSD.PROD,VM)
+FOR PPTR = 1 TO PCNT
+  PROD = OSD.PROD<1,PPTR>
+  WHSE = OSD.WHSE<1,PPTR>
+  PROD.SEQ = OSD.PROD.SEQ<1,PPTR>
+  PSEQ     = OSD.PROD.SEQ<1,PPTR>
+  KIT      = OSD.KIT<1,PPTR>
+  BOM.NUMBER = OSD.BOM.NUM<1,PPTR>
+  GOSUB 7650
+  IF NOT(BAD.PROD) THEN
+    RCNT = DCOUNT(OSD.RECP.NO<1,PPTR>,SM)
+    IF RCNT = 0 THEN RCNT = 1
+    FOR RPTR = 1 TO RCNT
+      RECP = OSD.RECP.NO<1,PPTR,RPTR>
+      IF ((KIT = "K" OR KIT = "M") AND OSD.REL.NO<1,PPTR,RPTR> = "") OR OSD.REL.NO<1,PPTR,RPTR> = RELNO THEN
+        PKTKT=""; WLOC=""; WGHT=""
+        RQTY = OSD.REL.QTY<1,PPTR,RPTR>+0
+        AQTY = RQTY
+        GOSUB 7550
+      END
+    NEXT RPTR
+  END ELSE GOTO 93000
+NEXT PPTR
+RETURN
+7550 *
+IF FIRST THEN
+  BOL.ORDER = ""
+  FIRST = 0
+END
+SID = PROD:"!":WHSE:"!":ORDNO:"!":RECP
+SPTR = DCOUNT(TEMP.SID<1>,VM) + 1
+IF SPTR THEN
+  UPDCNT = UPDCNT + 1
+  IPTR = IPTR + 1
+  TEMP.SID = INSERT(TEMP.SID,1,IPTR,0,SID)
+  BOL.TYPE = INSERT(BOL.TYPE,1,IPTR,0,TEMP.TYPE)
+  BOL.ORDER = INSERT(BOL.ORDER,1,IPTR,0,ORDNO)
+  BOL.PROD = INSERT(BOL.PROD,1,IPTR,0,PROD)
+  BOL.WHSE = INSERT(BOL.WHSE,1,IPTR,0,WHSE)
+  BOL.LOC = INSERT(BOL.LOC,1,IPTR,0,"")
+  BOL.KIT = INSERT(BOL.KIT,1,IPTR,0,KIT)
+  BOL.SEQ = INSERT(BOL.SEQ,1,IPTR,0,PSEQ)
+  BOL.BOM.NUM = INSERT(BOL.BOM.NUM,1,IPTR,0,BOM.NUMBER)
+  BOL.RECP.NO = INSERT(BOL.RECP.NO,1,IPTR,0,"")
+  TEMP.AVAIL = INSERT(TEMP.AVAIL,1,IPTR,0,AQTY)
+  TEMP.AVAIL<1,IPTR> = CalcStkQty(TEMP.AVAIL<1,IPTR>,MAT INV.CNV.REC,ROND,LN)
+  BEGIN CASE
+    CASE WLOC = ""
+      BOL.QTY = INSERT(BOL.QTY,1,IPTR,0,"")
+    CASE RQTY <= AQTY
+      BOL.QTY = INSERT(BOL.QTY,1,IPTR,0,RQTY)
+      BOL.QTY<1,IPTR> = CalcStkQty(BOL.QTY<1,IPTR>,MAT INV.CNV.REC,ROND,LN)
+    CASE 1
+      BOL.QTY = INSERT(BOL.QTY,1,IPTR,0,AQTY)
+      BOL.QTY<1,IPTR> = CalcStkQty(BOL.QTY<1,IPTR>,MAT INV.CNV.REC,ROND,LN)
+  END CASE
+  BOL.RELEASE = INSERT(BOL.RELEASE,1,IPTR,0,RELNO)   ;*T24693
+  BOL.PKTKT = INSERT(BOL.PKTKT,1,IPTR,0,PKTKTNO)
+  BOL.SHP.WT = INSERT(BOL.SHP.WT,1,IPTR,0,WGHT)
+  BOL.SHP.AMT = INSERT(BOL.SHP.AMT,1,IPTR,0,"")
+  BOL.POST.FLAG = INSERT(BOL.POST.FLAG,1,IPTR,0,"")
+  BOL.SKD.CNT = INSERT(BOL.SKD.CNT,1,IPTR,0,"");* T20661
+  BOL.CRTN.CNT = INSERT(BOL.CRTN.CNT,1,IPTR,0,"");* T20661
+  TEMP.LOC.AVAIL = INSERT(TEMP.LOC.AVAIL,1,IPTR,0,"")
+  TEMP.DESC = INSERT(TEMP.DESC,1,IPTR,0,"")
+END
+*
+IF WLOC # "" THEN
+  RSVBLE.QTY=0;RSVD.QTY=0
+  BOL.LOC<1,IPTR> = WLOC
+  BOL.RECP.NO<1,IPTR> = RECP
+  ISTK.ID=CONO:"R":RECP:"!":WHSE:"!":WLOC
+  IF RECORDLOCKED(INV_SERIAL_TEMP,ISTK.ID)=0 THEN     
+    DELETE INV_SERIAL_TEMP,ISTK.ID                    
+  END                                                 
+  MATREADU ISTK.REC FROM INV_SERIAL_TEMP,ISTK.ID ELSE  
+    MATREADU ISTK.REC FROM INV_SERIAL,ISTK.ID THEN    
+      IF (RELNO='') THEN                             
+        LOCATE ORDNO IN ISTK.ORDER<1> SETTING OPOS THEN  
+          RSVD.QTY=ISTK.ORSVD.QTY<1,OPOS>              
+        END                                           
+      END ELSE                                        
+        LOCATE RELNO IN ISTK.RELNO<1> SETTING RELPOS THEN
+          RSVD.QTY=ISTK.RRSVD.QTY<1,RELPOS>            
+        END                                           
+      END                                             
+      ;* return back quantity that has been reserved  
+      ;* for this order/release into reservable qty   
+      RSVBLE.QTY=ISTK.RSVB.QTY+RSVD.QTY                
+    END ELSE
+      RELEASE INV_SERIAL_TEMP,ISTK.ID
+      RELEASE INV_SERIAL,ISTK.ID
+    END
+  END
+  IF RQTY > RSVBLE.QTY THEN
+    ERRMSG='Receipt ':RECP:' has insufficient resv qty. for prod/whse/loc ':PROD:'/':WHSE:'/':WLOC
+    GOTO 93000
+  END
+END ELSE
+  CHKQTY=0
+  INVR.ID=CONO:RECP
+  IF RECORDLOCKED(INV_RECEIPTS_TEMP,INVR.ID)=0 THEN           
+    DELETE INV_RECEIPTS_TEMP,INVR.ID                          
+  END                                                         
+  MATREADU INVR.REC FROM INV_RECEIPTS_TEMP,INVR.ID ELSE       
+    MATREADU INVR.REC FROM INV_RECEIPTS,INVR.ID THEN          
+      IRW.ID=CONO:RECP:"!":WHSE
+      IF RECORDLOCKED(INV_RECP_WHSE_TEMP,IRW.ID)=0 THEN       
+        DELETE INV_RECP_WHSE_TEMP,IRW.ID                      
+      END                                                     
+      MATREADU IRW.REC FROM INV_RECP_WHSE_TEMP,IRW.ID ELSE    
+        MATREADU IRW.REC FROM INV_RECP_WHSE,IRW.ID THEN       
+          SCNT=DCOUNT(IRW.SERIAL.NO,VM)                       
+          FOR S=1 TO SCNT
+            RSVBLE.QTY =0;RSVD.QTY=0
+            ISTK.ID=CONO:IRW.SERIAL.NO<1,S>                   
+            IF RECORDLOCKED(INV_SERIAL_TEMP,ISTK.ID)=0 THEN   
+              DELETE INV_SERIAL_TEMP,ISTK.ID                  
+            END                                               
+            MATREAD ISTK.REC FROM INV_SERIAL_TEMP,ISTK.ID ELSE
+              MATREADU ISTK.REC FROM INV_SERIAL,ISTK.ID THEN  
+                IF RELNO='' THEN
+                  LOCATE ORDNO IN ISTK.ORDER<1> SETTING OPOS THEN
+                    RSVD.QTY=ISTK.ORSVD.QTY<1,OPOS>
+                  END
+                END ELSE
+                  LOCATE RELNO IN ISTK.RELNO<1> SETTING RELPOS THEN   
+                    RSVD.QTY=ISTK.RRSVD.QTY<1,RELPOS>
+                  END
+                END
+                ;* return back quantity that has been reserved
+                ;* for this order/release into reservable qty
+                RSVBLE.QTY=ISTK.RSVB.QTY+RSVD.QTY
+                IF RSVBLE.QTY > 0 THEN                     
+                  WLOC=ISTK.LOC
+                  PTR = 1
+                  LOOP
+                    LOCATE WLOC IN BOL.LOC<1,IPTR>,PTR BY "AL" SETTING P THEN
+                      IF BOL.RECP.NO<1,IPTR,P> >= RECP THEN PTR = 0
+                    END ELSE
+                      PTR = 0
+                    END
+                  UNTIL PTR = 0 DO
+                    PTR = P + 1
+                  REPEAT
+                  CHKQTY+=RSVBLE.QTY
+                  IF BOL.LOC<1,IPTR,P>=WLOC AND BOL.RECP.NO<1,IPTR,P>=RECP THEN
+                    TEMP.LOC.AVAIL<1,IPTR,P>+=RSVBLE.QTY
+                  END ELSE
+                    BOL.LOC = INSERT(BOL.LOC,1,IPTR,P,WLOC)
+                    BOL.RECP.NO = INSERT(BOL.RECP.NO,1,IPTR,P,RECP)
+                    BOL.QTY = INSERT(BOL.QTY,1,IPTR,P,0)
+                    BOL.POST.FLAG = INSERT(BOL.POST.FLAG,1,IPTR,P,"")
+                    TEMP.LOC.AVAIL=INSERT(TEMP.LOC.AVAIL,1,IPTR,P,RSVBLE.QTY)
+                  END
+                  TEMP.LOC.AVAIL<1,IPTR,P> = CalcStkQty(TEMP.LOC.AVAIL<1,IPTR,P>,MAT INV.CNV.REC,ROND,LN)
+                END                                                   
+              END ELSE
+                RELEASE INV_SERIAL_TEMP,ISTK.ID
+                RELEASE INV_SERIAL, ISTK.ID
+              END
+            END                                                     
+          NEXT S                                                    
+        END                                                           
+        RELEASE INV_RECP_WHSE,IRW.ID
+      END                                                             
+      RELEASE INV_RECP_WHSE_TEMP,IRW.ID
+    END
+    RELEASE INV_RECEIPTS,INVR.ID        
+  END
+  RELEASE INV_RECEIPTS_TEMP,INVR.ID
+  IF CHKQTY < RQTY THEN
+    ERRMSG="Cannot locate reserved quantity in inventory for Product/Whse ":PROD:"/":WHSE
+    GOTO 93000
+  END
+END
+RETURN
+7650 *
+BAD.PROD = 0
+MATREAD INV.REC FROM INVENTORY, CONO:PROD ELSE
+  ERRMSG = "Invalid Product number ":PROD
+  BAD.PROD = 1
+  RETURN
+END
+$INCLUDE ICSBP INV.UM.CNV
+MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE ELSE
+  ERRMSG = "Cannot locate CATEGORY ":INV.LINE:" for product ":PROD
+  BAD.PROD = 1
+  RETURN
+END
+MATREAD IWH.REC FROM INV.WHSE, CONO:PROD:"!":WHSE ELSE
+  ERRMSG = "Cannot locate INV.WHSE - ":PROD:"!":WHSE
+  BAD.PROD = 1
+  RETURN
+END
+RETURN
+
+93000
+STATUS = RBO.setProperty('','ServerStatus',1)        
+STATUS = RBO.setProperty('','ServerMessage',ERRMSG) 
+
+RETURN

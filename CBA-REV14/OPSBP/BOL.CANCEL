@@ -1,0 +1,381 @@
+*COPY>CPYLIB>COM1
+*COPY>JCS.CPYLIB>COM.JCS.LINK  
+*COPY>ICS.CPYLIB>COM.INV.MAIN  
+*COPY>ICS.CPYLIB>COM.INV.SERIAL
+*COPY>JCS.CPYLIB>COM.INV.STATS 
+*COPY>PMC.CPYLIB>COM.CUST
+*COPY>OPS.CPYLIB>COM.ORDER
+*COPY>PMC.CPYLIB>COM.SHIP.TO
+*COPY>OPS.CPYLIB>COM.BOL
+********************************************************************
+* REVISION    - [08.1B]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SOURCE        - OPSBP
+* PROGRAM       - BOL.CANCEL
+* BY            -
+* DATE          - 01/23/90
+* DESCRIPTION   -
+*T20852 doug 08/23/1996 * Pick ticket tracking
+*T21177 diane 11/06/1996 * REV11 UPG
+*T23278 markt 10/22/1998 * Add check for divisional security
+*T25745 lanny 04/05/2001 * Need to update FNGD.STATS file.
+*T25740 epitka 01/29/2002 * REV12
+*T26126 adelgado 02/26/2002 * Implement the LOCKED clause for READU.
+********************************************************************
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>COMP.OPS
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>PMC.CPYLIB>SHIP.TO
+*COPY>PMC.CPYLIB>SHIP.VIA
+*COPY>PMC.CPYLIB>FISCAL
+*COPY>PMC.CPYLIB>SALESDATES
+*COPY>PMC.CPYLIB>FOB
+*COPY>OPS.CPYLIB>ORDER
+*COPY>OPS.CPYLIB>ORDER.DETAIL
+*COPY>OPS.CPYLIB>BOL
+*COPY>OPS.CPYLIB>PICK.TICKET
+*COPY>OPS.CPYLIB>ORDER.RELEASE
+*COPY>CPYLIB>GEN.XREF.SUB
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+   MAT SYSCOM.REC =  ""; SYS.TYPE = 2
+*
+*---- Open files
+*
+   OPEN "","CONTROL" TO CONTROL ELSE
+      ERRMSG = "Cannot locate the CONTROL file"; GOTO 93000
+   END
+   OPEN "","COMPANY" TO COMPANY ELSE
+      ERRMSG = "Cannot locate the COMPANY file"; GOTO 93000
+   END
+   OPEN "","OPS.SCREENS" TO M.SCREENS ELSE
+      ERRMSG = "Cannot locate the OPS.SCREENS file"; GOTO 93000
+   END
+   OPEN "","SHIP.TO" TO SHIP.TO ELSE
+      ERRMSG = "Cannot locate the SHIP.TO file"; GOTO 93000
+   END
+   OPEN "","BOL" TO BOL ELSE
+      ERRMSG = "Cannot locate the BOL file"; GOTO 93000
+   END
+   OPEN "","BOL_TAG" TO BOL_TAG ELSE
+      ERRMSG = "Cannot locate the BOL_TAG file"; GOTO 93000
+   END
+   OPEN "","FNGD.BOM" TO FNGD.BOM ELSE
+      ERRMSG = "Cannot locate the FNGD.BOM file"; GOTO 93000
+   END
+   OPEN "","COUNTRY.CODE" TO COUNTRY.CODE ELSE
+      ERRMSG = "Cannot locate the COUNTRY.CODE file"; GOTO 93000
+   END
+   OPEN "","PICK.TICKET" TO PICK.TICKET ELSE
+      ERRMSG = "Cannot locate the PICK.TICKET file"; GOTO 93000
+   END
+   OPEN "","FOB" TO FOB ELSE
+      ERRMSG = "Cannot locate the FOB file"; GOTO 93000
+   END
+   OPEN "","INV.HIST" TO INV.HIST ELSE
+      ERRMSG = "Cannot locate the INV.HIST file"; GOTO 93000
+   END
+   OPEN "","INV.TRAN.HIST" TO INV.TRAN.HIST ELSE
+      ERRMSG = "Cannot locate the INV.TRAN.HIST file"; GOTO 93000
+   END
+* T20852 v
+* T20852 ^
+*T25745 v
+   OPEN "","FNGD.STATS" TO FNGD.STATS ELSE
+      ERRMSG = "Cannot locate the FNGD.STATS file"; GOTO 93000
+   END
+*T25745 ^
+*
+*---- Get company
+*
+   CONO = ""; MAT COMP.REC = ""
+   CALL GET.CONO(CONO,MAT COMP.REC)
+   IF CONO = "END" THEN GOTO 99999
+   MATREAD OPCO.REC FROM CONTROL, CONO:"OPS" ELSE
+      MAT OPCO.REC = ""
+   END
+*
+   CALL JOB.MAINT.OPEN(CO.JES,CO.POS,NOT.OPEN)
+   IF NOT.OPEN THEN GOTO 99999
+*
+*---- Setup SCRN.EDIT & EDIT.SUB
+*
+*   MAT EDIT.COM = ""
+*   TYP = 0; CALL EDIT.SUB
+   MAT EDIT.COM.DRIVER = ""
+   ECD.SCRN.CNT = 5
+   ECD.SCRN.NAME = "BOL.CANCEL"
+   ECD.ACTION = 1; CALL SCRN.EDIT
+   ECD.SCRN.NO = 1; ESN = 1
+   ECD.ACTION = 2; CALL SCRN.EDIT
+*
+*---- Initialize
+*
+   MAT SCV.REC = ""
+   MAT GEN.XREF.REC = ""
+   GXR.CO = CONO
+*
+   GEN.SHPNO = "000"
+   LINE.SPACE = 1
+   PAGE.SIZE = 2
+   BEGIN.PAGE = 18
+   OLD.START.LINE = 0
+*
+*---- Get Sequence Number
+100*
+   RELEASE
+   ORDNO = ""; RELNO = ""; PKTKTNO = ""
+   CUSTNO = ""; SHPNO = ""; OLD.RELNO = ""
+   ITYPE = ""; ICODE = ""
+   LN = 1; LINES = 0
+   ECD.NUM = 54; ECD.ACTION = 4; CALL SCRN.EDIT
+   BEGIN CASE
+      CASE ECD.RET.VALUE = "END"
+         GOTO 99999
+      CASE ECD.RET.VALUE = "???"
+         GXR.NAME ="BOL"
+         GXR.FILE = BOL
+         GXR.SORT.FILE = BOL
+         CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+         ECD.ACTION = 2; CALL SCRN.EDIT
+         SCV.REC(54) = GXR.ID
+         IF GXR.ID = "" THEN GOTO 100
+         BOLNO = GXR.ID
+      CASE 1
+         BOLNO = ECD.RET.VALUE"R%7"
+         SCV.REC(54)<ESN> = BOLNO
+         ECD.NUM=54; ECD.ACTION=5; CALL SCRN.EDIT
+   END CASE
+  * T26126 v
+   MATREADU BOL.REC FROM BOL, CONO:BOLNO LOCKED
+      ERRMSG = 'BILL OF LADING record is locked by user - ':GETUSERNAME(STATUS())
+      GOSUB 91000
+      ECD.ACTION = 6; CALL SCRN.EDIT
+      MAT SCV.REC = ""; GOTO 100
+   END ELSE
+  * T26126 ^
+      ERRMSG = "Cannot locate Bill Of Lading # ":BOLNO
+      GOSUB 91000
+      ECD.ACTION = 6; CALL SCRN.EDIT
+      MAT SCV.REC = ""; GOTO 100
+   END
+   CUSTNO = BOL.CUST
+   SHPNO = BOL.SHIP.TO
+   ORDNO = BOL.ORDER<1,1>
+   RELNO = BOL.RELEASE<1,1>
+   PKTKTNO = BOL.PKTKT<1,1>
+   OLD.RELNO = BOL.RELEASE
+   BEGIN CASE
+      CASE BOL.INVOICE # ""
+         ERRMSG = "Bill of Lading has been invoiced"
+      CASE BOL.STATUS = "CANCEL"
+         ERRMSG = "Bill of Lading has been cancelled"
+      CASE 1
+         GOSUB 4000
+   END CASE
+   IF ERRMSG # "" THEN
+      GOSUB 91000
+      ECD.ACTION = 6; CALL SCRN.EDIT
+      MAT SCV.REC = ""; GOTO 100
+   END
+****************************
+* Match Pallets on the BOL *
+****************************
+   GOSUB 5200
+   SCV.REC(17) = BOL.SHIP.VIA
+   MATREAD SHIP.VIA.REC FROM SHIP.VIA, CONO:BOL.SHIP.VIA ELSE
+      MAT SHIP.VIA.REC = ""; SHPV.DESC = "Unknown"
+   END
+   MATREAD FOB.REC FROM FOB, CONO:BOL.FOB ELSE
+      MAT FOB.REC = ""; FOB.DESC = "Unknown"
+   END
+   SCV.REC(18) = SHPV.DESC
+   SCV.REC(19) = BOL.SHP.DATE
+   SCV.REC(21) = BOL.FREIGHT
+   SCV.REC(24) = BOL.PERIOD
+   SCV.REC(27) = BOL.FOB
+   SCV.REC(28) = FOB.DESC
+   SCV.REC(56) = PKTKTNO
+   SCV.REC(57) = RELNO
+   SCV.REC(58) = ORDNO<1,1>
+   LINES = DCOUNT(BOL.INST,VM)
+   GOSUB 5000; GOSUB 7955
+*
+*---- Prompt line
+500*
+   MORE = 1
+   LOOP
+      P_X  = 0 ; P_Y = 23 ; P_VALUE = "" ; P_OPT = "CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      ECD.NUM = 51; SCV.REC(ECD.NUM)<ESN> = ""
+      ECD.ACTION = 4; CALL SCRN.EDIT
+      OPTION = ECD.RET.VALUE
+      BEGIN CASE
+         CASE OPTION = "END" OR OPTION = "E"
+            MORE = 0
+         CASE OPTION = "I"
+            ENCORE = 1
+            LOOP
+               ECD.NUM = 52; SCV.REC(ECD.NUM)<ESN> = ""
+               ECD.ACTION = 4; CALL SCRN.EDIT
+               REQUEST = ECD.RET.VALUE
+               BEGIN CASE
+                  CASE REQUEST = "END" OR REQUEST = "E"
+                     ENCORE = 0
+                  CASE REQUEST = "S" OR OPTION = "SF"
+                     LN = 1+INT((LN-1)/PAGE.SIZE) * PAGE.SIZE+PAGE.SIZE
+                     IF LN > LINES THEN LN = 1
+                     GOSUB 7900
+                  CASE REQUEST = "SR"
+                     LN = 1+INT((LN-1)/PAGE.SIZE) * PAGE.SIZE-PAGE.SIZE
+                     IF LN < 1 THEN LN = 1
+                     GOSUB 7900
+                  CASE REQUEST = "ST"
+                     LN = 1
+                     GOSUB 7900
+                  CASE REQUEST = "SB"
+                     LN = LINES
+                     GOSUB 7900
+               END CASE
+            WHILE ENCORE DO REPEAT
+         CASE OPTION = "CA"
+            ERRMSG = ""
+            CALL BOL.CANCEL.SUB(CONO,BOLNO,ZZZZ,ERRMSG)
+            IF ERRMSG = "" THEN
+               WRITE "" ON BOL_TAG, CONO:BOLNO:"!C"
+               BOL.STATUS = "CANCEL"
+               MATWRITE BOL.REC ON BOL, CONO:BOLNO
+            END ELSE
+               GOSUB 91000
+            END
+            MORE = 0
+      END CASE
+   WHILE MORE DO REPEAT
+   ECD.ACTION = 6; CALL SCRN.EDIT
+   MAT SCV.REC = ""; GOTO 100
+*
+*---- Display data
+5000*
+   ECD.ACTION = 3; CALL SCRN.EDIT
+   OLD.START.LINE = 0; GOSUB 7900
+   RETURN
+*
+*---- Load customer info
+5200*
+   SCV.REC(4)<ESN> = BOL.CUST
+   SCV.REC(5)<ESN> = SPT.NAME
+   SCV.REC(7)<ESN> = SPT.ADDR1
+   SCV.REC(9)<ESN> = SPT.ADDR2
+   SCV.REC(13)<ESN> = SPT.CITY:", ":SPT.STATE
+   SCV.REC(15)<ESN> = SPT.ZIP
+   SCV.REC(55)<ESN> = BOL.SHIP.TO
+   SCV.REC(56)<ESN> = PKTKTNO
+   SCV.REC(57)<ESN> = RELNO
+   SCV.REC(58)<ESN> = ORDNO
+   RETURN
+4000*
+   ERRMSG = ""
+   BEGIN CASE
+      CASE PKTKTNO # ""
+         MATREAD PKT.REC FROM PICK.TICKET, CONO:PKTKTNO ELSE
+            ERRMSG = "Cannot locate Pick Ticket # ":PKTKTNO
+            GOTO 4099
+         END
+         ORDNO = FIELD(PKTKTNO,"-",1)
+         RELNO = PKT.REL.NO
+         SHPNO = PKT.SHIP.TO
+         GOSUB 4100
+         IF ERRMSG # "" THEN GOTO 4099
+         IF PKT.REL.NO # "" THEN
+            MATREAD ORR.REC FROM ORDER.RELEASE, CONO:PKT.REL.NO ELSE
+               ERRMSG = "Cannot locate Release # ":PKT.REL.NO
+               GOTO 4099
+            END
+         END
+      CASE RELNO # ""
+         MATREAD ORR.REC FROM ORDER.RELEASE, CONO:RELNO ELSE
+            ERRMSG = "Cannot locate release # ":RELNO
+            GOTO 4099
+         END
+         ORDNO = ORR.ORD
+         SHPNO = ORR.SHIP.TO
+         GOSUB 4100
+         IF ERRMSG # "" THEN GOTO 4099
+      CASE 1
+         GOSUB 4100
+         IF ERRMSG # "" THEN GOTO 4099
+   END CASE
+   ECD.NUM = 58
+   SCV.REC(58)<ESN> = ORDNO
+   ECD.ACTION = 5; CALL SCRN.EDIT
+4099*
+   RETURN
+4100*
+   MATREAD ORD.REC FROM ORDER, CONO:ORDNO ELSE
+      ERRMSG = "Cannot locate Order # ":ORDNO
+      GOTO 4199
+   END
+*T23278 v
+   DIV.CODE = ORD.DIV; USER.ID = UPCASE(@LOGNAME); ERRMSG = ''
+   CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+   IF ERRMSG # '' THEN GOTO 4199
+*T23278 ^
+   CUSTNO = ORD.CUST
+   MATREAD CUST.REC FROM CUSTOMER, CONO:ORD.CUST ELSE
+      ERRMSG = "Cannot locate customer # ":ORD.CUST
+      GOTO 4199
+   END
+   LOCATE SHPNO IN ORD.SHIP.TO<1>,2 SETTING SLOC ELSE
+      ERRMSG = "Cannot associate ship to (":SHPNO:") with order # ":ORDNO
+      GOTO 4199
+   END
+   MATREAD SPT.REC FROM SHIP.TO, CONO:CUSTNO:"!":SHPNO ELSE
+      ERRMSG = "Cannot locate ship to # ":SHPNO
+      GOTO 4199
+   END
+   MATREAD ORD.DET.REC FROM ORDER.DETAIL, CONO:ORDNO:"!":SHPNO ELSE
+      ERRMSG = "Cannot locate Order / Ship to # ":ORDNO:" / ":SHPNO
+      GOTO 4199
+   END
+4199*
+   RETURN
+*
+*---- Display scrolling lines
+7900*
+   START.LINE = 1 + INT((LN-1)/PAGE.SIZE)*PAGE.SIZE
+   LAST.LINE = START.LINE + PAGE.SIZE - 1
+   IF LAST.LINE > LINES THEN LAST.LINE = LINES
+   IF START.LINE = OLD.START.LINE THEN GOTO 7909
+   OLD.START.LINE = START.LINE
+   ECD.NUM = 41
+   SCV.REC(ECD.NUM)<ESN> = INT(LAST.LINE/PAGE.SIZE+.9) "R%2"
+   ECD.ACTION = 5; CALL SCRN.EDIT
+   CNT = 1
+   FOR N = START.LINE TO LAST.LINE
+      SLN = BEGIN.PAGE + LINE.SPACE * MOD(N-1,PAGE.SIZE)
+      P_X  = 0 ; P_Y = SLN ; P_VALUE = N "R%2" ; P_OPT = "CL"
+      P_X  := AM:3 ; P_Y := AM:SLN ; P_VALUE := AM:BOL.INST<1,N> "L#65"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      CNT = CNT + 1
+   NEXT N
+   FOR M = CNT TO PAGE.SIZE
+      SLN = BEGIN.PAGE + LINE.SPACE * MOD(M-1,PAGE.SIZE)
+      P_X  = 0 ; P_Y = SLN ; P_VALUE = "" ; P_OPT = "CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   NEXT M
+7909 RETURN
+7950*
+   ECD.NUM = 41
+   SCV.REC(ECD.NUM)<ESN> = INT(LN/PAGE.SIZE+.9) "R%2"
+   ECD.ACTION = 5; CALL SCRN.EDIT
+7955*
+   ECD.NUM = 42
+   SCV.REC(ECD.NUM)<ESN> = INT(LINES/PAGE.SIZE+.9) "R%2"
+   ECD.ACTION = 5; CALL SCRN.EDIT
+   RETURN
+91000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+93000 ERR.TYPE=3;CALL SYSCOM(MAT SYSCOM.REC)
+99999 END

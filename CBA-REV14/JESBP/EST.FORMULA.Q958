@@ -1,0 +1,128 @@
+      SUBROUTINE EST.FORMULA.Q958 (CONO, ACTION, EQTY, DEPT, COMP)
+*********************************************************************
+*
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+*
+* PROGRAM  - EST.FORMULA.Q958
+*
+* AUTHOR   - GRAHAM JARVIS, PACRIM SOFTWARE PTY LTD
+*
+* DATE     - 17 MAR 93
+*
+* DESCRIPTION
+*
+* This formula is used to calculate:-
+*        1. The MAX OD Given the Qty of Labels/Roll and No Across
+*        2. The Qty of Labels/Roll Given the Max OD and No Across
+*        3. Theorectical Weight of Each Roll using PSI of Stock
+*        4. Theoretical No of Cartons Required using 35Lbs per Carton
+*        5. The Totals No of Rolls
+* The TEMP.QTY returned is the No of Cartons
+*
+* VARIABLES
+*        MAX.OD = The maximum OD in inches
+*        CORE.SZ= The size of the core (internal, add 0.25 inch for thickness)
+*        NO.ROLL= The Actual Quantity/Roll (user set)
+*        LACR   = The number of labels across the roll (user set)
+*        REPT   = The repeat of a SINGLE label (Die Repeat/No Around)
+*
+* FORMULA for Calculating No of Labels/Roll given MAX OD
+*
+*        TOT.LINEAL =  MAX.OD**2 - CORE.SZ**2
+*                      ----------------------
+*                          1.27 * TOT.CAL
+*
+*        ROLL.QTY   =  TOT.LINEAL * REPT * LACR
+*
+*
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>JES.CPYLIB>SCOMMON.ESTIMATE
+*COPY>JES.CPYLIB>ESTIMATE
+*COPY>JES.CPYLIB>ESTIMATE.TEMP
+*COPY>JES.CPYLIB>ESTIMATE.RES
+*COPY>CPYLIB>CHAR
+*
+*---- INITIALIZATION
+*
+      IF TEMP.MPTR = "" THEN MPTR = 1 ELSE MPTR = TEMP.MPTR
+      LOCATE EQTY IN EST.QTY<1>,1 SETTING QPTR ELSE QPTR=1
+*
+*---- MAIN PROCESSING
+*
+      TEMP.QTY = 0
+*
+*--- Calculate Weight and Caliper by adding Stocks
+*
+      WEB.CNT=DCOUNT(EST.PROD.OS.USAGE<1,COMP>,SM)
+      TOT.GSM=0
+      TOT.CAL=0
+      TOT.WGT=0
+      GSM=0
+      FOR WPTR=1 TO WEB.CNT
+         GSM=(EST.RL.PAP.GSM<1,COMP,WPTR>)
+         TOT.GSM=TOT.GSM+GSM
+         MSI=FIELD(EST.RL.PAP.MSI<1,COMP,WPTR>,'!',QPTR)
+         TOT.WGT=TOT.WGT+(MSI*(GSM/1000))
+         TOT.CAL=EST.RL.PAP.CAL<1,COMP,WPTR>+TOT.CAL
+      NEXT WPTR
+      TOT.CAL=TOT.CAL+30; *** Add Adhesive Caliper
+*
+*--- Calculate Lineal/Roll, Max OD and Qty/Roll
+*
+      ROLL.LINEAL=0
+      ROLL.QTY=0
+      ROLL.MAXOD=0
+      MAX.OD=EST.RL.MAX.OD<1,COMP,1>+0
+      CORE.SZ=EST.RL.CORE.SIZE<1,COMP,1> + 2500 ;* Add 0.25 inch for Core Thickness (6mm)
+      NO.ROLL=EST.RL.NO.PER.ROLL<1,COMP,1>+0
+      LACR=EST.RL.LAB.ACR<1,COMP,1>
+      VAR3=EST.PROD.OS.WIDTH<1,COMP,1>/EST.RL.DIE.NO.ACR<1,COMP,1>*LACR
+      IF LACR+0=0 THEN LACR = EST.RL.DIE.NO.ACR<1,COMP,1>
+      REPT=EST.RL.DIE.REPEAT<1,COMP,1>/10000
+      REPT=REPT/EST.RL.DIE.NO.ARD<1,COMP,1>
+      BEGIN CASE
+      CASE NO.ROLL=0 AND MAX.OD#0
+         VAR1=MAX.OD**2 - (CORE.SZ)**2
+         VAR2=1.27*TOT.CAL
+         ROLL.LINEAL=VAR1/VAR2
+         ROLL.MAXOD=MAX.OD
+         ROLL.QTY=INT((ROLL.LINEAL/(REPT/1000))*LACR+.99)
+         ROLL.QTY=INT(ROLL.QTY/250+.5)*250 ;* Round QTY to Nearest 250
+         IF ROLL.QTY=0 THEN ROLL.QTY=EQTY
+      CASE MAX.OD=0 AND NO.ROLL#0
+         ROLL.LINEAL=INT(((NO.ROLL*REPT)/1000)/LACR)
+         ROLL.MAXOD=INT(SQRT((1.27*ROLL.LINEAL*TOT.CAL) + CORE.SZ**2))
+         ROLL.QTY=NO.ROLL
+      CASE 1
+         ROLL.LINEAL=INT((NO.ROLL*REPT)/LACR/1000)
+         ROLL.MAXOD=MAX.OD
+         ROLL.QTY=NO.ROLL
+         IF ROLL.QTY=0 THEN ROLL.QTY=EQTY
+      END CASE
+*
+*-- Calculate Values
+*
+      ROLL.SQM=ROLL.LINEAL*(VAR3/1000)
+      ROLL.WGT=ROLL.SQM*(TOT.GSM/100000)
+* Use 35Lbs as Maximum Weight per Carton (16Kgs)
+      IF ROLL.WGT = 0 THEN ROLL.WGT = 35
+      PER.CTN=INT(35/ROLL.WGT)
+      IF PER.CTN=0 THEN PER.CTN=1
+      ROLL.TOT=EQTY/ROLL.QTY
+      TEMP.QTY=INT(ROLL.TOT/PER.CTN+.99) + 1
+      IF TEMP.QTY < 1 THEN TEMP.QTY = 1
+      TEMP.VSALE = "Y"
+*
+*--- Update ESTIMATE.RES fields with Calculated Values
+*
+      EST.RL.NO.ROLLS<1,COMP,QPTR>=ROLL.TOT
+      EST.RL.NO.CTNS<1,COMP,QPTR>=TEMP.QTY
+      EST.RL.NO.KGS<1,COMP,QPTR>=TOT.WGT
+      EST.RL.CALC.MAX.OD<1,COMP,QPTR>=ROLL.MAXOD
+      EST.RL.CALC.ROLL.QTY<1,COMP,QPTR>=ROLL.QTY
+*
+      RETURN
+   END

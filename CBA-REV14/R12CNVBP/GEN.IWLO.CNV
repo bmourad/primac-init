@@ -1,0 +1,244 @@
+*COPY>ICS.CPYLIB>ROLL.SKID.INFO
+*T25740 epitka 09/23/2002 * ASDF
+*COPY>ICS.CPYLIB>INV.WHSE.LOC.REV11
+*COPY>ICS.CPYLIB>INV.WHSE.LOC
+*COPY>ICS.CPYLIB>INV_SERIAL
+*COPY>ICS.CPYLIB>INV_RECEIPTS
+*COPY>ICS.CPYLIB>INV_RECP_WHSE
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>CATEGORY.REV11
+*COPY>ICS.CPYLIB>INV.WHSE.REV11
+*
+DEFFUN CALC.STK.QTY(COST.QTY,MAT INV.CNV.REC,ROND,LN)
+*
+*COPY>CPYLIB>CHAR
+*
+OPEN '','INV.WHSE.LOC' TO INV.WHSE.LOC ELSE STOP 201
+OPEN '','IWH.IWLO.XREF' TO IWH.IWLO.XREF ELSE STOP 201
+OPEN '','INV.WHSE.LOC.OLD' TO INV.WHSE.LOC.OLD ELSE STOP 201
+OPEN '','INV.WHSE.LOC.TEMP' TO INV.WHSE.LOC.TEMP ELSE STOP 201
+OPEN '','ROLL.SKID.INFO' TO ROLL.SKID.INFO ELSE STOP 201
+OPEN '','INV_SERIAL' TO INV_SERIAL ELSE STOP 201
+OPEN '','INV.WHSE' TO INV.WHSE ELSE STOP 201
+OPEN '','INV.WHSE.OLD' TO INV.WHSE.OLD ELSE STOP 201
+OPEN '','INV.WHSE.TEMP' TO INV.WHSE.TEMP ELSE STOP 201
+OPEN '','INV_RECEIPTS' TO INV_RECEIPTS ELSE STOP 201
+OPEN '','INV_RECP_WHSE' TO INV_RECP_WHSE ELSE STOP 201
+OPEN '','CONTROL' TO CONTROL ELSE STOP 201
+OPEN '','INVENTORY' TO INVENTORY ELSE STOP 201
+OPEN '','CATEGORY.OLD' TO CATEGORY.OLD ELSE STOP CATEGORY.OLD
+*
+;*
+;* exclude FNGD and barcoded items
+;*
+PRINT @(-1)
+PRINT @(1,5):'SELECTING INV.WHSE':@(-4)
+CMD="SELECT INV.WHSE WITH M.LINE#'FNGD'"
+UDTEXECUTE CMD CAPTURING MSG
+;* now start conversion process
+PRINT @(-1)
+PRINT @(1,5):'CONVERTING INV.WHSE.LOC RECORD ':@(-4)
+DONE=0; CNT=0
+LOOP
+  READNEXT IWH.ID ELSE DONE=1
+UNTIL DONE DO
+  MATREADU IWH.REC FROM INV.WHSE,IWH.ID THEN
+    CNT+=1
+    IF REM(CNT,100)=0 THEN
+      PRINT @(45,5):CNT:@(-4)
+    END
+    CONO=IWH.ID[1,3] 
+    INV.ID=OCONV(IWH.ID,"G!1")
+    MATREAD INV.REC FROM INVENTORY,INV.ID THEN
+      MATREAD R11.CATG.REC FROM CATEGORY.OLD,CONO:INV.LINE THEN
+        IF R11.CATG.R.S.ID='Y' OR INV.PAP.TYPE='REGULAR' THEN
+          READ LOC FROM IWH.IWLO.XREF,IWH.ID ELSE LOC=''
+          WHSE=OCONV(IWH.ID,"G1!1")
+          RECP.NO=IWH.RECP.NO
+          LOC.CNT=DCOUNT(LOC<1>,@VM)
+          FOR LL=1 TO LOC.CNT
+            MAT IWLO.REC=''
+            IWLO.ID=IWH.ID:"!":LOC<1,LL>
+            MATREADU R11.IWLO.REC FROM INV.WHSE.LOC.OLD,IWLO.ID THEN
+              LOC.CURR.QTY=R11.IWLO.LOC.ON.HAND
+              IF LOC.CURR.QTY > 0 THEN
+                ;*
+                ;* build ISTK.REC from INV.WHSE.LOC
+                ;* move INV.WHSE.LOC to INV.WHSE.LOC.OLD and prepare 
+                ;* INV.WHSE.LOC for rebuild from ISTK.REC 
+                ;*
+                MAT ISTK.REC=""
+                ISTK.LOC=IWH.LOC<1,LL>
+                ISTK.PLACE='C'
+                IWH.OK=1
+                MATREAD IWH.REC FROM INV.WHSE.TEMP,IWH.ID ELSE
+                  MATREAD IWH.REC FROM INV.WHSE,IWH.ID ELSE
+                    IWH.OK=0
+                  END
+                END
+                IF IWH.OK THEN
+                  FI.CNT=DCOUNT(IWH.QTY.FI,@VM)
+                  EOL=0
+                  FOR FI=1 TO FI.CNT UNTIL (EOL)
+                    IF FI # 1 THEN
+                      MATREAD IWH.REC FROM INV.WHSE.TEMP,IWH.ID ELSE MAT IWH.REC=""
+                    END
+                    IF IWH.QTY.FI<1,FI> > 0 THEN
+                      BEGIN CASE
+                        CASE LOC.CURR.QTY=IWH.QTY.FI<1,FI> 
+                          ISTK.CUR.QTY=IWH.QTY.FI<1,FI>
+                          ISTK.ORG.QTY=IWH.ORG.FI<1,FI>
+                          ISTK.RSVB.QTY=IWH.RSV.FI<1,FI>
+                          IWH.QTY.FI<1,FI>=0
+                          IWH.ORG.FI<1,FI>=0
+                          IWH.RSV.FI<1,FI>=0
+                          S.ID=CONO:"R":RECP.NO<1,FI>:"!":WHSE:"!":ISTK.LOC
+                          GOSUB CREATE.SERIAL
+                          ;* update INV.WHSE.TEMP
+                          MATWRITE IWH.REC ON INV.WHSE.TEMP,IWH.ID
+                          LOC.CURR.QTY=0
+                        CASE LOC.CURR.QTY < IWH.QTY.FI<1,FI>
+                          ISTK.CUR.QTY=LOC.CURR.QTY
+                          WHSE.CURR=IWH.QTY.FI<1,FI>-LOC.CURR.QTY
+                          ORIG.QTY=IWH.ORG.FI<1,FI>-WHSE.CURR
+                          ISTK.ORG.QTY=ORIG.QTY
+                          IWH.ORG.FI<1,FI>=IWH.ORG.FI<1,FI>-ORIG.QTY  
+                          IWH.QTY.FI<1,FI>=WHSE.CURR
+                          BEGIN CASE
+                            CASE IWH.RSV.FI<1,FI> > IWH.QTY.FI<1,FI> 
+                              ISTK.RSVB.QTY=IWH.RSV.FI<1,FI>-IWH.QTY.FI<1,FI>
+                              IWH.RSV.FI<1,FI>=IWH.RSV.FI<1,FI>-ISTK.RSVB.QTY
+                            CASE IWH.RSV.FI<1,FI> < IWH.QTY.FI<1,FI> 
+                              ISTK.RSVB.QTY=0
+                          END CASE
+                          S.ID=CONO:"R":RECP.NO<1,FI>:"!":WHSE:"!":ISTK.LOC
+                          GOSUB CREATE.SERIAL
+                          MATWRITE IWH.REC ON INV.WHSE.TEMP,IWH.ID 
+                          LOC.CURR.QTY=0
+                        CASE LOC.CURR.QTY > IWH.QTY.FI<1,FI>
+                          LOC.CURR.QTY=LOC.CURR.QTY-IWH.QTY.FI<1,FI>
+                          ISTK.CUR.QTY=IWH.QTY.FI<1,FI>
+                          ISTK.ORG.QTY=IWH.ORG.FI<1,FI>
+                          ISTK.RSVB.QTY=IWH.RSV.FI<1,FI>
+                          IWH.QTY.FI<1,FI>=0
+                          IWH.ORG.FI<1,FI>=0
+                          IWH.RSV.FI<1,FI>=0
+                          S.ID=CONO:"R":RECP.NO<1,FI>:"!":WHSE:"!":ISTK.LOC
+                          GOSUB CREATE.SERIAL
+                          MATWRITE IWH.REC ON INV.WHSE.TEMP,IWH.ID
+                      END CASE
+                      IF LOC.CURR.QTY=0 THEN EOL=1
+                    END ELSE
+                      MATWRITE IWH.REC ON INV.WHSE.TEMP,IWH.ID  
+                    END
+                  NEXT FI
+                END
+              END
+*        END
+              IWLO.LOC.ON.HAND=R11.IWLO.LOC.ON.HAND
+              IWLO.LOC.INPRCS=R11.IWLO.LOC.INPRCS
+              MATWRITE IWLO.REC ON INV.WHSE.LOC,IWLO.ID
+            END
+          NEXT LL
+        END
+      END
+    END
+  END
+REPEAT
+;*
+;* now create serials for fifo current qty buckets that have
+;* quantity of 0
+;*
+PRINT @(1,5):'SELECTING INV.WHSE':@(-4)
+CMD="SELECT INV.WHSE WITH M.LINE#'FNGD'"
+UDTEXECUTE CMD CAPTURING MSG
+PRINT @(1,5):'PROCESSING INV.WHSE RECORD':@(-4)
+DONE=0; CNT=0
+LOOP
+  READNEXT IWH.ID ELSE DONE=1
+UNTIL DONE DO
+  WHSE=OCONV(IWH.ID,"G1!1")
+  MATREAD IWH.REC FROM INV.WHSE,IWH.ID THEN
+    CNT+=1
+    IF REM(CNT,100)=0 THEN
+      PRINT @(45,5):CNT:@(-4)
+    END
+    CONO=IWH.ID[1,3]
+    RECP.NO=IWH.RECP.NO
+    MATREAD R11.IWH.REC FROM INV.WHSE.OLD,IWH.ID THEN
+      FI.CNT=DCOUNT(R11.IWH.QTY.FI<1>,VM)
+      FOR FI=1 TO FI.CNT
+        IF R11.IWH.QTY.FI<1,FI> <=0 THEN
+          MAT ISTK.REC=''
+          ISTK.LOC="CNV"
+          LOCATE ISTK.LOC IN IWH.LOC SETTING LPOS ELSE
+            IWH.LOC<1,LPOS>=ISTK.LOC
+          END
+          ISTK.PLACE='C'
+          ISTK.CUR.QTY=0
+          ISTK.ORG.QTY=R11.IWH.ORG.FI<1,FI>
+          ISTK.RSVB.QTY=0
+          S.ID=CONO:"R":RECP.NO<1,FI>:"!":WHSE:"!":ISTK.LOC
+          IWLO.ID=IWH.ID:"!CNV"
+          GOSUB CREATE.SERIAL             
+          MATWRITE IWLO.REC ON INV.WHSE.LOC,IWLO.ID
+        END
+      NEXT FI
+      MATWRITE IWH.REC ON INV.WHSE,IWH.ID
+    END
+  END
+REPEAT
+STOP
+*
+**************
+CREATE.SERIAL: 
+**************
+*
+ISTK.PROD=OCONV(IWH.ID,"G!1")[4,99]
+ISTK.WHSE=OCONV(IWH.ID,"G1!1")
+INVR.ID=CONO:RECP.NO<1,FI>
+MATREADU INVR.REC FROM INV_RECEIPTS,INVR.ID THEN
+  ISTK.RECP.PERIOD=INVR.PERIOD
+  ISTK.POST.DATE=INVR.POST.DATE 
+  ISTK.EDIT.DATE=INVR.POST.DATE
+  ISTK.ENTRY.DATE=INVR.ENT.DATE 
+  ISTK.PO.NO=INVR.PO
+  ISTK.PO.LINE=INVR.PO.LN
+  SEQ.CNT=0
+  EOP=0
+  CONOSER=OCONV(S.ID,"G!1")
+  WHSELOC=OCONV(S.ID,"G1!2")
+  LOOP
+    READ CHECK.REC FROM INV_SERIAL,S.ID THEN
+      SEQ.CNT +=1
+      S.ID=CONOSER:".":SEQ.CNT:"!":WHSELOC
+    END ELSE
+      EOP=1
+    END
+  UNTIL EOP DO REPEAT
+  INVR.SERIAL.NO<1,-1>=TRIM(S.ID[4,99])
+  IF ISTK.LOC='CNV' THEN
+    MATREAD IWLO.REC FROM INV.WHSE.LOC,IWLO.ID ELSE MAT IWLO.REC=''
+    IWLO.LOC.ON.HAND+=0
+    IWLO.LOC.INPRCS+=0
+    IWLO.SERIAL<1,-1>=TRIM(S.ID[4,99])
+  END ELSE
+    IWLO.SERIAL<1,-1>=TRIM(S.ID[4,99])
+  END
+  MATWRITE INVR.REC ON INV_RECEIPTS,INVR.ID
+  ISTK.RECP=RECP.NO<1,FI>
+*COPY>ICSBP>INV.UM.CNV
+  ISTK.ORG.STK.QTY=CALC.STK.QTY(ISTK.ORG.QTY,MAT INV.CNV.REC,'','')
+  ISTK.CUR.STK.QTY=CALC.STK.QTY(ISTK.CUR.QTY,MAT INV.CNV.REC,'','')
+  MATWRITE ISTK.REC ON INV_SERIAL,S.ID
+  IRW.ID=CONO:RECP.NO<1,FI>:"!":ISTK.WHSE
+  MATREAD IRW.REC FROM INV_RECP_WHSE,IRW.ID THEN
+    IRW.SERIAL.NO<1,-1>=TRIM(S.ID[4,99])
+    MATWRITE IRW.REC ON INV_RECP_WHSE,IRW.ID
+  END
+END
+RETURN
+END
+*

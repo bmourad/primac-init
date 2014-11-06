@@ -1,0 +1,198 @@
+SUBROUTINE GET_REQ_SEC
+********************************************************************************
+*   Program name :- GET_REQ_SEC
+*   Created:- 5/12/2003
+*------------------------------------------------------------------------------*
+*
+* PROGRAMMER : G.PURUSHOTHAM RAO
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE POS.CPYLIB APP.REQ
+$INCLUDE PMC.CPYLIB COMPANY
+$INCLUDE PMC.CPYLIB DIVISION
+* Insert method code here
+OPEN '','APP.REQ' TO APP.REQ ELSE
+   ERRMSG = 'APP.REQ FILE IS MISSING'; GOTO 93000
+END
+OPEN "","DIVISION" TO DIVISION ELSE ERRMSG = "DIVISION FILE IS MISSING";SERVER_STATUS = 1;GOTO 91000
+OPEN "","CONTROL" TO CONTROL ELSE ERRMSG = "CONTROL FILE IS MISSING";SERVER_STATUS = 1;GOTO 91000
+
+OPEN '','COMPANY' TO COMPANY ELSE
+   ERRMSG = 'COMPANY FILE IS MISSING'; GOTO 93000
+END
+
+* Get properties
+
+STATUS = RBO.getProperty('','DIV_CODE',DIV)
+STATUS = RBO.getProperty('','PMCProperty',PMCProperty)
+STATUS = RBO.getProperty('','Req_Type',REQ_TYPE)
+*STATUS=RBO.getProperty('','newitem',NEWITEM)
+
+USER.ID = PMCProperty<1,3>
+CONO = PMCProperty<1,4>
+PO.DIV.OWNER = DIV
+  
+   INVALID = 0
+
+APPLEVEL=""
+   
+	MATREAD APP.REQ.REC FROM APP.REQ, CONO : USER.ID : "!ALL" THEN
+         APPLEVEL=APP.PO.LEVEL
+       END ELSE
+		MATREAD APP.REQ.REC FROM APP.REQ, CONO : USER.ID : "!" : DIV THEN
+                APPLEVEL=APP.PO.LEVEL
+	       END	
+       END	
+      
+*APP.PO.LEVEL ;*REQUSISTOR LEVEL
+STATUS=RBO.setProperty('','USER_LEVEL',APPLEVEL)
+
+CMD = "SSELECT APP.REQ WITH @ID LIKE " : CONO : "... AND APP_PO_LEVEL < " : APP.PO.LEVEL : " AND ( @ID LIKE ...!ALL OR @ID LIKE ...!" : DIV : ")"
+UDTEXECUTE CMD
+
+APP.REQ.ID.LIST = ""
+APP.REQ.DESC.LIST = ""
+
+DATA = 1
+LOOP
+	READNEXT APP.REQ.ID THEN
+		APP.REQ.ID.LIST<1,-1> = APP.REQ.ID	
+	END ELSE
+		DATA = 0  
+	END
+
+WHILE DATA DO
+REPEAT
+
+APP.COUNT = DCOUNT(APP.REQ.ID.LIST ,@VM)
+
+	FOR X = 1 TO APP.COUNT
+	MATREAD APP.REQ.REC FROM APP.REQ, APP.REQ.ID.LIST<1,X> ELSE
+             MAT APP.REQ.REC = ""
+       END	
+		APP.REQ.DESC.LIST<1,-1> = APP.NAME	
+	NEXT 
+
+
+ STATUS = RBO.setProperty('','ApproverCodes',APP.REQ.ID.LIST) 
+ STATUS = RBO.setProperty('','ApproverDescs',APP.REQ.DESC.LIST) 
+
+REQ.POS = ""
+
+BEGIN CASE
+	CASE REQ_TYPE = "R"
+		REQ.POS = 1
+	CASE REQ_TYPE = "O"
+		REQ.POS = 2
+	CASE REQ_TYPE = "M"
+		REQ.POS = 3
+END CASE
+
+
+*******************************************
+RET.FLAG=1
+*IF NEWITEM=1 OR NEWITEM="" THEN
+  
+      IF PO.DIV.OWNER # "00" THEN
+      MATREAD DIV.REC FROM DIVISION, CONO:PO.DIV.OWNER ELSE
+         INVALID = 1
+      END
+   END ELSE
+      DIV = "ALL"
+   END
+   IF NOT(INVALID) THEN
+      VALID = 1
+      MATREAD APP.REQ.REC FROM APP.REQ,CONO:USER.ID:"!ALL" THEN
+         IF APP.PO.FLAG<1,2> = "Y" THEN
+            IF APP.STATUS = "Y" THEN
+               RET_VALUE = APP.NAME<1>
+            END ELSE
+               IF DIV # "ALL" THEN
+                  MATREAD APP.REQ.REC FROM APP.REQ,CONO:USER.ID:"!":DIV THEN
+                     IF APP.STATUS = "Y" THEN
+                        RET_VALUE = APP.NAME<1>
+                     END ELSE
+                        
+                        ERRMSG = "User profile is inactive for division ":DIV
+                        GOTO 91000
+                     END
+                  END ELSE
+                     
+                     ERRMSG = "You are not allowed to enter requisitions for division ":PO.DIV.OWNER
+                        GOTO 91000
+                  END
+               END ELSE
+                  
+                  ERRMSG = "User profile is inactive for division ":DIV
+                  GOTO 91000
+               END
+            END
+         END ELSE
+            
+            ERRMSG = "You are not allowed to enter an Outside Requesition."
+            GOTO 91000
+         END
+      END ELSE
+         IF DIV # "ALL" THEN
+            MATREAD APP.REQ.REC FROM APP.REQ,CONO:USER.ID:"!":DIV THEN
+               IF APP.PO.FLAG<1,2> = "Y" THEN
+                  IF APP.STATUS = "Y" THEN
+                     RET_VALUE = APP.NAME<1>
+                  END ELSE
+                     
+		     ERRMSG = "User profile is inactive for division ":DIV
+                     GOTO 91000
+                  END
+               END ELSE
+                  
+		  ERRMSG = "You are not allowed to enter an Outside Requesition."
+                  GOTO 91000
+               END
+            END ELSE
+                
+		ERRMSG = "You are not allowed to enter requisitions for division ":PO.DIV.OWNER
+                GOTO 91000
+            END
+         END ELSE
+            
+	    ERRMSG = "You are not allowed to enter requisitions for division ":PO.DIV.OWNER
+            GOTO 91000
+         END
+      END
+   END ELSE
+      
+      ERRMSG = "Invalid division number used for PO owning division"
+      GOTO 91000
+   END
+   DIV.CODE = PO.DIV.OWNER; USER.ID = UPCASE(@LOGNAME); ERRMSG = ''
+   CALL CK_DIV_SEC_SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+   IF ERRMSG # '' THEN
+      GOTO 91000
+   END
+
+*END 
+*STATUS = RBO.setProperty('','ServerStatus',USER.ID : " CONO 222222222 : "  : CONO : " : " : REQ.POS :  " : " : USER.ID  : " : " : REQ_TYPE)     
+RETURN
+
+91000 
+  STATUS = RBO.setProperty('','ServerStatus',1)        
+  STATUS = RBO.setProperty('','ServerMessage',ERRMSG) 
+  RETURN
+
+93000 
+  *STATUS = RBO.setProperty('','ServerStatus',USER.ID : " CONO  : "  : CONO)
+  STATUS = RBO.setProperty('','ServerStatus',1)        
+  STATUS = RBO.setProperty('','ServerMessage',ERRMSG) 
+  RETURN
+
+99999 
+RETURN
+

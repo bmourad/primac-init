@@ -1,0 +1,256 @@
+SUBROUTINE GET_ORD_OSDFIQTY
+********************************************************************************
+*   Program name :- GET_ORD_OSDFIQTY
+*   Created:- 12/22/2005
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+* Insert method code here
+$INCLUDE PMC.CPYLIB COMP.OPS
+$INCLUDE PMC.CPYLIB CUSTOMER
+$INCLUDE ICS.CPYLIB FNGD.BOM
+$INCLUDE PMC.CPYLIB SHIP.TO
+$INCLUDE PMC.CPYLIB TAX
+$INCLUDE PMC.CPYLIB FOB
+$INCLUDE OPS.CPYLIB ORDER
+$INCLUDE OPS.CPYLIB BOL
+$INCLUDE OPS.CPYLIB PICK.TICKET
+$INCLUDE OPS.CPYLIB ORDER.RELEASE
+$INCLUDE OPS.CPYLIB ORDER.DETAIL
+$INCLUDE OPS.CPYLIB ORDER.DETAIL.INQ
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB INV.WHSE
+$INCLUDE ICS.CPYLIB CATEGORY
+$INCLUDE ICS.CPYLIB INV.CNV
+$INCLUDE ICS.CPYLIB INV_SERIAL       
+$INCLUDE ICS.CPYLIB INV_RECEIPTS     
+$INCLUDE ICS.CPYLIB INV_RECP_WHSE    
+$INCLUDE CPYLIB GEN.XREF.SUB
+$INCLUDE CPYLIB EDIT.COM
+$INCLUDE CPYLIB XREF.DATA
+$INCLUDE CPYLIB EDIT.COM.DRIVER
+$INCLUDE CPYLIB FILE.VARS
+$INCLUDE CPYLIB CHAR
+$INCLUDE CPYLIB SYSCOM
+
+
+OPEN "","ORDER" TO ORDER ELSE
+	    ERRMSG = "CANNOT OPEN ORDER FILE"
+	    GOTO 91000
+END
+OPEN "","ORDER.DETAIL" TO ORDER.DETAIL ELSE
+	    ERRMSG = "CANNOT OPEN ORDER.DETAIL FILE"
+	    GOTO 91000
+END
+OPEN "","INVENTORY" TO INVENTORY ELSE
+	    ERRMSG = "CANNOT OPEN INVENTORY FILE"
+	    GOTO 91000
+END
+OPEN "","CATEGORY" TO CATEGORY ELSE
+	    ERRMSG = "CANNOT OPEN CATEGORY FILE"
+	    GOTO 91000
+END
+OPEN "","INV.WHSE" TO INV.WHSE ELSE
+	    ERRMSG = "CANNOT OPEN INV.WHSE FILE"
+	    GOTO 91000
+END
+
+OPEN "","INV_SERIAL_TEMP" TO INV_SERIAL_TEMP ELSE
+	    ERRMSG = "CANNOT OPEN INV_SERIAL_TEMP FILE"
+	    GOTO 91000
+END
+
+OPEN "","INV_RECEIPTS" TO INV_RECEIPTS ELSE
+	    ERRMSG = "CANNOT OPEN INV_RECEIPTS FILE"
+	    GOTO 91000
+END
+
+OPEN "","INV_RECP_WHSE_TEMP" TO INV_RECP_WHSE_TEMP ELSE
+	    ERRMSG = "CANNOT OPEN INV_RECP_WHSE_TEMP FILE"
+	    GOTO 91000
+END
+
+OPEN "","CUSTOMER" TO CUSTOMER ELSE
+	    ERRMSG = "CANNOT OPEN CUSTOMER FILE"
+	    GOTO 91000
+END
+
+OPEN "","SHIP.TO" TO SHIP.TO ELSE
+	    ERRMSG = "CANNOT OPEN SHIP.TO FILE"
+	    GOTO 91000
+END
+GEN.SHPNO = "000"
+TYPE=''
+CUSTNO=''
+DEFAULT.FOB=''
+BOL.FOB=''
+BOL.FOB1=''
+*---- SETUP UNIT MEASURE CONVERSION AND DISPLAY
+   ICR.CNV = "MD0"; ICR.CNV1 = "MD0,"
+   ICR.DV1 = 1; ICR.MT1 = 1; ICR.DV2 = 1000
+   ICR.TYPE = 3; ICR.SCAL = 0
+*----
+STATUS=RBO.getProperty('','PMCProperty',PMCProperty)
+STATUS=RBO.getProperty('','BOL_ORDNO',BOL_ORDNO)
+*STATUS=RBO.getProperty('','BOL_SHIP_TO',BOL_SHIP_TO)
+CONO = PMCProperty<1,4>
+*SHPNO=BOL_SHIP_TO
+*STATUS = RBO.setProperty("","TESTPRODUCT",CONO)
+
+ORDNO = BOL_ORDNO      
+**NEW
+4100*
+   MATREADU ORD.REC FROM ORDER, CONO:ORDNO ELSE
+      RELEASE ORDER, CONO:ORDNO
+      ERRMSG = "Cannot locate Order # ":ORDNO
+      GOTO 91000
+   END
+   DIV.CODE = ORD.DIV; USER.ID = UPCASE(PMCProperty<1,3>); ERRMSG = ''
+   CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+   IF ERRMSG # '' THEN GOTO 91000
+   *GOSUB 6000
+   IF ERRMSG # '' THEN GOTO 91000
+   IF ORD.STATUS<1,1> = "CLOSED" OR ORD.STATUS<1,1> = "CANCEL" THEN
+      RELEASE ORDER, CONO:ORDNO
+      ERRMSG = "Order has either been closed or cancelled"
+      GOTO 91000
+   END
+   IF CUSTNO = "" THEN
+      CUSTNO = ORD.CUST
+   END ELSE
+      IF CUSTNO # ORD.CUST THEN
+         RELEASE ORDER, CONO:ORDNO
+         ERRMSG = "Order (":ORDNO:") belongs to customer # ":ORD.CUST
+         GOTO 91000
+      END
+   END
+   MATREAD CUST.REC FROM CUSTOMER, CONO:ORD.CUST ELSE
+      RELEASE ORDER, CONO:ORDNO
+      ERRMSG = "Cannot locate customer # ":ORD.CUST
+      GOTO 91000
+   END
+	**FOR SHIPNO
+   SCNT = DCOUNT(ORD.SHIP.TO,VM)
+   SET=1
+   BEGIN CASE
+      CASE SCNT < 2
+         ERRMSG = "Cannot locate any valid Ship to for Order # ":ORDNO
+         GOTO 91000
+      CASE ORD.SHIP.TO<1,1> # GEN.SHPNO
+         ERRMSG = "Invalid General Ship to for Order # ":ORDNO
+         GOTO 91000
+      CASE SCNT = 2
+         SHPNO = ORD.SHIP.TO<1,2>
+	  SET=0
+        * GOTO 91000
+   END CASE
+   IF SET = 1 THEN
+   	ERRMSG ="Enter ship to"
+   	GOTO 91000
+   END
+      ** SHIPNO
+   LOCATE SHPNO IN ORD.SHIP.TO<1>,2 SETTING SLOC ELSE
+      ERRMSG = "Cannot associate ship to (":SHPNO:") with order # ":ORDNO
+      GOTO 91000
+   END
+   MATREAD SPT.REC FROM SHIP.TO, CONO:CUSTNO:"!":SHPNO ELSE
+      ERRMSG = "Cannot locate ship to # ":SHPNO
+      GOTO 91000
+   END
+	BOL.FOB=SPT.FOB
+	
+   MATREAD ORD.DET.REC FROM ORDER.DETAIL, CONO:ORDNO:"!":SHPNO ELSE
+      ERRMSG = "Cannot locate Order / Ship to # ":ORDNO:" / ":SHPNO
+      GOTO 91000
+   END
+   PCNT = DCOUNT(OSD.PROD,VM)
+   PDPTR = ""; QTYPTR = ""
+   PRODPTR = ""
+   FOR PNO = 1 TO PCNT
+      RCNT = DCOUNT(OSD.FI.QTY<1,PNO>,SVM)
+      FOR RNO = 1 TO RCNT
+         IF OSD.KIT<1,PNO> # "N" THEN
+            IF OSD.KIT<1,PNO> = "K" THEN
+               IF OSD.FI.QTY<1,PNO,RNO> > 0 THEN
+                  LOCATE PNO IN PDPTR,1 SETTING PLOC ELSE
+                     PDPTR<PLOC> = PNO
+                  END
+                  QTYPTR<PLOC,-1> = RNO
+               END ELSE
+                  LOCATE PNO IN PDPTR,1 SETTING PLOC ELSE
+                     PDPTR<PLOC> = PNO
+                  END
+                  QTYPTR<PLOC,-1> = RNO + 1
+               END
+            END ELSE
+               IF OSD.FI.QTY<1,PNO,RNO> > 0 THEN
+                  LOCATE PNO IN PDPTR,1 SETTING PLOC ELSE
+                     PDPTR<PLOC> = PNO
+                  END
+                  QTYPTR<PLOC,-1> = RNO
+               END
+            END
+         END ELSE
+            IF OSD.FI.QTY<1,PNO,RNO> > 0 THEN
+               LOCATE PNO IN PDPTR,1 SETTING PLOC ELSE
+                  PDPTR<PLOC> = PNO
+               END
+               QTYPTR<PLOC,-1> = RNO
+            END
+         END
+      NEXT RNO
+   NEXT PNO
+   PDCNT = DCOUNT(PDPTR,AM)
+   IF PDCNT < 1 THEN
+      ERRMSG = "Cannot locate any available quantity for this Order/Ship to ":ORDNO:" / ":SHPNO
+      STATUS = RBO.setProperty("","BOL_SHIP_TO",SHPNO)		
+      GOTO 91000
+   END
+4199*
+
+	***
+	BEGIN CASE
+	  CASE BOL.FOB # ""
+		DEFAULT.FOB=""
+	  CASE SPT.FOB # ""
+         	DEFAULT.FOB = SPT.FOB
+      	  CASE 1
+              DEFAULT.FOB= CUST.ADDL.OPS<1,2>
+   	END CASE
+	
+	***
+	***
+		STATUS = RBO.setProperty("","BOL_CUST",CUSTNO)
+		STATUS = RBO.setProperty("","BOL_ORDER",ORDNO)
+		STATUS = RBO.setProperty("","SPT_NAME",SPT.NAME)
+	       STATUS = RBO.setProperty("","SPT_ADDR1",SPT.ADDR1)
+      	 	STATUS = RBO.setProperty("","SPT_ADDR2",SPT.ADDR2)
+      		STATUS = RBO.setProperty("","SPT_CITY",SPT.CITY)
+     		STATUS = RBO.setProperty("","SPT_STATE",SPT.STATE)
+	       STATUS = RBO.setProperty("","SPT_ZIP",SPT.ZIP)
+	       STATUS = RBO.setProperty("","BOL_SHIP_TO",SHPNO)
+		STATUS = RBO.setProperty("","BOL_SHIP_VIA",SPT.SHIP.VIA)
+		STATUS = RBO.setProperty("","BOL_FOB",DEFAULT.FOB)
+		STATUS = RBO.setProperty("","BOL_TAX_JUR",SPT.TAX.JUR)
+	***Till here	
+RETURN
+
+**NEW
+* End of method code
+RETURN
+
+91000 *
+STATUS = RBO.setProperty('','ServerStatus1',1)        
+STATUS = RBO.setProperty('','ServerMessage1',ERRMSG) 
+RETURN
+
+

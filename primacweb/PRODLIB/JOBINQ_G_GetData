@@ -1,0 +1,155 @@
+SUBROUTINE JOBINQ_G_GetData
+********************************************************************************
+*   Program name :- JOBINQ_G_GetData
+*   Created:- 12/11/2002
+*   Author:- L. Ross
+*   Gets info for Job Inquiry 'G' option.
+*------------------------------------------------------------------------------*
+*
+*  
+
+* In Properties:
+* --------------
+*  
+IN_PARAM=''
+*
+* Out Properties:
+* ---------------
+*  
+OUT_PARAM=''
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE JCS.CPYLIB JOB
+$INCLUDE JCS.CPYLIB GANG.JOB
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE PMC.CPYLIB CUSTOMER
+$INCLUDE CPYLIB CHAR
+
+;* open files
+
+ERRMSG=''
+IF FILEINFO(JOB,0)=0 THEN
+   OPEN '','JOB' TO JOB ELSE
+      ERRMSG<1,-1>='JOB FILE IS MISSING'
+   END
+END
+IF FILEINFO(GANG.JOB,0)=0 THEN
+   OPEN '','GANG.JOB' TO GANG.JOB ELSE
+      ERRMSG<1,-1>='GANG.JOB FILE IS MISSING'
+   END
+END
+IF FILEINFO(CUSTOMER,0)=0 THEN
+   OPEN '','CUSTOMER' TO CUSTOMER ELSE
+      ERRMSG<1,-1>='CUSTOMER FILE IS MISSING'
+   END
+END
+IF FILEINFO(INVENTORY,0)=0 THEN
+   OPEN '','INVENTORY' TO INVENTORY ELSE
+      ERRMSG<1,-1>='INVENTORY FILE IS MISSING'
+   END
+END
+IF ERRMSG#'' THEN GOTO 93000
+
+;* initialize
+
+
+;* get ID
+
+STATUS=RBO.getProperty('','ID',ID)
+CONO=ID[1,3]
+
+;* get database values
+
+CALC.AREA=''
+TOT.AREA=''
+UNKNOWN = STR('?',30)
+MATREAD JOB.REC FROM JOB, ID ELSE
+  ERRMS='Cannot read record ':ID:' from JOB file'
+  GOTO 93000
+END
+MATREAD GJOB.REC FROM GANG.JOB, ID ELSE
+  ERRMSG='Cannot read record ':ID:' from GANG.JOB file'
+  GOTO 93000
+END
+MATREAD CUST.REC FROM CUSTOMER, CONO:JOB.CUST ELSE
+  CUST.NAME = UNKNOWN
+END
+
+LINES=DCOUNT(GJOB.JOB,VM)
+TMP.STATUS = ""
+TOT.AREA = INT(GJOB.IW / 10 * GJOB.IL / 10 + 0.5)
+CALC.AREA = 0
+FOR CREF = 1 TO LINES
+   MATREAD JOB.REC FROM JOB,CONO:GJOB.JOB<1,CREF> ELSE
+      MAT JOB.REC = ""
+      JOB.STATUS = "????????"
+   END
+   JSTAT=''
+   CALL JOB.STATUS.SUB(JOB.STATUS,JOB.TRACK.DATE,JSTAT)
+   BEGIN CASE
+   CASE JSTAT = "UNKNOWN"
+      JSTAT = "?"
+   CASE JSTAT = "BOOKED"
+      JSTAT = ""
+   CASE JSTAT = "COMPLETED"
+      JSTAT = "C"
+   CASE JSTAT = "CANCELLED"
+      JSTAT = "X"
+   CASE INDEX(JSTAT,"PURGE",1) > 0
+      JSTAT = "C"
+   CASE JSTAT = "IN PROCESS"
+      JSTAT = "I"
+   CASE 1
+      JSTAT = "I"
+   END CASE
+   CALC.AREA = CALC.AREA + INT(GJOB.WIDTH<1,CREF> / 1000 * GJOB.LENGTH<1,CREF> / 1000 * GJOB.SPOTS<1,CREF> + 0.5)
+   TMP.STATUS<1,CREF> = JSTAT
+   IF GJOB.PROD<1,CREF> # "" THEN
+      MATREAD INV.REC FROM INVENTORY,CONO:GJOB.PROD<1,CREF> ELSE
+         MAT INV.REC = ""
+         INV.DESC = "???????????????"
+      END
+      IF INV.DESC # "" THEN GJOB.PDESC<1,CREF> = INV.DESC
+      IF INV.PAP.WIDTH+0 > 0 THEN
+         GJOB.WIDTH<1,CREF> = INV.PAP.WIDTH
+      END
+      IF INV.PAP.LEN+0 > 0 THEN
+         GJOB.LENGTH<1,CREF> = INV.PAP.LEN
+      END
+      GJOB.WIDTH<1,CREF> = OCONV(GJOB.WIDTH<1,CREF>,'MD4')
+      GJOB.LENGTH<1,CREF> = OCONV(GJOB.LENGTH<1,CREF>,'MD4')
+   END
+NEXT CREF
+IF TOT.AREA # 0 THEN
+   WASTE = INT((1-(CALC.AREA/TOT.AREA))*10000+0.5)
+END ELSE
+   WASTE = 0
+END
+WASTE = OCONV(WASTE,'MD2')
+CALC.AREA = INT(CALC.AREA/100+.5)
+
+STATUS=RBO.setProperty('','CustName',CUST.NAME)
+STATUS=RBO.setProperty('','ImpressWidth',OCONV(GJOB.IW,'MD2'))
+STATUS=RBO.setProperty('','ImpressLength',OCONV(GJOB.IL,'MD2'))
+STATUS=RBO.setProperty('','AllocTable',GJOB.ALLOC)
+STATUS=RBO.setProperty('','AllocTblDesc',GJOB.DESC)
+STATUS=RBO.setProperty('','SqIn',CALC.AREA)
+STATUS=RBO.setProperty('','Spots',SUM(GJOB.SPOTS))
+STATUS=RBO.setProperty('','Waste',WASTE)
+STATUS=RBO.setProperty('','JobNo',GJOB.JOB)
+STATUS=RBO.setProperty('','Product',GJOB.PROD)
+STATUS=RBO.setProperty('','ProdDesc',GJOB.PDESC)
+STATUS=RBO.setProperty('','Width',GJOB.WIDTH)
+STATUS=RBO.setProperty('','Length',GJOB.LENGTH)
+STATUS=RBO.setProperty('','Cnt',GJOB.SPOTS)
+STATUS=RBO.setProperty('','Percent',GJOB.PCT)
+STATUS=RBO.setProperty('','JobStatus',TMP.STATUS)
+GOTO 99999
+
+93000 
+STATUS = RBO.setProperty('','ServerStatus',1)        
+STATUS = RBO.setProperty('','ServerMessage',ERRMSG)  
+
+99999 
+RETURN
+

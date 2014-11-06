@@ -1,0 +1,10 @@
+***************************
+*  REVISION - [08.1]      *
+* ID = CONO:"MANUAL.DEPR" *
+***************************
+MAN.DEPR.CTL.SIZE=5
+DIM MAN.DEPR.CTL(5)
+EQU MDC.CUR.PER   TO MAN.DEPR.CTL(1)
+EQU MDC.CUR.DATE  TO MAN.DEPR.CTL(2)
+EQU MDC.PRT.FLG   TO MAN.DEPR.CTL(3)
+EQU MDC.EOM.PER   TO MAN.DEPR.CTL(4)

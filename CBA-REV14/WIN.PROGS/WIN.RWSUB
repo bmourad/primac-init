@@ -1,0 +1,176 @@
+SUBROUTINE WIN.RWSUB(PARM)
+* Spool hold entry to terminal
+* Compile for: UD UC UV UP
+* (C) Copyright IBM Corporation 2003. All rights reserved
+*
+  DIM SS.ARGS(30)
+  MAT SS.ARGS = ""
+  EQU SS.PROGS  TO SS.ARGS(1)
+  EQU SS.PARAM  TO SS.ARGS(2)
+  EQU SS.RESULT TO SS.ARGS(3)
+  EQU SS.EXTRA1 TO SS.ARGS(4)
+  EQU SS.EXTRA2 TO SS.ARGS(5)
+*
+  EQU SSA.INIT    TO 1
+  EQU SSA.FILECHK TO 3
+  EQU SSA.READCHK  TO 12
+*
+ERR = 0
+GOSUB 50;* Initialise
+*
+IF ERR = 0 THEN
+   ACTION = FIELD(PARM,',',1)
+   ITEM = FIELD(PARM,',',2)
+   DUMMY = @(0,0)
+   *
+   BEGIN CASE
+   CASE ACTION = 1; GOSUB 100; * Spool hold entry to screen
+   CASE ACTION = 2; GOSUB 200; * Send entry list to dialog item
+   CASE ACTION = 3; GOSUB 300; * Send preview to the dialog item
+   END CASE
+END
+CALL WIN.SETVAR("SBT_Error",ERR)
+*
+RETURN
+*
+* Initialise
+50 MACHINE.TYPE = ""
+OPEN "","WIN.PARAMS" TO F.PROGS ELSE
+   OPEN "","WIN.PROGS" TO F.PROGS ELSE ERR = 2
+END
+IF ERR = 0 THEN
+    READV MACHINE.TYPE FROM F.PROGS,"MACHINE.TYPE",1 ELSE ERR = 3
+END
+IF ERR = 0 THEN
+   IF MACHINE.TYPE = "UD" OR MACHINE.TYPE = "UC" THEN
+     HOLDNAME = "_HOLD_"
+   END ELSE
+     HOLDNAME = "&HOLD&"
+   END
+*
+   SUB.SUFFIX = ''
+   IF MACHINE.TYPE # 'GENERIC' THEN SUB.SUFFIX = '.':MACHINE.TYPE
+   PARAMSUB = 'WIN.PARAM':SUB.SUFFIX
+*
+   R.OPTS = ''
+   CALL @PARAMSUB(F.MD, R.OPTS)
+*
+   READV SERVSUB FROM F.PROGS,"SERVICESUB",1 ELSE SERVSUB = ""
+   HOOK = ""
+   IF SERVSUB # "" THEN
+      SS.ARGS(1) = 3; * Id for Report Wizard
+      SS.ARGS(2) = R.OPTS
+      CALL @SERVSUB(SSA.INIT, MAT SS.ARGS, HOOK);* Initialise service routine
+   END
+   * Check user has access to Hold file
+   IF HOOK<SSA.FILECHK> = "1" THEN
+      SS.EXTRA1 = "";* This account
+      CALL @SERVSUB(SSA.FILECHK, MAT SS.ARGS, HOLDNAME)
+      IF SS.RESULT = 0 THEN ERR = 4
+   END
+*
+END
+RETURN
+*
+* Spool hold entry to screen
+100 *
+IF HOOK<SSA.READCHK> = "1" THEN
+   SS.EXTRA1 = ITEM
+   SS.EXTRA2 = ""
+   CALL @SERVSUB(SSA.READCHK, MAT SS.ARGS, HOLDNAME)
+   IF SS.RESULT = 0 THEN ERR = 1
+END
+IF ERR = 0 THEN
+   OPENSEQ HOLDNAME,ITEM TO F.ITEM ELSE ERR = 1
+END
+IF ERR = 0 THEN
+   EOF = 0
+   CNT = 0
+   PRINT "!SOF!"
+   ECHO OFF
+   INPUT RESP:
+   LOOP
+      READSEQ LINE FROM F.ITEM ELSE EOF = 1
+   UNTIL EOF DO
+      PRINT LINE
+      CNT = CNT + 1
+      IF CNT = 20 THEN
+         PRINT "!EOB!"
+         INPUT RESP:
+         RESP = OCONV(RESP,"MCU")
+         IF RESP = "NAK" THEN EOF = 1
+         CNT = 0
+      END
+   REPEAT
+   IF RESP = "ACK" THEN PRINT "!EOF!"
+   ECHO ON
+END
+RETURN
+*
+* Send list of entries to a control
+200 DLGNAME = FIELD(ITEM,".",1)
+CTRL = FIELD(ITEM,".",2)
+AL = "IF IsShown(":DLGNAME:") Then db al ":DLGNAME:",":CTRL:',"'
+CK = "Enter IsShown(":DLGNAME:")"
+EOF = 0
+CNT = 0
+RDCHECK = 0
+IF HOOK<SSA.READCHK> = "1" THEN
+   RDCHECK = 1
+   SS.EXTRA2 = ""
+END
+SS.RESULT = 1
+*
+ECHO OFF
+EXECUTE "SSELECT ":HOLDNAME:" BY.DSND @ID"
+LOOP
+  READNEXT KEY ELSE EOF = 1
+UNTIL EOF DO
+  IF RDCHECK = 1 THEN
+     SS.EXTRA1 = KEY
+     CALL @SERVSUB(SSA.READCHK, MAT SS.ARGS, HOLDNAME)
+  END
+  IF SS.RESULT THEN
+     CALL WIN.COMSUB(AL:KEY:'"')
+     CNT = CNT + 1
+     IF CNT = 5 THEN
+        CALL WIN.COMSUB(CK)
+        INPUT DUM:
+        IF DUM # "1" THEN
+           LOOP
+           READNEXT KEY ELSE EOF = 1
+           UNTIL EOF DO
+           REPEAT
+        END
+        CNT = 0
+     END
+  END
+REPEAT
+ECHO ON
+RETURN
+*
+* Send preview to the specified variable
+300 *
+IF HOOK<SSA.READCHK> = "1" THEN
+   SS.EXTRA1 = ITEM
+   SS.EXTRA2 = ""
+   CALL @SERVSUB(SSA.READCHK, MAT SS.ARGS, HOLDNAME)
+   IF SS.RESULT = 0 THEN ERR = 1
+END
+*
+OPENSEQ HOLDNAME,ITEM TO F.ITEM ELSE ERR = 1
+VARNAME = FIELD(PARM,",",3)
+IF ERR = 0 THEN
+   EOF = 0
+   AM = CHAR(254)
+   VALUE = ""
+   FOR J = 1 TO 100 UNTIL EOF
+      LINE = ""
+      READSEQ LINE FROM F.ITEM ELSE EOF = 1
+      VALUE = VALUE : AM: LINE
+   NEXT J
+   CALL WIN.ASSIGN(VARNAME,VALUE)
+END
+RETURN
+*
+END

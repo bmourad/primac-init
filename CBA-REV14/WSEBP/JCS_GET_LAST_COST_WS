@@ -1,0 +1,142 @@
+   SUBROUTINE JCS_GET_LAST_COST_WS(IWH.ID,MAT IWH.REC,WAREHOUSE,CONTROL,ERR.FLG,ERRMSG,DIV.POS,FISCAL.FLAG,TRAN.PERIOD,LAST.PRICE)
+*
+**********************************************
+* REVISION- [XX.X]
+* Copyright 1995 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM- PRIMAC
+* SOURCE- ICSBP
+* PROGRAM - GET.LAST.COST
+* BY- epitka; CBA
+* DATE- 12/03/2001
+* DESCRIPTION -
+* ERR.FLG :
+* '' - NO ERROR, RET.VALUE CONTAINS RESULT
+*         0 - WARNING
+*        -1 - ERROR ENCOUNTERED - LIKE GOSUB 91000
+*        -2 - FATAL ERROR      - LIKE GOSUB 93000
+*
+* WAREHOUSE $ CONTROL - FILE VARIABLES 
+* DIV.POS - POSITION OF DIVISION IN CONTROL RECORD 001DIVISIONS.
+* FISCAL.FLAG = 'IC'-ICS, 'JC'-JCS . IF '' THEN IT DEFAULTS TO 'IC'
+* TRAN.PERIOD = PERIOD FOR WHICH TRANSACTION IS TO OCCUR, 'ALL' 
+* TO INCLUDE ALL PERIODS
+* ERR.FLG,ERRMSG AND LAST.PRICE ARE RETURN ARGUMENTS
+* DIV.POS, FISCAL.FLAG  AND TRAN.PERIOD ARE NOT MANDATORY.
+* T25740 epitka 12/03/2001 * GET LAST UNIT PRICE
+*ENDDOC
+**********************************************
+*
+$INCLUDE ICS.CPYLIB INV.WHSE
+$INCLUDE ICS.CPYLIB WAREHOUSE
+$INCLUDE ICS.CPYLIB INV_RECP_WHSE
+$INCLUDE CPYLIB CHAR
+*
+   DEFFUN JCS_DIVISION_POSITION_WS(CONO,CONTROL,DIV.CODE)
+   DEFFUN JCS_CURRENT_PERIOD_WS(CONO,CONTROL,DIV.POS,FISCAL.FLAG)
+*
+   IF FILEINFO(INV_RECP_WHSE,0)=0 THEN
+      OPEN '','INV_RECP_WHSE' TO INV_RECP_WHSE ELSE 
+         ERRMSG='INV_RECP_WHSE FILE IS MISSING.'
+         ERR.FLG='-2'
+      END
+   END
+*
+   CONO=IWH.ID[1,3]
+   WHSE=OCONV(IWH.ID,"G1!1")
+   PERIOD=TRAN.PERIOD
+   RCP.CNT=DCOUNT(IWH.RECP.NO,VM)
+*
+   IF RCP.CNT>0 THEN
+      ERR.FLG=''; ERRMSG=''
+      LAST.PRICE=''
+      IF PERIOD='' THEN
+         IF DIV.POS='' THEN
+            WHSE.ID=CONO:WHSE
+            MATREAD WHSE.REC FROM WAREHOUSE,WHSE.ID THEN 
+               IF WHS.DIV='' THEN WHS.DIV='00'
+               ;* get division position
+               DIV.POS=JCS_DIVISION_POSITION_WS(CONO,CONTROL,WHSE.DIV)
+               IF DIV.POS<1,1>='' THEN
+                  DIV.POS=DIV.POS<1,2>
+               END ELSE
+                  ERR.FLG=DIV.POS<1,1>
+                  ERRMSG=DIV.POS<1,2>
+               END
+            END ELSE
+               ERRMSG='WAREHOUSE RECORD ':WHSE.ID:' IS MISSING.'
+               ERR.FLG="-2"
+            END
+         END
+         ;* get the current period
+         IF FISCAL.FLAG='' THEN FISCAL.FLAG='IC'
+         PERIOD=JCS_CURRENT_PERIOD_WS(CONO,CONTROL,DIV.POS,FISCAL.FLAG) 
+         IF PERIOD<1,1>='' THEN
+            PERIOD=PERIOD<1,2>
+         END ELSE 
+            ERR.FLG=PERIOD<1,1>
+            ERRMSG=PERIOD<1,2>
+         END
+      END
+      IF ERR.FLG='' THEN
+         GOSUB FIND.RECP.NO
+         IF (FOUND) THEN
+            GOSUB GET.LAST.PRICE
+         END
+         IF LAST.PRICE='' THEN
+            ERRMSG='Cannot get last price'
+            ERR.FLG='-1'
+         END
+      END
+   END ELSE
+      ERRMSG='Cannot get last cost'
+      ERR.FLG="-1"                 
+   END
+   GOTO 99999
+**************************************************************************
+*
+**************
+FIND.RECP.NO: 
+**************
+*
+   IF PERIOD='ALL' THEN
+      IRW.ID=CONO:IWH.RECP.NO<1,RCP.CNT>:"!":WHSE
+   END ELSE
+      LOCATE PERIOD IN IWH.RECP.PERIOD<1> SETTING BEG.POS THEN
+         FOUND=0
+         FOR P=BEG.POS TO RCP.CNT UNTIL FOUND
+            IF IWH.RECP.PERIOD<1,P+1> > PERIOD THEN
+               FOUND=1
+               IRW.ID=CONO:IWH.RECP.NO<1,P>:"!":WHSE
+            END
+         NEXT P
+         IF NOT(FOUND) THEN 
+            IRW.ID=CONO:IWH.RECP.NO<1,RCP.CNT>:"!":WHSE
+            FOUND=1
+         END
+      END ELSE
+         IF IWH.RECP.PERIOD<1,RCP.CNT> <= PERIOD THEN
+            IRW.ID=CONO:IWH.RECP.NO<1,RCP.CNT>:"!":WHSE
+            FOUND=1
+         END ELSE
+            FOUND=0
+            FOR P=RCP.CNT TO 1 STEP -1 UNTIL FOUND
+               IF IWH.RECP.PERIOD<1,P> <= PERIOD THEN
+                  FOUND=1
+                  IRW.ID=CONO:IWH.RECP.NO<1,P>:"!":WHSE
+               END
+            NEXT P
+         END
+      END
+   END
+   RETURN
+*
+***************
+GET.LAST.PRICE: 
+***************
+*
+   MATREAD IRW.REC FROM INV_RECP_WHSE,IRW.ID THEN
+      LAST.PRICE=IRW.UNIT.COST                   
+   END                                           
+   RETURN
+99999 
+   RETURN

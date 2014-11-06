@@ -1,0 +1,728 @@
+*COPY>CPYLIB>COM1
+*COPY>JCS.CPYLIB>COM.INVOICE
+*********************************************************************
+* REVISION    - [10.0]
+* COPYRIGHT   - 1994 by C.B.A.    (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC-JCS
+* SOURCE      - JCSBP
+* PROGRAM     - INVOICE.MAINT.F4
+* AUTHOR      - WALID YAMOUT, CBA
+* DATE        - 06/05/84
+* DESCRIPTION
+*  This program is used to create or maintain invoices, credit memos
+*  or debit memos.
+* COMMENT     - REVISED TO REFLECT JOB.STATUS '5' - "REOPENED"
+*               TASK #12907 (RRG)
+* TASK 17927 GAT 10/31/94 ADD INVOICE DETAIL ALLOCATION
+* CSF 22628 GAT 03/14/95 FIX LOCK ON DAILY.INVOICE AT EXIT
+*T20828 lanny 08/16/1996 * If an invoice is duplicated from one which
+*                          has been thru JCS.EOM.CLOSE the IVC.GLA.DATE
+*                          field is left as is and new invoice will
+*                          never process at EOM.
+*T21177 diane 11/06/1996 * REV11 UPG
+* T20782 UPDATE INVOICE.SALES.STATS FILE
+* T22154 stefanie 08/19/1997 * Fix Rev10B to Rev11 match problem.
+* T23278 markt 10/13/1998 * Add division security check
+*T25159 alex 05/11/2000 * Add PMC.CPYLIB>COUNTRY.CODE, since the
+*                         COUNTRY.CODE file can hold multiple attributes
+*                         of data.
+*T25947 cm 07/12/2001 * Allow duplication of invoices across jobs and
+*                       customers.
+*T25764 renee 07/19/2001 * Add "Terms code" field that defaults from
+*                          customer record but allows edit. Add the
+*                          number of days stored in the terms record to
+*                          the invoice date to come up with the invoice
+*                          due date.
+*T26126 adelgado 02/28/2002 * Implement the LOCKED clause for READU.
+*T28645 lross 08/10/2005 * Need to blank out IVC.LIST.DATE when
+*                          Duplicating.
+*T28826 wvaughan 05/09/2006 * Additional Prompt to CM entry for Final
+*                             Invoice
+*********************************************************************
+*
+*---- FILE COPY STATEMENTS
+*
+*COPY>JCS.CPYLIB>INVOICE
+*COPY>PMC.CPYLIB>INVOICE.CODE
+*COPY>JCS.CPYLIB>JOB
+*COPY>OPS.CPYLIB>JOB.FNGD.STATS
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>PMC.CPYLIB>SALESMAN
+*COPY>PMC.CPYLIB>DIVISION
+*COPY>CPYLIB>FILE.VARS
+*COPY>JES.CPYLIB>JES.FILE.VARS
+*COPY>CPYLIB>GEN.XREF
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>CHAR
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>JOB.SALES.STATS
+*COPY>JES.CPYLIB>ESTIMATE.JOB
+*COPY>PMC.CPYLIB>GLTABLE
+*COPY>PMC.CPYLIB>COA
+*COPY>PMC.CPYLIB>COUNTRY.CODE         ;*T25159
+*
+*---- DIMENSIONED VARIABLES
+*
+   DIM SAVE.CUST(CUST.REC.SIZE)
+   DIM SAVE.REC(60)
+*
+*--- SETUP SYSTEM ERROR MESSAGES
+*
+   SYS.TYPE = 1
+   CALL SYSCOM(MAT SYSCOM.REC)
+*
+*--- OPEN ALL FILES
+*
+   OPEN "","JCS.SCREENS" TO M.SCREENS ELSE
+      ERRMSG="JCS.SCREENS FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","CONTROL" TO CONTROL ELSE
+      ERRMSG="CONTROL FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","COMPANY" TO COMPANY ELSE
+      ERRMSG="COMPANY FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","JOB" TO JOB ELSE
+      ERRMSG="JOB FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","INVOICE" TO INVOICE ELSE
+      ERRMSG="INVOICE FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","DAILY.INVOICE" TO DAILY.INVOICE ELSE
+      ERRMSG="DAILY.INVOICE FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","INVOICE.CODE" TO INVOICE.CODE ELSE
+      ERRMSG="INVOICE.CODE FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","CUSTOMER" TO CUSTOMER ELSE
+      ERRMSG="CUSTOMER FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","SALESMAN" TO SALESMAN ELSE
+      ERRMSG="SALESMAN FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","DIVISION" TO DIVISION ELSE
+      ERRMSG="DIVISION FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","DEPARTMENT" TO DEPARTMENT ELSE
+      ERRMSG="DEPARTMENT FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","COST.CNTR" TO COST.CNTR ELSE
+      ERRMSG="COST.CNTR FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","JOB.CATEGORY" TO JOB.CATEGORY ELSE
+      ERRMSG="JOB.CATEGORY FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","JOB.SHIP" TO JOB.SHIP ELSE
+      ERRMSG="JOB.SHIP FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","SALES.CODE" TO SALES.CODE ELSE
+      ERRMSG="SALES.CODE FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","TAX" TO TAX ELSE
+      ERRMSG="TAX FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","SHIP.VIA" TO SHIP.VIA ELSE
+      ERRMSG="SHIP-VIA FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","PREFIX" TO PREFIX ELSE
+      ERRMSG="PREFIX FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","CUSTOMER.XREF" TO CUSTOMER.XREF ELSE
+      ERRMSG="CUSTOMER.XREF FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","VOID.INVOICES" TO VOID.INVOICES ELSE
+      ERRMSG="VOID.INVOICES FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","COUNTRY.CODE" TO COUNTRY.CODE ELSE
+      ERRMSG="COUNTRY.CODE FILE IS MISSING"; GOTO 93000
+   END
+   OPEN "","TERMS" TO TERMS ELSE
+      ERRMSG="TERMS FILE IS MISSING"; GOTO 93000
+   END
+*
+*--- GET COMPANY NUMBER
+*
+   MAT COMP.REC = ""
+   CONO = ""
+   CALL GET.CONO(CONO,MAT COMP.REC)
+   IF CONO = "END" THEN GOTO 999999
+   IF CO.ARS = "Y" THEN OPEN "","OPEN.RECV" TO OPEN.RECV ELSE
+      ERRMSG="OPEN.RECV FILE IS MISSING"; GOTO 93000
+   END
+   IF CO.SAS = "Y" AND CO.SAS.INVOICE # "N" THEN
+      OPEN "","JOB.SALES.STATS" TO JOB.SALES.STATS ELSE
+         ERRMSG="JOB.SALES.STATS FILE IS MISSING"; GOTO 93000
+      END
+      OPEN "","INVOICE.SALES.STATS" TO INVOICE.SALES.STATS ELSE
+         ERRMSG="INVOICE.SALES.STATS FILE IS MISSING"; GOTO 93000
+      END
+   END
+   IF CO.OPS = "Y" THEN
+      OPEN "","JOB.FNGD.STATS" TO JOB.FNGD.STATS ELSE
+         ERRMSG = "Cannot locate the JOB.FNGD.STATS file"
+         GOTO 93000
+      END
+      OPS.ONFILE = 1
+   END ELSE
+      OPS.ONFILE = 0
+   END
+   IF CO.ALLOC.FLG = "Y" THEN
+      OPEN "","ESTIMATE.JOB" TO ESTIMATE.JOB ELSE
+         ERRMSG = "Cannot locate the ESTIMATE.JOB file"
+         GOTO 93000
+      END
+      OPEN '','COA' TO COA ELSE ERRMSG='COA FILE IS MISSING';GOTO 93000
+      OPEN '','SALES.CODE' TO SALES.CODE ELSE
+         ERRMSG='SALES.CODE FILE IS MISSING';GOTO 93000
+      END
+   END
+*
+*--- GET MENU SELECTION
+*
+   PROCREAD ID ELSE ERRMSG = "MUST RUN FROM MENU"; GOTO 93000
+   MENU = ID<1>
+*
+*--- INITIALIZATION
+*
+   UNKNOWN = "????????"
+   MAT EDIT.COM.DRIVER = ""
+   ECD.SCRN.CNT = 2
+   BEGIN CASE
+      CASE MENU = "INVOICE"
+         ECD.SCRN.NAME<1> = "INVOICE.MAINT"
+         ECD.SCRN.NAME<2> = "INVOICE.MAINT.SUB.F4"
+         ECD.SCRN.NAME<3> = "INVOICE.WIP.SUB"
+         ECD.SCRN.CNT = 3
+         IF CO.SAS.INVOICE # "N" THEN
+            ECD.SCRN.NAME<4> = "JOB.SALES.MAINT"
+            ECD.SCRN.CNT = 4
+         END
+         GOSUB 50
+      CASE MENU = "DEBIT"
+         ECD.SCRN.NAME<1> = "DEBIT.MEMO"
+         ECD.SCRN.NAME<2> = "DEBIT.MEMO.SUB.F4"
+         GOSUB 50
+      CASE MENU = "CREDIT"
+         ECD.SCRN.NAME<1> = "CREDIT.MEMO"
+         ECD.SCRN.NAME<2> = "CREDIT.MEMO.SUB.F4"
+         ECD.SCRN.NAME<3> = "INVOICE.WIP.SUB"
+         ECD.SCRN.CNT = 3
+         GOSUB 50
+      CASE 1
+         ERRMSG = "INVALID SCREEN"; GOTO 93000
+   END CASE
+   ECD.ACTION=1;CALL SCRN.EDIT
+*      MAT EDIT.COM = ""
+*      TYP = 0; CALL EDIT.SUB; FILL = "#"
+   LINE.COUNT.C = 2
+   LINE.COUNT.D = 4
+   GOTO 100
+*
+50 * INV ALLOC MAINT
+   IF CO.ALLOC.FLG # "N" THEN 
+      ECD.SCRN.NAME<5> = "INV.ALLOC.MAINT"
+      ECD.SCRN.CNT = 5
+   END
+   RETURN
+*
+*---- MAIN PROCESSING
+*
+100*
+   ECD.SCRN.NO = 1
+   MAT SCV.REC = ""
+   ECD.ACTION=2;CALL SCRN.EDIT
+   GOTO 150
+120*
+   MAT SCV.REC = ""
+   ECD.ACTION=6;CALL SCRN.EDIT
+150*
+   SCV.REC(23)<1> = DATE()
+   ECD.NUM=23;ECD.ACTION=5;CALL SCRN.EDIT
+   MAT JOB.REC = ""
+   MAT CUST.REC = ""
+   MAT SAVE.CUST = ""
+   MAT SAVE.REC = ""
+   MAST.CUST = ""
+   JOB.NO = ""
+   ECD.NUM=1;ECD.ACTION = 4;CALL SCRN.EDIT
+   IF ECD.RET.VALUE = "END" THEN GOTO 999999
+   JOB.NO = ECD.RET.VALUE
+   MATREAD JOB.REC FROM JOB, CONO:JOB.NO ELSE
+      ERRMSG = "Cannot locate Job record - ":JOB.NO; GOSUB 91000
+      GOTO 120
+   END
+*T23278 v
+   DIV.CODE = JOB.DIV; USER.ID = UPCASE(@LOGNAME); ERRMSG = ''
+   CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+   IF ERRMSG # '' THEN
+      GOSUB 91000; GOTO 120
+   END
+*T23278 ^
+   IF OPS.ONFILE THEN
+      MATREAD JFS.REC FROM JOB.FNGD.STATS, CONO:JOB.NO THEN
+         IF JFS.PROD # "" THEN
+            ERRMSG = "Cannot Invoice a Finished Goods JOB"
+            GOSUB 91000; GOTO 120
+         END
+      END
+*CSF 25943 v
+      IF JOB.SUBS # "" THEN
+         FOR SJ = 1 TO DCOUNT(JOB.SUBS,VM)
+            MATREAD JFS.REC FROM JOB.FNGD.STATS, CONO:JOB.SUBS<1,SJ> THEN
+               IF JFS.PROD # "" THEN
+                  ERRMSG = "Cannot Invoice a JOB with Finished Goods on Sub-Job"
+                  GOSUB 91000; GOTO 120
+               END
+            END
+         NEXT SJ
+      END
+*CSF 25943 ^
+   END
+   MATREAD CUST.REC FROM CUSTOMER, CONO:JOB.CUST ELSE
+      CUST.NAME = UNKNOWN
+      CUST.ACCT = ""
+   END
+   MATREAD DIV.REC FROM DIVISION, CONO:JOB.DIV ELSE
+      MAT DIV.REC = ""
+      DIV.DESC = "??????????"
+   END
+   MATREAD SALESMAN.REC FROM SALESMAN, CONO:JOB.SLSMN ELSE
+      MAT SALESMAN.REC = ""
+      SALS.NAME = "??????????"
+   END
+   READV CATG.DESC FROM JOB.CATEGORY, CONO:JOB.CATG,1 ELSE
+      CATG.DESC = "??????????"
+   END
+   SCV.REC(3)<1>=CUST.NAME
+   SCV.REC(4)<1>=JOB.DIV
+   SCV.REC(5)<1>=DIV.DESC
+   SCV.REC(6)<1>=JOB.SLSMN
+   SCV.REC(7)<1>=SALS.NAME
+   SCV.REC(8)<1>=JOB.TYPE
+   BEGIN CASE
+      CASE JOB.TYPE = "R"
+         SCV.REC(9)<1>="REGULAR"
+      CASE JOB.TYPE = "S"
+         SCV.REC(9)<1>="SPOILAGE"
+      CASE JOB.TYPE = "N"
+         SCV.REC(9)<1>="NON-CHARGEABLE"
+      CASE JOB.TYPE = "C"
+         SCV.REC(9)<1>="CHANGE ORDER"
+      CASE 1
+         SCV.REC(9)<1>="UNKNOWN"
+   END CASE
+   SCV.REC(10)<1>=JOB.SALES.CODE
+   SCV.REC(12)<1>=JOB.CATG
+   SCV.REC(13)<1>=CATG.DESC
+   SCV.REC(14)<1>=JOB.MASTER
+   SCV.REC(25)<1> = ""
+   JCNT = COUNT(CUST.TAX.JUR,VM) + (CUST.TAX.JUR # "")
+   FOR J = 1 TO JCNT
+      IF CUST.TAXABLE<1,J> = "Y" THEN
+         IF SCV.REC(25)<1> = "" THEN
+            SCV.REC(25)<1> = CUST.TAX.JUR<1,J>
+         END ELSE
+            SCV.REC(25)<1> = SCV.REC(25)<1>:", ":CUST.TAX.JUR<1,J>
+         END
+      END
+   NEXT J
+   SCV.REC(15)<1>=JOB.COLORS
+   SCV.REC(16)<1>=JOB.QTY<1,1>
+   SCV.REC(17)<1>=JOB.QTY<1,3>
+   SCV.REC(19)<1>=JOB.CUST.PO
+   CNT = COUNT(JOB.COMMENTS,VM)+(JOB.COMMENTS # "")
+   FOR C = 1 TO CNT
+      SCV.REC(20)<1,C>=JOB.COMMENTS<1,C>
+   NEXT C
+   CNT = COUNT(JOB.DESC,VM)+(JOB.DESC # "")
+   FOR C = 1 TO CNT
+      SCV.REC(21)<1,C>=JOB.DESC<1,C>
+   NEXT C
+   BEGIN CASE
+      CASE JOB.STATUS<1,1>=""
+         SCV.REC(24)<1>="BOOKED"
+      CASE JOB.STATUS<1,1>="9"
+         SCV.REC(24)<1>="CANCELLED"
+      CASE JOB.STATUS<1,1>="7"
+         SCV.REC(24)<1>="READY TO PURGE"
+      CASE JOB.STATUS<1,1>="8"
+         SCV.REC(24)<1>="PURGED"
+      CASE JOB.TRACK.DATE<1,10> # ""
+         BEGIN CASE
+            CASE JOB.STATUS<1,1> = "1"
+               SCV.REC(24)<1> = "IN PROCESS"
+            CASE JOB.STATUS<1,1> = "5" 
+               SCV.REC(24)<1>="REOPENED"
+            CASE 1
+               SCV.REC(24)<1> = "COMPLETED"
+         END CASE
+      CASE JOB.TRACK.DATE<1,9> # ""
+         BEGIN CASE
+            CASE JOB.STATUS<1,1> = "1"
+               SCV.REC(24)<1> = "IN PROCESS"
+            CASE JOB.STATUS<1,1> = "5"
+               SCV.REC(24)<1>="REOPENED"
+            CASE 1
+               SCV.REC(24)<1> = "INVOICED"
+         END CASE
+      CASE JOB.TRACK.DATE<1,8> # ""
+         SCV.REC(24)<1>="COSTED"
+      CASE JOB.TRACK.DATE<1,7> # ""
+         SCV.REC(24)<1>="RDY-TO-BILL"
+      CASE JOB.TRACK.DATE<1,6> # ""
+         SCV.REC(24)<1>="DELIVERED"
+      CASE JOB.TRACK.DATE<1,5> # ""
+         SCV.REC(24)<1>="IN PROCESS"
+      CASE JOB.TRACK.DATE<1,3> # ""
+         SCV.REC(24)<1>="IN PROCESS"
+      CASE JOB.STATUS<1,1>="1"
+         SCV.REC(24)<1>="IN PROCESS"
+      CASE JOB.STATUS<1,1>="3"
+         SCV.REC(24)<1>="INVOICED"
+      CASE 1
+         SCV.REC(24)<1>="UNKNOWN"
+   END CASE
+   ECD.ACTION=3;CALL SCRN.EDIT
+   CREF.NO=1;DREF.NO=1
+*
+*---- GET OPERATOR INPUT
+*
+200*
+   MAT IVC.REC = ""
+   IVC.NO = ""
+   MODE = ""
+   IF MENU = "INVOICE" THEN
+      ECD.NUM=18;ECD.ACTION=4;CALL SCRN.EDIT
+      IF ECD.RET.VALUE = "END" THEN GOTO 120
+      PRE.BILL = ECD.RET.VALUE
+   END ELSE
+      PRE.BILL = ""
+   END
+   ECD.NUM=2;ECD.ACTION = 4;CALL SCRN.EDIT
+   BEGIN CASE
+      CASE ECD.RET.VALUE = "END"
+         GOTO 120
+      CASE ECD.RET.VALUE = "N"
+         IF JOB.STATUS<1,1> > 6 THEN
+            ERRMSG = "Cannot add new invoices to job because of status"
+            GOSUB 91000; GOTO 200
+         END
+         GOSUB 1000
+         MODE = "NEW"
+         IVC.NO = ECD.RET.VALUE
+      CASE ECD.RET.VALUE = "D"
+210 * T25947
+         ECD.NUM=26;ECD.ACTION=4;CALL SCRN.EDIT
+         IF ECD.RET.VALUE = "END" OR ECD.RET.VALUE = "" THEN GOTO 200
+         DUP.INVOICE = ECD.RET.VALUE
+         MATREAD IVC.REC FROM INVOICE, CONO:DUP.INVOICE ELSE
+            ERRMSG = "Cannot locate specified item"
+            GOSUB 91000; GOTO 200
+         END
+         READ TEMP.JOB.REC FROM JOB,CONO:IVC.JOB.NO ELSE TEMP.JOB.REC = ''
+         IF TEMP.JOB.REC<6> # JOB.DIV THEN
+            ERRMSG = 'Cannot duplicate from that invoice.  Job Division on invoice is ':TEMP.JOB.REC<6>
+            GOSUB 91000;GOTO 200
+         END
+         MATREAD CUST.REC FROM CUSTOMER, CONO:IVC.CUST.NO ELSE
+            ERRMSG = 'Cannot locate customer record - ':IVC.CUST.NO
+            GOSUB 91000; GOTO 200
+         END
+         X = 0 ; Y = 23 ; TYP = 18 ; MAXL = 1 ; O.R = 'R' ; MINL = 1
+         PMSG = 'This invoice was for job ':IVC.JOB.NO:', ':CUST.NAME:' OK to use (Y/N)?'
+         CALL EDIT.SUB
+         P_X = 0 ; P_Y = 23 ; P_VALUE = "" ; P_OPT = 'CL'
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         IF VALUE = 'END' THEN MOD = 'END' ; GOTO 2999
+         IF VALUE = 'N' THEN GOTO 210
+         IF (MENU = "CREDIT" OR MENU = "DEBIT") AND IVC.JOB.NO # JOB.NO THEN
+            ERRMSG = "Cannot duplicate item from another job"
+            GOSUB 91000
+            GOTO 200
+         END
+         IF DUP.INVOICE[LEN(DUP.INVOICE)-1,2] = "CM" THEN
+            N2 = COUNT(IVC.CHG.CODE,VM) + (IVC.CHG.CODE # "")
+            FOR N = 1 TO N2
+               IF IVC.AMOUNT<1,N>+0 # 0 THEN
+                  IVC.AMOUNT<1,N> = IVC.AMOUNT<1,N> * (-1)
+               END
+               IF IVC.TAXABLE<1,N>+0 # 0 THEN
+                  IVC.TAXABLE<1,N> = IVC.TAXABLE<1,N> * (-1)
+               END
+            NEXT N
+         END
+         MATREAD CUST.REC FROM CUSTOMER, CONO:IVC.CUST.NO ELSE
+            ERRMSG = "Cannot locate customer record - ":IVC.CUST.NO
+            GOSUB 91000; GOTO 200
+         END
+         ECD.NUM=27;ECD.ACTION=4;CALL SCRN.EDIT
+         BEGIN CASE
+            CASE ECD.RET.VALUE = "END" OR ECD.RET.VALUE = ""
+               GOTO 200
+            CASE ECD.RET.VALUE = "N"
+               SCV.REC(2)<1> = ECD.RET.VALUE; ECD.NUM = 2; ECD.ACTION = 5; CALL SCRN.EDIT
+            CASE ECD.RET.VALUE # ""
+               ECD.RET.VALUE = STR("0",6-LEN(ECD.RET.VALUE)):ECD.RET.VALUE
+               SCV.REC(2)<1> = ECD.RET.VALUE; ECD.NUM = 2; ECD.ACTION = 5; CALL SCRN.EDIT
+               BEGIN CASE
+                  CASE MENU = "CREDIT"
+                     ECD.RET.VALUE = ECD.RET.VALUE:"CM"
+                  CASE MENU = "DEBIT"
+                     ECD.RET.VALUE = ECD.RET.VALUE:"DM"
+                  CASE PRE.BILL = "Y"
+                     ECD.RET.VALUE = ECD.RET.VALUE:"PB"
+               END CASE
+               IF CO.ARS = "Y" THEN
+                  FND = 1
+                  READ REC FROM OPEN.RECV, CONO : ECD.RET.VALUE ELSE FND = 0
+                  IF FND THEN
+                     ERRMSG = "Item exists on OPEN.RECV file"; GOSUB 91000
+                     GOTO 200
+                  END
+               END
+               FND = 1
+               READ REC FROM INVOICE, CONO : ECD.RET.VALUE ELSE FND = 0
+               IF FND THEN
+                  ERRMSG = "Item exists on INVOICE file"; GOSUB 91000
+                  GOTO 200
+               END
+               FND = 1
+               READ REC FROM VOID.INVOICES, CONO : ECD.RET.VALUE ELSE FND = 0
+               IF FND THEN
+                  ERRMSG = "Item exists on VOID INVOICES file"; GOSUB 91000
+                  GOTO 200
+               END
+               FND = 1
+          * T26126 v
+               READU REC FROM DAILY.INVOICE, CONO : ECD.RET.VALUE LOCKED
+                  ERRMSG = 'INVOICE record is locked by user - ':GETUSERNAME(STATUS())
+                  GOSUB 91000;GOTO 200 
+               END ELSE
+                  FND = 0
+               END
+          * T26126 ^
+               IF FND THEN
+                  RELEASE DAILY.INVOICE, CONO : ECD.RET.VALUE
+                  ERRMSG = "Item exists on DAILY.INVOICE file"; GOSUB 91000
+                  GOTO 200
+               END
+         END CASE
+         FOR J = 1 TO DCOUNT(IVC.CHG.JOB,VM)
+            IF IVC.CHG.JOB<1,J> # '' THEN IVC.CHG.JOB<1,J> = JOB.NO
+         NEXT J
+         IVC.JOB.NO = JOB.NO;* SINCE CAN DUP FROM ANOTHER JOB
+         MATREAD JOB.REC FROM JOB, CONO:IVC.JOB.NO ELSE
+            MAT JOB.REC = ''
+         END
+         IVC.CUST.NO = JOB.CUST
+         IVC.TERMS = JOB.TERMS
+         IF IVC.TERMS = "" THEN IVC.TERMS = CUST.TERMS
+         IVC.NO = ECD.RET.VALUE
+         IVC.DATE = DATE()
+         IVC.PROC.DATE = ""
+         IVC.PRT.DATE = ""
+         IVC.PROC.MON = ""
+         IVC.STATUS = ""
+         IVC.LAST = ""
+         IVC.WIP.DATE = ""
+         IVC.WIP.PRCNT = ""
+         IVC.PRE.BILL = ""
+         IVC.PRE.BILL.MON = ""
+         IVC.GLA.DATE = '' ;* T20828
+         IVC.LIST.DATE = '' ;*T28645
+         GOSUB 1000 ; * T25947
+         MODE = "NEW"
+      CASE ECD.RET.VALUE # ""
+         ECD.RET.VALUE = STR("0",6-LEN(ECD.RET.VALUE)):ECD.RET.VALUE
+         SCV.REC(2)<1> = ECD.RET.VALUE; ECD.NUM = 2; ECD.ACTION = 5;CALL SCRN.EDIT
+         BEGIN CASE
+            CASE MENU = "CREDIT"
+               ECD.RET.VALUE = ECD.RET.VALUE:"CM"
+            CASE MENU = "DEBIT"
+               ECD.RET.VALUE = ECD.RET.VALUE:"DM"
+            CASE PRE.BILL = "Y"
+               ECD.RET.VALUE = ECD.RET.VALUE:"PB"
+         END CASE
+         IF CO.ARS = "Y" THEN GOSUB 2000 ELSE GOSUB 3000
+         IF MODE = "ERROR" OR MODE = "END" THEN RELEASE DAILY.INVOICE, CONO:ECD.RET.VALUE
+         IF MODE = "ERROR" THEN GOTO 200
+         IF MODE = "END" THEN GOTO 120
+         IF JOB.NO # IVC.JOB.NO THEN
+            RELEASE DAILY.INVOICE, CONO:ECD.RET.VALUE
+            ERRMSG = "Invoice # ":ECD.RET.VALUE:" is for job # ":IVC.JOB.NO
+            GOSUB 91000; GOTO 200
+         END
+         IVC.NO = ECD.RET.VALUE
+      CASE 1
+         ERRMSG = "*** Invalid invoice number ***";GOSUB 91000; GOTO 200
+   END CASE
+*
+*---- GET OPERATOR REQUEST
+*
+300*
+   ECD.NUM=22;ECD.ACTION=4;CALL SCRN.EDIT
+   OPTION = ECD.RET.VALUE
+   BEGIN CASE
+      CASE OPTION = "SC"
+         CREF.NO = CREF.NO + LINE.COUNT.C
+         IF CREF.NO > COUNT(JOB.COMMENTS,VM)+1 THEN CREF.NO = 1
+         ECD.NUM=20;ECD.SUB.NUM=CREF.NO;ECD.ACTION=7;CALL SCRN.EDIT
+         GOTO 300
+      CASE OPTION = "SD"
+         DREF.NO = DREF.NO + LINE.COUNT.D
+         IF DREF.NO > COUNT(JOB.DESC,VM)+1 THEN DREF.NO = 1
+         ECD.NUM=21;ECD.SUB.NUM=DREF.NO;ECD.ACTION=7;CALL SCRN.EDIT
+         GOTO 300
+      CASE OPTION = "E" OR OPTION = "END"
+         RELEASE DAILY.INVOICE, CONO:IVC.NO
+         GOTO 120
+   END CASE
+   SAVE.IVC.LAST=IVC.LAST
+   IF PRE.BILL = "Y" THEN
+      CALL INVOICE.MAINT.SUB.F4(CONO,JOB.NO,IVC.NO,"PREBILL","")
+   END ELSE
+      CALL INVOICE.MAINT.SUB.F4(CONO,JOB.NO,IVC.NO,MENU,"")
+   END
+   RELEASE DAILY.INVOICE, CONO:IVC.NO
+   IF CO.SAS = "Y" AND CO.SAS.INVOICE # "N" AND SAVE.IVC.LAST # IVC.LAST AND IVC.LAST = "Y" AND MENU = "INVOICE" THEN
+      MATREAD JOB.REC FROM JOB, CONO:JOB.NO ELSE MAT JOB.REC = ""
+      CALL JOB.SALES.MAINT(CONO,JOB.NO,IVC.NO,4,MAT JSS.REC)
+   END
+   ECD.SCRN.NO = 1
+   MAT SCV.REC = ""
+   ECD.ACTION=6;CALL SCRN.EDIT
+*      GOTO 100
+   GOTO 150
+*
+*--- LOAD CUSTOMER INFORMATION
+*
+1000*
+   IVC.JOB.NO = JOB.NO
+   IVC.DATE = DATE()
+   IF CUST.ACCT = "" THEN
+      IVC.CUST.NO = JOB.CUST
+*T25947 v
+      MATREAD CUST.REC FROM CUSTOMER, CONO:JOB.CUST ELSE
+         CUST.NAME = UNKNOWN
+         CUST.ACCT = ''
+      END
+*T25947 ^
+   END ELSE
+      MAT SAVE.CUST = MAT CUST.REC
+      MAST.CUST = CUST.ACCT
+      MATREAD CUST.REC FROM CUSTOMER, CONO:MAST.CUST ELSE
+         MAT CUST.REC = MAT SAVE.CUST
+         IVC.CUST.NO = JOB.CUST
+         GOTO 1100
+      END
+      IVC.CUST.NO = MAST.CUST
+   END
+1100*
+   IVC.CUST.NAME = CUST.NAME
+   IVC.ADDR1 = CUST.ADDR1
+   IVC.ADDR2 = CUST.ADDR2
+   IVC.ADDR3 = CUST.ADDR3
+* T25764 v
+   IVC.TERMS = JOB.TERMS
+   IF IVC.TERMS = "" THEN IVC.TERMS = CUST.TERMS
+* T25764 ^
+*T22154 v
+   SHIP.TO.CNTY = CUST.ADDL.OPS<1,4>
+  *T25159  v
+  * READ COUNTRY FROM COUNTRY.CODE, CONO:SHIP.TO.CNTY THEN
+  *     SHIP.TO.CNTY = COUNTRY
+  * END ELSE
+  *     SHIP.TO.CNTY = ''
+  * END
+   MATREAD CTY.REC FROM COUNTRY.CODE, CONO:SHIP.TO.CNTY ELSE MAT CTY.REC = ''
+   SHIP.TO.CNTY = CTY.DESC
+  *T25159 ^
+*      IVC.ADDR4 = CUST.ADDR4:"  ":CUST.ZIP
+   IVC.ADDR4 = CUST.ADDR4:"  ":CUST.ZIP:"  ":SHIP.TO.CNTY
+*T22154 ^
+   IVC.ATTENTION = CUST.ATTENTION
+   RETURN
+*
+*---- EDIT INVOICE NUMBER ENTERED
+*
+2000*
+   FLAG = ""
+   REC = ""
+   MATREAD IVC.REC FROM INVOICE, CONO:ECD.RET.VALUE ELSE FLAG<1,1> = "N"
+   READ REC FROM DAILY.INVOICE, CONO:ECD.RET.VALUE ELSE FLAG<1,2> = "N"
+   READ REC FROM OPEN.RECV, CONO:ECD.RET.VALUE ELSE FLAG<1,3> = "N"
+   READ REC FROM VOID.INVOICES, CONO:ECD.RET.VALUE ELSE FLAG<1,4> = "N"
+   BEGIN CASE
+      CASE FLAG<1,4> # "N"
+         ERRMSG = "This is a voided invoice"; GOSUB 91000; MODE = "ERROR"
+      CASE FLAG<1,3> # "N" AND FLAG<1,2> = "N" AND FLAG<1,1> = "N"
+         ERRMSG = "This is a manual invoice"; GOSUB 91000; MODE = "ERROR"
+      CASE FLAG<1,1> # "N" AND FLAG<1,2> = "N" AND FLAG<1,3> # "N"
+         MODE = "OLD"
+      CASE FLAG<1,1> = "N" AND FLAG<1,3> = "N"
+         MODE = ""
+      * T26126 v
+         MATREADU IVC.REC FROM DAILY.INVOICE, CONO:ECD.RET.VALUE LOCKED
+            ERRMSG = 'INVOICE record is locked by user - ':GETUSERNAME(STATUS())
+            GOSUB 91000; MODE = "ERROR"; GOTO 2999 
+         END ELSE
+      * T26126 ^
+            IF JOB.STATUS<1,1> > 6 THEN
+               ERRMSG = "Cannot add new invoices to job because of status"
+               GOSUB 91000; MODE = "ERROR"; GOTO 2999
+            END
+            X = 0; Y = 23; TYP = 18; MAXL = 1; O.R = "R"; MINL =1
+            PMSG = "Record is not on file, do you wish to add (Y/N)"
+            CALL EDIT.SUB
+            IF VALUE = "END" THEN MODE = "END"; GOTO 2999
+            IF VALUE = "Y" THEN
+               GOSUB 1000
+               MODE = "NEW"
+            END ELSE
+               P_X  = 0 ; P_Y = 23 ; P_VALUE = "" ; P_OPT = "CL"
+               CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+               MODE = "ERROR"; GOTO 2999
+            END
+         END
+      CASE 1
+         ERRMSG = "*** ERROR ***"; MODE = "ERROR"; GOSUB 91000
+   END CASE
+2999*
+   RETURN
+*
+*---- ENTER INVOICE NUMBER ENTERED
+*
+3000*
+   MATREAD IVC.REC FROM INVOICE, CONO:ECD.RET.VALUE ELSE
+      MATREADU IVC.REC FROM DAILY.INVOICE, CONO:ECD.RET.VALUE ELSE
+         IF JOB.STATUS<1,1> > 6 THEN
+            ERRMSG = "Cannot add new invoices to job because of status"
+            GOSUB 91000; MODE = "ERROR"; GOTO 3999
+         END
+         X = 0; Y = 23; TYP = 18; MAXL = 1; O.R = "R"
+         PMSG = "Record is not on file, do you wish to add (Y/N)"
+         CALL EDIT.SUB
+         IF VALUE = "END" THEN MODE = "END"; GOTO 3999
+         IF VALUE = "Y" THEN
+            GOSUB 1000
+            MODE = "NEW"
+         END ELSE
+            P_X  = 0 ; P_Y = 23 ; P_VALUE = "" ; P_OPT = "CL"
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            MODE = "ERROR"; GOTO 3999
+         END
+      END
+   END
+3999*
+   RETURN
+*
+*--- CALLS FOR SYSCOM
+*
+91000 ERR.TYPE = 1;CALL SYSCOM(MAT SYSCOM.REC); RETURN
+92000 ERR.TYPE = 2;CALL SYSCOM(MAT SYSCOM.REC); RETURN
+93000 ERR.TYPE = 3;CALL SYSCOM(MAT SYSCOM.REC)
+999999*
+*       PRINT @(-1)
+END

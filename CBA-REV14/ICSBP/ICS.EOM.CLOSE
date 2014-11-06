@@ -1,0 +1,959 @@
+*COPY>CPYLIB>COM1
+*********************************************************************
+* REVISION    - [12.00]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - ICSBP
+* PROGRAM     - ICS.EOM.CLOSE
+* BY          - EDVARD PITKA
+* DATE        - 08/20/01
+* DESCRIPTION
+* This program is used to close the inventory system at end of month.
+*T25740 edvard 08/20/2001 * Rev12
+*T25975 cmykleb 02/01/2002 * Save EOM transaction data so history
+*                            reports can be run.
+*T25740 epitka 03/12/2002 * Update average cost for the items that have
+*                           receipts in future periods.
+*T26556 cmykleb 06/04/2002 * GLA.DESC field is populating with bad data.
+*T25740 epitka 06/07/2002 * Rev12
+*T26767 epitka 07/24/02 * Change of arguments for INV.AVG.COST.MAINT  
+*C40696 adelgado 09/12/2002 * Comment out deletion of INV_SERIAL.
+*C40907 cmykleb 10/17/2002 * Add logic to make sure Finished Goods was
+*                            closed before allowing closing of ICS.
+*TAKE OUT CSF 40696
+*T27147 epitka 12/23/2002 * SHOW INV.WHSE ID BEING PROCESSED.
+*T27362 lross 04/03/2003 * CONO missing from SELECT INV.WHSE & Error in
+*                          processing INV_SERIAL deletions.
+*T28067 lross 04/15/2004 * Do not delete INV_SERIAL until period in
+*                          which qty becomes 0.
+*T28320 lross 11/05/2004 * Mods for "AC" cost type & "N" resv serial.
+*T28556 lross 05/18/2005 * Bring REV11 logic for purging INV.WHSE.LOC
+*                        * records into REV12.
+*T28876 lross 04/06/2006 * Include FNGD in reserves mismatch test.
+*********************************************************************
+*
+***** INSERT FILE EQUATE
+*
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>SALESDATES
+*COPY>PMC.CPYLIB>FISCAL
+*COPY>PMC.CPYLIB>POST.REJECTS
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>ICS.CPYLIB>INV.WHSE.LOC
+*COPY>ICS.CPYLIB>INV.STATS
+*COPY>ICS.CPYLIB>INV.JOB.STATS
+*COPY>ICS.CPYLIB>FNGD.STATS ;*T28876
+*COPY>ICS.CPYLIB>FNGD.ORDER.STATS ;*T28876
+*COPY>ICS.CPYLIB>INV_AUDIT_HIST
+*COPY>ICS.CPYLIB>INV_AUDIT_BAL
+*COPY>ICS.CPYLIB>INV_SERIAL
+*COPY>ICS.CPYLIB>INV_RECP_WHSE
+*COPY>ICS.CPYLIB>INV_RECEIPTS
+*COPY>ICS.CPYLIB>CATEGORY
+*COPY>PMC.CPYLIB>PO
+*COPY>ICS.CPYLIB>PO.RSKI.XREF
+*COPY>ICS.CPYLIB>PO.MAN.XREF
+*COPY>PMC.CPYLIB>GLTABLE
+*COPY>GLS.CPYLIB>GLA
+*COPY>PMC.CPYLIB>COA
+*COPY>PMC.CPYLIB>EOM.TRANS
+*COPY>PMC.CPYLIB>EOM.TRANS.HIST         ; * T25975
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>ICS.CPYLIB>WAREHOUSE
+*
+***** SETUP ERRMSG ROUTINE
+*
+SYS.TYPE = 1
+CALL SYSCOM(MAT SYSCOM.REC)
+*
+*--- PROCREAD
+*
+PROCREAD INBUFF ELSE
+   ERRMSG = "MUST RUN FROM PROC"
+   GOSUB 91000;GOTO 99999
+END
+S.ARR=''
+CONO = INBUFF<1>
+D.M.FLG = INBUFF<6>
+DIV.CODE=INBUFF<8>
+OPEN.FLAG=1
+**** INTITIALIZATION
+*
+PORT = 'TTY'
+CALL SYSVARS.SUB(PORT)
+MAT FILE.VARS = ""
+MAT EDIT.COM.DRIVER = ""
+DIM SAVE.ITB.REC(15)
+MAT SAVE.ITB.REC = ""
+TODAY = DATE()
+UNKNOWN = "NOT ON FILE"
+SYS.FISCAL = "ICFISCAL"
+PROG.ID = PORT:"!":CONO:"!ICS.EOM"
+EOM.LIST3='' ; EOM.LIST2='' ; EOM.LIST1=''
+IAT.LIST1='' ; INAH.EOM.LIST='' ; IRW.LIST9='' ; IWH.LIST1=''
+*
+***** OPEN FILES
+*
+OPEN "","CONTROL" TO CONTROL ELSE
+   ERRMSG = "CONTROL FILE MISSING"
+   GOSUB 91000;GOTO 99000
+END
+OPEN "",INBUFF<3> TO EOM.TRANS ELSE
+   ERRMSG = "YOU NEED TO RUN ICS END OF ":D.M.FLG:" POSTING BEFORE YOU CLOSE THE ":D.M.FLG
+   GOSUB 91000;GOTO 99000
+END
+OPEN "",INBUFF<4> TO POST.REJECTS ELSE
+   ERRMSG = "YOU NEED TO RUN ICS END OF ":D.M.FLG:" POSTING BEFORE YOU CLOSE THE ":D.M.FLG
+   GOSUB 91000;GOTO 99000
+END
+OPEN "","COMPANY" TO COMPANY ELSE
+   ERRMSG="COMPANY FILE MISSING";GOTO 93000
+END
+OPEN "","PMC.SCREENS" TO M.SCREENS ELSE
+   ERRMSG="PMC.SCREENS FILE IS MISSING";GOTO 93000
+END
+OPEN "","INVENTORY" TO INVENTORY ELSE
+   ERRMSG="INVENTORY FILE MISSING";GOTO 93000
+END
+OPEN "","INV.WHSE" TO INV.WHSE ELSE
+   ERRMSG="INV.WHSE FILE MISSING";GOTO 93000
+END
+OPEN "","INV.WHSE.LOC" TO INV.WHSE.LOC ELSE
+   ERRMSG="INV.WHSE.LOC FILE MISSING";GOTO 93000
+END
+OPEN "","INV_AUDIT_HIST" TO INV_AUDIT_HIST ELSE
+   ERRMSG="INV_AUDIT_HIST FILE MISSING";GOTO 93000
+END
+OPEN "","INV_AUDIT_TAG" TO INV_AUDIT_TAG ELSE
+   ERRMSG="INV_AUDIT_TAG FILE MISSING";GOTO 93000
+END
+OPEN "","INV_AUDIT_BAL" TO INV_AUDIT_BAL ELSE
+   ERRMSG="INV_AUDIT_BAL FILE MISSING";GOTO 93000
+END
+OPEN "","INV_RECEIPTS" TO INV_RECEIPTS ELSE
+   ERRMSG="INV_RECEIPTS FILE MISSING";GOTO 93000
+END
+OPEN "","INV_SERIAL" TO INV_SERIAL ELSE
+   ERRMSG="INV_SERIAL FILE MISSING";GOTO 93000
+END
+OPEN "","INV_SERIAL_DELETED" TO INV_SERIAL_DELETED ELSE
+   ERRMSG="INV_SERIAL_DELETED FILE MISSING";GOTO 93000     ;*T24023
+END
+OPEN "","INV_RECP_WHSE" TO INV_RECP_WHSE ELSE
+   ERRMSG="INV_RECP_WHSE FILE MISSING";GOTO 93000
+END
+OPEN "","CATEGORY" TO CATEGORY ELSE
+   ERRMSG="CATEGORY FILE MISSING";GOTO 93000
+END
+OPEN "","INV.STATS" TO INV.STATS ELSE
+   ERRMSG="INV.STATS FILE MISSING";GOTO 93000
+END
+OPEN "","INV.JOB.STATS" TO INV.JOB.STATS ELSE
+   ERRMSG="INV.JOB.STATS FILE MISSING";GOTO 93000
+END
+*T28876 v
+OPEN "","FNGD.STATS" TO FNGD.STATS ELSE
+   ERRMSG="FNGD.STATS FILE MISSING";GOTO 93000
+END
+OPEN "","FNGD.ORDER.STATS" TO FNGD.ORDER.STATS ELSE
+   ERRMSG="FNGD.ORDER.STATS FILE MISSING";GOTO 93000
+END
+*T28876 ^
+OPEN "","PO" TO PO ELSE ERRMSG="PO FILE IS MISSING";GOTO 93000
+OPEN "","PO.RSKI.XREF" TO PO.RSKI.XREF ELSE
+   ERRMSG="PO.RSKI.XREF FILE IS MISSING";GOTO 93000
+END
+OPEN "","PO.RSKI.XREF.DELETED" TO PO.RSKI.XREF.DELETED ELSE
+   ERRMSG="PO.RSKI.XREF.DELETED FILE IS MISSING";GOTO 93000     ;*T24023
+END
+OPEN "","PO.MAN.XREF" TO PO.MAN.XREF ELSE
+   ERRMSG="PO.MAN.XREF FILE IS MISSING";GOTO 93000
+END
+OPEN "","PO.MAN.XREF.DELETED" TO PO.MAN.XREF.DELETED ELSE
+   ERRMSG="PO.MAN.XREF.DELETED FILE IS MISSING";GOTO 93000     ;*T24023
+END
+OPEN "","EOD.HIST" TO EOD.HIST ELSE
+   ERRMSG="EOD.HIST FILE IS MISSING";GOTO 93000
+END
+OPEN '','WAREHOUSE' TO WAREHOUSE ELSE
+   ERRMSG='WAREHOUSE FILE IS MISSING';GOTO 93000
+END
+*T25975 v
+OPEN '','ICS.EOM.TRANS.HIST' TO ICS.EOM.TRANS.HIST ELSE
+   ERRMSG='ICS.EOM.TRANS.HIST FILE IS MISSING';GOTO 93000
+END
+*T25975 ^
+MATREAD COMP.REC FROM COMPANY,CONO ELSE
+   ERRMSG = "CANNOT LOCATE COMPANY # ":CONO;GOTO 93000
+END
+IF CO.GLS # "N" THEN
+   IF CO.GL.LINK<1,5> = "Y" THEN
+      OPEN "","GLA" TO GLA ELSE ERRMSG="GLA FILE IS MISSING";GOTO 93000
+   END
+   OPEN "","COA" TO COA ELSE ERRMSG="COA FILE IS MISSING";GOTO 93000
+   EQV.FLG = 1
+   OPEN "","COA.EQUIV" TO COA.EQUIV ELSE EQV.FLG = 0
+END
+STMT.HEAD = "INVENTORY"
+*COPY>PMCBP>EOD.CLOSE
+DIV.POS=POS ; * POS is set in EOD.CLOSE  
+IF ECD.RET.VALUE = "END" THEN
+   ECD.ACTION = 99;CALL SCRN.EDIT
+   GOTO 99000
+END
+*C40907 v
+IF CO.OPS = "Y" THEN
+   READ FNGD.EOM FROM CONTROL, CONO:"FNGD.EOM" ELSE FNGD.EOM = ""
+   BEGIN CASE
+      CASE FNGD.EOM<7,POS> = "PERIOD" AND D.M.FLG = "PERIOD" 
+         OPEN "",INBUFF<9> TO TEMP.EOM ELSE
+            ERRMSG = "YOU NEED TO RUN ICF END OF ":D.M.FLG:" POSTING BEFORE YOU CLOSE THE ":D.M.FLG
+            GOSUB 91000
+            ECD.ACTION = 99 ; CALL SCRN.EDIT
+            GOTO 99000
+         END
+         OPEN "",INBUFF<10> TO TEMP.POST ELSE
+            ERRMSG = "YOU NEED TO RUN ICF END OF ":D.M.FLG:" POSTING BEFORE YOU CLOSE THE ":D.M.FLG
+            GOSUB 91000
+            ECD.ACTION = 99 ; CALL SCRN.EDIT
+            GOTO 99000
+         END
+      CASE FNGD.EOM<7,POS> = "DAY" AND D.M.FLG = "PERIOD"
+         ERRMSG = 'YOU NEED TO RUN ICF END OF PERIOD POSTING/LISTING BEFORE YOU CLOSE THE PERIOD'
+         GOSUB 91000
+         ECD.ACTION = 99 ; CALL SCRN.EDIT
+         GOTO 99000
+      CASE FNGD.EOM<1,POS> = "" AND D.M.FLG = "PERIOD" 
+         ERRMSG = 'YOU NEED TO RUN ICF END OF PERIOD POSTING BEFORE YOU CLOSE THE PERIOD'
+         GOSUB 91000
+         ECD.ACTION = 99 ; CALL SCRN.EDIT
+         GOTO 99000
+      CASE FNGD.EOM<2,POS> = "" AND D.M.FLG = "PERIOD" 
+         ERRMSG = 'YOU NEED TO PRINT THE ICF END OF PERIOD SUMMARY REPORT BEFORE CLOSING'
+         GOSUB 91000
+         ECD.ACTION = 99 ; CALL SCRN.EDIT
+         GOTO 99000
+   END CASE
+   FNGD.EOM<3,POS> = FR.CURR.DATE<1,POS>
+   FNGD.EOM<4,POS> = FR.CURR.PER<1,POS>
+   WRITE FNGD.EOM ON CONTROL, CONO:"FNGD.EOM"
+END
+*C40907 ^
+CLEARFILE POST.REJECTS
+PRR.SEQ = 10000
+;* if closing is by divisions that correct division position
+;* will be used to determine in what period division is in
+;* if not then all divisions have to be in the same period so
+;* it really does not matter.
+CURR.PERIOD=FR.CURR.PER<1,DIV.POS>; NEXT.PERIOD=''
+CURR.ODATE=FR.CURR.DATE<1,DIV.POS> ; * T26556
+FISCAL.FLAG='IC'
+CALL GET.NEXT.PERIOD (CONO,DIV.CODE,FISCAL.FLAG,NEXT.PERIOD,ERR.FLG,ERR)
+*
+***** MAIN PROCESSING
+*
+IF D.M.FLG = "PERIOD" THEN
+   ECD.NUM = 14;SCV.REC(ECD.NUM)<1> = "NOW PROCESSING INV.WHSE FILE"
+   ECD.ACTION = 5;CALL SCRN.EDIT
+   IF DIV.CODE='ALL' THEN
+*T27362 v
+      CMD='SELECT INV.WHSE WITH CONO="':CONO:'"'
+      UDTEXECUTE CMD CAPTURING ERROR RETURNING MSG
+*   SELECT INV.WHSE TO IWH.LIST1
+   END ELSE
+*   CMD='SELECT INV.WHSE WITH IWH_DIV="':DIV.CODE:'"'
+      CMD='SELECT INV.WHSE WITH CONO = "':CONO:'" AND WITH IWH_DIV="':DIV.CODE:'"'
+      UDTEXECUTE CMD CAPTURING ERROR RETURNING MSG
+*   IF MSG<1,1,1> = "41" THEN                 
+*     SELECT INV.WHSE TO IWH.LIST1
+*   END                                       
+   END
+   IF SYSTEM(11) > 0 THEN
+      SELECT INV.WHSE TO IWH.LIST1
+*T27362 ^
+      WRITE "INV.WHSE" ON CONTROL , PROG.ID
+      DATA = 1
+      LOOP
+         READNEXT IWH.ID FROM IWH.LIST1 ELSE DATA = 0
+*     ECD.NUM = 14
+*     SCV.REC(ECD.NUM)<1> = "NOW PROCESSING INV.WHSE FILE   ":IWH.ID 
+*     ECD.ACTION = 5;CALL SCRN.EDIT                                     
+*     ERR=0
+      WHILE DATA DO
+         IF IWH.ID[1,3] # CONO THEN CONTINUE
+         ECD.NUM = 14
+         SCV.REC(ECD.NUM)<1> = "NOW PROCESSING INV.WHSE FILE   ":IWH.ID 
+         ECD.ACTION = 5;CALL SCRN.EDIT                                     
+         ERR=0
+*T27362 ^
+         PROD.NUM = FIELD(IWH.ID,"!",1)[4,99]      ;* C40690
+         WHSE = FIELD(IWH.ID,"!",2)                ;* C40690
+         L.ARR='' ;*T28556
+         GOSUB PROCESS.INV.WHSE
+         IF NOT(ERR) THEN
+            GOSUB PROCESS.INV_RECP_WHSE
+            IF NOT(ERR) THEN
+               GOSUB PROCESS.INV_AUDIT_BAL
+            END
+         END
+         RELEASE INV.WHSE,IWH.ID
+      REPEAT
+   END ;*T27362
+END
+IF CO.GLS = "N" OR CO.GL.LINK<1,5>#'Y' THEN  
+   GOSUB PROCESS.EOM.TRANS.2
+END ELSE
+   GOSUB PROCESS.EOM.TRANS.1
+   GOSUB PROCESS.EOM.TRANS.2
+END
+SELECT EOM.TRANS TO EOM.LIST3
+READNEXT ETR.ID FROM EOM.LIST3 THEN
+   FR.PRINT<1,DIV.POS>= "X"
+   MATWRITE FISCAL.REC ON CONTROL, CONO:SYS.FISCAL
+   ERRMSG = "E R R O R !!! CANNOT LOCATE ALL TRANSACTIONS"
+   ECD.ACTION = 99;CALL SCRN.EDIT
+   GOTO 93000
+END ELSE
+   IF D.M.FLG = "PERIOD" THEN
+      FR.CURR.DATE<1,DIV.POS> = FR.NEXT.DATE<1,DIV.POS>
+      FR.CURR.PER<1,DIV.POS>=FR.NEXT.PER<1,DIV.POS>
+*     CURR.PERIOD<1,DIV.POS> = FR.NEXT.PER<1,DIV.POS>
+      FR.CLOSE.DATE<1,DIV.POS> = TODAY
+   END
+   FR.NEXT.PER<1,DIV.POS>= ""
+   FR.NEXT.DATE<1,DIV.POS>= "";FR.PRINT<1,DIV.POS>= ""
+   MATWRITE FISCAL.REC ON CONTROL, CONO:SYS.FISCAL
+   DELETE CONTROL, PROG.ID
+END
+*
+GOSUB PROCESS.INV_AUDIT_TAG
+*
+ECD.ACTION = 99;CALL SCRN.EDIT
+GOTO 99999
+*
+**************************************************************************
+**** S U B R O U T I N E S ***********************************************
+**************************************************************************
+*
+******************
+PROCESS.INV.WHSE: 
+******************
+*
+ERR=0
+IF IWH.ID[1,3] # CONO THEN ERR=1
+IF NOT(ERR) THEN
+   MATREADU IWH.REC FROM INV.WHSE, IWH.ID THEN
+*T27362 v Save receipt data to restore prior to write - BUILD.IWH.FI will
+*         only build receipt data thru next period.
+      SAVE.IWH.RECP.NO = IWH.RECP.NO
+      SAVE.IWH.RECP.PERIOD = IWH.RECP.PERIOD
+      SAVE.IWH.RECP.ENT.DATE = IWH.RECP.ENT.DATE
+*T27362 ^
+      IF IWH.RECP.NO#'' THEN
+         ERR.FLG=''; ERRMSG=''
+         ;*include receipts one period in the future so avg.cost
+         ;*can be recalculated for qty received in future period.
+         PERIOD=NEXT.PERIOD<1,1>
+         CALL BUILD.IWH.FI(IWH.ID,MAT IWH.REC,PERIOD,ERR.FLG,ERRMGS,OPEN.FLAG)
+      END ELSE
+         ERR=1
+      END
+   END ELSE
+      MAT PRR.REC = "" ; ERR=1
+      PRR.FILE = "INV.WHSE"
+      PRR.ID = IWH.ID[4,99]
+      PRR.ERR = "CANNOT LOCATE"
+      PRR.SEQ = PRR.SEQ + 1
+      MATWRITE PRR.REC ON POST.REJECTS, PRR.SEQ
+      RELEASE INV.WHSE, IWH.ID
+   END
+END
+IF NOT(ERR) THEN
+   MATREAD INV.REC FROM INVENTORY,  FIELD(IWH.ID,"!",1) ELSE
+      MAT INV.REC = ""
+   END
+   IF INV.COST.WT + 0 = 0 THEN INV.COST.WT = 100
+   MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE ELSE
+      MAT CATG.REC = ""
+   END
+*T28876 v
+   IF INV.M.LINE # "FNGD" THEN
+*T28320 v
+     MATREAD INV.STAT.REC FROM INV.STATS,IWH.ID ELSE MAT INV.STAT.REC = ''
+     MAT FGS.REC = ''
+*T28320 ^
+   END ELSE
+     MATREAD FGS.REC FROM FNGD.STATS,IWH.ID ELSE MAT FGS.REC = ''
+     MAT INV.STAT.REC = ''
+   END
+*T28876 ^
+   LCNT = DCOUNT(IWH.LOC,VM)
+   LQTY = 0;LWIP = 0
+   L.ARR='' ;*T28556
+   SQTY=0; S.ARR=''
+   RQTY=0
+   FOR L = LCNT TO 1 STEP -1 UNTIL (ERR)
+      IWLO.ID = IWH.ID:"!":IWH.LOC<1,L>
+      MATREADU IWLO.REC FROM INV.WHSE.LOC,IWLO.ID ELSE MAT IWLO.REC=''
+      SCNT=DCOUNT(IWLO.SERIAL<1>,VM)
+      SQTY = 0
+      S.ARR='' ;*T27362
+      FOR S = SCNT TO 1 STEP -1 
+         ISTK.ID=CONO:IWLO.SERIAL<1,S>
+*     MATREADU ISTK.REC FROM INV_SERIAL,ISTK.ID THEN
+         MATREAD ISTK.REC FROM INV_SERIAL,ISTK.ID THEN
+            LQTY+=ISTK.CUR.QTY
+            SQTY+=ISTK.CUR.QTY
+            RQTY+=ISTK.RSVB.QTY
+            IF ISTK.CUR.QTY = 0 THEN
+               IF ISTK.RECP # '' THEN
+*T28067 v
+                  FUTR.DEPL=0
+                  FOR F = 1 TO DCOUNT(ISTK.AUDIT.NO,VM)
+                     MATREAD INAH.REC FROM INV_AUDIT_HIST,CONO:ISTK.AUDIT.NO<1,F> THEN
+                        IF INAH.QTY < 0 AND INAH.PERIOD > CURR.PERIOD THEN
+                           FUTR.DEPL -= INAH.QTY
+                        END
+                     END
+                  NEXT F
+                  IF FUTR.DEPL = 0 THEN
+*T28067 ^
+                     S.ARR<1,-1>=ISTK.ID[4,99]
+*T27362 v Move delete to below.
+*           MATWRITE ISTK.REC ON INV_SERIAL_DELETED,ISTK.ID
+*           DELETE INV_SERIAL,ISTK.ID
+                     DEL IWLO.SERIAL<1,S> ;*Added T27362
+                  END ;*T28067
+               END
+*       END ELSE
+*         RELEASE INV_SERIAL,ISTK.ID
+            END
+         END ELSE
+            DEL IWLO.SERIAL<1,S>
+*       RELEASE INV_SERIAL,ISTK.ID
+         END
+      NEXT S
+      ;* check location on hand vs. sum of all serial qty's for the loc
+      IF SQTY#IWLO.LOC.ON.HAND+0 THEN
+         MAT PRR.REC='' ; ERR=1
+         PRR.FILE='INV.WHSE.LOC'
+         PRR.ID=IWLO.ID[4,99]
+         PRR.ERR='INV.WHSE.LOC ON HAND QTY=':IWLO.LOC.ON.HAND:' AND SUM = ':SQTY
+         PRR.SEQ+=1
+         MATWRITE PRR.REC ON POST.REJECTS,PRR.SEQ
+*     RELEASE INV.WHSE,IWH.ID
+         RELEASE INV.WHSE.LOC,IWLO.ID
+      END ELSE
+*T27362 v Need to purge zero serials regardless of TRK.LVL
+*     IF CATG.TRK.LVL='S' THEN
+         SCNT = DCOUNT(S.ARR,VM)
+         FOR S = 1 TO SCNT
+            SERIAL=S.ARR<1,S>
+            ISTK.ID=CONO:SERIAL
+*         MATREAD ISTK.REC FROM INV_SERIAL,ISTK.ID THEN
+            MATREADU ISTK.REC FROM INV_SERIAL,ISTK.ID THEN
+*T27362
+               IF CATG.TRK.LVL = 'S' THEN
+                  RSXRF.ID=CONO:ISTK.PO.NO
+                  MATREADU RSXRF.REC FROM PO.RSKI.XREF,RSXRF.ID THEN
+                     LOCATE SERIAL IN RSXRF.RS.NO<1>,1 SETTING XP THEN
+                        RSXRF.RS.NO = DELETE(RSXRF.RS.NO,1,XP,0)
+                        DEL RSXRF.LN.NO<1,XP>
+                     END
+                     IF RSXRF.RS.NO = "" THEN
+                        MATWRITE RSXRF.REC ON PO.RSKI.XREF.DELETED,RSXRF.ID
+                        DELETE PO.RSKI.XREF,RSXRF.ID
+                     END ELSE
+                        MATWRITE RSXRF.REC ON PO.RSKI.XREF,RSXRF.ID
+                     END
+                  END ELSE
+                     RELEASE PO.RSKI.XREF,RSXRF.ID
+                  END
+                  PO.ID = RSXRF.ID
+                  MATREADU PO.REC FROM PO, PO.ID THEN
+                     RSMAN.ID = PO.ID:'!':ISTK.MANIFEST.NO
+                     MATREADU RSMAN.REC FROM PO.MAN.XREF, RSMAN.ID THEN
+                        LOCATE SERIAL IN RSMAN.RS.NO<1>,1 SETTING XPTR THEN
+                           RSMAN.RS.NO = DELETE(RSMAN.RS.NO,1,XPTR,0)
+                        END
+                        IF RSMAN.RS.NO = "" THEN
+                           MATWRITE RSMAN.REC ON PO.MAN.XREF.DELETED,RSMAN.ID
+                           DELETE PO.MAN.XREF, RSMAN.ID
+                           LOCATE ISTK.MANIFEST.NO IN PO.MAN<1>,1 SETTING MPTR THEN
+                              PO.MAN = DELETE(PO.MAN,1,MPTR,0)
+                           END
+                        END ELSE
+                           MATWRITE RSMAN.REC ON PO.MAN.XREF, RSMAN.ID
+                        END
+                     END ELSE
+                        RELEASE PO.MAN.XREF, RSMAN.ID
+                        LOCATE ISTK.MANIFEST.NO IN PO.MAN<1>,1 SETTING MPTR THEN
+                           PO.MAN = DELETE(PO.MAN,1,MPTR,0)
+                        END
+                     END
+                     MATWRITE PO.REC ON PO,PO.ID
+                  END ELSE
+                     RELEASE PO, CONO:ISTK.PO.NO
+                  END
+               END ;*T27362
+               MATWRITE ISTK.REC ON INV_SERIAL_DELETED,ISTK.ID
+               DELETE INV_SERIAL,ISTK.ID
+            END ELSE
+               RELEASE INV_SERIAL,ISTK.ID
+            END
+         NEXT S
+*T27362 END
+*T28556 v
+        IF IWLO.LOC.ON.HAND+0=0 AND IWLO.LOC.INPRCS+0=0 AND IWLO.SERIAL = '' THEN
+          L.ARR<1,-1>=IWH.LOC<1,L>
+        END
+        MATWRITE IWLO.REC ON INV.WHSE.LOC,IWLO.ID
+*T28556 ^
+      END
+*   MATWRITE IWLO.REC ON INV.WHSE.LOC,IWLO.ID
+   NEXT L
+   IF NOT(ERR) THEN
+      IF LQTY <> IWH.ON.HAND + 0 THEN
+         MAT PRR.REC = "" ; ERR=1
+         PRR.FILE = "INV.WHSE"
+         PRR.ID = IWH.ID[4,99]
+         PRR.ERR = "INV.WHSE ON HAND= ":IWH.ON.HAND:" AND LOC SUM = ":LQTY
+         PRR.SEQ = PRR.SEQ + 1
+         MATWRITE PRR.REC ON POST.REJECTS, PRR.SEQ
+         RELEASE INV.WHSE, IWH.ID
+      END
+      IF CATG.TRK.LVL='G' THEN
+         ;* for generally tracked items reservable qty. from serials should
+         ;* always be same as current qty.
+         IF RQTY#IWH.ON.HAND+0 THEN
+            MAT PRR.REC = "" ; ERR=1
+            PRR.FILE = "INV.WHSE"
+            PRR.ID = IWH.ID[4,99]
+            PRR.ERR='INV.WHSE ON HAND=':IWH.ON.HAND:' AND TRACKING SUM= ':RQTY
+            PRR.SEQ = PRR.SEQ + 1
+            MATWRITE PRR.REC ON POST.REJECTS, PRR.SEQ
+            RELEASE INV.WHSE, IWH.ID
+         END
+      END
+      IF NOT(ERR) THEN
+         CALL INV.AVG.COST.MAINT(MAT IWH.REC,INV.COST.WT,CURR.PERIOD)
+         IF DIV.EOY THEN
+            ;* add code to delete receipts that have a quantity of 0 
+            ;* once we decide how to do it.
+         END
+      END
+   END
+END
+RETURN
+*
+**********************
+PROCESS.INV_RECP_WHSE: 
+**********************
+*
+ERR=0
+RSVB=0
+CUR.QTY=0
+IRW.LIST9=''
+*T28320 v
+HERR=0
+RESV.IJS=0
+IF ISTAT.JOB # '' THEN
+   FOR J = 1 TO DCOUNT(ISTAT.JOB,VM)
+      MATREAD INV.JS.REC FROM INV.JOB.STATS,IWH.ID:"!":ISTAT.JOB<1,J> THEN
+         RESV.IJS += IJS.JOB.QTY
+      END
+   NEXT J
+END
+*T28876 v
+IF FGS.ORDER # '' THEN
+   FOR J = 1 TO DCOUNT(FGS.ORDER,VM)
+      MATREAD FOS.REC FROM FNGD.ORDER.STATS,IWH.ID:"!":FGS.ORDER<1,J>:"!":FGS.SEQ<1,J>:"!":FGS.KIT<1,J> THEN
+         RESV.IJS += FOS.R.QTY
+      END
+   NEXT J
+END
+*T28876 ^
+IF RESV.IJS # IWH.RESV+0 THEN
+   MAT PRR.REC = "" ; HERR=1                  
+   PRR.FILE = "INV.WHSE"                     
+   PRR.ID=IWH.ID[4,99]
+*T28876 v
+   IF INV.M.LINE # "FNGD" THEN
+     PRR.ERR='Reserve qty mismatch vs INV.JOB.STATS'
+   END ELSE
+     PRR.ERR='Reserve qty mismatch vs FNGD.ORDER.STATS'
+   END
+*T28876 ^
+   PRR.SEQ = PRR.SEQ + 1                     
+   MATWRITE PRR.REC ON POST.REJECTS, PRR.SEQ 
+   RELEASE INV.WHSE,IWH.ID
+END
+*T28320 ^
+CMD='SELECT INV_RECP_WHSE WITH PROD_WHSE_IDX="':CONO:PROD.NUM:'!':WHSE:'"' 
+UDTEXECUTE CMD CAPTURING ERROR RETURNING MSG 
+*T27362 v
+*IF MSG<1,1,1> = "41" THEN                  
+IF SYSTEM(11) > 0 THEN
+   SELECT INV_RECP_WHSE TO IRW.LIST9
+END ELSE
+   ERR=1
+   IF IWH.RECP.NO<1>#'' THEN
+      MAT PRR.REC = "" ; ERR=1                  
+      PRR.FILE = "INV_RECP_WHSE"                     
+      PRR.ID='NO IDS'
+      PRR.ERR='No INV_RECP_WHSE records exist for prod ':PROD.NUM:' and whse ':WHSE
+      PRR.SEQ = PRR.SEQ + 1                     
+      MATWRITE PRR.REC ON POST.REJECTS, PRR.SEQ 
+      RELEASE INV.WHSE,IWH.ID
+   END
+END
+IF NOT(ERR) THEN
+*T28320 v
+   BEGIN CASE
+      CASE CATG.COST.TYPE = 'AC' AND CATG.RSV.SERIAL # 'Y'
+         RSVB = SUM(IWH.QTY.FI) - RESV.IJS
+         CUR.QTY = SUM(IWH.QTY.FI)
+         IRW.LIST9 = ''
+      CASE 1
+*T28320 ^
+         FIRST.TIME=1
+         WDATA = 1
+         LOOP
+            READNEXT IRW.ID FROM IRW.LIST9 ELSE WDATA=0
+         WHILE WDATA AND NOT(ERR) DO
+            MATREAD IRW.REC FROM INV_RECP_WHSE, IRW.ID THEN
+               IF SUM(IRW.JRSVD.QTY)#IRW.CUR.QTY-IRW.RSVB.QTY THEN              
+                  MAT PRR.REC = ""   ; ERR=1                                     
+                  PRR.FILE = "INV_RECP_WHSE"                                     
+                  PRR.ID = IRW.ID[4,99]                                          
+                  PRR.ERR='RESERVED QTY MISMATCH FOR ':IRW.ID                    
+                  PRR.SEQ = PRR.SEQ + 1                                          
+                  MATWRITE PRR.REC ON POST.REJECTS, PRR.SEQ
+                  RELEASE INV.WHSE,IWH.ID
+               END ELSE                                                         
+                  IF IRW.RSVB.QTY>IRW.CUR.QTY THEN                               
+                     MAT PRR.REC = ""  ; ERR=1                                    
+                     PRR.FILE = "INV_RECP_WHSE"                                   
+                     PRR.ID = IRW.ID[4,99]                                        
+                     PRR.ERR='RESERVED QTY VS. CURRENT QTY MISMATCH  FOR ':IRW.ID 
+                     PRR.SEQ = PRR.SEQ + 1                                        
+                     MATWRITE PRR.REC ON POST.REJECTS, PRR.SEQ
+                     RELEASE INV.WHSE,IWH.ID
+                  END ELSE                                                       
+                     IF IRW.CUR.QTY+0<0 OR IRW.RSVB.QTY+0<0 THEN                      
+                        MAT PRR.REC = ""   ; ERR=1                                 
+                        PRR.FILE = "INV_RECP_WHSE"                                 
+                        PRR.ID = IRW.ID[4,99]                                      
+                        PRR.ERR='NEGATIVE QTY  FOR ':IRW.ID                        
+                        PRR.SEQ = PRR.SEQ + 1                                      
+                        MATWRITE PRR.REC ON POST.REJECTS, PRR.SEQ
+                        RELEASE INV.WHSE,IWH.ID
+                     END                       
+                  END                         
+               END                           
+               RSVB+=IRW.RSVB.QTY
+               CUR.QTY+=IRW.CUR.QTY
+               INVR.ID=OCONV(IRW.ID,"G!1")
+            END
+         REPEAT
+   END CASE
+END
+*T28320 ^
+IF NOT(ERR) THEN
+   IF RSVB<>(IWH.ON.HAND-IWH.RESV)+0 THEN
+      MAT PRR.REC = "" ; ERR=1
+      PRR.FILE = "INV.WHSE"
+      PRR.ID = IWH.ID[4,99]
+      PRR.ERR = "INV.WHSE RESERVABLE QTY = ":IWH.ON.HAND-IWH.RESV:" AND RECEIPT RESERVABLE  = ":RSVB
+      PRR.SEQ = PRR.SEQ + 1
+      MATWRITE PRR.REC ON POST.REJECTS, PRR.SEQ
+      RELEASE INV.WHSE, IWH.ID
+   END ELSE
+      IF CUR.QTY<>IWH.ON.HAND+0 THEN
+         MAT PRR.REC = "" ; ERR=1      
+         PRR.FILE = "INV.WHSE"         
+         PRR.ID = IWH.ID[4,99]         
+         PRR.ERR='INV.WHSE ON HAND QTY= ':IWH.ON.HAND:' AND TOTAL RECEIPTS QTY= ':CUR.QTY
+         MATWRITE PRR.REC ON POST.REJECTS,PRR.SEQ   
+         RELEASE INV.WHSE,IWH.ID                 
+      END
+   END
+END
+IF HERR THEN ERR = 1 ;*T28320
+RETURN
+*
+**********************
+PROCESS.INV_AUDIT_BAL: 
+**********************
+*
+ERR=0
+INAH.EOM.LIST=''
+CMD = 'SSELECT INV_AUDIT_HIST BY INAH_PERIOD '
+CMD:=' WITH PROD_WHSE_IDX = "'
+CMD:=CONO:PROD.NUM:'!':WHSE:'"'
+CMD:= ' AND WITH INAH_PERIOD>=':CURR.PERIOD
+UDTEXECUTE CMD CAPTURING ERROR RETURNING MSG
+*T27362 v
+*IF MSG<1,1,1> = "41" THEN 
+IF SYSTEM(11) > 0 THEN
+   SELECT INV_AUDIT_HIST TO INAH.EOM.LIST
+END
+INAH.DATA = 1;PREV.PROD = "";PREV.WHSE = ""
+;*
+;* update current periods INV_AUDIT_BAL and 
+;* calculate begining balances for the next period.
+;* also calc total onhand and cost (QOH and COH)
+;* remember that IWH.ON.HAND includes all periods.
+;*
+ITB.ID=CONO:PROD.NUM:'!':WHSE:'!':CURR.PERIOD
+MATREAD ITB.REC FROM INV_AUDIT_BAL,ITB.ID ELSE MAT ITB.REC=''
+QOH=ITB.BEG ; COH=ITB.BEG.AMT
+MAT ITB.REC=''
+ITB.BEG=QOH ; ITB.BEG.AMT=COH
+LOOP
+   READNEXT INAH.ID FROM INAH.EOM.LIST ELSE INAH.DATA = 0
+WHILE INAH.DATA DO
+   MATREAD INAH.REC FROM INV_AUDIT_HIST, INAH.ID ELSE
+      MAT INAH.REC = ""
+   END
+   IF INAH.ID[4,1]#'C' THEN
+      IF INAH.PERIOD=CURR.PERIOD THEN
+         BEGIN CASE
+            CASE INAH.PROD # PROD.NUM
+            CASE INAH.WHSE # WHSE
+            CASE INAH.TYPE = "R"
+               ITB.RECV = ITB.RECV + INAH.QTY
+               ITB.RECV.AMT = ITB.RECV.AMT + INAH.EXT.COST
+            CASE INAH.TYPE = "S"
+               ITB.SALE = ITB.SALE + INAH.QTY
+               ITB.SALE.AMT = ITB.SALE.AMT + INAH.EXT.COST
+            CASE INAH.TYPE = "A"
+               ITB.SHRNK = ITB.SHRNK + INAH.QTY
+               ITB.SHRNK.AMT = ITB.SHRNK.AMT + INAH.EXT.COST
+            CASE INAH.TYPE = "I"
+               ITB.TRAN.IN = ITB.TRAN.IN + INAH.QTY
+               ITB.TRAN.IN.AMT = ITB.TRAN.IN.AMT + INAH.EXT.COST
+            CASE INAH.TYPE = "O"
+               ITB.TRAN.OUT = ITB.TRAN.OUT + INAH.QTY
+               ITB.TRAN.OUT.AMT = ITB.TRAN.OUT.AMT + INAH.EXT.COST
+         END CASE
+      END
+      ;* include all periods into total
+      QOH+=INAH.QTY
+      COH+=INAH.EXT.COST
+   END
+REPEAT
+;*
+;* write out current period record
+;*
+MATWRITE ITB.REC ON INV_AUDIT_BAL,ITB.ID
+;*
+;* calculate ending balance for current period
+;*
+END.BAL=ITB.BEG+ITB.RECV+ITB.TRAN.IN+ITB.SALE+ITB.SHRNK+ITB.TRAN.OUT
+END.BAL.AMT=ITB.BEG.AMT+ITB.RECV.AMT+ITB.TRAN.IN.AMT+ITB.SALE.AMT+ITB.SHRNK.AMT+ITB.TRAN.OUT.AMT
+;*
+;* now write ending balace for current period as a
+;* beginging balance for the next period.
+;*
+ITB.ID=CONO:PROD.NUM:"!":WHSE:"!":NEXT.PERIOD<1,1>
+MATREADU ITB.REC FROM INV_AUDIT_BAL,ITB.ID ELSE MAT ITB.REC=''
+MAT ITB.REC=''
+ITB.BEG =  END.BAL
+ITB.BEG.AMT = END.BAL.AMT
+MATWRITE ITB.REC ON INV_AUDIT_BAL, ITB.ID
+;* now put these begining balances in IWH record too.
+IWH.BAL.PERIOD<1,-1>=NEXT.PERIOD<1,1>
+IWH.BEG.QTY<1,-1>=END.BAL+0
+IWH.BEG.AMT<1,-1>=END.BAL.AMT+0
+;*
+;* now compare total onhand and cost against IWH.ON.HAND
+;*
+IF QOH+0 # IWH.ON.HAND+0 THEN
+   MAT PRR.REC = "" ; ERR=1
+   PRR.FILE = "INV.WHSE"
+   PRR.ID = IWH.ID[4,99]
+   PRR.ERR = "INV.WHSE ON HAND QTY = ":IWH.ON.HAND:" AND INV_AUDIT_BAL = ":QOH      ; * this is including future periods.
+   PRR.SEQ = PRR.SEQ + 1
+   MATWRITE PRR.REC ON POST.REJECTS, PRR.SEQ
+   RELEASE INV.WHSE, IWH.ID
+END
+IF DIV.EOY THEN 
+   IWH.BEG.INV = IWH.ON.HAND
+   IWH.BEG.VALUE = COH    
+END
+;*                          
+;*remove FIFO from INV.WHSE 
+;*                          
+IWH.VDR.FI = ""             
+IWH.PO.NO.FI = ""           
+IWH.PO.LN.FI = ""           
+IWH.ORG.FI = ""             
+IWH.RSV.FI = ""             
+IWH.QTY.FI = ""             
+IWH.COST.FI = ""            
+IWH.ACT.COST = ""           
+*T27362 v Restore original RECP data.
+IWH.RECP.NO = SAVE.IWH.RECP.NO
+IWH.RECP.PERIOD = SAVE.IWH.RECP.PERIOD
+IWH.RECP.ENT.DATE = SAVE.IWH.RECP.ENT.DATE
+*T27362 ^
+*T28556 v
+IWLO.ID=CONO:PROD.NUM:"!":WHSE:"!"
+FOR L = 1 TO DCOUNT(L.ARR,VM)
+  READU LREC FROM INV.WHSE.LOC,IWLO.ID:L.ARR<1,L> THEN
+    DELETE INV.WHSE.LOC,IWLO.ID:L.ARR<1,L>
+    LOCATE L.ARR<1,L> IN IWH.LOC<1>,1 SETTING LFND THEN
+      DEL IWH.LOC<1,LFND>
+    END
+  END ELSE RELEASE INV.WHSE.LOC,IWLO.ID:L.ARR<1,L>
+NEXT L
+*T28556 ^
+MATWRITE IWH.REC ON INV.WHSE,IWH.ID
+RETURN
+*
+**********************
+PROCESS.INV_AUDIT_TAG: 
+**********************
+*
+ECD.NUM = 14;SCV.REC(ECD.NUM)<1> = "NOW PROCESSING INV.AUDIT.HIST "
+ECD.ACTION = 5;CALL SCRN.EDIT
+SELECT INV_AUDIT_TAG TO IAT.LIST1
+DATA = 1
+LOOP
+   READNEXT INAH.ID FROM IAT.LIST1 ELSE DATA = 0
+WHILE DATA = 1 DO
+*T27362 v
+   IF INAH.ID[1,3] = CONO THEN
+      MATREAD INAH.REC FROM INV_AUDIT_HIST, INAH.ID THEN
+         IF INAH.GLA.DATE = "P" THEN
+            INAH.GLA.DATE = TODAY
+            MATWRITE INAH.REC ON INV_AUDIT_HIST, INAH.ID
+            DELETE INV_AUDIT_TAG, INAH.ID
+         END
+      END
+   END
+*T27362 ^
+REPEAT
+RETURN
+*
+********************
+PROCESS.EOM.TRANS.1: 
+********************
+*
+ECD.NUM = 14;SCV.REC(ECD.NUM)<1> = "NOW PROCESSING EOM.TRANS (1) FILE"
+ECD.ACTION = 5;CALL SCRN.EDIT
+ACCOUNTS = "";AMOUNTS = ""
+SELECT EOM.TRANS TO EOM.LIST1
+WRITE "EOM.TRANS (1)" ON CONTROL , PROG.ID
+DATA = 1
+LOOP
+   READNEXT ETR.ID FROM EOM.LIST1 ELSE DATA = 0
+WHILE DATA DO
+   IF ETR.ID[1,3] = CONO THEN 
+      MATREADU ETR.REC FROM EOM.TRANS, ETR.ID THEN 
+         ACCT = ETR.ID[1,ACCT.LEN]
+         TYPE = FIELD(FIELD(ETR.ID,"!",3),"*",1)
+         LOCATE ACCT IN ACCOUNTS,1 SETTING FND ELSE
+            ACCOUNTS<FND> = ACCT
+            AMOUNTS<FND> = ""
+         END
+         IF TYPE = "D" THEN
+            AMOUNTS<FND,1> = AMOUNTS<FND,1> + ETR.AMT
+         END ELSE
+            AMOUNTS<FND,2> = AMOUNTS<FND,2> + ETR.AMT
+         END
+      END ELSE
+         RELEASE EOM.TRANS, ETR.ID
+      END
+   END
+REPEAT
+MAT GLA.REC = ""
+GLA.DATE = TODAY
+GLA.SRC = "IA"
+GLA.MON = CURR.PERIOD
+*T26556 v
+*  ODATE = " " : OCONV(FR.CURR.DATE,"D2/")
+ODATE = " " : OCONV(CURR.ODATE,"D2/")
+*T26556 ^
+ACNT=DCOUNT(ACCOUNTS,AM)
+READU COUNTER FROM CONTROL, CONO : "GLACOUNTER" ELSE COUNTER = 0
+WRITE "GLA ":COUNTER ON CONTROL, PROG.ID
+FOR I = 1 TO ACNT
+   IF EQV.FLG = 1 THEN
+      READ ACCT FROM COA.EQUIV, ACCOUNTS<I> ELSE ACCT = ACCOUNTS<I>
+   END ELSE
+      ACCT = ACCOUNTS<I>
+   END
+   COA.ID = CONO : ACCT[11,IN.ACCT.LEN]
+   MATREAD COA.REC FROM COA, COA.ID ELSE COA.DESC = UNKNOWN
+   GLA.DESC = COA.DESC "L#25" : ODATE
+   FOR J = 1 TO 2
+      IF AMOUNTS<I,J> # "" THEN 
+         LOOP
+            COUNTER = COUNTER + 1
+            IF COUNTER > 999998 THEN COUNTER = 1
+            GLA.ID = ACCT : STR("0",6-LEN(COUNTER)) : COUNTER
+            READ DUMMY FROM GLA, GLA.ID ELSE DUMMY = ""
+         WHILE DUMMY # "" DO REPEAT
+         GLA.AMT = AMOUNTS<I,J>
+         MATWRITE GLA.REC ON GLA, GLA.ID
+      END
+   NEXT J
+NEXT I
+WRITE COUNTER ON CONTROL, CONO : "GLACOUNTER"
+RETURN
+*
+********************
+PROCESS.EOM.TRANS.2: 
+********************
+*
+ECD.NUM = 14;SCV.REC(ECD.NUM)<1> = "NOW PROCESSING EOM.TRANS (2) FILE"
+ECD.ACTION = 5;CALL SCRN.EDIT
+SELECT EOM.TRANS TO EOM.LIST2
+WRITE "EOM.TRANS (2)" ON CONTROL , PROG.ID
+DATA = 1
+LOOP
+   READNEXT ETR.ID FROM EOM.LIST2 ELSE DATA = 0
+WHILE DATA DO
+   IF ETR.ID[1,3] = CONO THEN 
+      MATREADU ETR.REC FROM EOM.TRANS, ETR.ID THEN
+*T25975 v
+         CURR.PER = FR.CURR.PER<1,DIV.POS>
+         MAT ETH.REC = MAT ETR.REC
+         DONE = 0
+         SEQ = 0
+         ETH.ID = FIELD(ETR.ID,"*",1):"*":CURR.PER
+         LOOP UNTIL DONE = 1 DO
+            SEQ = SEQ + 1
+            ETH.KEY = ETH.ID:"*":SEQ
+            READ CHECKIT FROM ICS.EOM.TRANS.HIST, ETH.KEY ELSE DONE = 1
+         REPEAT
+         MATWRITE ETH.REC ON ICS.EOM.TRANS.HIST, ETH.KEY
+*T25975 ^
+         DELETE EOM.TRANS, ETR.ID
+      END ELSE
+         RELEASE EOM.TRANS,ETR.ID
+      END
+   END
+REPEAT
+WRITE "EOM.TRANS (3)" ON CONTROL, PROG.ID
+EOD.HIST.REC = INSERT(EOD.HIST.REC,-1,0,0,TODAY)
+WRITE EOD.HIST.REC ON EOD.HIST,CONO:SYS.FISCAL:CURR.PERIOD:EOD.HID
+RETURN
+*
+91000 ERR.TYPE = 1
+CALL SYSCOM(MAT SYSCOM.REC)
+RETURN
+93000 WRITEV ERRMSG ON CONTROL, PROG.ID,2
+ERR.TYPE = 3
+CALL SYSCOM(MAT SYSCOM.REC)
+99000 INBUFF<5> = "END"
+PROCWRITE INBUFF
+*** END OF JOB ***
+99999 END

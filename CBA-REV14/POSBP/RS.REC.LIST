@@ -1,0 +1,230 @@
+*********************************************************************
+* PROGRAM  - RS.REC.LIST
+* AUTHOR   - Scott McHargue     
+* DATE      - 08/01/90
+* DESCRIPTION
+* This program prints roll/skid receipt listings.   
+* T25740 edvard 08/22/2001 * REV12
+* T26493 cmykleb 04/19/2002 * Change rpt to get rpt # from the proc.
+* t26759 epitka 07/22/02 * Pgm needs to take in consideration serials
+*                          in _DELETED file too.
+*T27705 lross 11/14/2003 * Expand serial to 15.
+*********************************************************************
+*
+*------------------------ COPY STATEMENTS ---------------------------
+*
+*COPY>PMC.CPYLIB>PO 
+*COPY>ICS.CPYLIB>INVENTORY 
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>ICS.CPYLIB>PO.RSKI.XREF 
+*COPY>ICS.CPYLIB>INV_SERIAL
+*COPY>ICS.CPYLIB>WAREHOUSE
+*COPY>CPYLIB>SYSCOM
+*
+*---------------------------- READ PROC -----------------------------
+*
+PROCREAD X ELSE
+  ERRMSG = "THIS REPORT MUST RUN FROM A PROC"
+  GOTO 93000
+END
+CONO = X<1>
+;* CNAME = X<2>
+DIV = X<4>
+*
+*--------------------- SETUP FOR SYSTEM ERRMSGS ---------------------
+*
+SYS.TYPE = 1
+CALL SYSCOM(MAT SYSCOM.REC)
+*
+*--------------------------- OPEN FILES -----------------------------
+*
+OPEN "","PO" TO PO ELSE
+  ERRMSG ="PO FILE IS MISSING"
+  GOTO 93000 
+END
+OPEN "","INVENTORY" TO INVENTORY ELSE
+  ERRMSG = "INVENTORY FILE IS MISSING"
+  GOTO 93000 
+END
+OPEN "","INV_SERIAL" TO INV_SERIAL ELSE
+  ERRMSG ="INV_SERIAL FILE IS MISSING"
+  GOTO 93000 
+END
+OPEN "","INV_SERIAL_DELETED" TO INV_SERIAL_DELETED ELSE
+  ERRMSG ="INV_SERIAL_DELETED FILE IS MISSING"
+  GOTO 93000 
+END
+OPEN "","PO.RSKI.XREF" TO PO.RSKI.XREF ELSE
+  ERRMSG ="PO.RSKI.XREF FILE IS MISSING"
+  GOTO 93000 
+END
+OPEN "","CONTROL" TO CONTROL ELSE
+  ERRMSG ="CONTROL FILE IS MISSING"
+  GOTO 93000 
+END
+OPEN "WAREHOUSE" TO WAREHOUSE ELSE
+  ERRMSG="WAREHOUSE FILE IS MISSING"
+  GOTO 93000
+END
+*
+*------------------ INITIALIZATION ---------------------------------
+*
+END.DATE = DATE()
+LINE.COUNT = 99
+PAGE.NO = 0
+SP1 = " " 
+SP2 = "  "
+SP62 = SPACE(62)
+L4 = STR("_",4)
+L8 = STR("_",8)
+L9 = STR("_",9)
+L11 = STR("_",11)
+L20 = STR("_",20)
+L25 = STR("_",25)
+OLD.PO.LINE.NO = ""
+OLD.PO.NO = ""
+PRINTER ON
+*
+*-------------------------- GET HEADING ----------------------------
+*
+*T26493 v
+*  REPORT.NO = ""
+*  REPORT.NAME = "ROLL/SKID.STOCK.RECEIPTS.LISTING"
+CNAME = ""
+REPORT.NAME = ""
+REPORT.NO = X<2>
+*T26493 ^
+HD1 = ""
+HD2 = ""
+CALL GET.PROG.HEAD(CONO,CNAME,REPORT.NAME,REPORT.NO,END.DATE,HD1,HD2)
+HD3 = "DIVISION : ":DIV
+*
+*---------------- READ AND PROCESS ALL RECORDS ---------------------
+*
+100 *
+DATA = 1
+LOOP
+  READNEXT KEY ELSE DATA = 0
+WHILE DATA  DO
+  PRINT.HEAD.FLAG = 1
+  MATREAD RSXRF.REC FROM PO.RSKI.XREF, KEY ELSE GOTO 111
+  SEQ.CNT = DCOUNT(RSXRF.RS.NO,VM)
+  FOR CNT = 1 TO SEQ.CNT
+*IF @LOGNAME = 'thompson' THEN DEBUG
+    ISTK.ID=CONO: RSXRF.RS.NO<1,CNT>
+    MATREAD ISTK.REC FROM INV_SERIAL,ISTK.ID THEN
+      IF ISTK.POST.DATE # "" THEN GOTO 109
+      IF DIV # "ALL" THEN
+        MATREAD WHSE.REC FROM WAREHOUSE,CONO:ISTK.WHSE THEN
+          CDIV = WHS.DIV
+        END ELSE
+          CDIV=""
+        END
+        IF CDIV # DIV THEN GOTO 109
+      END
+    END ELSE 
+      MATREAD ISTK.REC FROM INV_SERIAL_DELETED,ISTK.ID THEN
+        GOTO 109
+      END ELSE
+        MAT ISTK.REC = ""
+        ISTK.PROD = "???????????????"
+      END
+    END
+    MATREAD INV.REC FROM INVENTORY,CONO:ISTK.PROD ELSE
+      MAT INV.REC = ""
+      INV.FULL.DESC = STR("?",15)
+    END
+    GOSUB 2000
+109 NEXT CNT 
+111 REPEAT
+GOTO 99990
+*
+*---------------------- PRINT DETAIL LINE --------------------------
+*
+2000 *
+IF LINE.COUNT > 55 OR ISTK.PO.NO # OLD.PO.NO THEN
+  OLD.PO.LINE.NO = ""
+  OLD.PO.NO = ISTK.PO.NO
+  GOSUB 9000
+END
+IF ISTK.PO.LINE = OLD.PO.LINE.NO AND PRINT.HEAD.FLAG # 1 THEN
+*T27705  D.LINE = SPACE(29):L20:SP1:L11:SP1:RSXRF.RS.NO<1,CNT>"L#8":SP1:ISTK.WHSE"L#4":SP1:L4:SP1:L8:SP1:L9:SP1:L25
+  D.LINE = SPACE(29):L20:SP1:L11:SP1:RSXRF.RS.NO<1,CNT>"L#15":SP1:ISTK.WHSE"L#4":SP1:L4:SP1:L8:SP1:L9:SP1:L25
+  PRINT D.LINE
+  LINE.COUNT = LINE.COUNT + 1
+END ELSE
+  PRINT.HEAD.FLAG = 0
+  PRINT
+  D.LINE = "PRODUCT:  ":ISTK.PROD"L#15":"DESC:  ":INV.FULL.DESC"L#45"
+  PRINT D.LINE
+*T27705  D.LINE = SPACE(29):L20:SP1:L11:SP1:RSXRF.RS.NO<1,CNT>"L#8":SP1:ISTK.WHSE"L#4":SP1:L4:SP1:L8:SP1:L9:SP1:L25
+  D.LINE = SPACE(29):L20:SP1:L11:SP1:RSXRF.RS.NO<1,CNT>"L#15":SP1:ISTK.WHSE"L#4":SP1:L4:SP1:L8:SP1:L9:SP1:L25
+  SH.LINE = SHD6 
+  PRINT SH.LINE
+  SH.LINE = UL 
+  PRINT SH.LINE
+*        PRINT
+*T27705  D.LINE = SPACE(29):L20:SP1:L11:SP1:RSXRF.RS.NO<1,CNT>"L#8":SP1:ISTK.WHSE"L#4":SP1:L4:SP1:L8:SP1:L9:SP1:L25
+  PRINT D.LINE
+  LINE.COUNT = LINE.COUNT + 5
+END
+*     PRINT D.LINE
+*     LINE.COUNT = LINE.COUNT + 1
+OLD.PO.LINE.NO = ISTK.PO.LINE
+OLD.PO.NO = ISTK.PO.NO
+RETURN
+* ---------------------------- PRINT HEADINGS -------------------------
+*
+9000 *
+PRINT CHAR(12)
+PAGE.NO = PAGE.NO + 1
+H.LINE = HD1:PAGE.NO
+PRINT H.LINE
+H.LINE = HD2
+PRINT H.LINE
+PRINT HD3
+PRINT
+SHD3 = "P/O NUMBER: "
+*     SHD4 = "Manifest number ____________________        Manifest total quantity ____________"
+******* "       Received by ________________"
+SHD5 = "                                                                       P/O  Act"
+*T27705 SHD6 = "                             Manifest Number      Total Qty    Serial  Whse Whse Location  Quantity       Mill Roll ID"
+SHD6 = "                             Manifest Number      Total Qty       Serial      Whse Whse Location  Quantity       Mill Roll ID"
+*T27705 UL =   "                             -------------------- ----------- -------- ---- ---- -------- --------- -------------------------"
+UL =   "                             -------------------- ----------- --------------- ---- ---- -------- --------- -------------------------"
+SH.LINE = ""
+SH.LINE = SHD3 : KEY[4,99]
+PRINT SH.LINE
+PRINT
+*     SH.LINE = SHD4 
+*     PRINT SH.LINE
+*     PRINT
+*     PRINT
+*     SH.LINE = SHD5 
+*     PRINT SH.LINE
+*     SH.LINE = SHD6 
+*     PRINT SH.LINE
+*     SH.LINE = UL 
+*     PRINT SH.LINE
+LINE.COUNT = 5
+RETURN
+*
+*--------------------------- CALLS FOR SYSCOM -----------------------
+*
+91000 ERR.TYPE = 1; CALL SYSCOM(MAT SYSCOM.REC)
+RETURN
+92000 ERR.TYPE = 2; CALL SYSCOM(MAT SYSCOM.REC)
+RETURN
+93000 PRINTER CLOSE; PRINTER OFF; ERR.TYPE = 3; CALL SYSCOM(MAT SYSCOM.REC)
+*
+99990 *
+PROCWRITE "END"
+*
+*--------------------------- END OF JOB -----------------------------
+*
+99999 *
+PRINTER CLOSE 
+PRINTER OFF
+STOP
+END

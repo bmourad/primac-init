@@ -1,0 +1,207 @@
+      SUBROUTINE FNGD.JOB.INQ (CONO,PROD,WHSE)
+*COPY>CPYLIB>COM1
+*COPY>ICS.CPYLIB>COM.INV.INQ
+*********************************************************************
+* REVISION    - [12.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - BP
+* PROGRAM     - FNGD.JOB.INQ
+* DATE        - 05/01/01
+* DESCRIPTION - This program is used to display all JOB activities
+*               for a product in a warehouse
+*T25740  edvard  06/30/01  REV12 
+*T26527 lross 04/02/2002 * On completed jobs display 0 for available.
+*T27359 lhelms 04/10/2003 * NON-NUMERIC FOUND WHEN NUMERIC REQUIRED
+*                           (135)
+*T28620 lross 07/14/2005 * Incorrect pointers to data.
+*T28676 lross 09/21/2005 * If JOB STATUS is 4 or > 5 display 0 for
+*                          Available Qty.
+*ENDDOC
+*********************************************************************
+*
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>JCS.CPYLIB>JOB
+*COPY>ICS.CPYLIB>INV.STATS
+*COPY>ICS.CPYLIB>FNGD.STATS      
+*COPY>ICS.CPYLIB>FNGD.JOB.STATS  
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>ICS.CPYLIB>INV.JOB.STATS
+*COPY>CPYLIB>GEN.XREF.SUB
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+*
+      MAT SYSCOM.REC =  ""; SYS.TYPE = 2
+*
+      ESN = ECD.SCRN.NO
+      PAGE.SIZE = 5
+      START=1
+      S.M.QTY = ""
+      S.A.QTY = ""
+      S.V.QTY = ""
+      S.CUST = ""
+      S.DATE = ""
+      S.ORD = ""
+      S.CNAME=""
+      MAT GEN.XREF.REC = ""
+      GXR.CO = CONO
+*
+      GOSUB GET.DATA
+      GOSUB BUILD.SCREEN
+      ECD.ACTION = 3; CALL SCRN.EDIT
+      ;*
+      ;* Main Prompt
+      ;*
+      LOOP
+         ECD.NUM = 41; SCV.REC(ECD.NUM)<ESN> = ""
+         ECD.ACTION = 4; CALL SCRN.EDIT
+         ACTION = ECD.RET.VALUE
+         BEGIN CASE
+            CASE ACTION = "" OR ACTION = "END"
+               ACTION = "END"
+            CASE ACTION[1,1] = "S"
+               GOSUB SCROLL
+            CASE NOT(NUM(ACTION))
+               ERRMSG = "Invalid entry, please re-enter"
+               GOSUB 91000
+            CASE ACTION < 1 OR ACTION > LN.CNT
+               ERRMSG = "Out of range, please re-enter"
+               GOSUB 91000
+            CASE S.ORD<ACTION,2> # ""
+               GXR.NAME = "FJS.ORD"
+               GXR.XREF = FNGD.JOB.STATS                              
+               GXR.SRCH.ID = IWH.ID[4,99]:"!":FGS.JOB<1,ACTION>       
+               CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA) 
+               GOSUB SCROLL
+         END CASE
+      WHILE ACTION # "END" DO REPEAT
+      GOTO 99999
+*
+**************************************************************************
+***** S U B R O U T I N E S **********************************************
+**************************************************************************
+*
+*************
+GET.DATA: 
+*************
+*
+      IWH.ID = CONO:PROD:"!":WHSE
+      LN.CNT = DCOUNT(FGS.JOB,VM) 
+      TOT.MQTY=0
+      TOT.AQTY=0
+      TOT.SVQTY=0
+      LN.NUM=""
+      FOR I = 1 TO LN.CNT
+         LN.NUM<1,I> = I
+         MATREAD FJS.REC FROM FNGD.JOB.STATS, IWH.ID:"!":FGS.JOB<1,I> ELSE MAT FJS.REC = ""
+*T28676 v
+         MATREAD JOB.REC FROM JOB,CONO:FGS.JOB<1,I> ELSE MAT JOB.REC = ''
+         S.CUST<1,I> = FJS.CUST
+         MATREAD CUST.REC FROM CUSTOMER,CONO:FJS.CUST THEN
+            S.CNAME<1,I> = CUST.NAME
+         END ELSE
+            S.CNAME<1,I> = STR("?",30)
+         END
+         S.DATE<1,I> = OCONV(FJS.DATE,"D2/")
+         S.M.QTY<1,I>=OCONV(INT(((FJS.M.QTY/ICR.DV1)*ICR.MT1)/ICR.DV2+.5),ICR.CNV1)
+         S.A.QTY<1,I>=OCONV(INT(((FJS.A.QTY/ICR.DV1)*ICR.MT1)/ICR.DV2+.5),ICR.CNV1)
+         IF FJS.F.QTY > FJS.M.QTY THEN                     
+            S.V.QTY<1,I> = 0 ;* T23748                       
+         END ELSE                                          
+            S.V.QTY<1,I> = FJS.M.QTY - FJS.F.QTY - FJS.A.QTY 
+*T28620     IF S.V.QTY<I> < 0 THEN S.V.QTY<I> = 0          
+            IF S.V.QTY<1,I> < 0 THEN S.V.QTY<1,I> = 0          
+*T28676 v
+            IF JOB.STATUS<1,1> = 4 OR JOB.STATUS<1,1> > 5 THEN S.V.QTY<1,I> = 0
+*T28620     S.V.QTY<1,I>=OCONV(INT(((S.V.QTY/ICR.DV1)*ICR.MT1)/ICR.DV2+.5),ICR.CNV1)
+            S.V.QTY<1,I>=OCONV(INT(((S.V.QTY<1,I>/ICR.DV1)*ICR.MT1)/ICR.DV2+.5),ICR.CNV1)
+         END                                               
+*T26527 v
+         READV JSTAT FROM JOB,CONO:FGS.JOB<1,I>,2 ELSE JSTAT=''
+         IF JSTAT<1,1> > 3 AND JSTAT<1,1> # 5 THEN S.V.QTY<1,I> = 0
+*T26527 ^
+         IF FJS.ORD<1,2> = "" THEN
+            S.ORD<1,I> = FJS.ORD
+         END ELSE
+            S.ORD<1,I> = "MULTI"
+         END
+         TOT.MQTY +=FJS.M.QTY
+         TOT.AQTY +=FJS.A.QTY
+* T27359
+         IF S.V.QTY<1,I> > 0 THEN
+*        TOT.SVQTY +=S.V.QTY<1,I>
+            TOT.SVQTY += (FJS.M.QTY - FJS.F.QTY - FJS.A.QTY)
+         END
+      NEXT I
+      RETURN
+*
+**************
+BUILD.SCREEN: 
+**************
+*
+      SCV.REC(32)<ESN> = INT(LN.CNT/PAGE.SIZE+.9) "R%2"
+      SCV.REC(21)<ESN> = TOT.MQTY
+      SCV.REC(22)<ESN> = TOT.AQTY
+      SCV.REC(23)<ESN> = TOT.SVQTY
+      FOR I = 21 TO 23
+         SCV.REC(I)<ESN> = OCONV(INT(((SCV.REC(I)<ESN>/ICR.DV1) * ICR.MT1) / ICR.DV2 +.5),ICR.CNV1)
+      NEXT I
+      SCV.REC(11)<ESN> = LN.NUM
+      SCV.REC(12)<ESN>=FGS.JOB
+      SCV.REC(13)<ESN>=S.CUST
+      SCV.REC(14)<ESN>=S.DATE
+      SCV.REC(15)<ESN>=S.M.QTY
+      SCV.REC(16)<ESN>=S.A.QTY
+      SCV.REC(17)<ESN>=S.V.QTY
+      SCV.REC(18)<ESN>=S.CNAME
+      SCV.REC(19)<ESN>=S.ORD
+      RETURN
+*
+**************
+SCROLL: 
+**************
+*
+      BEGIN CASE                                                
+         CASE ACTION = "S" OR ACTION = "SF"                      
+            IF LN.CNT > PAGE.SIZE THEN                            
+               START +=PAGE.SIZE                                   
+               IF START > LN.CNT THEN START = 1                    
+            END                                                   
+         CASE ACTION = "SR"                                      
+            IF LN.CNT > PAGE.SIZE THEN                            
+               START -=PAGE.SIZE                                   
+* CWV          IF START<LN.CNT THEN START = 1
+               IF START < 1 THEN START = 1
+            END                                                   
+         CASE ACTION = "ST"                                      
+            START = 1                                             
+         CASE ACTION = "SB"                                      
+            START=LN.CNT
+         CASE ACTION[1,1] = "S" AND NUM(ACTION[2,99])            
+            START = ACTION[2,99]+0                                
+            IF START < 1 OR START > LN.CNT THEN                   
+               ERRMSG = "** Invalid selection **"                  
+               GOSUB 91000                                         
+            END                                                   
+      END CASE                                                  
+      START=1+INT((START-1)/PAGE.SIZE)*PAGE.SIZE 
+      ECD.NUM=11;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT  
+      ECD.NUM=12;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT  
+      ECD.NUM=13;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT  
+      ECD.NUM=14;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT  
+      ECD.NUM=15;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT  
+      ECD.NUM=16;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT  
+      ECD.NUM=17;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT  
+      ECD.NUM=18;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT  
+      ECD.NUM=19;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT  
+      RETURN
+*
+*---- Error message routine
+91000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+*---- End of job
+99999*
+      ECD.ACTION=99;CALL SCRN.EDIT
+      RETURN
+   END

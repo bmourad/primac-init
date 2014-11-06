@@ -1,0 +1,1917 @@
+*COPY>CPYLIB>COM1
+*COPY>ICS.CPYLIB>COM.INV.MAIN  
+*COPY>ICS.CPYLIB>COM.INV.SERIAL
+*COPY>ICS.CPYLIB>COM.INV.LINK  
+*********************************************************************
+* REVISION     - [10.0]
+* COPYRIGHT    - 1994-Computer Business Associates (Vercom Software,Inc)
+* SYSTEM       - PRIMAC
+* SOURCE       - ICSBP
+* PROGRAM      - PAP.SLIT.MAINT
+* BY           - Blair W. Dickerson
+* DATE         - 08/24/94
+* DESCRIPTION  - Enters and maintains the slitting transaction records
+*              - which includes a parent roll and it's associated slit
+*              - rolls with quantites and dollar amounts.
+* CSF 23345    - Problem with PC/MSI conversions (LMR).
+* C25024 gat 02/23/1996 * FIXED MSI CALC ON SECOND ROLL SLIT
+* CSF 24762 LMR 2/26/96 - MOD TO TEST ROLL.SKID.INFO IS IN INVENTORY.
+*  RKB 3/28/96 change to how slit trans keys are created.
+*   change logic to use "S" at the end of the slit trans key field.  this
+*   will facilitate that PO numbers do not conflict with slit trans
+*   keys.  this is because the fifo bucket uses one field to store the
+*   authorization po number and this field may have a po number or a
+*   slit trans key there.   
+*T21852 lanny 04/28/1997 * Allow for trans delete if not posted.
+*T21910 lanny 05/09/1997 * Must not enter duplicate slit roll #.
+*T21935 julie 05/16/1997 * DO NOT ALLOW USER TO CHANGE TO SLIT QUANTITY
+*T23278 markt 10/20/1998 * Add check for divisional security
+*T25740 edvard 07/23/2001 * REV12
+*T25978 adelgado 02/18/2002 * Add the use of prompts (S,SR,SB,ST).
+*T26126 adelgado 02/25/2002 * Implement the LOCKED clause for READU.
+*T25740 epitka 04/03/2002 * REV12
+*T26497 adelgado 04/04/2002 * Add validation rule for Inter-Divisional
+*                             Whse.
+*T26556 adelgado 05/06/2002 * Mod. to only do slitting for Serial items.
+*T26556 adelgado 05/13/2002 * Fix error of slit qty becoming greater
+*                             than parent qty.  
+*T27339 cmykleb 03/13/2003 * When a product is a serial, non-barcode
+*                            product when user is prompted for the
+*                            serial numbers to be created the user is in
+*                            a continues loop that keeps asking for the
+*                            next serial number and if the user does END
+*                            out of this loop the serial numbers are not
+*                            stored.  Also, the parent qty is being
+*                            multipiled instead of divided resulting
+*                            in the slit qty being greater than the
+*                            parent qty.
+*T27620 cmykleb 08/07/2003 * When a product is set for actual costing
+*                            (AC) after the user enters a serial # the
+*                            errmsg "NOT ENOUGH AVAILABLE QTY" always
+*                            comes up.
+*T27653 lross 08/19/2003 * Several mods to ensure calcs ok and bring
+*                          up to REV12 date/period defaults.
+*T27880 thompson 01/12/2004 * CHANGE FIELD FOR LOOKUP TO DIV.CODE FROM
+*                             INPUT.
+*T27990 lross 03/10/2004 * Mods for ICS.IWH.SUB (ERRMSG)
+*********************************************************************
+*
+*---- INSERT FILES EQUATES
+*
+*COPY>ICS.CPYLIB>CATEGORY
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>ICS.CPYLIB>INV.WHSE.LOC
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>ICS.CPYLIB>INV.STATS
+*COPY>ICS.CPYLIB>PO.RSKI.XREF
+*COPY>ICS.CPYLIB>SLIT.TRANS
+*COPY>ICS.CPYLIB>WAREHOUSE
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>GEN.XREF.SUB
+*COPY>CPYLIB>SYSCOM
+*COPY>ICS.CPYLIB>INV_SERIAL
+*COPY>ICS.CPYLIB>INV_RECEIPTS
+*COPY>ICS.CPYLIB>INV_RECP_WHSE
+*COPY>PMC.CPYLIB>DIVISION
+*
+*COPY>ICS.CPYLIB>INV_AUDIT_HIST
+DEFFUN GET.SERIAL.SEQ(CONO,CONTROL.FILE,INV_SERIAL.FILE)
+DEFFUN DIVISION.POSITION(COMP.NO,CONTROL.FILE,DIVISION.CODE)    
+DEFFUN CURRENT.PERIOD(COMP.NO,CONTROL.FILE,DIV.POS,FISCAL.FLAG) 
+GEN.DIV='00'
+*
+DIM SAVE.ICR.REC(10)
+EQU S.ICR.DV1  TO SAVE.ICR.REC(2)
+MAT SAVE.ICR.REC = ''
+DIM HOLD.SLT.REC(SLT.REC.SIZE) ; MAT HOLD.SLT.REC=''
+*
+*---- SETUP FOR SYSTEM ERRMSGS
+*
+SYS.TYPE = 1
+CALL SYSCOM(MAT SYSCOM.REC)
+*
+*---- OPEN FILES
+*
+OPEN '','INVENTORY' TO INVENTORY ELSE
+   ERRMSG = 'INVENTORY FILE IS MISSING' ; GOTO 93000
+END
+OPEN '','INV.WHSE' TO INV.WHSE ELSE
+   ERRMSG = 'INV.WHSE IS MISSING' ; GOTO 93000
+END
+OPEN '','INV.WHSE.LOC' TO INV.WHSE.LOC ELSE
+   ERRMSG = 'INV.WHSE.LOC IS MISSING' ; GOTO 93000
+END
+OPEN '','INVENTORY.XREF' TO INVENTORY.XREF ELSE
+   ERRMSG = 'INVENTORY.XREF FILE IS MISSING' ; GOTO 93000
+END
+OPEN '','INV.STATS' TO INV.STATS ELSE
+   ERRMSG = 'INV.STATS FILE IS MISSING' ; GOTO 93000
+END
+OPEN '','WAREHOUSE' TO WAREHOUSE ELSE
+   ERRMSG = 'WAREHOUSE FILE IS MISSING' ; GOTO 93000
+END
+OPEN '','CATEGORY' TO CATEGORY ELSE
+   ERRMSG = 'CATEGORY FILE IS MISSING' ; GOTO 93000
+END
+OPEN '','COMPANY' TO COMPANY ELSE
+   ERRMSG = 'COMPANY FILE IS MISSING' ; GOTO 93000
+END
+OPEN '','ICS.SCREENS' TO M.SCREENS ELSE
+   ERRMSG = 'ICS.SCREENS FILE IS MISSING' ; GOTO 93000
+END
+OPEN '','XREF.DATA' TO XREF.DATA ELSE
+   ERRMSG = 'XREF.DATA FILE MISSING' ; GOTO 93000
+END
+OPEN '','CONTROL' TO CONTROL ELSE
+   ERRMSG = 'CONTROL FILE IS MISSING' ; GOTO 93000
+END
+OPEN '','PREFIX' TO PREFIX ELSE
+   ERRMSG = 'PREFIX FILE IS MISSING' ; GOTO 93000
+END
+OPEN '','PO.RSKI.XREF' TO PO.RSKI.XREF ELSE
+   ERRMSG = 'PO.RSKI.XREF FILE IS MISSING'; GOTO 93000
+END
+OPEN '','PO' TO PO ELSE
+   ERRMSG = 'PO FILE IS MISSING'; GOTO 93000
+END
+OPEN '','SLIT.TRANS' TO SLIT.TRANS ELSE
+   ERRMSG = 'SLIT.TRANS FILE IS MISSING'; GOTO 93000
+END
+OPEN '','SECURITY' TO SECURITY ELSE
+   ERRMSG = 'SECURITY FILE IS MISSING'; GOTO 93000
+END
+OPEN '','INV_SERIAL' TO INV_SERIAL ELSE
+   ERRMSG='INV_SERIAL FILE IS MISSING'; GOTO 93000
+END
+OPEN '','INV_RECEIPTS' TO INV_RECEIPTS ELSE
+   ERRMSG='INV_RECEIPTS IS MISSING'; GOTO 93000
+END
+OPEN '','INV_RECP_WHSE' TO INV_RECP_WHSE ELSE
+   ERRMSG='INV_RECP_WHSE IS MISSING';GOTO 93000
+END
+OPEN '','DIVISION' TO DIVISION ELSE
+   ERRMSG = 'DIVISION IS MISSING'; GOTO 93000
+END
+*T27339 v
+OPEN '','INV_SERIAL_DELETED' TO INV_SERIAL_DELETED ELSE
+   ERRMSG='INV_SERIAL_DELETED FILE IS MISSING'; GOTO 93000
+END
+*T27339 ^
+GOSUB INITIALIZE ; GOSUB INIT.SLT.LOG
+MAT COMP.REC = ''
+CONO = ''
+CALL GET.CONO(CONO,MAT COMP.REC)
+IF CONO = 'END' THEN GOTO 99999
+*
+*---- SETUP GEN.XREF FOR PRODUCT
+*
+ITEM.LIST = "" ; * T27339
+OPEN.FLAG=1
+MAT GEN.XREF.REC = ""
+GXR.CO = CONO
+ECD.SCRN.CNT = 4
+ECD.SCRN.NAME<1> = 'PAP.SLIT.MAINT'
+ECD.SCRN.NAME<2> = 'INV.PAP.MAINT'
+ECD.SCRN.NAME<3> = 'WHSE.INV.REG.MAINT'
+ECD.SCRN.NAME<4> = 'PROD.VEND.MAINT'
+ECD.ACTION=1; CALL SCRN.EDIT
+ECD.SCRN.NO = 1
+EQU ESN TO ECD.SCRN.NO
+;*
+;*  Main Loop
+;*
+DONE=0
+LOOP
+100*
+   MAT SCV.REC = '' ; MAT SLT.REC='' ; MAT HOLD.SLT.REC=''
+   ECD.ACTION=6; CALL SCRN.EDIT
+*100*
+   ERR=''
+   GOSUB ENT.SLIT.CODE
+   IF NOT(ERR) THEN
+      IF (NEW) THEN             ;* T26556
+         GOSUB ENT.DIVISION
+         IF ERR THEN GOTO 100
+      END                       ;* T26556 
+   END ELSE
+      DONE=1
+   END
+UNTIL (DONE) DO
+   IF NEW THEN
+      SPTR = 1
+      LOOP
+         ON SPTR GOSUB ENT.ENTRY.DATE,ENT.PERIOD,ENT.PARENT.SERIAL,ENT.PARENT.WHSE,ENT.PARENT.LOC
+         IF (SPTR>=1 AND SPTR<=3) AND ECD.RET.VALUE='END' THEN 
+            GOTO 100
+         END ELSE
+            IF ECD.RET.VALUE = 'END' THEN
+               SPTR = SPTR - 1
+            END
+         END
+      WHILE SPTR >= 1 AND SPTR <=5 DO REPEAT
+      GOSUB GET.USED.SLIT.TRIM.AMT
+      IF NOT(ERR) THEN
+         GOSUB BUILD.PARENT.LINE
+         ECD.ACTION=3; CALL SCRN.EDIT 
+         MAT SAVE.INV.REC = MAT INV.REC
+         MAT SAVE.ICR.REC = MAT INV.CNV.REC
+         EOA=0
+         LN=1
+         LOOP
+            GOSUB ENT.CHILD.LINE
+            LN+=1
+         UNTIL (EOA) DO REPEAT
+      END ELSE
+         GOTO 100
+      END
+   END ELSE
+      INV.ID=CONO:SLT.LOG.PROD
+      MATREAD INV.REC FROM INVENTORY,INV.ID THEN
+         GOSUB GET.INV.UM.CNV
+         SLT.LOG.USED.STK.QTY=INT(((SLT.LOG.USED.QTY/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+         GOSUB BUILD.PARENT.LINE
+         GOSUB BUILD.CHILD.LINES
+         ECD.ACTION=3;CALL SCRN.EDIT
+      END
+   END
+   GOSUB ENT.OPTION
+   RELEASE ; NEW=0
+REPEAT
+GOTO 99999
+*
+*************************************************************************
+********** S U B R O U T I N E S ****************************************
+*************************************************************************
+*
+***************
+ENT.OPTION: 
+***************
+*
+EOP=0
+LOOP
+   ECD.NUM=28
+   ECD.ACTION=4; CALL SCRN.EDIT
+   OPTION = ECD.RET.VALUE
+   BEGIN CASE
+      CASE OPTION = 'END' OR OPTION = 'E'
+         IF SLIT.CODE = 'N' THEN RELEASE SLIT.TRANS, CONO:SLIT.CODE
+         EOP=1
+*T27653 v
+      CASE OPTION = 1
+         SPTR=1
+         GOSUB ENT.ENTRY.DATE
+      CASE OPTION = 2
+         IF CO.ICS.PERIOD.FLG # 'Y' THEN
+            SPTR=2
+            GOSUB ENT.PERIOD
+         END ELSE
+            ERRMSG='Must change date to change the period.'
+            GOSUB 91000
+         END
+*T27653 ^
+      CASE OPTION = 'A'
+         LN=DCOUNT(SLT.SLIT.PROD,VM)+1
+         GOSUB ENT.CHILD.LINE   
+      CASE OPTION = 'C'
+         MODE='C'
+         MAT HOLD.SLT.REC= MAT SLT.REC
+         GOSUB ENT.LINE.NUM
+         IF (LNO) THEN
+            LN = LNO
+            INV.ID=CONO:SLT.SLIT.PROD<1,LN>
+            MATREAD INV.REC FROM INVENTORY,INV.ID ELSE
+               MAT INV.REC = ""; INV.FULL.DESC = UNKNOWN
+               INV.M.WT = 1; INV.SBR = 1
+            END
+            GOSUB ENT.CHILD.LINE
+         END
+         MODE=''
+      CASE OPTION = 'D'
+         GOSUB ENT.LINE.NUM
+         IF LNO THEN
+            LN = LNO
+            GOSUB DELETE.LINE
+         END
+      CASE OPTION = 'S'
+         START +=PAGE.SIZE
+         IF START>DCOUNT(SLT.SLIT.PROD,VM) THEN START=1
+         GOSUB BUILD.CHILD.LINES
+         GOSUB DISP.CHILD.LINES
+      * T25978 v
+      CASE OPTION = 'SR'
+         START -= PAGE.SIZE
+         IF START < 1 THEN START = 1
+         GOSUB BUILD.CHILD.LINES
+         GOSUB DISP.CHILD.LINES
+      CASE OPTION = 'ST'
+         START = 1
+         GOSUB BUILD.CHILD.LINES
+         GOSUB DISP.CHILD.LINES
+      CASE OPTION = 'SB'
+         START = DCOUNT(SLT.SLIT.PROD,VM)
+         GOSUB BUILD.CHILD.LINES
+         GOSUB DISP.CHILD.LINES
+      * T25978 ^
+      CASE OPTION = 'P'
+         FOR P = 1 TO DCOUNT(SLT.SLIT.PROD,VM)
+            IWH.ID = CONO:SLT.SLIT.PROD<1,P>:"!":SLT.SLIT.WHSE<1,P>
+            MATREADU INV.STAT.REC FROM INV.STATS, IWH.ID THEN
+               LOCATE SLIT.CODE IN ISTAT.PO<1>,1 SETTING PFND THEN
+                  DEL ISTAT.PO<1,PFND>
+                  DEL ISTAT.PO.VEND<1,PFND>
+                  DEL ISTAT.PO.DATE<1,PFND>
+                  DEL ISTAT.PO.QTY<1,PFND>
+                  DEL ISTAT.PO.JOB<1,PFND>
+                  DEL ISTAT.PO.JOB.QTY<1,PFND>
+                  DEL ISTAT.PO.JOB.AMT<1,PFND>
+               END
+               IF ISTAT.PO = '' AND ISTAT.JOB = '' THEN
+                  DELETE INV.STATS, IWH.ID
+               END ELSE
+                  MATWRITE INV.STAT.REC ON INV.STATS, IWH.ID
+               END
+            END ELSE RELEASE INV.STATS, IWH.ID
+         NEXT P
+         DELETE SLIT.TRANS, CONO:SLIT.CODE
+         EOP = 1
+      CASE OPTION = 'F'
+         IF SLT.SLIT.PROD = '' THEN
+            ERRMSG='Cannot file without at least one slit product'
+            GOSUB 91000
+         END ELSE
+            SLT.OPER.ID = OPER.ID
+            IF SLT.LOG.TRIM.QTY + 0 # 0 THEN
+               ECD.NUM = 39
+               ECD.PMSG="YOU HAVE A TRIM VALUE OF ":OCONV(SLT.LOG.TRIM.QTY/10,"MD2"):" ":SLT.LOG.CST.UOM:". IS THIS OKAY? (Y/N)"
+               ECD.ACTION = 4 ; CALL SCRN.EDIT
+               VALUE = ECD.RET.VALUE
+               IF VALUE = 'Y' THEN
+                  IF SLT.LOG.TRIM.QTY + 0 # 0 THEN
+                     ECD.NUM = 39
+                     ECD.PMSG="YOU HAVE A TRIM VALUE OF ":OCONV(SLT.LOG.TRIM.AMT,"MD2"):". DISTRIBUTE TRIM PROPORTIONALLY? (Y/N)"
+                     ECD.ACTION = 4 ; CALL SCRN.EDIT
+                     VALUE = ECD.RET.VALUE 
+                  END
+                  IF VALUE = "Y" THEN SLT.PRO.CODE = "Y" ELSE SLT.PRO.CODE = "N"
+                  IF SLIT.CODE = "N" THEN
+                     FND = 1
+                     READU SLIT.SEQ FROM CONTROL, CONO:"SLITCODE" ELSE SLIT.SEQ = "1"
+                     LOOP
+                     WHILE FND DO
+                        SLIT.CODE = STR("0",6-LEN(SLIT.SEQ)):SLIT.SEQ
+                        SLIT.SEQ = SLIT.CODE + 1
+                        IF SLIT.SEQ > 999999 THEN SLIT.SEQ = 1
+                        SLIT.ID = SLIT.CODE:"S"
+                        READU REC FROM SLIT.TRANS, CONO:SLIT.ID ELSE
+                           READU REC FROM PO, CONO:SLIT.ID ELSE FND = 0
+                        END
+                        REC = ""
+                        IF FND THEN RELEASE SLIT.TRANS, CONO:SLIT.ID
+                     REPEAT
+                     WRITE SLIT.SEQ ON CONTROL, CONO:"SLITCODE"
+                     ECD.NUM = 1; SCV.REC(1)<1> = SLIT.ID
+                     SLIT.CODE=SLIT.ID
+                     ECD.ACTION = 5; CALL SCRN.EDIT
+                     ERRMSG = 'Note new Slit Transaction number';GOSUB 91000
+                  END
+                  FOR P = 1 TO DCOUNT(SLT.SLIT.PROD,VM)
+                     IWH.ID = CONO:SLT.SLIT.PROD<1,P>:"!":SLT.SLIT.WHSE<1,P>
+                     MATREADU INV.STAT.REC FROM INV.STATS, IWH.ID ELSE MAT INV.STAT.REC = ""
+                     LOCATE SLIT.CODE IN ISTAT.PO<1>,1 SETTING PFND ELSE
+                        ISTAT.PO<1,PFND> = SLIT.CODE
+                        ISTAT.PO.VEND<1,PFND> = OPER.ID
+                        ISTAT.PO.DATE<1,PFND> = SLT.ENT.DATE
+                        ISTAT.PO.QTY<1,PFND> = ''
+                        ISTAT.PO.JOB<1,PFND> = ""
+                        ISTAT.PO.JOB.QTY<1,PFND> = ""
+                        ISTAT.PO.JOB.AMT<1,PFND> = ""
+                     END
+                     ISTAT.PO.QTY<1,PFND> = SLT.SLIT.CST.QTY<1,P>
+                     IF ISTAT.PO = '' AND ISTAT.JOB = '' THEN
+                        DELETE INV.STATS, IWH.ID
+                     END ELSE
+                        MATWRITE INV.STAT.REC ON INV.STATS, IWH.ID
+                     END
+                  NEXT P
+                  MATWRITE SLT.REC ON SLIT.TRANS, CONO:SLIT.CODE
+                  GOSUB GENERATE.BARCODES
+                  MATWRITE SLT.REC ON SLIT.TRANS, CONO:SLIT.CODE
+                  EOP=1
+               END
+            END ELSE
+               IF SLIT.CODE = "N" THEN
+                  FND = 1
+                  READU SLIT.SEQ FROM CONTROL, CONO:"SLITCODE" ELSE SLIT.SEQ = "1"
+                  LOOP
+                  WHILE FND DO
+                     SLIT.CODE = STR("0",6-LEN(SLIT.SEQ)):SLIT.SEQ
+                     SLIT.SEQ = SLIT.CODE + 1
+                     IF SLIT.SEQ > 999999 THEN SLIT.SEQ = 1
+                     READU REC FROM SLIT.TRANS, CONO:SLIT.CODE:"S" ELSE
+                        READU REC FROM PO, CONO:SLIT.CODE:"S" ELSE FND = 0
+                     END
+                     REC = ""
+                     IF FND THEN RELEASE SLIT.TRANS, CONO:SLIT.CODE:"S"
+                  REPEAT
+                  WRITE SLIT.SEQ ON CONTROL, CONO:"SLITCODE"
+                  SLIT.CODE = SLIT.CODE:"S"
+                  ECD.NUM = 1; SCV.REC(1)<1> = SLIT.CODE
+                  ECD.ACTION = 5; CALL SCRN.EDIT
+                  ERRMSG = 'Note new Slit Transaction number';GOSUB 91000
+               END
+               FOR P = 1 TO DCOUNT(SLT.SLIT.PROD,VM)
+                  IWH.ID = CONO:SLT.SLIT.PROD<1,P>:"!":SLT.SLIT.WHSE<1,P>
+                  MATREADU INV.STAT.REC FROM INV.STATS, IWH.ID ELSE MAT INV.STAT.REC = ""
+                  LOCATE SLIT.CODE IN ISTAT.PO<1>,1 SETTING PFND ELSE
+                     ISTAT.PO<1,PFND> = SLIT.CODE
+                     ISTAT.PO.VEND<1,PFND> = OPER.ID
+                     ISTAT.PO.DATE<1,PFND> = SLT.ENT.DATE
+                     ISTAT.PO.QTY<1,PFND> = ''
+                     ISTAT.PO.JOB<1,PFND> = ""
+                     ISTAT.PO.JOB.QTY<1,PFND> = ""
+                     ISTAT.PO.JOB.AMT<1,PFND> = ""
+                  END
+                  ISTAT.PO.QTY<1,PFND> = SLT.SLIT.CST.QTY<1,P>
+                  IF ISTAT.PO = '' AND ISTAT.JOB = '' THEN
+                     DELETE INV.STATS, IWH.ID
+                  END ELSE
+                     MATWRITE INV.STAT.REC ON INV.STATS, IWH.ID
+                  END
+               NEXT P
+               MATWRITE SLT.REC ON SLIT.TRANS, CONO:SLIT.CODE
+               GOSUB GENERATE.BARCODES
+               MATWRITE SLT.REC ON SLIT.TRANS, CONO:SLIT.CODE
+               EOP = 1
+            END
+         END
+   END CASE
+UNTIL (EOP) DO REPEAT
+RETURN
+*
+****************
+ENT.CHILD.LINE: 
+****************
+*
+MAT HOLD.SLT.REC=MAT SLT.REC
+SCV.REC(17)<ESN,LN>=LN 
+ECD.NUM=17;ECD.SUB.NUM=LN;ECD.ACTION=5;CALL SCRN.EDIT
+GOSUB ENT.CHILD.PROD
+IF NOT(ERR) THEN
+   BAIL.OUT=0
+   FOR AA=1 TO 3 UNTIL (BAIL.OUT)
+      ON AA GOSUB ENT.NUM.OF.CUTS,ENT.CHILD.WHSE,ENT.CHILD.LOC
+      IF (ERR) THEN 
+         BAIL.OUT=1 ;* LN-=1
+         EOA=1
+         MAT SLT.REC=MAT HOLD.SLT.REC
+         IF MODE='C' THEN
+            GOSUB BUILD.CHILD.LINES
+            ECD.ACTION=3;CALL SCRN.EDIT
+         END ELSE
+            GOSUB CLEAR.CURR.LINE
+         END
+      END
+   NEXT AA
+* T26556 v
+*   IF NOT(ERR) THEN
+*     GOSUB CALC.SLIT.AMT
+*     IF (ERR) THEN
+*       MAT SLT.REC= MAT HOLD.SLT.REC
+*       LN -=1
+*     END
+*   END
+* T26556 ^
+END ELSE
+   EOA=1
+   SCV.REC(17)<ESN,LN>=''
+   ECD.NUM=17;ECD.SUB.NUM=LN;ECD.ACTION=5;CALL SCRN.EDIT
+END
+RETURN
+*
+***************
+ENT.CHILD.PROD: 
+***************
+*
+EOI1=0
+LOOP
+   ERR=0
+   EOI2=0
+   LOOP
+      ECD.NUM=18 ; ECD.SUB.NUM=LN ; ECD.ACTION=4
+      IF SLT.SLIT.PROD<1,LN>#"" THEN
+         ECD.DEFAULT = SLT.SLIT.PROD<1,LN>
+      END
+      CALL SCRN.EDIT
+      BEGIN CASE
+         CASE ECD.RET.VALUE='END'
+            EOI1=1;EOI2=1;ERR=1
+            GOSUB DELETE.LINE
+         CASE ECD.RET.VALUE=''
+            ECD.NUM=19 ; ECD.SUB.NUM=LN ; ECD.ACTION=4
+            ECD.HMSG='Enter a partial description to display cross reference'
+            CALL SCRN.EDIT
+            BEGIN CASE
+               CASE ECD.RET.VALUE='END' OR ECD.RET.VALUE=''
+                  EOI2=1 ; ERR=1
+               CASE 1
+                  GXR.NAME = "INV.PAP"
+                  GXR.FILE = INVENTORY
+                  GXR.XREF = INVENTORY.XREF
+                  GXR.ID = ""
+                  GXR.SRCH.ID = ECD.RET.VALUE
+                  CALL GEN.XREF.SUB(MAT GEN.XREF.REC,PREFIX,XREF.DATA)
+                  ECD.ACTION=2;CALL SCRN.EDIT
+                  ECD.ACTION=3;CALL SCRN.EDIT
+                  IF GXR.ID = "" THEN
+                     EOI2=1 ; ERR=1
+                  END ELSE
+                     CPROD=GXR.ID
+                     ECD.NUM=18 ; ECD.SUB.NUM=LN 
+                     SCV.REC(18)<ESN,LN>=CPROD ; ECD.ACTION=5
+                     CALL SCRN.EDIT
+                  END
+            END CASE
+         CASE 1
+            CPROD=ECD.RET.VALUE
+      END CASE
+      IF NOT(ERR) THEN
+         INV.ID=CONO:CPROD
+         MATREAD INV.REC FROM INVENTORY, INV.ID THEN
+            EOI2=1
+         END ELSE
+            ECD.NUM=31 ; ECD.ACTION=4 ; CALL SCRN.EDIT
+            P_X = 0;P_Y = 21;P_VALUE = "";P_OPT = "CL"
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            IF ECD.RET.VALUE = 'Y' THEN
+               MATREAD SAVE.INV.REC FROM INVENTORY,INV.ID ELSE NULL
+               MATREAD SAVE.IWH.REC FROM INV.WHSE,IWH.ID ELSE NULL
+               SAVE.IWH.REC(4) = SLT.LOG.UN.PRICE
+               CALL SLIT.INV.PAP.MAINT(CONO,INV.ID[4,99],MAT SAVE.INV.REC,MAT SAVE.IWH.REC)
+               ECD.SCRN.NO = 1
+               GOSUB BUILD.PARENT.LINE
+               GOSUB BUILD.CHILD.LINES
+               ECD.ACTION=3 ; CALL SCRN.EDIT
+               LINES = DCOUNT(SLT.SLIT.PROD,VM)
+               ECD.DEFAULT=INV.ID[4,99]
+            END
+         END
+         IF INV.M.WT > LOG.M.WT THEN
+            ERRMST="M.WEIGHT OF A LOG CANNOT BE LESS THEN M.WEIGHT OF A SLIT."
+            ERR=1
+         END
+      END
+   UNTIL (EOI2) DO REPEAT
+   IF NOT(ERR) THEN
+      LOCATE CPROD IN SLT.SLIT.PROD<1>,1 SETTING SPFND THEN
+         IF LN # SPFND THEN
+            ERRMSG= "Product ":CPROD:" has already been entered on line "
+            ERRMSG :=SPFND
+            GOSUB 91000;ERR=1
+         END
+      END
+      IF NOT(ERR) THEN
+         IF SLT.LOG.STK.UOM = INV.UNIT<1,2> THEN
+            READ LOGLINE FROM CATEGORY, CONO:LOG.INV.LINE ELSE LOGLINE=''
+            IF LOG.INV.LINE # INV.LINE AND LOGLINE<8> # "S" THEN
+               ERRMSG = "The Product Line of the SLIT roll must match the PARENT."
+               GOSUB 91000
+            END ELSE
+               IF LOG.COLOR = INV.COLOR THEN
+                  ;* Only ROLL or SKID product can be used as
+                  ;* SLIT detail on a LOG. 
+                  IF INV.PAP.TYPE = "ROLL" OR INV.PAP.TYPE = "LROLL" OR INV.PAP.TYPE = "PCOAT" OR INV.PAP.TYPE = "SHEET" THEN
+                     ;* LOG product can not be used as SLIT detail products.
+                     IF INV.ID[4,99] # SLT.LOG.PROD THEN
+                        EOI1=1
+                        CATG.ID=CONO:INV.LINE
+                        MATREAD CATG.REC FROM CATEGORY,CATG.ID ELSE MAT CATG.REC=''
+                        GOSUB GET.INV.UM.CNV
+                        SLT.SLIT.PROD<1,LN> = CPROD
+                        SLT.SLIT.STK.UOM<1,LN> = INV.UNIT<1,2>
+                        SLT.SLIT.CST.UOM<1,LN> = INV.UNIT<1,3>
+                        SLT.SLIT.DESC<1,LN> = INV.FULL.DESC
+                        ECD.NUM=19;ECD.SUB.NUM=LN
+                        SCV.REC(19)<ESN,LN>=INV.FULL.DESC
+                        ECD.ACTION=5;CALL SCRN.EDIT
+                        ECD.NUM=23;ECD.SUB.NUM=LN
+                        SCV.REC(23)<ESN,LN>=INV.UNIT<1,2>
+                        ECD.ACTION=5;CALL SCRN.EDIT
+                        ECD.NUM=24;ECD.SUB.NUM=LN
+                        SCV.REC(24)<ESN,LN>=INV.UNIT<1,3>
+                        ECD.ACTION=5;CALL SCRN.EDIT
+                     END ELSE
+                        ERRMSG = "You can NOT put the PARENT as a SLIT product for itself."
+                        GOSUB 91000
+                     END
+                  END ELSE
+                     ERRMSG = "Cannot put a non-ROLL or non-SKID product type on this screen."
+                     GOSUB 91000
+                  END
+               END ELSE
+                  ERRMSG = "The Color of the SLIT roll must match the PARENT."
+                  GOSUB 91000
+               END
+            END
+         END ELSE
+            ERRMSG = "The Stocking UOM of the SLIT roll must match the PARENT."
+            GOSUB 91000
+         END
+      END
+   END
+UNTIL (EOI1) DO REPEAT
+RETURN
+*
+****************
+ENT.NUM.OF.CUTS: 
+****************
+*
+EOI=0
+LOOP
+   ERR=0
+   SAVE.CUTS = SLT.SLIT.CUTS<1,LN>
+   ECD.NUM=20;ECD.SUB.NUM=LN;ECD.ACTION=4
+   IF SLT.SLIT.CUTS<1,LN> # "" THEN
+      ECD.DEFAULT=SLT.SLIT.CUTS<1,LN>
+      ECD.O.R = 'O'
+   END
+   CALL SCRN.EDIT
+   IF ECD.RET.VALUE = 'END' THEN
+      EOI=1 ; ERR=1
+   END ELSE
+      EOI=1
+      SLT.SLIT.CUTS<1,LN> = ECD.RET.VALUE
+* T26556 v
+      GOSUB CALC.SLIT.AMT
+      IF (ERR) THEN
+         EOI = 0 ; SLT.SLIT.CUTS<1,LN> = SAVE.CUTS
+         MAT SLT.REC=MAT HOLD.SLT.REC
+         GOSUB BUILD.PARENT.LINE
+         GOSUB BUILD.CHILD.LINES
+         ECD.ACTION=3;CALL SCRN.EDIT
+         ERR = 0 ; ERRMSG = ''
+      END
+* T26556 ^
+   END
+UNTIL (EOI) DO REPEAT
+RETURN
+*
+*****************
+ENT.CHILD.WHSE: 
+*****************
+*
+WCNT=DCOUNT(INV.WHSE.CODE,VM)
+WLIST='WAREHOUSE - '
+FOR W=1 TO WCNT
+   WLIST = WLIST : ', ' :INV.WHSE.CODE<1,W>     
+NEXT W
+EOI=0
+LOOP
+   ERR=''
+   WCNT = DCOUNT(INV.WHSE.CODE,VM)
+   IF WCNT = 1 THEN
+      SAVE.WHSE = INV.WHSE.CODE<1,1>
+      SLT.SLIT.WHSE<1,LN> = SAVE.WHSE
+      ECD.NUM=21 ; ECD.SUB.NUM=LN ; ECD.ACTION=5
+      SCV.REC(21)<ESN>=SAVE.WHSE
+      CALL SCRN.EDIT
+   END ELSE
+      ECD.NUM=21;ECD.SUB.NUM=LN
+      ECD.DEFAULT=INV.WHSE.CODE<1,1>
+      ECD.HMSG="Enter a valid warehouse or '???' for a list of valid warehouses"
+      ECD.ACTION=4 ; CALL SCRN.EDIT
+      BEGIN CASE
+         CASE ECD.RET.VALUE = 'END'
+            EOI=1 ; ERR=1
+            GOSUB CLEAR.CURR.LINE
+         CASE 1
+            SAVE.WHSE = ECD.RET.VALUE
+            LOCATE ECD.RET.VALUE IN INV.WHSE.CODE<1>,1 SETTING WFND ELSE
+               ECD.NUM=32;ECD.SUB.NUM=LN
+               ECD.ACTION=4 ; CALL SCRN.EDIT
+               IF ECD.RET.VALUE='Y' THEN
+                  IWH.ID=CONO:SLT.LOG.PROD:"!":SLT.LOG.WHSE
+                  MATREAD SAVE.IWH.REC FROM INV.WHSE,IWH.ID ELSE NULL
+                  SAVE.IWH.REC(4) = SLT.LOG.UN.PRICE
+                  CALL SLIT.WHSE.MAINT(SLT.SLIT.PROD<1,LN>,CONO,SAVE.WHSE,MAT SAVE.IWH.REC)
+                  SLT.SLIT.WHSE<1,LN> = SAVE.WHSE
+                  ECD.SCRN.NO = 1
+                  ECD.ACTION=2; CALL SCRN.EDIT
+                  MAT SCV.REC = ''
+                  GOSUB BUILD.PARENT.LINE
+                  GOSUB BUILD.CHILD.LINES
+                  ECD.ACTION=3;CALL SCRN.EDIT
+                  LINES = DCOUNT(SLT.SLIT.PROD,VM)
+               END ELSE
+                  ERR=1
+               END
+            END
+            IF NOT(ERR) THEN
+               SLT.SLIT.WHSE<1,LN> = SAVE.WHSE
+            END
+      END CASE
+   END
+   IF NOT(ERR) THEN
+      * T26497 v
+      IF CO.INTR.WHSE # '' AND SAVE.WHSE = CO.INTR.WHSE THEN
+         ERRMSG = 'CANNOT APPLY, USING AN INTER-DIVISIONAL WHSE IS RESTRICTED'
+         GOSUB 91000 ; SLT.SLIT.WHSE<1,LN>=''
+      END ELSE
+      * T26497 ^
+         IWH.ID = CONO:SLT.SLIT.PROD<1,LN>:"!":SAVE.WHSE
+         MATREAD IWH.REC FROM INV.WHSE, IWH.ID THEN
+            MATREAD WHSE.REC FROM WAREHOUSE,CONO:SAVE.WHSE ELSE MAT WHSE.REC = ''
+            IF WHS.DIV='' THEN WHS.DIV=GEN.DIV
+            IF WHS.DIV# SLT.DIVISION THEN
+               ERRMSG= 'Warehouse belongs to division ': WHS.DIV
+            END
+            IF ERRMSG # '' THEN
+               GOSUB 91000
+               SLT.SLIT.WHSE<1,LN>=''
+            END ELSE
+               ERRMSG = "" ; * CM
+               EOI=1
+            END
+         END ELSE
+            ERRMSG='INV.WHSE record ':IWH.ID:' is not on file.'
+            GOSUB 91000
+         END
+      END             ;* T26497
+   END
+UNTIL (EOI) DO REPEAT
+RETURN
+*
+******************
+ENT.CHILD.LOC: 
+******************
+*
+LCNT = DCOUNT(IWH.LOC,VM)
+LLIST='LOCATION - '
+FOR L = 1 TO LCNT
+   LLIST:=', ':IWH.LOC<1,L>
+NEXT L
+EOI=0
+LOOP
+   IF LCNT = 1 THEN
+      ECD.DEFAULT = IWH.LOC<1,1>
+      ECD.O.R = 'O'
+   END
+   IF SLT.SLIT.LOC<1,LN> # "" THEN
+      ECD.DEFAULT=SLT.SLIT.LOC<1,LN>
+      ECD.O.R = 'O'
+   END
+   ECD.HMSG="Enter a location or '???' for a list of existing locations"
+   ECD.NUM=22 ; ECD.SUB.NUM =LN
+   ECD.ACTION=4 ; CALL SCRN.EDIT
+   BEGIN CASE
+      CASE ECD.RET.VALUE = 'END'
+         GOSUB CLEAR.CURR.LINE
+         EOI=1 ; ERR=1
+*    CASE VALUE = '???'
+*      X=0; Y=23; TYP=11; MAXL=1
+*      PMSG=LLIST
+*      CALL EDIT.SUB
+*      P_X  = 0 ; P_Y = 23 ; P_VALUE = "" ; P_OPT = "CL"
+*      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      CASE 1
+         EOI=1
+         SLT.SLIT.LOC<1,LN> = ECD.RET.VALUE
+   END CASE
+UNTIL (EOI) DO REPEAT
+RETURN
+*
+**************
+CALC.SLIT.AMT: 
+**************
+*
+*IF @LOGNAME='lross' THEN DEBUG
+ERR=0
+IF NOT(ERR) THEN
+   SAVE.STK.QTY = SLT.SLIT.STK.QTY<1,LN>
+   SAVE.CST.QTY = SLT.SLIT.CST.QTY<1,LN>
+   SAVE.AMT = SLT.SLIT.AMT<1,LN>
+   IF INV.UNIT<1,2>='LBS' AND INV.UNIT<1,3>='LBS' THEN
+*T27653 v
+*T27339 v
+*        SLT.SLIT.STK.QTY<1,LN>=(SLT.LOG.USED.STK.QTY/(LOG.PAP.WIDTH/10000)*(INV.PAP.WIDTH/10000)*SLT.SLIT.CUTS<1,LN>)
+*        SLT.SLIT.STK.QTY<1,LN>=(SLT.LOG.USED.STK.QTY/(LOG.PAP.WIDTH/10000)*(INV.PAP.WIDTH/10000) / SLT.SLIT.CUTS<1,LN>)
+      SLT.SLIT.STK.QTY<1,LN> = SLT.LOG.USED.STK.QTY
+*T27339 ^
+*        SLT.SLIT.STK.QTY<1,LN>=INT(SLT.SLIT.STK.QTY<1,LN>+.5)
+*T27339 v
+*        SLT.SLIT.CST.QTY<1,LN>=((SLT.LOG.USED.QTY/1000)/(LOG.PAP.WIDTH/10000)*(INV.PAP.WIDTH/10000)*SLT.SLIT.CUTS<1,LN>)
+*        SLT.SLIT.CST.QTY<1,LN>=((SLT.LOG.USED.QTY/1000)/(LOG.PAP.WIDTH/10000)*(INV.PAP.WIDTH/10000) / SLT.SLIT.CUTS<1,LN>)
+*T27339 ^
+*        SLT.SLIT.CST.QTY<1,LN>=INT(SLT.SLIT.CST.QTY<1,LN>+.5)
+*        SLT.SLIT.CST.QTY<1,LN> = SLT.SLIT.CST.QTY<1,LN> * 1000
+      SLT.SLIT.CST.QTY<1,LN> = SLT.LOG.USED.QTY
+   END ELSE
+      ;*# of cuts is actually pieces out. So if we have 1000 sheets and 
+      ;* number of pieces out is 2 we would end up with 2000 sheets but
+      ;* total weight would not change
+*T27339 v I reversed the * following LMR 08-19-03 T27653
+      SLT.SLIT.STK.QTY<1,LN> = SLT.LOG.USED.STK.QTY * SLT.SLIT.CUTS<1,LN>
+*        SLT.SLIT.STK.QTY<1,LN> = SLT.LOG.USED.STK.QTY / SLT.SLIT.CUTS<1,LN>
+*T27339 ^
+      ;* now we take stocking qty and convert it back to costing and see 
+      ;*if we end up with more costing qty than we started with. For examp.
+      ;* we made to many cuts.
+      SLT.SLIT.CST.QTY<1,LN>=INT(((SLT.SLIT.STK.QTY<1,LN>*ICR.DV1)/ICR.MT1)*ICR.DV2+.5)
+*LMR     SLT.SLIT.CST.QTY<1,LN>=INT((((SLT.SLIT.STK.QTY<1,LN>*ICR.DV1)/ICR.MT1)*ICR.DV2+.5) / 1000)
+   END
+   IF INV.UNIT<1,2>="SHT" AND INV.UNIT<1,3>="LBS" THEN
+      SLT.SLIT.CST.QTY<1,LN> = INT(SLT.SLIT.CST.QTY<1,LN> / 1000 + .5) * 1000
+   END
+   IF INV.UNIT<1,3> = 'MSI' AND INV.UNIT<1,2> # 'MSI' THEN
+      IF ABS(SLT.LOG.TRIM.QTY - SLT.SLIT.CST.QTY<1,LN>) < 50 THEN
+         SLT.SLIT.CST.QTY<1,LN> = SLT.LOG.TRIM.QTY
+      END
+   END
+*    SLT.SLIT.AMT<1,LN> = INT((SLT.SLIT.CST.QTY<1,LN>/1000)*(SLT.LOG.UN.PRICE/10000)+.5)
+   SLT.SLIT.AMT<1,LN> = ((SLT.SLIT.CST.QTY<1,LN>/1000)*(SLT.LOG.UN.PRICE/10000))
+   SLT.SLIT.AMT<1,LN>=ICONV(SLT.SLIT.AMT<1,LN>,"MD2")
+*
+*T27653 v
+   IF SLT.SLIT.STK.UOM<1,LN> = 'SHT' OR SLT.SLIT.STK.UOM<1,LN>='FT' OR SLT.SLIT.STK.UOM<1,LN>='PC' THEN
+      TMP.QTY = OCONV(ICONV(SLT.SLIT.STK.QTY<1,LN>,"MD2"),"MD2")
+   END ELSE TMP.QTY = SLT.SLIT.STK.QTY<1,LN>
+*T27653 ^
+   ECD.NUM=25;ECD.SUB.NUM=LN;ECD.ACTION=5
+   SCV.REC(25)<ESN,LN>=TMP.QTY; CALL SCRN.EDIT
+*IF @LOGNAME='lross' THEN DEBUG
+   TMP.QTY=SLT.SLIT.CST.QTY<1,LN>/10
+   ECD.NUM=26;ECD.SUB.NUM=LN;ECD.ACTION=5
+   SCV.REC(26)<ESN,LN>=TMP.QTY;CALL SCRN.EDIT
+   ECD.NUM=27;ECD.SUB.NUM=LN;ECD.ACTION=5
+   SCV.REC(27)<ESN,LN>=SLT.SLIT.AMT<1,LN>;CALL SCRN.EDIT
+*IF @LOGNAME='lross' THEN DEBUG
+*
+   IF SAVE.CUTS # SLT.SLIT.CUTS<1,LN> THEN
+      SLT.LOG.SLIT.QTY= SLT.LOG.SLIT.QTY-(SAVE.CST.QTY+0)+SLT.SLIT.CST.QTY<1,LN>
+      SLT.LOG.SLIT.AMT = SLT.LOG.SLIT.AMT - (SAVE.AMT+0) + SLT.SLIT.AMT<1,LN>
+      SLT.LOG.TRIM.QTY = SLT.LOG.TRIM.QTY + (SAVE.CST.QTY+0) - SLT.SLIT.CST.QTY<1,LN>
+      SLT.LOG.TRIM.AMT = SLT.LOG.TRIM.AMT + (SAVE.AMT+0) - SLT.SLIT.AMT<1,LN>
+      GOSUB BUILD.PARENT.LINE
+      ECD.ACTION=3 ; CALL SCRN.EDIT
+      LINES = DCOUNT(SLT.SLIT.PROD,VM)
+   END
+   IF SLT.LOG.TRIM.QTY < 0 THEN
+      ERRMSG='Slit quantity total is greater than parent product quantity.'
+      GOSUB 91000 ; ERR=1
+   END
+END
+RETURN
+*
+*************************************************************************
+*
+******************
+BUILD.CHILD.LINES: 
+******************
+*
+SCV.REC(23)<ESN>=SLT.SLIT.STK.UOM<1,1>
+SCV.REC(24)<ESN>=SLT.SLIT.CST.UOM<1,1>
+SCV.REC(18)<ESN>=SLT.SLIT.PROD
+SCV.REC(19)<ESN>=SLT.SLIT.DESC
+SCV.REC(20)<ESN>=SLT.SLIT.CUTS
+SCV.REC(21)<ESN>=SLT.SLIT.WHSE
+SCV.REC(22)<ESN>=SLT.SLIT.LOC
+LN.CNT=DCOUNT(SLT.SLIT.STK.QTY,VM)
+SCV.REC(17)<ESN>='';SCV.REC(25)<ESN>=''
+SCV.REC(26)<ESN>='';SCV.REC(27)<ESN>=''
+FOR N=1 TO LN.CNT
+   SCV.REC(17)<ESN,N>=N  
+*T27653 v
+   IF SLT.SLIT.STK.UOM<1,N> = 'SHT' OR SLT.SLIT.STK.UOM<1,N>='FT' OR SLT.SLIT.STK.UOM<1,N>='PC' THEN
+      TMP.QTY = OCONV(ICONV(SLT.SLIT.STK.QTY<1,N>,"MD2"),"MD2")
+   END ELSE TMP.QTY = SLT.SLIT.STK.QTY<1,N>
+*T27653 ^
+   SCV.REC(25)<ESN,N>=TMP.QTY
+   TMP.QTY=OCONV((SLT.SLIT.CST.QTY<1,N>/10),"MD2")
+   SCV.REC(26)<ESN,N>=TMP.QTY
+   SCV.REC(27)<ESN,N>=SLT.SLIT.AMT<1,N>
+NEXT N
+RETURN
+*
+********************
+DISP.CHILD.LINES: 
+********************
+*
+ECD.NUM=23;ECD.ACTION=5;CALL SCRN.EDIT
+ECD.NUM=24;ECD.ACTION=5;CALL SCRN.EDIT
+ECD.NUM=17;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+ECD.NUM=18;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+ECD.NUM=20;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+ECD.NUM=21;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+ECD.NUM=22;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+ECD.NUM=25;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+ECD.NUM=26;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+ECD.NUM=27;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+ECD.NUM=19;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+RETURN
+*
+*************
+ENT.LINE.NUM: 
+*************
+*
+ECD.NUM = 29
+ECD.MINV=START
+ECD.MAXV=START+PAGE.SIZE-1
+IF ECD.MAXV>DCOUNT(SLT.SLIT.PROD,VM) THEN
+   ECD.MAVX=DCOUNT(SLT.SLIT.PROD,VM)
+END
+ECD.ACTION = 4
+CALL SCRN.EDIT
+IF ECD.RET.VALUE#'' AND ECD.RET.VALUE#'END' THEN
+   LNO=ECD.RET.VALUE
+END ELSE
+   LNO=0
+END
+RETURN
+*
+***************
+ENT.SLIT.CODE: 
+***************
+*
+EOI=0
+LOOP
+   ERR=0
+   NEW = 0
+   ECD.NUM = 1
+   ECD.DEFAULT = 'N'
+   ECD.ACTION = 4; CALL SCRN.EDIT
+   BEGIN CASE
+      CASE ECD.RET.VALUE = 'END' OR ECD.RET.VALUE = 'E'
+         EOI=1 ; ERR=1
+      CASE ECD.RET.VALUE = 'N'
+         EOI=1 ; NEW = 1
+         SLIT.CODE = ECD.RET.VALUE
+         MAT SLT.REC = ''
+      CASE ECD.RET.VALUE # ''
+         SLIT.CODE = ECD.RET.VALUE
+        * T26126 v
+         MATREADU SLT.REC FROM SLIT.TRANS, CONO:SLIT.CODE LOCKED
+            ERRMSG = 'SLIT CODE record is locked by user - ':GETUSERNAME(STATUS())
+            GOSUB 91000 ; CONTINUE 
+         END THEN
+        * T26126 ^
+            MATREAD WHSE.REC FROM WAREHOUSE, CONO:SLT.LOG.WHSE ELSE MAT WHSE.REC = ''
+            DIV.CODE = WHS.DIV; USER.ID = UPCASE(@LOGNAME); ERRMSG = ''
+            CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+            IF ERRMSG # '' THEN
+               GOSUB 91000
+            END ELSE
+               IF SLT.POST.DATE = "" THEN
+                  EOI=1
+                  INV.ID=CONO:SLT.LOG.PROD
+                  READV LOG.INV.LINE FROM INVENTORY, INV.ID,5 ELSE LOG.INV.LINE = ''
+                  READV LOG.PAP.WIDTH FROM INVENTORY, INV.ID,33 ELSE LOG.PAP.WIDTH = ''
+                  READV LOG.COLOR FROM INVENTORY, INV.ID,27 ELSE LOG.COLOR = ''
+                  READV LOG.M.WT FROM INVENTORY,INV.ID,23 ELSE LOG.M.WT=''
+               END ELSE
+                  ERRMSG = 'SLIT TRANSACTION HAS ALREADY BEEN POSTED'
+                  GOSUB 91000
+                  RELEASE SLIT.TRANS, CONO:SLIT.CODE
+               END
+            END
+         END ELSE
+            ERRMSG = 'SLIT TRANSACTION NOT ON FILE'
+            GOSUB 91000
+         END
+   END CASE
+UNTIL (EOI) DO REPEAT
+RETURN
+*
+*                                                                      
+**************                                                         
+ENT.DIVISION: 
+************** 
+*
+EOI=0
+LOOP 
+   SCV.REC(38)<1>=''
+   ECD.NUM = 38; ECD.ACTION = 4; CALL SCRN.EDIT 
+   BEGIN CASE 
+      CASE ECD.RET.VALUE = "END" 
+         EOI=1;ERR=1
+      CASE ECD.RET.VALUE = "00"
+         DIV.CODE = ECD.RET.VALUE; USER.ID = UPCASE(@LOGNAME); ERRMSG = ''
+         CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+         IF ERRMSG # '' THEN
+            GOSUB 91000
+         END ELSE 
+            GOSUB 1000 
+            IF ERRMSG='' THEN
+               SLT.DIVISION=ECD.RET.VALUE
+               EOI=1
+            END
+         END
+      CASE 1 
+         MATREAD DIV.REC FROM DIVISION, CONO:ECD.RET.VALUE THEN 
+            DIV.CODE = ECD.RET.VALUE; USER.ID = UPCASE(@LOGNAME); ERRMSG = ''
+            CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+            IF ERRMSG # '' THEN
+               GOSUB 91000
+            END ELSE 
+               GOSUB 1000 
+               IF ERRMSG='' THEN
+                  SLT.DIVISION=ECD.RET.VALUE
+                  EOI=1
+               END
+            END
+         END ELSE 
+            ERRMSG = "INVALID DIVISION"; GOSUB 91000 
+         END
+   END CASE 
+UNTIL (EOI) DO REPEAT
+RETURN 
+*
+****************
+ENT.ENTRY.DATE: 
+****************
+*
+ECD.NUM=2
+ECD.DEFAULT = OCONV(DATE(),"D2/")
+ECD.ACTION=4; CALL SCRN.EDIT
+IF ECD.RET.VALUE # 'END' THEN
+   DEF.PERIOD = "";ERR.FLG = "";ERRMSG = ""                              
+   CALL CHECK.PERIOD.DATE(CONO,ECD.RET.VALUE,DEF.PERIOD,SLT.DIVISION,ERR.FLG,ERRMSG,COMPANY,CONTROL) 
+   BEGIN CASE                            
+      CASE ERRMSG = ""                    
+         SLT.ENT.DATE = ECD.RET.VALUE 
+* T27653 v
+         IF CO.ICS.PERIOD.FLG = 'Y' THEN
+            SLT.PERIOD = DEF.PERIOD ; ECD.NUM = 35
+            SCV.REC(ECD.NUM)<ECD.SCRN.NO> = SLT.PERIOD
+            ECD.ACTION = 5 ; CALL SCRN.EDIT
+         END
+* T27653 ^
+      CASE ERR.FLG = 0                    
+         SLT.ENT.DATE = ECD.RET.VALUE 
+         GOSUB 91000                       
+* T27653 v
+         IF CO.ICS.PERIOD.FLG = 'Y' THEN
+            SLT.PERIOD = DEF.PERIOD ; ECD.NUM = 35
+            SCV.REC(ECD.NUM)<ECD.SCRN.NO> = SLT.PERIOD
+            ECD.ACTION = 5 ; CALL SCRN.EDIT
+         END
+* T27653 ^
+      CASE ERR.FLG = 1                    
+         GOSUB 91000;GOTO ENT.ENTRY.DATE         
+      CASE ERR.FLG = 2                    
+         GOSUB 91000;ECD.RET.VALUE = "END" 
+   END CASE                              
+   ERRMSG = ""                           
+   ERR.FLG = ""                          
+   SPTR = SPTR + 1
+END
+RETURN
+*
+******************
+ENT.PERIOD: 
+******************
+*
+ECD.DEFAULT=DEF.PERIOD
+EP=0
+LOOP
+   ECD.NUM = 35
+   ECD.ACTION = 4;CALL SCRN.EDIT 
+   IF ECD.RET.VALUE # "END" THEN 
+      ERR.FLG = "";ERRMSG = ""  
+      CALL CHECK.PERIOD.DATE(CONO,SLT.ENT.DATE,ECD.RET.VALUE,SLT.DIVISION,ERR.FLG,ERRMSG,COMPANY,CONTROL) 
+      BEGIN CASE                           
+         CASE ERRMSG = ""                   
+            SLT.PERIOD = ECD.RET.VALUE    
+         CASE ERR.FLG = 0                   
+            SLT.PERIOD = ECD.RET.VALUE    
+            GOSUB 91000                      
+         CASE ERR.FLG = 1                   
+            GOSUB 91000;GOTO ENT.PERIOD      
+         CASE ERR.FLG = 2                   
+            GOSUB 91000;ECD.RET.VALUE = "END"
+      END CASE                             
+      ERRMSG = ""                          
+      ERR.FLG = ""                         
+      SPTR+=1 ; EP=1             
+*T26556 v
+   END ELSE
+*        EP=1 ; ERR=1
+      EP=1 ; SPTR +=1
+      SLT.PERIOD = DEF.PERIOD
+      SCV.REC(ECD.NUM)<ECD.SCRN.NO> = SLT.PERIOD
+      ECD.ACTION = 5 ; CALL SCRN.EDIT
+   END
+*T26556 ^
+UNTIL (EP) DO REPEAT
+RETURN 
+*
+******************
+ENT.PARENT.SERIAL: 
+******************
+*
+EPS=0
+LOOP
+   ERR=0 ; ERRMSG=''
+   ECD.NUM=3
+   ECD.ACTION=4; CALL SCRN.EDIT
+   BEGIN CASE
+      CASE ECD.RET.VALUE = 'END'
+         ECD.ACTION=6; CALL SCRN.EDIT
+         EPS=1
+      CASE ECD.RET.VALUE # ''
+         IF SLT.LOG.SERIAL='' AND SLT.LOG.PROD#'' THEN
+            LOCATE ECD.RET.VALUE IN IWLO.SERIAL<1>,1 SETTING RFND ELSE
+               ERRMSG = 'Serial ':ECD.RET.VALUE:' is not valid for '
+               ERRMSG:='INV.WHSE.LOC ':IWLO.ID
+               GOSUB 91000 ; ERR=1
+            END
+         END
+         IF NOT(ERR) THEN
+            ISTK.ID=CONO:ECD.RET.VALUE
+            MATREAD ISTK.REC FROM INV_SERIAL,ISTK.ID THEN
+            * T26497 v
+               IF CO.INTR.WHSE # '' AND ISTK.WHSE = CO.INTR.WHSE THEN
+                  ERRMSG = 'CANNOT APPLY,SERIAL USING AN INTER-DIVISIONAL WHSE'
+                  GOSUB 91000 ; CONTINUE
+               END
+            * T26497 ^
+            * T26556 v
+               IF ISTK.RSVB.QTY LE 1 THEN
+                  ERRMSG = 'SERIAL NUMBER HAS NO QUANTITY AVAILABLE TO SLIT'
+                  GOSUB 91000 ; CONTINUE
+               END
+            * T26556 ^
+               IF ISTK.POST.DATE='' THEN
+                  ERRMSG='Serial has not been received into inventory'
+                  GOSUB 91000
+               END ELSE
+                  IF ISTK.RECP.PERIOD>SLT.PERIOD THEN
+                     ERRMSG='Serial received in period ':ISTK.RECP.PERIOD:' cannot be slitted'
+                     ERRMSG:='in period ':SLT.PERIOD
+                     GOSUB 91000
+                  END ELSE
+                     IF ISTK.RSVB.QTY<ISTK.CUR.QTY THEN 
+                        ERRMSG='This serial has quantity reserved and cannot be slitted.'
+                        GOSUB 91000
+                     END ELSE
+                        INV.ID=CONO:ISTK.PROD
+                        MATREAD INV.REC FROM INVENTORY,INV.ID THEN
+                           MATREAD WHSE.REC FROM WAREHOUSE, CONO:ISTK.WHSE ELSE MAT WHSE.REC = ''
+                           IF WHS.DIV# SLT.DIVISION THEN
+                              ERRMSG='Serial belongs to division ':WHS.DIV
+                           END
+                           IF ERRMSG # '' THEN
+                              GOSUB 91000
+                           END ELSE
+                              IF NOT(ERR) THEN
+                                 CATG.ID=CONO:INV.LINE
+                                 MATREAD CATG.REC FROM CATEGORY,CATG.ID ELSE MAT CATG.REC=''
+* T26556 v
+                                 IF CATG.TRK.LVL # 'S' THEN
+                                    ERRMSG = 'Only Serial tracked products are allowed.'
+                                    GOSUB 91000 ; CONTINUE
+                                 END
+* T26556 ^
+                                 IF CATG.COST.TYPE='AC' THEN 
+                                    DEPL.METHOD='AC'
+                                 END ELSE
+                                    DEPL.METHOD='FI'
+                                 END
+                                 IWH.ID=CONO:ISTK.PROD:"!":ISTK.WHSE
+                                 MATREAD IWH.REC FROM INV.WHSE,IWH.ID THEN
+                                    SLT.LOG.SERIAL = ECD.RET.VALUE
+*T27620                                IF DEPL.METHOD='FI' THEN
+                                    INAH.PROD=ISTK.PROD
+                                    INAH.WHSE=ISTK.WHSE
+                                    ACTION=1
+                                    TMP.CNT='' ; LAST='' ; TMP.ARR=''
+                                    PERIOD=SLT.PERIOD
+                                    MAT ORG.IWH.REC = MAT IWH.REC
+*T27990                                CALL ICS.IWH.SUB (CONO,PERIOD,TMP.ARR,TMP.CNT,LAST,ACTION,OPEN.FLAG)
+                                    CALL ICS.IWH.SUB (CONO,PERIOD,TMP.ARR,TMP.CNT,LAST,ACTION,OPEN.FLAG,ERRMSG)
+*T27620 v
+*                                      END ELSE
+                                    IF DEPL.METHOD = 'AC' THEN
+*T27620 ^
+                                       RECP.NO=ISTK.RECP
+                                       INVR.ID = CONO:RECP.NO
+                                       MATREAD INVR.REC FROM INV_RECEIPTS,INVR.ID THEN
+                                          IRW.ID=CONO:ISTK.RECP:"!":ISTK.WHSE
+                                          MATREAD IRW.REC FROM INV_RECP_WHSE,IRW.ID ELSE
+                                             ERRMSG='INV_RECP_WHSE record ':IRW.ID:' is missing.'
+                                             GOTO 93000
+                                          END 
+                                       END ELSE
+                                          ERRMSG='INV_RECEIPTS record ':INVR.ID:' is missing.'
+                                          GOTO 93000
+                                       END
+                                    END
+                                 END ELSE
+                                    MAT IWH.REC=''
+                                 END
+                                 GOSUB GET.INV.UM.CNV
+                                 SLT.LOG.PROD = ISTK.PROD
+                                 SLT.LOG.DESC = INV.FULL.DESC
+                                 SLT.LOG.STK.UOM = INV.UNIT<1,2>
+                                 SLT.LOG.CST.UOM = INV.UNIT<1,3>
+                                 SLT.LOG.WHSE = ISTK.WHSE
+                                 SLT.LOG.LOC = ISTK.LOC
+                                 IWLO.ID=IWH.ID:"!":ISTK.LOC
+                                 MATREAD IWLO.REC FROM INV.WHSE.LOC,IWLO.ID ELSE MAT IWLO.REC=''
+                                 LOCATE SLT.LOG.SERIAL IN IWLO.SERIAL<1>,1 SETTING RSFND THEN
+                                    ;* maybe +5 should not be added because
+                                    ;* if it is converted back might show
+                                    ;* more costing qty. than there really is.
+                                    SER.STK.QTY=INT(((ISTK.CUR.QTY/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+                                    SER.STK.QTY=OCONV(SER.STK.QTY,ICR.CNV)
+                                    SLT.LOG.USED.STK.QTY=SER.STK.QTY
+                                    SLT.LOG.USED.QTY=ISTK.CUR.QTY
+                                    SLT.LOG.SLIT.STK.QTY = 0
+                                    SLT.LOG.SLIT.AMT = 0
+                                    SLT.LOG.TRIM.QTY=ISTK.CUR.QTY
+                                    LOG.INV.LINE = INV.LINE
+                                    LOG.PAP.WIDTH = INV.PAP.WIDTH
+                                    LOG.COLOR = INV.COLOR
+                                    SPTR = 6
+                                    EPS=1
+                                 END ELSE
+                                    ERRMSG='Serial is missing from INV.WHSE.LOC record.'
+                                    GOTO 93000
+                                 END
+                                 GOSUB BUILD.PARENT.LINE
+                                 ECD.ACTION=3 ; CALL SCRN.EDIT
+                              END
+                           END
+                        END ELSE
+                           ERRMSG='Product ':ISTK.PROD:' is not on file'
+                           GOSUB 91000
+                        END
+                     END
+                  END
+               END
+            END ELSE
+               ERRMSG='Serial ':ECD.RET.VALUE:' is not on file'
+               GOSUB 91000
+            END
+         END
+      CASE 1
+         SLT.LOG.SERIAL=''
+         GOSUB ENT.PARENT.PROD
+   END CASE
+   LOG.M.WT=INV.M.WT
+UNTIL (EPS) DO REPEAT
+RETURN
+*
+****************
+ENT.PARENT.PROD: 
+****************
+*
+EPP=0
+LOOP
+   ECD.NUM=5
+   ECD.ACTION=4; CALL SCRN.EDIT
+   BEGIN CASE
+      CASE ECD.RET.VALUE='END' OR ECD.RET.VALUE='E'
+         EPP=1
+      CASE ECD.RET.VALUE=''
+         GOSUB ENT.PROD.DESC
+      CASE 1
+         INV.ID=CONO:ECD.RET.VALUE
+         MATREAD INV.REC FROM INVENTORY,INV.ID THEN
+            IF INV.WHSE.CODE = "" THEN
+               ERRMSG='No warehouses have been setup for this product.'
+               GOSUB 91000
+            END ELSE
+*COPY>ICSBP>INV.UM.CNV
+               CATG.ID=CONO:INV.LINE
+               MATREAD CATG.REC FROM CATEGORY,CATG.ID ELSE 
+                  MAT CATG.REC=''
+               END
+* T26556 v
+               IF CATG.TRK.LVL # 'S' THEN
+                  ERRMSG = 'Only Serial tracked products are allowed.'
+                  GOSUB 91000 ; CONTINUE
+               END
+* T26556 ^
+               SLT.LOG.PROD = ECD.RET.VALUE
+               SLT.LOG.DESC = INV.FULL.DESC
+               SLT.LOG.STK.UOM = INV.UNIT<1,2>
+               SLT.LOG.CST.UOM = INV.UNIT<1,3>
+               LOG.INV.LINE = INV.LINE
+               LOG.PAP.WIDTH = INV.PAP.WIDTH
+               LOG.COLOR = INV.COLOR
+               SPTR+=1 ; EPP=1
+               GOSUB BUILD.PARENT.LINE
+               ECD.ACTION=3;CALL SCRN.EDIT
+            END
+         END ELSE
+            ERRMSG='Inventory ':ECD.RET.VALUE:' is not on file.'
+            GOSUB 91000
+         END
+   END CASE
+UNTIL (EPP) DO REPEAT
+IF SLT.LOG.PROD#'' THEN
+   GOSUB ENT.PARENT.WHSE
+   IF NOT(ERR) THEN
+      GOSUB ENT.PARENT.LOC
+      SPTR=3;*go back to serial entry
+   END
+END
+RETURN
+*
+**************
+ENT.PROD.DESC: 
+**************
+*
+EPD=0
+LOOP
+   ECD.NUM=4
+   ECD.ACTION=4; CALL SCRN.EDIT
+   BEGIN CASE
+      CASE ECD.RET.VALUE='END' OR ECD.RET.VALUE='E'
+         EPD=1
+         SCV.REC(4)<ESN>='';ECD.NUM=4;ECD.ACTION=5;CALL SCRN.EDIT
+      CASE ECD.RET.VALUE=''
+         EPD=1
+      CASE 1
+         GXR.NAME = "INV.PAP"
+         GXR.FILE = INVENTORY
+         GXR.XREF = INVENTORY.XREF
+         GXR.ID = ""
+         GXR.SRCH.ID = ECD.RET.VALUE
+         CALL GEN.XREF.SUB(MAT GEN.XREF.REC,PREFIX,XREF.DATA)
+         ECD.ACTION=2;CALL SCRN.EDIT
+         ECD.ACTION=3;CALL SCRN.EDIT
+         IF GXR.ID # "" THEN
+            INV.ID=CONO:GXR.ID
+            MATREAD INV.REC FROM INVENTORY,INV.ID THEN
+               IF INV.WHSE.CODE = "" THEN
+                  ERRMSG='NO WAREHOUSES HAVE BEEN SETUP FOR THIS PRODUCT'
+                  GOSUB 91000 ; EPD=1
+               END ELSE
+                  CATG.ID=CONO:INV.LINE
+                  MATREAD CATG.REC FROM CATEGORY,CATG.ID ELSE MAT CATG.REC=''
+*COPY>ICSBP>INV.UM.CNV
+* T26556 v
+                  IF CATG.TRK.LVL # 'S' THEN
+                     ERRMSG = 'Only Serial tracked products are allowed.'
+                     GOSUB 91000 ; EPD = 1 ; RETURN
+                  END
+* T26556 ^
+                  SLT.LOG.PROD = GXR.ID
+                  SLT.LOG.DESC = INV.FULL.DESC
+                  SLT.LOG.STK.UOM = INV.UNIT<1,2>
+                  SLT.LOG.CST.UOM = INV.UNIT<1,3>
+                  LOG.INV.LINE = INV.LINE
+                  LOG.INV.WIDTH = INV.PAP.WIDTH
+                  LOG.INV.COLOR = INV.COLOR
+                  GOSUB BUILD.PARENT.LINE
+                  ECD.ACTION=3;CALL SCRN.EDIT
+                  EPP=1 ; EPD=1 ; SPTR+=1
+               END
+            END ELSE
+               ERRMSG='Inventory ':GXR.ID:' is not on file.'
+               GOSUB 91000 ; EPD=1
+            END
+         END
+   END CASE
+UNTIL (EPD) DO REPEAT
+RETURN
+*
+****************
+ENT.PARENT.WHSE: 
+****************
+*
+WHSE.CNT=DCOUNT(INV.WHSE.CODE,VM)
+IF WHSE.CNT>1 THEN
+   ECD.VALDAT = INV.WHSE.CODE<1,1>
+   ECD.HMSG = 'WAREHOUSE - ':INV.WHSE.CODE<1,1>
+   FOR I = 2 TO WHSE.CNT
+      ECD.VALDAT = ECD.VALDAT : "," : INV.WHSE.CODE<1,I>
+      ECD.HMSG = ECD.HMSG : ", " : INV.WHSE.CODE<1,I>
+   NEXT I
+END
+EPW=0
+LOOP
+   ERR=0
+   ECD.NUM=6
+   IF WHSE.CNT = 1 THEN
+      SCV.REC(ECD.NUM)<1> = INV.WHSE.CODE<1,1>
+      ECD.RET.VALUE = INV.WHSE.CODE<1,1>
+      ECD.ACTION=5; CALL SCRN.EDIT
+   END ELSE
+      ECD.DEFAULT = INV.WHSE.CODE<1,1>
+      ECD.ACTION=4; CALL SCRN.EDIT
+      ECD.VALDAT = ""; ECD.HMSG = ""
+      IF ECD.RET.VALUE = 'END' THEN
+         ERR=1 ; EPW=1
+         GOSUB INIT.SLT.LOG
+         SCV.REC(5)<ESN>='';ECD.NUM=5;ECD.ACTION=5;CALL SCRN.EDIT
+         SCV.REC(4)<ESN>='';ECD.NUM=4;ECD.ACTION=5;CALL SCRN.EDIT
+      END ELSE
+         LOCATE ECD.RET.VALUE IN INV.WHSE.CODE<1>,1 SETTING WFND THEN
+            NULL
+         END ELSE
+            ERRMSG='Warehouse ':ECD.RET.VALUE:' is not setup for product '
+            ERRMSG:=SLT.LOG.PROD
+            GOSUB 91000 ; ERR=1
+         END
+      END
+   END
+    * T26497 v
+   IF CO.INTR.WHSE # '' AND ECD.RET.VALUE = CO.INTR.WHSE THEN
+      ERRMSG = 'CANNOT APPLY, USING AN INTER-DIVISIONAL WHSE IS RESTRICTED'
+      GOSUB 91000 ; ERR=1
+   END
+    * T26497 ^
+   IF NOT(ERR) THEN
+      IWH.ID = CONO:SLT.LOG.PROD:"!":ECD.RET.VALUE
+      MATREAD IWH.REC FROM INV.WHSE, IWH.ID THEN
+         MAT SAVE.IWH.REC = MAT IWH.REC
+         IF IWH.LOC = "" THEN
+            ERRMSG='No locations have been setup for this warehouse.'
+            GOSUB 91000
+            IF WHSE.CNT=1 THEN
+               EPW=1 ; ERR=1
+            END
+         END ELSE
+            EPW=1
+            SLT.LOG.WHSE = ECD.RET.VALUE
+            SCV.REC(ECD.NUM)<1> = ECD.RET.VALUE
+            ECD.ACTION=5; CALL SCRN.EDIT
+            SPTR = SPTR + 1
+         END
+      END ELSE
+         ERRMSG='INV.WHSE record ':IWH.ID:' is not on file.'
+         GOSUB 91000
+         IF WHSE.CNT=1 THEN 
+            EPW=1 ; ERR=1
+         END
+      END
+   END
+UNTIL (EPW) DO REPEAT
+RETURN
+*
+***************
+ENT.PARENT.LOC: 
+***************
+*
+LOC.CNT = DCOUNT(IWH.LOC,VM)
+ECD.VALDAT = IWH.LOC<1,1>
+ECD.HMSG = 'LOCATION - ':IWH.LOC<1,1>
+FOR I = 2 TO LOC.CNT
+   ECD.VALDAT = ECD.VALDAT : "," : IWH.LOC<1,I>
+   ECD.HMSG = ECD.HMSG : ", " : IWH.LOC<1,I>
+NEXT I
+ECD.DEFAULT = IWH.LOC<1,1>
+ECD.NUM=7
+EPL=0
+LOOP
+   ERR=0
+   IF LOC.CNT = 1 THEN
+      SCV.REC(ECD.NUM)<1> = IWH.LOC<1,1>
+      ECD.RET.VALUE = IWH.LOC<1,1>
+      ECD.ACTION=5; CALL SCRN.EDIT
+   END ELSE
+      ECD.ACTION=4; CALL SCRN.EDIT
+      ECD.VALDAT = ""; ECD.HMSG = ""
+      IF ECD.RET.VALUE = 'END' THEN
+         EPL=1 ; ERR=1
+         GOSUB INIT.SLT.LOG
+         SCV.REC(5)<ESN>='';ECD.NUM=5;ECD.ACTION=5;CALL SCRN.EDIT
+         SCV.REC(6)<ESN>='';ECD.NUM=6;ECD.ACTION=5;CALL SCRN.EDIT
+         SCV.REC(4)<ESN>='';ECD.NUM=4;ECD.NUM=5;CALL SCRN.EDIT 
+      END ELSE
+         LOCATE ECD.RET.VALUE IN IWH.LOC<1>,1 SETTING LFND ELSE
+            ERRMSG='Location ':ECD.RET.VALUE:' not setup for warehouse '
+            ERRMSG :=SLT.LOG.WHSE
+            GOSUB 91000 ; ERR=1
+         END
+      END
+   END
+   IF NOT(ERR) THEN 
+      IWLO.ID = IWH.ID:"!":ECD.RET.VALUE
+      MATREAD IWLO.REC FROM INV.WHSE.LOC, IWLO.ID THEN
+         EPL=1
+         SLT.LOG.LOC = ECD.RET.VALUE
+      END ELSE
+         ERRMSG='INV.WHSE.LOC record ':IWLO.ID:' is not on file'
+         GOSUB 91000
+      END
+   END
+UNTIL (EPL) DO REPEAT
+RETURN
+*
+***********************
+GET.USED.SLIT.TRIM.AMT: 
+***********************
+*
+GOSUB GET.COST
+IF NOT(ERR) THEN
+*    SLT.LOG.USED.AMT=INT((SLT.LOG.USED.QTY/1000)*(SLT.LOG.UN.PRICE/10000)+.5)
+   SLT.LOG.USED.AMT=((SLT.LOG.USED.QTY/1000)*(SLT.LOG.UN.PRICE/10000))
+   SLT.LOG.USED.AMT=ICONV(SLT.LOG.USED.AMT,"MD2")
+   TRIM.QTY = SLT.LOG.USED.QTY-SLT.LOG.SLIT.QTY
+*    SLT.LOG.TRIM.AMT=INT((TRIM.QTY/1000)*(SLT.LOG.UN.PRICE/10000)+.5)
+   SLT.LOG.TRIM.AMT=((TRIM.QTY/1000)*(SLT.LOG.UN.PRICE/10000))
+   SLT.LOG.TRIM.AMT=ICONV(SLT.LOG.TRIM.AMT,"MD2")
+END
+RETURN
+*
+****************
+GET.COST: 
+****************
+*
+DIFF.QTY=-(SLT.LOG.TRIM.QTY);PRICE='';TYPE='';ERRMSG='';RET.ARR=''
+CALL QTY.CHANGE.SUB(CONO,SLIT.CODE,MAT IWH.REC, MAT INV.REC, MAT PO.REC,DEPL.METHOD,RECP.NO,SLT.ENT.DATE,SLT.PERIOD,DIFF.QTY,PRICE,TYPE,ERRMSG,RET.ARR)
+IF ERRMSG='' THEN
+   TEMP.COST=ABS(RET.ARR<1>)
+   SLT.LOG.UN.PRICE=(TEMP.COST/(ABS(DIFF.QTY)/10))
+   SLT.LOG.UN.PRICE=ICONV(SLT.LOG.UN.PRICE,"MD4")
+END ELSE
+   GOSUB 91000 ; ERR=1
+END
+RETURN
+*
+****************
+CLEAR.CURR.LINE: 
+****************
+*
+SCV.REC(17)<ESN,LN>=''
+ECD.NUM=17;ECD.SUB.NUM=LN;ECD.ACTION=5;CALL SCRN.EDIT
+SCV.REC(18)<ESN,LN>='' 
+ECD.NUM=18;ECD.SUB.NUM=LN;ECD.ACTION=5;CALL SCRN.EDIT
+SCV.REC(19)<ESN,LN>=''
+ECD.NUM=19;ECD.SUB.NUM=LN;ECD.ACTION=5;CALL SCRN.EDIT
+SCV.REC(20)<ESN,LN>=''
+ECD.NUM=20;ECD.SUB.NUM=LN;ECD.ACTION=5;CALL SCRN.EDIT
+SCV.REC(21)<ESN,LN>=''
+ECD.NUM=21;ECD.SUB.NUM=LN;ECD.ACTION=5;CALL SCRN.EDIT
+SCV.REC(22)<ESN,LN>='' 
+ECD.NUM=22;ECD.SUB.NUM=LN;ECD.ACTION=5;CALL SCRN.EDIT
+SCV.REC(25)<ESN,LN>=''
+ECD.NUM=25;ECD.SUB.NUM=LN;ECD.ACTION=5;CALL SCRN.EDIT
+SCV.REC(26)<ESN,LN>=''
+ECD.NUM=26;ECD.SUB.NUM=LN;ECD.ACTION=5;CALL SCRN.EDIT
+SCV.REC(27)<ESN,LN>=''
+ECD.NUM=27;ECD.SUB.NUM=LN;ECD.ACTION=5;CALL SCRN.EDIT
+RETURN
+*
+******************
+GENERATE.BARCODES: 
+******************
+*
+GGB=0
+*T27339   LOOP
+ERR=0
+VALUE='N'
+SLT.LINE.CNT = DCOUNT(SLT.SLIT.PROD,VM)
+BCFLAG=0
+FOR SLT.LINE.PTR=1 TO SLT.LINE.CNT WHILE BCFLAG=0
+   INV.ID=CONO:SLT.SLIT.PROD<1,SLT.LINE.PTR>
+   MATREAD INV.REC FROM INVENTORY,INV.ID ELSE MAT INV.REC=''
+   MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE ELSE MAT CATG.REC=''
+   IF CATG.TRK.LVL='S' AND CATG.BARCODE='Y' THEN
+      BCFLAG = 1
+   END
+NEXT SLT.LINE.PTR
+IF BCFLAG=1 THEN
+   ECD.NUM=36;ECD.ACTION=4;CALL SCRN.EDIT
+   VALUE=ECD.RET.VALUE
+END
+IF VALUE = 'Y' THEN
+   MAT RSXRF.REC = ""
+   SLT.LINE.CNT = DCOUNT(SLT.SLIT.PROD,VM)
+   CNT = 0 ; ERR=0
+   FOR SLT.LINE.PTR = 1 TO SLT.LINE.CNT UNTIL (ERR)
+      LINE.CNT = 0
+      INV.ID=CONO:SLT.SLIT.PROD<1,SLT.LINE.PTR>
+      MATREAD INV.REC FROM INVENTORY,INV.ID THEN
+         CATG.ID=CONO:INV.LINE
+         MATREAD CATG.REC FROM CATEGORY,CATG.ID ELSE MAT CATG.REC=''
+         IF CATG.TRK.LVL="S" THEN
+            BCFLAG = 0
+            IF CATG.TRK.LVL='S' AND CATG.BARCODE='Y' THEN BCFLAG=1
+            IF BCFLAG THEN
+               CMD='SSELECT INV_SERIAL WITH CONO="':CONO:' " AND WITH ISTK_PO_NO="':SLIT.CODE:'" AND WITH ISTK_PO_LINE="':SLT.LINE.PTR:'"'
+               PERFORM CMD RTNLIST ITEM.LIST CAPTURING ITEMS.MSG
+               EOG = 0
+               LOOP
+                  READNEXT KEY FROM ITEM.LIST ELSE EOG = 1
+               UNTIL EOG DO
+                  MATREADU ISTK.REC FROM INV_SERIAL,KEY ELSE         
+                     ERRMSG='Cannot find serial information record ':KEY
+                     GOTO 93000                                       
+                  END                                                
+                  GOSUB 30050                                        
+                  MATWRITE ISTK.REC ON INV_SERIAL,KEY                
+                  RSXRF.RS.NO<1,CNT> = KEY[4,99]                     
+                  RSXRF.LN.NO<1,CNT>=SLT.LINE.PTR                     
+                  SLT.SLIT.SERIAL<1,SLT.LINE.PTR,LINE.CNT> = KEY[4,99]
+               REPEAT
+               MAT ISTK.REC=''
+               LOOP WHILE LINE.CNT < SLT.SLIT.CUTS<1,SLT.LINE.PTR> DO
+                  ISTK.SEQ=''
+                  ISTK.SEQ=GET.SERIAL.SEQ(CONO,CONTROL,INV_SERIAL)
+                  GOSUB 30050
+                  ISTK.PRINT.DATE = ''
+                  KEY=CONO:ISTK.SEQ
+                  MATWRITE ISTK.REC ON INV_SERIAL,KEY
+                  RSXRF.RS.NO<1,CNT>= ISTK.SEQ
+                  RSXRF.LN.NO<1,CNT>=SLT.LINE.PTR   
+                  SLT.SLIT.SERIAL<1,SLT.LINE.PTR,LINE.CNT> =ISTK.SEQ
+               REPEAT
+            END
+         END
+         IF RSXRF.RS.NO # "" THEN
+            MATWRITE RSXRF.REC ON PO.RSKI.XREF, CONO:SLIT.CODE
+         END
+      END ELSE
+         ERRMSG = "NO INVENTORY RECORD FOR PRODUCT " SLT.SLIT.PROD<1,SLT.LINE.PTR>
+         GOSUB 91000 ;ERR=1
+      END
+   NEXT SLT.LINE.PTR
+   GGB=1
+END ELSE
+   SLT.LINE.CNT = DCOUNT(SLT.SLIT.PROD,VM)
+*T27339 v
+*        FOR SLC = 1 TO SLT.LINE.CNT UNTIL (ERR)
+*           FOR SRN = 1 TO SLT.SLIT.CUTS<1,SLC>
+*              GSN=0
+*              LOOP
+   HOLD.SLIT.SERIAL = SLT.SLIT.SERIAL
+   MAT RSXRF.REC = ""
+   CNT = 0
+   LINE.CNT = 0
+   FOR SLC = 1 TO SLT.LINE.CNT
+      ERR = 0
+      FOR SRN = 1 TO SLT.SLIT.CUTS<1,SLC> UNTIL (ERR)
+*T27339 ^
+         ECD.MAXL = 15 
+*T27339 v
+******************
+ENT.MANUAL.SERIAL: 
+******************
+         ECD.PMSG = "Enter serial # ":SRN:" for product ":SLT.SLIT.PROD<1,SLC>:" : "
+         ECD.DEFAULT = SLT.SLIT.SERIAL<1,SLC,SRN>
+         SLT.SLIT.SERIAL<1,SLC,SRN> = ""
+*T27339 ^
+         ECD.NUM=37;ECD.ACTION=4;CALL SCRN.EDIT
+         VALUE=ECD.RET.VALUE
+         IF VALUE # 'END' THEN
+            LOCATE VALUE IN SLT.SLIT.SERIAL<1,SLC> SETTING VFND THEN
+               ERRMSG ='Serial has already been entered.'
+               GOSUB 91000
+               GOTO ENT.MANUAL.SERIAL ; * T27339
+            END ELSE
+               IWLO.ID=CONO:SLT.SLIT.PROD<1,SLC>:"!":SLT.SLIT.WHSE<1,SLC>:"!":SLT.SLIT.LOC<1,SLC>
+               MATREAD IWLO.REC FROM INV.WHSE.LOC,IWLO.ID ELSE MAT IWLO.REC=''
+               LOCATE VALUE IN IWLO.SERIAL<1>,1 SETTING VFND THEN
+                  ERRMSG='Serial number already entered for this product'
+                  GOSUB 91000
+                  GOTO ENT.MANUAL.SERIAL ; * T27339
+               END ELSE
+                  ISTK.ID=CONO:VALUE
+                  MATREAD ISTK.REC FROM INV_SERIAL,ISTK.ID THEN
+                     IF ISTK.POST.DATE # '' THEN
+                        ERRMSG='Serial number already received.'
+                        GOSUB 91000
+                        GOTO ENT.MANUAL.SERIAL ; * T27339
+                     END ELSE
+                        GSN=1
+                        SLT.SLIT.SERIAL<1,SLC,SRN> = VALUE
+                     END
+*T27339 v
+*                          END
+                  END
+                  MATREAD ISTK.REC FROM INV_SERIAL_DELETED,ISTK.ID THEN
+                     ERRMSG = 'Serial number already used.'
+                     GOSUB 91000
+                     GOTO ENT.MANUAL.SERIAL
+                  END ELSE
+                     GSN=1
+                     SLT.SLIT.SERIAL<1,SLC,SRN> = VALUE
+                     SLT.LINE.PTR = SLC
+                     CHECK.SERIAL = HOLD.SLIT.SERIAL<1,SLC,SRN>
+                     BEGIN CASE
+                        CASE CHECK.SERIAL = VALUE
+                        CASE CHECK.SERIAL # "" AND CHECK.SERIAL # VALUE
+                           DELETE INV_SERIAL, CONO:CHECK.SERIAL
+                           MAT ISTK.REC = ''
+                           GOSUB 30050
+                           ISTK.PRINT.DATE = ''
+                           KEY=CONO:VALUE
+                           MATWRITE ISTK.REC ON INV_SERIAL,KEY
+                           RSXRF.RS.NO<1,CNT>= VALUE
+                           RSXRF.LN.NO<1,CNT>=SLT.LINE.PTR   
+                        CASE 1
+                           MAT ISTK.REC = ''
+                           GOSUB 30050
+                           ISTK.PRINT.DATE = ''
+                           KEY=CONO:VALUE
+                           MATWRITE ISTK.REC ON INV_SERIAL,KEY
+                           RSXRF.RS.NO<1,CNT>= VALUE
+                           RSXRF.LN.NO<1,CNT>=SLT.LINE.PTR   
+                     END CASE
+                  END
+*T27339 ^
+               END
+            END
+         END ELSE
+*T27339 v
+*                 GGB=1 ; GSN=1 ; ERR=1 ; SLT.SLIT.SERIAL=''
+            ERR=1
+*T27339 ^
+         END
+*T27339     UNTIL (GSN) DO REPEAT
+      NEXT SRN
+   NEXT SLC
+   IF RSXRF.RS.NO # "" THEN
+      MATWRITE RSXRF.REC ON PO.RSKI.XREF, CONO:SLIT.CODE
+   END
+END
+*T27339   UNTIL (GGB) DO REPEAT
+RETURN
+*
+*********
+30050: 
+*********
+*
+IF ISTK.LOC = "" THEN                          
+   ISTK.PO.NO=SLIT.CODE
+   ISTK.PO.LINE=SLT.LINE.PTR
+   ISTK.PROD=SLT.SLIT.PROD<1,SLT.LINE.PTR>
+   ISTK.WHSE = SLT.SLIT.WHSE<1,SLT.LINE.PTR>
+*  ISTK.UOM = SLT.SLIT.STK.UOM<1,SLT.LINE.PTR>
+END                                            
+CNT= CNT + 1
+LINE.CNT = LINE.CNT + 1
+RETURN
+*
+**************
+INIT.SLT.LOG: 
+**************
+*
+SLT.LOG.SERIAL=''
+SLT.LOG.DESC=''
+SLT.LOG.PROD=''
+SLT.LOG.WHSE=''
+SLT.LOG.LOC=''
+SLT.LOG.STK.UOM=''
+SLT.LOG.CST.UOM=''
+SLT.LOG.CST.UOM=''
+SLT.LOG.USED.STK.QTY=''
+SLT.LOG.USED.AMT=''
+SLT.LOG.SLIT=''
+SLT.LOG.SLIT.AMT=''
+SLT.LOG.TRIM=''
+SLT.LOG.TRIM.AMT=''
+RETURN
+*
+*************
+INITIALIZE: 
+*************
+*
+MAT ORG.IWH.REC=''
+SLIT.CODE = ''
+PAGE.SIZE = 3
+START=1
+ERRMSG = ""
+UNKNOWN = "??????????"
+LOG.INV.LINE = ''
+LOG.PAP.WIDTH = ''
+LOG.COLOR = ''
+TEMP.COST = 0
+SAVE.WHSE = ''
+DIM SAVE.INV.REC(INV.REC.SIZE)
+DIM SAVE.IWH.REC(IWH.REC.SIZE)
+MAT SAVE.INV.REC = ''
+MAT SAVE.IWH.REC = ''
+MAT INV.REC = ''
+MAT EDIT.COM.DRIVER = ''
+FILL = '#'
+OPER.ID=@LOGNAME
+MODE=''
+RETURN
+*
+*****************
+BUILD.PARENT.LINE: 
+*****************
+*
+SCV.REC(1)<1> = SLIT.CODE
+SCV.REC(2)<1> = SLT.ENT.DATE
+SCV.REC(35)<1> = SLT.PERIOD
+SCV.REC(38)<1>=SLT.DIVISION
+IF SLT.LOG.SERIAL#'' THEN
+   SCV.REC(3)<1> = SLT.LOG.SERIAL
+END
+SCV.REC(4)<1> = SLT.LOG.DESC
+SCV.REC(5)<1> = SLT.LOG.PROD
+SCV.REC(6)<1> = SLT.LOG.WHSE
+SCV.REC(7)<1> = SLT.LOG.LOC
+SCV.REC(8)<1> = SLT.LOG.STK.UOM
+SCV.REC(9)<1> = SLT.LOG.CST.UOM
+SCV.REC(10)<1> = SLT.LOG.CST.UOM
+IF ICR.CNV="MD0" THEN
+   DQTY = OCONV(ICONV(SLT.LOG.USED.STK.QTY,"MD2"),"MD2")
+END ELSE
+   DQTY = SLT.LOG.USED.STK.QTY 
+END
+SCV.REC(11)<1>=DQTY
+SCV.REC(12)<1>=SLT.LOG.USED.AMT
+SCV.REC(13)<1>=OCONV(SLT.LOG.SLIT.QTY/10,"MD2")
+SCV.REC(14)<1>=SLT.LOG.SLIT.AMT
+SCV.REC(15)<1>=OCONV(SLT.LOG.TRIM.QTY/10,"MD2")
+SCV.REC(16)<1>=SLT.LOG.TRIM.AMT
+RETURN
+*
+***************
+GET.INV.UM.CNV: 
+***************
+*
+*COPY>ICSBP>INV.UM.CNV
+RETURN
+*
+***************
+DELETE.LINE: 
+***************
+*
+*        SLT.LOG.SLIT.STK.QTY = SLT.LOG.SLIT.STK.QTY - SLT.SLIT.CST.QTY<1,LN>
+SLT.LOG.SLIT.QTY = SLT.LOG.SLIT.QTY - SLT.SLIT.CST.QTY<1,LN>
+SLT.LOG.SLIT.AMT = SLT.LOG.SLIT.AMT - SLT.SLIT.AMT<1,LN>
+SLT.LOG.TRIM.QTY+=SLT.SLIT.CST.QTY<1,LN>
+SLT.LOG.TRIM.AMT = SLT.LOG.TRIM.AMT + SLT.SLIT.AMT<1,LN>
+ECD.ACTION=6;CALL SCRN.EDIT
+GOSUB BUILD.PARENT.LINE
+IWH.ID = CONO:SLT.SLIT.PROD<1,LN>:"!":SLT.SLIT.WHSE<1,LN>
+MATREADU INV.STAT.REC FROM INV.STATS, IWH.ID THEN
+   LOCATE SLIT.CODE IN ISTAT.PO<1>,1 SETTING PFND THEN
+      DEL ISTAT.PO<1,PFND>
+      DEL ISTAT.PO.VEND<1,PFND>
+      DEL ISTAT.PO.DATE<1,PFND>
+      DEL ISTAT.PO.QTY<1,PFND>
+      DEL ISTAT.PO.JOB<1,PFND>
+      DEL ISTAT.PO.JOB.QTY<1,PFND>
+      DEL ISTAT.PO.JOB.AMT<1,PFND>
+   END
+   IF ISTAT.PO = '' AND ISTAT.JOB = '' THEN
+      DELETE INV.STATS, IWH.ID
+   END ELSE
+      MATWRITE INV.STAT.REC ON INV.STATS, IWH.ID
+   END
+END ELSE RELEASE INV.STATS, IWH.ID
+SLT.SLIT.PROD = DELETE(SLT.SLIT.PROD,1,LN,0)
+SLT.SLIT.DESC = DELETE(SLT.SLIT.DESC,1,LN,0)
+SLT.SLIT.STK.UOM = DELETE(SLT.SLIT.STK.UOM,1,LN,0)
+SLT.SLIT.CST.UOM = DELETE(SLT.SLIT.CST.UOM,1,LN,0)
+SLT.SLIT.CUTS = DELETE(SLT.SLIT.CUTS,1,LN,0)
+SLT.SLIT.WHSE = DELETE(SLT.SLIT.WHSE,1,LN,0)
+SLT.SLIT.LOC = DELETE(SLT.SLIT.LOC,1,LN,0)
+SLT.SLIT.STK.QTY = DELETE(SLT.SLIT.STK.QTY,1,LN,0)
+SLT.SLIT.CST.QTY = DELETE(SLT.SLIT.CST.QTY,1,LN,0)
+SLT.SLIT.AMT = DELETE(SLT.SLIT.AMT,1,LN,0)
+SLT.STATUS = DELETE(SLT.STATUS,1,LN,0)
+GOSUB BUILD.CHILD.LINES
+ECD.ACTION=3;CALL SCRN.EDIT
+RETURN
+*
+***************                                          
+1000: 
+***************                                          
+*                                                        
+*   DIV.POS=DIVISION.POSITION(CONO,CONTROL,WHS.DIV)          
+DIV.POS=DIVISION.POSITION(CONO,CONTROL,DIV.CODE)          ;*T27880
+BEGIN CASE                                               
+   CASE DIV.POS<1,1>=''                                   
+      DIV.POS=DIV.POS<1,2>                                 
+      CUR.PERIOD=CURRENT.PERIOD(CONO,CONTROL,DIV.POS,"IC") 
+      IF CUR.PERIOD<1,1>='' THEN                           
+         CUR.PERIOD=CUR.PERIOD<1,2>                         
+      END ELSE                                             
+         IF CUR.PERIOD<1,2>='-2' THEN                       
+            ERRMSG=CUR.PERIOD<1,2>                           
+            GOTO 93000                                      
+         END                                                
+      END                                                  
+   CASE DIV.POS<1,1>='-1'                                 
+      ERRMSG=DIV.POS<1,2>                                  
+      GOSUB 91000                                          
+   CASE DIV.POS<1,1>='-2'                                 
+      ERRMSG=DIV.POS<1,2>                                  
+      GOTO 93000    
+END CASE           
+RETURN             
+*
+*---- CALLS FOR SYSCOM
+*
+91000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+92000 ERR.TYPE=2;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+93000 ERR.TYPE=3;CALL SYSCOM(MAT SYSCOM.REC)
+99999*
+RELEASE
+ECD.ACTION=99 ; CALL SCRN.EDIT
+RELEASE
+END

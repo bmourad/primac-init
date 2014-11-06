@@ -1,0 +1,145 @@
+*********************************************************************
+* REVISION - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM   - PRIMAC
+* SOURCE   - PSSBP
+* PROGRAM  - CCTR.SCH.HIST.PROCESS
+* AUTHOR   - ANN POWLEY, C.B.A.
+* DATE     - 09/02/87
+* DESCRIPTION
+*           This programs moves the cost center schedule file
+*           to the cost center schedule history file.
+*********************************************************************
+*
+***** FILE COPY STATEMENTS
+*
+*COPY>PSS.CPYLIB>CCTR.SCHED
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+*
+*---- SET UP SYSCOM
+*
+   SYS.TYPE = 1
+   CALL SI_SYSCOM(MAT SYSCOM.REC)
+*
+***** GET PARAMETERS
+*
+   PROMPT ''
+   PROCREAD BUFFER ELSE
+      ERRMSG = "MUST RUN FROM A PROC"
+      GOSUB 90000
+      GOTO 99999
+   END
+   CONO = BUFFER<1>
+   BUF.DATE = BUFFER<3>
+   BUF.DATE = ICONV(BUF.DATE, "D2/")
+*
+***** OPEN ALL FILES
+*
+   OPEN "","CONTROL" TO CONTROL ELSE
+      ERRMSG = "CANNOT OPEN CONTROL FILE"
+      GOSUB 90000
+      GOTO 99999
+   END
+   OPEN "","CCTR.SCHED" TO CCTR.SCHED ELSE
+      ERRMSG = "CANNOT OPEN CCTR.SCHED FILE"
+      GOSUB 90000
+      GOTO 99999
+   END
+   OPEN "","CCTR.SCHED.HIST" TO CCTR.SCHED.HIST ELSE
+      ERRMSG = "CANNOT OPEN CCTR.SCHED.HIST FILE"
+      GOSUB 90000
+      GOTO 99999
+   END
+   OPEN "","PSS.JOURNAL" TO PSS.JOURNAL ELSE
+      ERRMSG = "CANNOT OPEN PSS.JOURNAL FILE"
+      GOSUB 90000
+      GOTO 99999
+   END
+   OPEN "","PSS.LOCK" TO PSS.LOCK ELSE
+      ERRMSG = "CANNOT OPEN PSS.LOCK FILE"
+      GOSUB 90000
+      GOTO 99999
+   END
+*
+**** CHECK DATE
+*
+   READ DEMODATE FROM CONTROL,"DEMODATE" THEN TODAY=ICONV(DEMODATE,"D") ELSE TODAY=DATE()
+   IF BUF.DATE >= TODAY THEN
+      ERRMSG = "The input date can not be equal to or greater than today's date."
+      GOSUB 90000
+      GOTO 99999
+   END
+   GOSUB 89900;* CHECK FOR ACTIVE TRANSACTION
+   IF ERRMSG # "" THEN
+      GOSUB 90000
+      GOTO 99999
+   END
+*
+**** MAIN PROCESSING
+*
+   DATA = 1
+   LOOP
+      READNEXT ID ELSE DATA = 0
+   WHILE DATA DO
+      MATREADU CCTR.SCHED.REC FROM CCTR.SCHED, ID ELSE
+         RELEASE CCTR.SCHED, ID
+      END
+      JCNT = DCOUNT(CCS.JOB,VM)
+      BLK = 0
+      FOR JB = 1 TO JCNT UNTIL BLK
+         IF CCS.OPER.STATUS<1,JB> # "C" THEN BLK = 1
+      NEXT JB
+      IF BLK THEN
+         RELEASE CCTR.SCHED, ID
+      END ELSE
+***       MATWRITE CCTR.SCHED.REC ON CCTR.SCHED.HIST, ID
+         TPFID = ID
+         MATBUILD TPREC FROM CCTR.SCHED.REC
+         CALL TRANSACTION.WRITE("WRITE",CONO,TP.DIV,"CCTR.SCHED.HIST",TPFID,TPREC,CCTR.SCHED.HIST,PSS.JOURNAL,ERRMSG)
+**********************************************************************
+***       DELETE CCTR.SCHED, ID
+         TPFID = ID
+         CALL TRANSACTION.DELETE(CONO,TP.DIV,"CCTR.SCHED",TPFID,CCTR.SCHED,PSS.JOURNAL,ERRMSG)
+**********************************************************************
+      END
+   REPEAT
+   GOTO 99999
+*
+***(TPCHECKBEG3)***************************************************
+*
+*---- CHECK FOR ACTIVE TRANSACTION
+*
+89900 *
+   READU LREC FROM PSS.LOCK, CONO:"TP" ELSE NULL
+   REQDIV = "ALL"
+   CALL TRANSACTION.LOCK(CONO, REQDIV, TP.DIV, ERRMSG)
+   BEGIN CASE
+      CASE TP.DIV = "X"
+      CASE TP.DIV = ""
+         DCNT = DCOUNT(REQDIV,VM)
+         FOR DPTR = 1 TO DCNT
+            CDIV = REQDIV<1,DPTR>
+            LOCK.ID = "[":CONO:",":CDIV:",":@LOGNAME:" @ ":@TTY:"]"
+            READU LREC FROM PSS.LOCK, LOCK.ID ELSE NULL
+         NEXT DPTR
+   END CASE
+   RELEASE PSS.LOCK, CONO:"TP"
+   RETURN
+***(TPCHECKEND)***************************************************
+*
+***** ERROR ROUTINE
+*
+90000*
+91000*
+   ERR.TYPE = 1
+   CALL SI_SYSCOM(MAT SYSCOM.REC)
+   RETURN
+*
+***** END OF PROGRAM
+*
+99999*
+   PRINT @(-1):
+   STOP
+END

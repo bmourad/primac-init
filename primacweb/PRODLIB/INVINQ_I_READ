@@ -1,0 +1,271 @@
+  SUBROUTINE GET.INV.SEL.INQ.INFO
+*********************************************************************
+*
+* REVISION - [12.0]
+*
+* PROGRAM  - GET.INV.SEL.INQ.INFO
+*
+* AUTHOR   - ALEJANDRO DELGADO
+*
+* DATE     - 09/30/2002
+*
+* DESCRIPTION
+*
+* This program builds the data from INVENTORY file to load into 
+* Inventory Receipt Selection Inquiry screen.
+*
+*********************************************************************
+*
+*---- FILE COPY STATEMENTS
+*
+  $INCLUDE WWINSERT RBO.H
+  $INCLUDE ICS.CPYLIB INVENTORY
+  $INCLUDE ICS.CPYLIB CATEGORY
+  $INCLUDE ICS.CPYLIB INV.CNV
+  $INCLUDE ICS.CPYLIB INV.WHSE
+  $INCLUDE ICS.CPYLIB INV.WHSE.LOC
+  $INCLUDE ICS.CPYLIB INV_SERIAL
+  $INCLUDE ICS.CPYLIB INV_RECEIPTS
+  $INCLUDE CPYLIB FILE.VARS
+  $INCLUDE CPYLIB CHAR
+*
+*---- INITIALIZATION
+*
+  *B_FLAG = '' ; STR_SPLIT = ''
+  CURRENT_WAREHOUSE = '' ; CURRENT_LOCATION = ''
+  MIN_QTY = ''
+  MIN.QTY.CNV = 1
+  ODVD = 10
+  ERRMSG = RBO.getProperty('','ID',PROD.NO)
+  ERRMSG = RBO.getProperty('','WHSE_FLAG',CURRENT_WAREHOUSE)
+  ERRMSG = RBO.getProperty('','LOC_FLAG',CURRENT_LOCATION)
+  ERRMSG = RBO.getProperty('','MIN_QTY',MIN_QTY)
+
+
+  TINDX=0
+  CONO = PROD.NO[1,3]
+  PROD.NO = PROD.NO[4,99]
+  RQTY="R"
+
+
+  *
+  ERRMSG = "" ; IN_PARAM = "" ; OUT_PARAM = ""
+  INVUM="" ;INVSCAL=""
+  IN_PARAM<1,1> = 'INVENTORY'
+  IN_PARAM<1,2> = 'INV.WHSE'
+  IN_PARAM<1,3> = 'INV.WHSE.LOC'
+  IN_PARAM<1,4> = 'INV_RECEIPTS'
+  IN_PARAM<1,5> = 'INV_SERIAL'
+  IN_PARAM<1,6> = 'CATEGORY'
+  CALL GetInvOpenFiles(ERRMSG,IN_PARAM,OUT_PARAM,MAT FILE.VARS)
+  IF ERRMSG # '' THEN GOTO SET.ERROR
+  *
+  MATREAD INV.REC FROM INVENTORY, CONO:PROD.NO THEN
+    $INCLUDE ICSBP INV.UM.CNV
+    INVSCAL=ICR.SCAL
+    INVUM=INV.UNIT<1,2>
+  END ELSE
+    ERRMSG = 'Inventory is not on file.  Try again'
+    GOTO SET.ERROR
+  END
+  MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE ELSE MAT CATG.REC = ''
+  ERRMSG = "" ; IN_PARAM = "" ; OUT_PARAM = "" ; MAT INV.CNV.REC = ""
+  CALL GetInvUMCnv(ERRMSG,IN_PARAM,OUT_PARAM,MAT INV.CNV.REC,MAT INV.REC)
+*
+*---- PROCESSING
+*
+* if bFlag = 'ALL' then process all the records
+* else just process the record of current whse & loc
+   FOR MX = 1 TO INVSCAL
+      MIN.QTY.CNV = MIN.QTY.CNV * 10
+   NEXT MX
+  WORK.REC=""
+  TMP.REC=""
+ 	IF CURRENT_WAREHOUSE = "ALL" THEN
+		W.CNT = DCOUNT(INV.WHSE.CODE,VM)
+	END ELSE
+		W.CNT = 1
+	      INV.WHSE.CODE<1,1> = CURRENT_WAREHOUSE
+	END
+
+  FOR W = 1 TO W.CNT
+
+    IWH.ID = CONO:PROD.NO:"!":INV.WHSE.CODE<1,W>
+    MATREAD IWH.REC FROM INV.WHSE,IWH.ID ELSE CONTINUE
+
+    IF CURRENT_LOCATION = 'ALL' THEN
+       L.CNT = DCOUNT(IWH.LOC<1>,VM)
+    END ELSE
+      L.CNT = 1
+    END
+
+    FOR L = 1 TO L.CNT
+
+      IF CURRENT_LOCATION = 'ALL' THEN 
+		IWLO.ID = IWH.ID:"!":IWH.LOC<1,L>
+      END ELSE
+		IWH.LOC<1,L> = CURRENT_LOCATION
+		IWLO.ID = IWH.ID:"!":IWH.LOC<1,L>
+      END
+      
+      MATREAD IWLO.REC FROM INV.WHSE.LOC,IWLO.ID THEN
+        S.CNT = DCOUNT(IWLO.SERIAL,VM)
+        FOR S = 1 TO S.CNT
+          ISTK.ID = CONO:IWLO.SERIAL<1,S>
+          MATREAD ISTK.REC FROM INV_SERIAL,ISTK.ID THEN
+            RECP.ID = CONO:ISTK.RECP
+            MATREAD INVR.REC FROM INV_RECEIPTS,RECP.ID ELSE
+              MAT INVR.REC = ""
+            END
+   
+            WORK.REC = INSERT(WORK.REC,1,-1,0,ISTK.WHSE)     
+            WORK.REC = INSERT(WORK.REC,2,-1,0,ISTK.LOC)      
+            IF CATG.TRK.LVL='S' THEN
+              WORK.REC = INSERT(WORK.REC,3,-1,0,IWLO.SERIAL<1,S>)     
+            END ELSE
+              RECP=IWLO.SERIAL<1,S>[2,99]
+              RECP=OCONV(RECP,"G!1")
+              WORK.REC=INSERT(WORK.REC,3,-1,0,RECP)
+            END
+            TMP.DATE = OCONV(INVR.ENT.DATE,'D2/')
+            CURR.QTY = ISTK.CUR.QTY
+            CURR.QTY = INT(((CURR.QTY/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+           
+            WORK.REC = INSERT(WORK.REC,4,-1,0,CURR.QTY) 
+            WORK.REC = INSERT(WORK.REC,5,-1,0,TMP.DATE)
+          END
+        NEXT S
+      END
+    NEXT L.CNT
+  NEXT W
+   IF CURRENT_WAREHOUSE = "ALL" THEN
+      TMP.REC<1> = WORK.REC<1>
+      TMP.REC<2> = WORK.REC<2>
+      TMP.REC<3> = WORK.REC<3>
+      TMP.REC<4> = WORK.REC<4>
+      TMP.REC<5> = WORK.REC<5>
+      TMP.REC<6> = WORK.REC<6>
+      TMP.REC<7> = WORK.REC<7>
+   END ELSE
+   NUM.VALUE = DCOUNT(WORK.REC<1>,VM)
+      TINDX = 0
+      FOR I = 1 TO NUM.VALUE
+         IF WORK.REC<1,I>= CURRENT_WAREHOUSE THEN
+            TINDX = TINDX + 1
+            TMP.REC<1,TINDX> = WORK.REC<1,I>
+            TMP.REC<2,TINDX> = WORK.REC<2,I>
+            TMP.REC<3,TINDX> = WORK.REC<3,I>
+            TMP.REC<4,TINDX> = WORK.REC<4,I>
+            TMP.REC<5,TINDX> = WORK.REC<5,I>
+          
+         END
+      NEXT I
+   END
+   IF CURRENT_LOCATION # "ALL" THEN
+      NUM.VALUE = DCOUNT(TMP.REC<1>,VM)
+      FOR I = NUM.VALUE TO 1 STEP -1
+         IF "X":TMP.REC<2,I>#"X":CURRENT_LOCATION THEN
+            TMP.REC = DELETE(TMP.REC,1,I,0)
+            TMP.REC = DELETE(TMP.REC,2,I,0)
+            TMP.REC = DELETE(TMP.REC,3,I,0)
+            TMP.REC = DELETE(TMP.REC,4,I,0)
+            TMP.REC = DELETE(TMP.REC,5,I,0)
+          
+         END
+      NEXT I
+   END
+ IF MIN_QTY > 0 THEN
+      NUM.VALUE = DCOUNT(TMP.REC<1>,VM)
+      FOR I = NUM.VALUE TO 1 STEP -1
+         IF TMP.REC<4,I> < (MIN_QTY * MIN.QTY.CNV) THEN
+            TMP.REC = DELETE(TMP.REC,1,I,0)
+            TMP.REC = DELETE(TMP.REC,2,I,0)
+            TMP.REC = DELETE(TMP.REC,3,I,0)
+            TMP.REC = DELETE(TMP.REC,4,I,0)
+            TMP.REC = DELETE(TMP.REC,5,I,0)
+           
+         END
+      NEXT I
+   END
+  SD = "" ; NUM.VALUE = DCOUNT(TMP.REC<1>, VM)
+ FOR I = 1 TO NUM.VALUE
+         LOCATE TMP.REC<5,I> IN SD<5>,1 BY "AR" SETTING TINDX THEN
+            SD = INSERT(SD,1,TINDX,0,TMP.REC<1,I>)
+            SD = INSERT(SD,2,TINDX,0,TMP.REC<2,I>)
+            SD = INSERT(SD,3,TINDX,0,TMP.REC<3,I>)
+            IF INVUM="LBS" OR INVUM="MSI" THEN
+              SD = INSERT(SD,4,TINDX,0,OCONV(TMP.REC<4,I>,"MD2"))
+            END ELSE
+              SD = INSERT(SD,4,TINDX,0,OCONV(TMP.REC<4,I>,ICR.CNV1))
+            END
+            SD = INSERT(SD,5,TINDX,0,TMP.REC<5,I>)
+       
+         END ELSE
+            SD = INSERT(SD,1,TINDX,0,TMP.REC<1,I>)
+            SD = INSERT(SD,2,TINDX,0,TMP.REC<2,I>)
+            SD = INSERT(SD,3,TINDX,0,TMP.REC<3,I>)
+            IF INVUM="LBS" OR INVUM="MSI" THEN
+              SD = INSERT(SD,4,TINDX,0,OCONV(TMP.REC<4,I>,"MD2"))
+            END ELSE
+              SD = INSERT(SD,4,TINDX,0,OCONV(TMP.REC<4,I>,ICR.CNV1))
+            END
+            SD = INSERT(SD,5,TINDX,0,TMP.REC<5,I>)
+         
+         END
+      NEXT I
+
+ 
+*
+*---- BUILD RBO RECORD
+*
+  STATUS = RBO.setProperty('','I_WHSE_IDS',SD<1>)
+  STATUS = RBO.setProperty('','I_LOC_IDS',SD<2>)
+  STATUS = RBO.setProperty('','I_SER_RECP_IDS',SD<3>)
+  STATUS = RBO.setProperty('','I_STOCK_QTYS',SD<4>)
+  STATUS = RBO.setProperty('','I_RECV_DATES',SD<5>)
+  RETURN
+*
+*ADDED NEW
+
+1845:
+   TEST.LINES = ''; TEST.CURR = ''; TEST.MIN = ''
+   TEST.LINES=DCOUNT(SD<4>,VM)
+
+   FOR J=TEST.LINES TO 1 STEP -1
+       *TEST.CURR=INT((SD<4,J> / ODVD)+.5)
+	TEST.CURR=INT(SD<4,J>)
+      *IF ICR.TYPE=4 THEN
+         TEST.MIN = MIN_QTY * MIN.QTY.CNV
+STATUS=RBO.setProperty('','TEMPVAL',TEST.CURR:"**":TEST.MIN :"**":TEST.LINES)
+      *END ELSE
+      *   TEST.MIN =MIN_QTY * MIN.QTY.CNV *  100
+      *END
+      IF TEST.CURR < TEST.MIN THEN
+         GOSUB DELETE.SD
+      END ELSE
+	  SD<4,J> = OCONV(SD<4,J>,ICR.CNV1)
+      END
+   NEXT J
+RETURN
+
+DELETE.SD: 
+   SD=DELETE(SD,1,J)
+   SD=DELETE(SD,2,J)
+   SD=DELETE(SD,3,J)
+   SD=DELETE(SD,4,J)
+   SD=DELETE(SD,5,J)
+   
+   *SD=DELETE(SD,6,1,I)
+   *SD=DELETE(SD,7,1,I)
+   *SD=DELETE(SD,8,1,I)
+   *SD=DELETE(SD,9,1,I)
+   *SD=DELETE(SD,10,1,I)
+   *SD=DELETE(SD,11,1,I)
+RETURN
+*END
+SET.ERROR: 
+*
+  STATUS = RBO.setProperty('','ServerStatus',1)
+  STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+  RETURN
+END

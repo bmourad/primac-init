@@ -1,0 +1,411 @@
+SUBROUTINE CONVERT_TO_PS(EMAIL_PARAM, TEXT.REC, ERRMSG)
+*********************************************************************
+* REVISION     - [12.0]
+* Copyright 2001 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM       - PRIMAC
+* SOURCE       - PMCBP
+* PROGRAM      - CONVERT.TO.PS
+* BY           - ABDULLAH JIBALY, COMPUTER BUSINESS ASSOCIATES
+* DATE         - 10/19/2001
+* DESCRIPTION  - This subroutine converts a unidata file to
+*                Adobe PostScript format
+*              - SEE TASK 26206
+*
+* ARGUMENTS    - TEXT.FILE.NAME: Directory that contains file to be converted
+*                TEXT.REC.NAME : The record name of the file to be converted
+*                FORMATSTR     : Property-value string, can contain the
+*                                following values, or else the default is used:
+*                                (The property names are in attribute 1, and the
+*                                values in attribute 2)
+*                  Property--------------   Default----
+*                  "FORMATSTR-PATH"         
+*                  "PAGE-FORMAT"            "LANDSCAPE"
+*                  "FONT-SIZE"              9
+*                  "LINE-HEIGHT"            9.5
+*                  "IMAGE-FILE-PATH"
+*                  "TOP-MARGIN"             0.5
+*                  "LEFT-MARGIN"            0.5
+*                  "REMOVE-EMPTY-PAGES"     "NO"
+*                  "CONVERT-TO-PDF"         "NO"
+* 
+* REQUIRED SOFTWARE: UNIX- GHOSTSCRIPT; WINDOWS- CYGWIN WITH GHOSTSCRIPT
+* THIS ROUTINE IS A COMBINATION OF PMC_VIEW_SUB AND CONVERT_TO_PS
+*ENDDOC
+*T28346 thompson 12/02/2004 * Add duplex capability to output per WAY.
+*T28346 Added by Lakshmi Prasanna on 22/03/05
+*********************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE PMC.CPYLIB COMPANY
+$INCLUDE PMC.CPYLIB SECURITY
+$INCLUDE CPYLIB CHAR
+
+* Insert method code here
+
+ERRMSG = ""
+OPEN '',"_HOLD_" TO HOLD.FILE ELSE
+	ERRMSG = "HOLD FILE IS MISSING"
+      	GOTO 99999
+END
+
+OPEN 'VOC' TO VOC.FILE ELSE
+	ERRMSG = 'CANNOT LOCATE THE VOC FILE!'
+	GOTO 99999
+END
+
+CONO = EMAIL_PARAM<1>
+CO.NAME = EMAIL_PARAM<2>
+HF.NAME = EMAIL_PARAM<3>
+EMAIL.FORMAT = EMAIL_PARAM<4>
+EMAIL.ADDRESS = EMAIL_PARAM<5>
+SUBJECT = EMAIL_PARAM<6>
+EMAIL.PLATFORM = EMAIL_PARAM<7>
+PPSR_ID = EMAIL_PARAM<8>
+RB.FLAG = EMAIL_PARAM<9>
+VIEW_ID = ""
+
+IF PPSR_ID = "" THEN
+	P_DATE = DATE()
+      	READU XXX_REC FROM HOLD.FILE, CONO:"PMC_VIEW" ELSE XXX_REC = ""
+      	PPSR_ID = ""
+      	LOOP
+      	UNTIL PPSR_ID # "" DO
+		IF XXX_REC<1> = "" OR P_DATE > XXX_REC<1> THEN
+            		XXX_REC<1> = P_DATE
+            		XXX_REC<2> = 0
+         	END
+         	XXX_REC<2> += 1
+         	PPSR_ID = CONO : P_DATE : "!" : XXX_REC<2>
+         	READU DUMMY FROM HOLD.FILE, PPSR_ID THEN
+            		PPSR_ID = ""
+         	END LOCKED
+            		PPSR_ID = ""
+         	END
+      	REPEAT
+      	DUMMY = ""
+      	WRITE XXX_REC ON HOLD.FILE, CONO:"PMC_VIEW"
+END
+*
+READ HOLD.REC FROM HOLD.FILE, HF.NAME ELSE HOLD.REC = ''
+WRITE HOLD.REC ON HOLD.FILE, PPSR_ID
+
+*CALL CONVERT.TO.PDF("_HOLD_",PPSR_ID,'') ;* FOLOWING ARE THE ONLY 3 INSTRCUTIONS IN CONVERT.TO.PDF SUBROUTINE
+FORMATSTR<1,-1> = "CONVERT-TO-PDF"
+FORMATSTR<2,-1> = "YES"
+TEXT.FILE.NAME = "_HOLD_"
+TEXT.REC.NAME = PPSR_ID
+*CALL CONVERT.TO.PS(TEXT.FILE.NAME,TEXT.REC.NAME,FORMATSTR)
+*(TEXT.FILE.NAME,TEXT.REC.NAME,FORMATSTR)
+
+*THIS IS THE PROCESS IN CONVERT.TO.PS SUBROUTINE
+OPEN TEXT.FILE.NAME TO TEXT.FILE ELSE
+	ERRMSG = 'CANNOT OPEN THE ' : TEXT.FILE.NAME : ' FILE!'
+	GOTO 99999
+END
+
+CMD.SEP = " && "
+
+*READ TEXT.REC FROM TEXT.FILE, TEXT.REC.NAME ELSE
+*	ERRMSG = "ITEM " : TEXT.REC.NAME : " DOES NOT EXIST IN " : TEXT.FILE.NAME
+*    	GOTO 99999
+*END
+;*
+;* Assign ASCII char 12 (form-feed) as the delimeter for an image
+;* background (for the new page)
+;*
+IMG.ASCII = 12
+IMG.DELIM = CHAR(IMG.ASCII)
+;*
+;* Set default values
+;* Read the formatstr if specified
+;*
+LOCATE "FORMATSTR-PATH" IN FORMATSTR<1> SETTING PTR THEN
+	OLD.FORMATSTR = FORMATSTR
+	FORMATSTR.PATH = FORMATSTR<2,PTR>
+    	FORMATSTR.DIR  = FIELD(FORMATSTR.PATH,'/',1)
+    	FORMATSTR.ID   = FIELD(FORMATSTR.PATH,'/',2)
+    	OPEN FORMATSTR.DIR TO FORMATSTR.FILE ELSE
+      		ERRMSG = 'CANNOT OPEN THE <' : FORMATSTR.DIR : '> DIRECTORY!'
+      		GOSUB 99999
+      		RETURN
+    	END
+    	READ FORMATSTR FROM FORMATSTR.FILE, FORMATSTR.ID ELSE
+      		ERRMSG = 'CANNOT READ THE <' : FORMATSTR.ID : '> RECORD.'
+      		GOSUB 99999
+      		RETURN
+    	END
+    	FS.CNT = DCOUNT(OLD.FORMATSTR<1>,@VM)
+    	FOR FS.IDX = 1 TO FS.CNT
+      		LOCATE OLD.FORMATSTR<1,FS.IDX> IN FORMATSTR<1> SETTING PTR ELSE
+        		FORMATSTR<1,PTR> = OLD.FORMATSTR<1,FS.IDX>
+      		END
+      		FORMATSTR<2,PTR> = OLD.FORMATSTR<2,FS.IDX>
+    	NEXT FS.IDX
+END
+;*
+;* Default margins
+;*
+TOP.MARGIN = 0.5
+LOCATE "TOP-MARGIN" IN FORMATSTR<1> SETTING PTR THEN
+	TOP.MARGIN = FORMATSTR<2,PTR>
+END
+BOT.MARGIN = 0.25
+LOCATE "BOT-MARGIN" IN FORMATSTR<1> SETTING PTR THEN
+	BOT.MARGIN = FORMATSTR<2,PTR>
+END
+LEFT.MARGIN = 0.5
+LOCATE "LEFT-MARGIN" IN FORMATSTR<1> SETTING PTR THEN
+	LEFT.MARGIN = FORMATSTR<2,PTR>
+END
+;*
+;* Default page orientation is wide (landscape)
+;*
+PAGE.HEIGHT = 612
+PAGE.WIDTH  = 792
+LOCATE "PAGE-FORMAT" IN FORMATSTR<1> SETTING PTR THEN
+	IF FORMATSTR<2,PTR> = "PORTRAIT" THEN
+      		PAGE.HEIGHT = 792
+      		PAGE.WIDTH  = 612
+    	END
+END
+
+PAGE.FORMAT = "<< /PageSize  [":PAGE.WIDTH:" "
+
+* T28346 PAGE.FORMAT:= PAGE.HEIGHT : "] >> setpagedevice"; 
+
+ *T28346 v
+
+     PAGE.FORMAT:= PAGE.HEIGHT:"] " 
+     PAGE.FORMAT:=  "/Duplex true >> setpagedevice" 
+
+ *T28346 ^
+
+PAGE.START  = 72 * LEFT.MARGIN : " " : PAGE.HEIGHT - 72*TOP.MARGIN : " moveto"
+;*
+;* Default font size is 9 pts
+;*
+FONT.SIZE = 9
+LOCATE "FONT-SIZE" IN FORMATSTR<1> SETTING PTR THEN
+	FONT.SIZE = FORMATSTR<2,PTR>
+END
+;*
+;* Default line height is 9 pts
+;*
+LINE.HEIGHT = 9
+LOCATE "LINE-HEIGHT" IN FORMATSTR<1> SETTING PTR THEN
+	LINE.HEIGHT = FORMATSTR<2,PTR>
+END
+;*
+;* No backround image by default
+;*
+IMG.FILE.PATH = ''
+LOCATE "IMAGE-FILE-PATH" IN FORMATSTR<1> SETTING PTR THEN
+	IMG.FILE.PATH = FORMATSTR<2,PTR>
+END
+IF IMG.FILE.PATH # '' THEN
+	IMG.DIR.NAME  = FIELD(IMG.FILE.PATH,'/',1)
+    	IMG.FILE.NAME = FIELD(IMG.FILE.PATH,'/',2)
+    	READ REC FROM VOC.FILE, IMG.DIR.NAME ELSE
+      		ERRMSG = "Missing VOC entry for <" : IMG.DIR.NAME : ">."
+      		GOTO 99999
+    	END
+    	IMG.FILE.PATH = REC<2> : '/' : IMG.FILE.NAME
+    	SWAP "/" WITH "\" IN IMG.FILE.PATH
+END
+;*
+;* Do not remove empty pages by default
+;*
+REMOVE.EMPTY.PAGES = 0
+LOCATE "REMOVE-EMPTY-PAGES" IN FORMATSTR<1> SETTING PTR THEN
+	IF FORMATSTR<2,PTR> = "YES" THEN REMOVE.EMPTY.PAGES = 1
+END
+;*
+;* Do not convert to PDF by default
+;*
+CONVERT.TO.PDF = 0
+LOCATE "CONVERT-TO-PDF" IN FORMATSTR<1> SETTING PTR THEN
+	IF FORMATSTR<2,PTR> = "YES" THEN CONVERT.TO.PDF = 1
+END
+;*
+;* Define the postscript header for each page
+;*
+NEWLN = CHAR(13):CHAR(10)
+NEWPG = "showpage":NEWLN
+NEWPG:= PAGE.FORMAT:NEWLN
+NEWPG:= IMG.DELIM:NEWLN
+NEWPG:= PAGE.START:NEWLN
+;*
+;* Calculate maximum number of lines per page
+;*
+PAGE.MAX.LINES = PAGE.HEIGHT - 72*TOP.MARGIN - 72*BOT.MARGIN
+PAGE.MAX.LINES = PAGE.MAX.LINES / LINE.HEIGHT
+;*
+;*
+;* Define functions at the beginning of the postscript file
+;* Desc of font array:
+;* [ charwidth rotation italicization fontsize left/right-pos top/down-pos ]
+;*
+POSTSCRIPT.REC = "%!PS-Adobe-3.0"
+POSTSCRIPT.REC:= "%%Creator: PRIMAC":NEWLN
+POSTSCRIPT.REC:= "/Courier findfont [ ":FONT.SIZE:" 0 0 ":NEWLN
+POSTSCRIPT.REC:= FONT.SIZE:" 0 0 ] makefont setfont":NEWLN
+POSTSCRIPT.REC:= "/showline { gsave show grestore 0 -":LINE.HEIGHT
+POSTSCRIPT.REC:= "  rmoveto } def":NEWLN
+POSTSCRIPT.REC:= PAGE.FORMAT:NEWLN
+POSTSCRIPT.REC:= IMG.DELIM:NEWLN
+POSTSCRIPT.REC:= PAGE.START:NEWLN
+
+;*
+;* Process first line seperately, it cannot begin with a new page
+;*
+LOOP WHILE TEXT.REC<1> = IMG.DELIM DO
+	TEXT.REC = DELETE(TEXT.REC,1)
+REPEAT
+IF TEXT.REC<1>[1,1] = IMG.DELIM THEN
+	TEXT.REC<1> = TEXT.REC<1>[2,LEN(TEXT.REC)]
+END
+;*
+;* Iterate through every line in the text and convert to postscript
+;*
+IS.NEW.PAGE = 1
+THIS.PAGE.LINES = 0
+
+LINES = DCOUNT(TEXT.REC,@AM)
+
+HD1 		= TEXT.REC<1>
+HD2 		= TEXT.REC<2>
+HD3 		= TEXT.REC<3>
+HD4 		= TEXT.REC<4>
+HD5 		= TEXT.REC<5>
+PRINT.DATA 	= TEXT.REC<6>
+
+*DB.TOT		= TEXT.REC<5>
+*CR.TOT		= TEXT.REC<6>
+*OUT.OF.RANGE	= TEXT.REC<7>
+*FORMAT.STR = ""
+*FORMAT.STR = TEXT.REC<1> : @AM : TEXT.REC<2> : @AM : TEXT.REC<3> : @AM : " " : @AM : TEXT.REC<4> : @AM : TEXT.REC<5> : @AM : TEXT.REC<6>
+*TEXT.REC = ""
+*TEXT.REC = FORMAT.STR
+******************************************************
+
+***PRINT.DATA = CHANGE(PRINT.DATA,@VM,NEWLN)
+
+*FORMAT.STR = HD1 : NEWLN : HD2 : NEWLN : HD3 : NEWLN : PRINT.DATA : NEWLN : DB.TOT : CR.TOT : NEWLN : OUT.OF.RANGE
+***FORMAT.STR = HD1 : @AM : HD2 : @AM : HD3 : @AM : PRINT.DATA : @AM : DB.TOT : CR.TOT : @AM : OUT.OF.RANGE
+***FORMAT.STR = HD1 : @AM : HD2 : @AM : HD3 : @AM : " " : @AM : HD4 : @AM : HD5 : @AM : PRINT.DATA
+***TEXT.REC = FORMAT.STR
+******************************************************
+MAX.LINES = 60
+FOR INDEX = 1 TO LINES
+	;*
+    	;* Delimit reserved characters in the line
+    	;*
+   	TEXT.REC<INDEX> = CHANGE(TEXT.REC<INDEX>,"\","\\")
+    	TEXT.REC<INDEX> = CHANGE(TEXT.REC<INDEX>,"(","\(")
+    	TEXT.REC<INDEX> = CHANGE(TEXT.REC<INDEX>,")","\)")
+    	;*
+    	;* Check for a pagefeed or if text has reached maximum line number
+    	;*
+	NEW.PAGE.MARKER = 0
+    	FINDSTR IMG.DELIM IN TEXT.REC<INDEX> SETTING NEW.PAGE.MARKER THEN NULL
+   	***IF THIS.PAGE.LINES GE PAGE.MAX.LINES OR NEW.PAGE.MARKER THEN
+		
+      	TEXT.REC<INDEX> = CHANGE(TEXT.REC<INDEX>,IMG.DELIM,'')
+      	***IF REMOVE.EMPTY.PAGES AND IS.NEW.PAGE THEN
+       ***	NULL
+      	***END ELSE IF INDEX # LINES THEN
+       ***	POSTSCRIPT.REC:= NEWPG
+      	***END
+	IF (THIS.PAGE.LINES GE MAX.LINES) THEN
+		POSTSCRIPT.REC := " " : NEWPG
+      		IS.NEW.PAGE = 1
+		THIS.PAGE.LINES = 0
+	END
+      	***THIS.PAGE.LINES = 0
+      	***IF TEXT.REC<INDEX> # '' THEN
+	CNT1 = DCOUNT(TEXT.REC<INDEX>,@VM)
+	FOR I = 1 TO CNT1
+		TEXT.REC<INDEX,I> = "(" : TEXT.REC<INDEX,I> : ")" : " showline"
+		THIS.PAGE.LINES += 1
+		IF (THIS.PAGE.LINES GE MAX.LINES) THEN
+			POSTSCRIPT.REC := " " : NEWPG
+      			IS.NEW.PAGE = 1
+			THIS.PAGE.LINES = 0
+		END
+		POSTSCRIPT.REC := TEXT.REC<INDEX,I>
+	NEXT
+	
+	IS.NEW.PAGE = 0
+	IF CNT1 = 0 THEN 
+		POSTSCRIPT.REC:= TEXT.REC<INDEX>
+		THIS.PAGE.LINES += 1
+	END
+NEXT INDEX
+
+POSTSCRIPT.REC = CHANGE(POSTSCRIPT.REC,@VM,NEWLN)
+
+POSTSCRIPT.REC := " showpage"
+POSTSCRIPT.REC.PATH = "./":TEXT.FILE.NAME:"/":TEXT.REC.NAME
+PS.INPUT = POSTSCRIPT.REC.PATH:".ps1"
+PS.OUTPUT = POSTSCRIPT.REC.PATH:".ps"
+;*
+;* If there is no background image then remove image delimiter
+;* and write out the postscript file
+;*
+
+IF TRIM(IMG.FILE.PATH) = '' THEN
+	SWAP IMG.DELIM WITH '' IN POSTSCRIPT.REC
+    	OSWRITE POSTSCRIPT.REC ON PS.OUTPUT
+	CONVERT.TO.PDF = 1
+    	IF CONVERT.TO.PDF THEN GOTO PS2PDF
+END
+;*
+;* Otherwise if background image exists,
+;* create temp record containing postscript file
+;*
+
+OSWRITE POSTSCRIPT.REC ON PS.INPUT
+;*
+;* Convert all occurrences of ASCII char 12 to the background image
+;*
+STMT = "!cp_replace " : PS.INPUT : " " : PS.OUTPUT : " "
+STMT:= IMG.FILE.PATH : " " : IMG.ASCII
+UDTEXECUTE STMT CAPTURING CAP RETURNING RET
+;*
+;* Delete temp postscript record
+;*
+DELETE TEXT.FILE, TEXT.REC.NAME : ".ps1"
+*
+********************
+* PS2PDF           *
+********************
+*
+PS2PDF:
+STMT = "!cd " : TEXT.FILE.NAME : CMD.SEP
+STMT:= "sh /bin/ps2pdf " : TEXT.REC.NAME : ".ps"
+UDTEXECUTE STMT CAPTURING CAP RETURNING RET
+DELETE TEXT.FILE, TEXT.REC.NAME : ".ps"
+
+
+VIEW_ID = PPSR_ID : ".pdf"
+
+IF RB.FLAG = "" THEN
+	UDTEXECUTE "!acrobat _HOLD_\":VIEW_ID
+END
+
+IF RB.FLAG # "" THEN
+	STMT2 = "copy FROM _HOLD_ TO LOCAL_REPORTS "
+   	STMT2 := VIEW_ID : "," : VIEW_ID
+   	UDTEXECUTE STMT2 CAPTURING MESG
+END
+
+***DELETE HOLD.FILE, HF.NAME
+
+VAL = RBO.setProperty('','ReportImage',VIEW_ID)
+
+99999
+IF ERRMSG # "" THEN
+      STATUS = RBO.setProperty('', 'ServerStatus', 'E')
+      STATUS = RBO.setProperty('', 'ServerMessage', ERRMSG)
+END
+RETURN
+* End of method code

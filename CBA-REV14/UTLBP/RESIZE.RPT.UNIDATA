@@ -1,0 +1,320 @@
+*
+*   this pgm will process an entire account structure for primac acct
+*    the program will go through each module and determine based
+*    upon the FILESTAT verb the recommended size for a file.  if the
+*    recommendation is to change the filesize the program will report
+*    on all recommendations over the speicified percentage and changes
+*    that are larger than the number of frames change specified.   This
+*    pgm must be given a CBA- path or PMC module path for it to work.
+*
+*    rickb 8/21/95
+*
+PATH = @PATH
+DO.DEBUG=1
+*
+NUMFIELDS = DCOUNT(PATH,"/")
+ACCTNAME = FIELD(PATH,"/",NUMFIELDS)
+*
+100 *
+PRINT "ENTER THRESHOLD (10,20,30 PERCENT)":
+INPUT CHGPCT
+IF CHGPCT = 'END' THEN STOP
+IF NUM(CHGPCT) THEN
+  CHGPCT = CHGPCT / 100
+END ELSE
+  PRINT "INVALID ENTRY TRY AGAIN"
+  GOTO 100
+END
+*
+200 *
+PRINT "This field is when the number of frames difference is > {specified} "
+PRINT "  then go ahead and report the change regardless of percentage"
+PRINT "ENTER FRAMES TO CHANGE (100,1000,3000...)":
+INPUT FRMSCHG
+IF FRMSCHG = 'END' THEN STOP
+IF NUM(FRMSCHG) ELSE
+  PRINT "INVALID ENTRY TRY AGAIN"
+  GOTO 200
+END
+PRINTER ON
+GOSUB 2000
+PRINTER OFF
+*
+EQU VM TO CHAR(253)
+EQU AM TO CHAR(254)
+ISDASH = INDEX(PATH,"-",1)
+ISDASH = INDEX(ACCTNAME,"-",1)
+OPEN 'CONTROL' TO CONTROL THEN
+  READV OACCTLIST FROM CONTROL,'MENUS.CONTROL',6 ELSE
+    OACCTLIST = "APS":VM:"ARS":VM:"GLS":VM:"ICS":VM:"JCS":VM:"JES":VM:"PRS":VM
+    OACCTLIST = OACCTLIST:"POS":VM:"PSS":VM:"OPS":VM:"SAS"
+  END
+END ELSE PRINT 'CANNOT OPEN CONTROL FILE';INPUT X;STOP
+NUMACCT = DCOUNT(OACCTLIST,VM)
+ACCTLIST=''
+IF NOT(ISDASH) THEN
+  BASENAME = ACCTNAME
+END ELSE
+  BASENAME = FIELD(ACCTNAME,"-",2)
+END
+FOR II = 1 TO NUMACCT
+  IF II = 1 THEN
+    ACCTLIST = BASENAME:"-":OACCTLIST<1,II>
+  END ELSE
+    ACCTLIST<1,-1> = BASENAME:"-":OACCTLIST<1,II>
+  END
+NEXT II
+*
+IF NOT(ISDASH) OR ACCTNAME[1,4] = "CBA-" THEN
+  IF ACCTNAME[1,4] = "CBA-" THEN
+    ACCTLIST = BASENAME:VM:ACCTLIST
+    CURRACCT = ACCTNAME
+    GOSUB 1000
+  END ELSE
+    CURRACCT = ACCTNAME
+    GOSUB 1000
+  END
+  OPEN "VOC" TO CURVOC ELSE
+    PRINT "CANNOT OPEN VOC FILE! ABORT.";STOP
+  END
+  NUMACCTS = DCOUNT(ACCTLIST,VM)
+  FOR ACTR = 1 TO NUMACCTS
+    CURRACCT = ACCTLIST<1,ACTR>
+    VPATH = "../":CURRACCT:"/VOC"
+    VERB = "SETFILE ":VPATH:" QREMVOC OVERWRITING"
+    UDTEXECUTE VERB CAPTURING JUNK
+    IF INDEX(JUNK,"No such file:",1) THEN
+*SETFILE FAILED GO TO NEXT
+    END ELSE
+      OPEN "QREMVOC" TO REMVOC THEN
+        READ LREC FROM REMVOC,"LOGIN" THEN
+          XX="PQN":AM:"X"
+          WRITE XX ON REMVOC,"LOGIN"
+          VERB = "LOGTO ../":CURRACCT
+          UDTEXECUTE VERB CAPTURING JUNK
+          WRITE LREC ON REMVOC,"LOGIN"
+          GOSUB 1000
+          READ FREC FROM CURVOC,"LOGIN" THEN
+            DELETE CURVOC,"LOGIN"
+          END
+          VERB = "LOGTO ":PATH
+          UDTEXECUTE VERB CAPTURING JUNK
+          WRITE FREC ON CURVOC,"LOGIN"
+        END ELSE
+          VERB = "LOGTO ../":CURRACCT
+          UDTEXECUTE VERB CAPTURING JUNK
+          GOSUB 1000
+          READ FREC FROM CURVOC,"LOGIN" THEN
+            DELETE CURVOC,"LOGIN"
+          END
+          VERB = "LOGTO ":PATH
+          UDTEXECUTE VERB CAPTURING JUNK
+          WRITE FREC ON CURVOC,"LOGIN"
+          WRITE "PQN":AM:"X" ON REMVOC,"LOGIN"
+        END
+      END
+    END
+  NEXT ACTR
+END ELSE
+  PRINT "Cannot run from this acct ":ACCTNAME
+END
+STOP
+1000 *
+PRINTER ON
+PRINT
+PRINT "Processing ":CURRACCT
+LCTR=LCTR+2
+IF LCTR > 58 THEN GOSUB 2000
+OPEN "VOC" TO VOC ELSE PRINT "NO OPEN VOC";STOP
+* ADD A PTR TO THIS VOC
+PTRREC = "DIR"
+PTRREC<2> = "."
+PTRREC<3> = "D_VOC"
+WRITE PTRREC ON VOC,"SPEC.PTR.LOCAL"
+OPEN "SPEC.PTR.LOCAL" TO LOCAL.VOC ELSE
+  PRINT "UNABLE TO OPEN LOCAL VOC IN ": CURRACCT
+  RETURN
+END
+VERB = "SSELECT VOC WITH F1 LIKE F..."
+UDTEXECUTE VERB
+DONE = 0
+LOOP
+  READNEXT ID ELSE DONE = 1
+UNTIL DONE DO
+  READ REC FROM VOC,ID THEN
+    BEGIN CASE
+      CASE ID = "VOC" OR ID = "voc" OR ID = "AE.COMS" OR ID = "AE_COMS"
+      CASE ID = "DL/ID" OR ID = "SYMBOLS"
+      CASE ID # REC<2>
+      CASE 1
+        IF INDEX(REC,"/",1) = 0 THEN
+          VERB = "FILE-STAT ":ID
+          VERB = "!guide ":ID
+          UDTEXECUTE VERB CAPTURING JUNK
+          CURR.SEP='';CURR.MOD='';PRED.SEP='';PRED.MOD=''
+          READ STATS FROM LOCAL.VOC,"GUIDE_STATS.LIS" THEN
+            GOSUB 3000
+          END
+          DLIST = 0
+          STMT = "SELECT SPEC.PTR.LOCAL WITH @ID LIKE ...GUIDE_..."
+          UDTEXECUTE STMT CAPTURING JUNK
+          LOOP
+             READNEXT THEID ELSE DLIST = 1
+          UNTIL DLIST DO
+             DELETE LOCAL.VOC, THEID
+          REPEAT
+          IF NUM(CURR.SEP) AND NUM(CURR.MOD) AND NUM(PRED.SEP) AND NUM(PRED.MOD) AND PRED.SEP # "" THEN
+            CURRNUMFRAMES = CURR.MOD * CURR.SEP
+            PREDNUMFRAMES = PRED.MOD * PRED.SEP
+          END ELSE
+            CURRNUMFRAMES = 0
+            PREDNUMFRAMES = 0
+          END
+          FROMSIZE = INT(TRIM(FIELD(JUNK<2>,"=",2)))
+          TOSIZE   = INT(TRIM(FIELD(JUNK<25>,"=",2)))
+          FROMSIZE = CURRNUMFRAMES
+          TOSIZE = PREDNUMFRAMES
+          IF TOSIZE = "0" OR TOSIZE = "" THEN
+* SKIP IT
+          END ELSE
+            DIFF = ABS(FROMSIZE - TOSIZE)
+            DOIT=0
+            IF FROMSIZE > TOSIZE THEN
+              PERCHG = INT(DIFF / FROMSIZE * 100 + .5)
+              IF DIFF > FROMSIZE * CHGPCT THEN
+                ADDON = "CHANGE FROM > %":CHGPCT
+                DOIT=1
+              END ELSE
+                IF DIFF > FRMSCHG THEN
+                  ADDON = "NO CHANGE FROM <= %":CHGPCT
+                  DOIT=1
+                END
+              END
+              ADDON = "DOWNSIZE"
+            END ELSE
+              PERCHG = INT(DIFF / TOSIZE * 100 + .5)
+              IF DIFF > TOSIZE * CHGPCT THEN
+                ADDON = "CHANGE TO > %":CHGPCT
+                DOIT=1
+              END ELSE
+                IF DIFF > FRMSCHG THEN
+                  ADDON = "NO CHANGE FROM <= %":CHGPCT
+                  DOIT=1
+                END
+              END
+              ADDON = "INCREASE"
+            END
+            IF DOIT THEN
+              PRINT "  ":ID"L#35":" FROM ":FROMSIZE"R#6":" TO ":TOSIZE"R#6":" ":ADDON
+              PRINT (SPACE(15):FILE.TYPE)"L#38":"FROM ":(CURR.MOD:",":CURR.SEP)"L#8":" TO ":
+              PRINT (PRED.MOD:",":PRED.SEP)
+*:" ":ADDON:" ":PERCHG
+              LCTR=LCTR+2
+              IF LCTR > 58 THEN GOSUB 2000
+            END
+          END
+        END
+    END CASE
+  END
+REPEAT
+PRINTER OFF
+DELETE VOC,"SPEC.PTR.LOCAL"
+*
+RETURN
+2000* 
+PRINT CHAR(12)
+LCTR = 0
+PRINT SPACE(10):"SUGGESTED FILE RESIZE LISTING":SPACE(5):OCONV(DATE(),"D2/")
+PRINT;PRINT
+RETURN
+*
+3000 *     PROCESS THE STATS RECORD
+*
+NUM.LINES = DCOUNT(STATS,@AM)
+TT = DCOUNT(STATS,@VM)
+*
+*   PROCESS CURRENT MODULO AND SEPARATION
+*
+CURR.MOD = '';CURR.SEP = ''
+DO.CONTINUE = 1
+DOES.MATCH=0
+FILE.TYPE = ""
+FOR II = 1 TO NUM.LINES WHILE DO.CONTINUE
+  CLINE = TRIM(STATS<II>)
+  CLINE = OCONV(CLINE,"MCU")
+*  IF DO.DEBUG THEN DEBUG
+  IF CLINE = ID THEN
+    DOES.MATCH=1
+  END
+  IF CLINE = "BASIC STATISTICS:" AND DOES.MATCH THEN
+    DO.CONTINUE = 0
+    STARTLINE = II + 1
+    CONTINUE.WRK = 1
+    FOR KK = STARTLINE TO NUM.LINES WHILE CONTINUE.WRK
+      WRKLINE = TRIM(STATS<KK>)
+      WRKLINE = OCONV(WRKLINE,"MCU")
+      IF WRKLINE[1,9] = "FILE TYPE" THEN
+        NUMSPACES = DCOUNT(WRKLINE," ")
+        FILE.TYPE = FIELD(WRKLINE," ",NUMSPACES)
+      END
+      IF WRKLINE[1,11] = "FILE MODULO" THEN
+        NFIELDS = DCOUNT(WRKLINE," ")
+        CURR.MOD = FIELD(WRKLINE," ",NFIELDS)
+        CONTINUE.WRK = 0
+        KEEP.ON = 1
+        CPTR = KK + 1
+        FOR JJ = CPTR TO NUM.LINES WHILE KEEP.ON
+          WRKLINE = TRIM(STATS<JJ>)
+          WRKLINE = OCONV(WRKLINE,"MCU")
+          IF WRKLINE[1,15] = "FILE BLOCK SIZE" THEN
+            NFIELDS = DCOUNT(WRKLINE," ")
+            CURR.SEP = FIELD(WRKLINE," ",NFIELDS)
+            KEEP.ON = 0
+            IF CURR.SEP >= 1024 THEN
+              CURR.SEP = CURR.SEP / 1024
+            END
+          END
+        NEXT JJ
+      END
+    NEXT KK
+  END
+NEXT II
+*
+*   PROCESS PREDICTED MODULO AND SEPARATION
+*
+PRED.MOD = '';PRED.SEP = ''
+DO.CONTINUE = 1
+FOR II = 1 TO NUM.LINES WHILE DO.CONTINUE
+  CLINE = TRIM(STATS<II>)
+  CLINE = OCONV(CLINE,"MCU")
+  IF CLINE = "PREDICTED OPTIMAL SIZE:" AND DOES.MATCH THEN
+    DO.CONTINUE=0
+    STARTLINE = II + 1
+    CONTINUE.WRK = 1
+    FOR KK = STARTLINE TO NUM.LINES WHILE CONTINUE.WRK
+      WRKLINE = TRIM(STATS<KK>)
+      WRKLINE = OCONV(WRKLINE,"MCU")
+      IF WRKLINE[1,10] = "BLOCK SIZE" THEN
+        NFIELDS = DCOUNT(WRKLINE," ")
+        PRED.SEP = FIELD(WRKLINE," ",NFIELDS)
+        IF PRED.SEP >= 1024 THEN
+          PRED.SEP = PRED.SEP / 1024
+        END
+        CONTINUE.WRK = 0
+        KEEP.ON = 1
+        CPTR = KK + 1
+        FOR JJ = CPTR TO NUM.LINES WHILE KEEP.ON
+          WRKLINE = TRIM(STATS<JJ>)
+          WRKLINE = OCONV(WRKLINE,"MCU")
+          IF WRKLINE[1,6] = "MODULO" THEN
+            NFIELDS = DCOUNT(WRKLINE," ")
+            PRED.MOD = FIELD(WRKLINE," ",NFIELDS)
+            KEEP.ON = 0
+          END
+        NEXT JJ
+      END
+    NEXT KK
+  END
+NEXT II
+RETURN
+

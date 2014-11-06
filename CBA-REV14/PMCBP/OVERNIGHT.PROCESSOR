@@ -1,0 +1,374 @@
+*********************************************************************
+*
+* Copyright 1989 by PRISYS Pty Ltd (Australasia)
+*
+* SYSTEM        - PRIMAC
+*
+* PROGRAM       - OVERNIGHT.PROCESSOR
+*
+* AUTHOR        - BERN (PRISYS Pty Ltd)
+*
+* DATE          - 14 NOV 1989
+*
+* MODIFIED      - 22 MAR 1992 by NICK AMENDOLA - VERCOM
+*
+* DESCRIPTION
+*
+* This program is used to invoke the overnight report processor,
+* and must run from a proc .
+*
+*********************************************************************
+*
+*  COPY statements
+*
+*COPY>CPYLIB>SCOMMON1
+*COPY>CPYLIB>SCREEN.COM
+*COPY>CPYLIB>FILE.VARS
+*COPY>PMC.CPYLIB>OVERNIGHT.REQUESTS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+MAT SYSCOM.REC =  ""; SYS.TYPE = 2
+*
+*  Open all files
+*
+OPEN "","CONTROL" TO CONTROL ELSE
+  ERRMSG = "CANNOT OPEN CONTROL FILE"
+  GOSUB 90000
+  STOP
+END
+OPEN "","PMC.SCREENS" TO M.SCREENS ELSE
+  ERRMSG = "CANNOT OPEN PMC.SCREENS FILE"
+  GOSUB 90000
+  STOP
+END
+*
+*  Initialization
+*
+PROCREAD PARAM ELSE PARAM = ""
+ACTION = PARAM<1>
+IF ACTION # "M" THEN ACTION = "I"
+PROMPT ""
+SCREEN INIT;#
+S$SCR = 1
+SCREEN DEFINE;OVERNIGHT.PROCESSOR
+SCREEN FORMAT
+SCREEN COUNT;;11
+LINE.COUNT = S$LCNT
+LINE.SPACE = S$LSPC
+*     EXECUTE "SP-ASSIGN"
+PORT = 'TTY'
+CALL SYSVARS.SUB(PORT)
+*
+*  Main processing
+*
+100 *
+IF ACTION = "M" THEN
+  LOCK.CNT = 0
+  LOOP
+    REC.LOCK = 0
+    MATREADU OR.REC FROM CONTROL,"OVERNIGHT.REQUESTS" LOCKED REC.LOCK=1 ELSE MAT OR.REC = ""
+  WHILE REC.LOCK DO
+    IF LOCK.CNT <= 3 THEN
+      LOCK.CNT = LOCK.CNT + 1
+      SLEEP 2
+    END ELSE
+      ERRMSG = "Processor not currently available for maintenance."
+      GOSUB 90000
+      ACTION = "I"
+      GOTO 100
+    END
+  REPEAT
+END ELSE
+  MATREAD OR.REC FROM CONTROL,"OVERNIGHT.REQUESTS" ELSE MAT OR.REC = ""
+END
+GOSUB 80000
+LINE.CNT = DCOUNT(OR.MD.PROC,VM)
+GOSUB 81000
+REF.NO = 1
+CURR.REF.NO = ""
+GOSUB 50000
+*
+*  Get operator reply
+*
+500 *
+BEGIN CASE
+  CASE ACTION = "M"
+    SCREEN FIELD;;21
+    SCREEN INPUT;;21
+  CASE 1
+    SCREEN FIELD;;23
+    SCREEN INPUT;;23
+END CASE
+OPT = S$VALUE
+*
+BEGIN CASE
+  CASE OPT = "E" OR OPT = "END"
+    GOTO 99999
+  CASE OPT = "C" AND LINE.CNT > 0
+    MODE = "C"
+    GOSUB 600
+    IF S$VALUE # "" AND S$VALUE # "END" THEN
+      REF.NO = S$VALUE
+      GOSUB 10000
+      IF S$VALUE = "END" THEN
+        CURR.REF.NO = ""
+        GOSUB 50000
+      END
+    END
+  CASE OPT = "R" AND LINE.CNT > 0
+    GOSUB 600
+    IF S$VALUE # "" AND S$VALUE # "END" THEN
+      REF.NO = S$VALUE
+      S$SCR = S$SCR + 1
+      CALL OVERNIGHT.REPORT.REVIEW(MAT OR.REC, REF.NO)
+      SCREEN CLOSE
+      S$SCR = S$SCR - 1
+      SCREEN FORMAT
+      GOSUB 80050
+      LINE.CNT = DCOUNT(OR.MD.PROC,VM)
+      CURR.REF.NO = ""
+      GOSUB 81000
+      GOSUB 50000
+    END
+  CASE OPT = "S" OR OPT = "SF"
+    REF.NO = CURR.REF.NO + LINE.COUNT
+    IF REF.NO > LINE.CNT THEN REF.NO = 1
+    GOSUB 50000
+  CASE OPT = "SR"
+    REF.NO = CURR.REF.NO - LINE.COUNT
+    IF REF.NO < 1 THEN REF.NO = 1
+    GOSUB 50000
+  CASE OPT = "ST"
+    REF.NO = 1
+    GOSUB 50000
+  CASE OPT = "SB"
+    REF.NO = LINE.CNT
+    IF REF.NO < 1 THEN REF.NO = 1
+    GOSUB 50000
+  CASE OPT = "F"
+    IFND = 0
+    FOR REF.NO = LINE.CNT TO 1 STEP -1 UNTIL IFND
+      IF OR.STATUS<1,REF.NO> = "D" THEN GOSUB 700
+      IF OR.STATUS<1,REF.NO> = "I" THEN IFND = 1
+    NEXT REF
+    MATWRITE OR.REC ON CONTROL,"OVERNIGHT.REQUESTS"
+    GOTO 99999
+  CASE OPT = "P"
+    PROCESS.OK = 0
+    FOR REF = 1 TO LINE.CNT UNTIL PROCESS.OK
+      BEGIN CASE
+        CASE OR.STATUS<1,REF> = "S"
+          PROCESS.OK = 1
+        CASE OR.STATUS<1,REF> = "H"
+          IF OR.SCHED.DATE<1,REF> <= DATE() THEN PROCESS.OK = 1
+      END CASE
+    NEXT REF
+    IF NOT(PROCESS.OK) THEN
+      ERRMSG = "Sorry, there are no requests queued! "
+      GOSUB 90000
+      GOTO 500
+    END
+    SCREEN FIELD;;24
+    SCREEN INPUT;;24;GOTO 500
+    IF S$VALUE # "" THEN
+      HH = S$VALUE[1,2]
+      MM = S$VALUE[4,2]
+      IF HH < 0 OR HH > 23 OR MM < 0 OR MM > 59 THEN
+        ERRMSG = "Invalid response! "
+        GOSUB 90000
+        GOTO 500
+      END
+    END
+    START.TIME = S$VALUE
+    IF START.TIME # "" THEN
+      MATWRITE OR.REC ON CONTROL,"OVERNIGHT.REQUESTS"
+      P_X  = 3 ; P_Y = 21 ; P_VALUE = "... sleeping until ":START.TIME:" ..." ; P_OPT = "CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      EXECUTE "SLEEP ":START.TIME
+      MATREADU OR.REC FROM CONTROL,"OVERNIGHT.REQUESTS" ELSE
+        RELEASE CONTROL,"OVERNIGHT.REQUESTS"
+        GOTO 100
+      END
+    END
+    OR.PROCESS.DATE = DATE()
+    OR.PROCESS.TIME = TIME()
+    IF OR.PROCESS.TIME < 30 THEN OR.PROCESS.DATE = DATE()
+    MATWRITE OR.REC ON CONTROL,"OVERNIGHT.REQUESTS"
+*
+*  Produce the reports
+*
+    S$SCR = S$SCR + 1
+    CALL OVERNIGHT.PROCESSOR.SUB
+    SCREEN CLOSE
+    S$SCR = S$SCR - 1
+    SCREEN FORMAT
+    ACTION = "I"
+    GOTO 100
+END CASE
+GOTO 500
+*
+*  Get line number
+*
+600 *
+SCREEN FIELD;;22
+S$MINV = CURR.REF.NO
+S$MAXV = S$MINV + LINE.COUNT - 1
+IF S$MAXV > LINE.CNT THEN S$MAXV = LINE.CNT
+SCREEN INPUT;;22
+RETURN
+*
+* Delete multi-line data
+*
+700 *
+AC = COUNT(OR.A1A,",")+1
+FOR AP = 1 TO AC
+  AA = FIELD(OR.A1A,",",AP)
+  AA1 = FIELD(AA,"-",1)
+  AA2 = FIELD(AA,"-",2)
+  IF AA2 = "" THEN AA2 = AA1
+  FOR AAP = AA1 TO AA2
+    OR.REC(AAP) =  DELETE(OR.REC(AAP),1,REF.NO,0)
+  NEXT AAP
+NEXT AP
+LINE.CNT = DCOUNT(OR.MD.PROC,VM)
+*     GOSUB 81000
+RETURN
+*
+*  Get multi-line data
+*
+10000 *
+S$VAL = REF.NO
+S$DATA(16)<S$SCR,REF.NO> = ""
+SCREEN DISPLAY;;16
+10100 *
+BEGIN CASE
+  CASE OR.STATUS<1,REF.NO> = "A"
+    S$VALDAT = "A,D,H,S"
+    S$HMSG = "Enter (D)elete, (H)old, (S)chedule or <RETURN>"
+  CASE OR.STATUS<1,REF.NO> = "C"
+    S$VALDAT = "C,D,H,S"
+    S$HMSG = "Enter (D)elete, (H)old, (S)chedule or <RETURN>"
+  CASE OR.STATUS<1,REF.NO> = "D"
+    S$VALDAT = "D,H,S"
+    S$HMSG = "Enter (H)old, (S)chedule or <RETURN>"
+  CASE OR.STATUS<1,REF.NO> = "H"
+    S$VALDAT = "H,D,S"
+    S$HMSG = "Enter (D)elete, (S)chedule or <RETURN>"
+  CASE OR.STATUS<1,REF.NO> = "I"
+    S$VALDAT = "I,A,D,H,,S"
+    S$HMSG = "Enter (A)bort, (D)elete, (H)old, (S)chedule or <RETURN>"
+  CASE OR.STATUS<1,REF.NO> = "S"
+    S$VALDAT = "S,D,H"
+    S$HMSG = "Enter (D)elete, (H)old or <RETURN>"
+END CASE
+S$VAL = REF.NO
+SCREEN FIELD;;15
+SCREEN INPUT;;15;GOTO 10950
+TEMP.MF1 = S$VALUE
+BEGIN CASE
+  CASE TEMP.MF1 = "A"
+    S$DATA(16)<S$SCR,REF.NO> = "bt"
+  CASE TEMP.MF1 = "C"
+    S$DATA(16)<S$SCR,REF.NO> = "mp"
+  CASE TEMP.MF1 = "D"
+    S$DATA(16)<S$SCR,REF.NO> = "el"
+  CASE TEMP.MF1 = "H"
+    S$DATA(16)<S$SCR,REF.NO> = "ld"
+  CASE TEMP.MF1 = "I"
+    S$DATA(16)<S$SCR,REF.NO> = "np"
+  CASE TEMP.MF1 = "S"
+    S$DATA(16)<S$SCR,REF.NO> = "ch"
+END CASE
+S$VAL = REF.NO
+SCREEN DISPLAY;;16
+10200 *
+IF TEMP.MF1 = "H" THEN
+  S$VAL = REF.NO
+  SCREEN FIELD;;17
+  SCREEN INPUT;;17;GOTO 10950
+  TEMP.MF2 = S$VALUE
+END ELSE
+  TEMP.MF2 = ""
+  S$VAL = REF.NO
+  S$DATA(17)<S$SCR,REF.NO> = ""
+  SCREEN DISPLAY;;17
+END
+10900 *
+OR.STATUS<1,REF.NO> = TEMP.MF1
+OR.SCHED.DATE<1,REF.NO> = TEMP.MF2
+RETURN
+10950 *
+GOSUB 81000
+RETURN
+*
+*  Multi-line scroll routine
+*
+50000 *
+START.REF.NO = 1 + INT((REF.NO-1)/LINE.COUNT)*LINE.COUNT
+IF START.REF.NO = CURR.REF.NO THEN RETURN
+CURR.REF.NO = START.REF.NO
+S$VAL = START.REF.NO
+S$CNT = DCOUNT(S$DATA(12)<S$SCR>,VM)
+SCREEN MULTI;;C;11;12;13;14;15;16;17
+RETURN
+*
+*  Display data
+*
+80000 *
+S$DATA(1) = DATE()
+80050 *
+SCREEN DISPLAY;;ALL
+RETURN
+*
+*  Load multi-line screen data
+*
+81000 *
+S$DATA(12)<S$SCR> = ""
+S$DATA(13)<S$SCR> = OR.COMPANY.NO
+S$DATA(14)<S$SCR> = OR.USER.ID
+S$DATA(15)<S$SCR> = ""
+S$DATA(16)<S$SCR> = ""
+S$DATA(17)<S$SCR> = OR.SCHED.DATE
+FOR REF = 1 TO LINE.CNT
+  IF OR.REPORT.NAME<1,REF> = "" THEN
+    S$DATA(12)<S$SCR,REF> = OR.MD.PROC<1,REF>
+  END ELSE
+    S$DATA(12)<S$SCR,REF> = OR.REPORT.NAME<1,REF>
+  END
+  IF OR.STATUS<1,REF>="I" AND OR.PROCESS.PORT<1,REF>=PORT THEN
+    OR.STATUS<1,REF>="A"
+  END
+  STAT = OR.STATUS<1,REF>
+  BEGIN CASE
+    CASE STAT = "A"
+      S$DATA(16)<S$SCR,REF> = "bt"
+    CASE STAT = "C"
+      S$DATA(16)<S$SCR,REF> = "mp"
+    CASE STAT = "D"
+      S$DATA(16)<S$SCR,REF> = "el"
+    CASE STAT = "H"
+      S$DATA(16)<S$SCR,REF> = "ld"
+    CASE STAT = "I"
+      S$DATA(16)<S$SCR,REF> = "np"
+    CASE STAT = "S"
+      S$DATA(16)<S$SCR,REF> = "ch"
+  END CASE
+NEXT REF
+S$DATA(15)<S$SCR> = OR.STATUS
+RETURN
+*
+*  Error routine
+*
+90000 ERR.TYPE=1;CALL SI_SYSCOM(MAT SYSCOM.REC);RETURN
+* 90000 *
+*       PRINT @(0,23):@(-4):ERRMSG:
+*       INPUT REPLY:
+*       PRINT @(0,23):@(-4):
+*       RETURN
+*
+*  End of program
+*
+99999 *
+*       PRINT @(-1)
+SCREEN CLOSE
+END

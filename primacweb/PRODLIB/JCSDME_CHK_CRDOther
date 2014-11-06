@@ -1,0 +1,140 @@
+SUBROUTINE JCSDME_CHK_CRDOther
+********************************************************************************
+*   Program name :- JCSME_CHK_CRDOther
+*   Created:- 8/6/2003
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+* PMCProperty(CONO),CRD_NO(6 DIGITS),JOB_NO)
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE PMC.CPYLIB COMPANY
+$INCLUDE JCS.CPYLIB JOB
+$INCLUDE JCS.CPYLIB INVOICE
+
+OPEN "","COMPANY" TO COMPANY ELSE ERRMSG="COMPANY FILE IS MISSING"; GOTO 99999
+OPEN "","JOB" TO JOB ELSE ERRMSG="JOB FILE IS MISSING"; GOTO 99999
+OPEN "","INVOICE" TO INVOICE ELSE ERRMSG="INVOICE FILE IS MISSING"; GOTO 99999
+OPEN "","DAILY.INVOICE" TO DAILY.INVOICE ELSE ERRMSG="DAILY.INVOICE FILE IS MISSING"; GOTO 99999
+OPEN "","VOID.INVOICES" TO VOID.INVOICES ELSE ERRMSG="VOID.INVOICES FILE IS MISSING"; GOTO 99999
+
+
+CRD.NO = ''
+JOB.NO = ''
+MODE = ''
+JOB.STATUS = ''
+
+STATUS=RBO.getProperty('','PMCProperty',PMCProperty)
+CONO = PMCProperty<1,4>
+STATUS = RBO.getProperty('','CRD_NO',CRD.NO)
+STATUS = RBO.getProperty('','JOB_NO',JOB.NO)
+
+* Insert method code here
+MATREAD COMP.REC FROM COMPANY, CONO ELSE
+      ERRMSG = "Invalid Company ID (":CONO:")"
+      GOTO 99999
+END
+
+OPEN "","OPEN.RECV" TO OPEN.RECV ELSE
+	ERRMSG="OPEN.RECV FILE IS MISSING"
+	GOTO 99999
+END
+
+CRD.NO = STR("0",6-LEN(CRD.NO)):CRD.NO:"DM"
+*CRD.NO = STR("0",6-LEN(CRD.NO)):CRD.NO
+
+IF CO.ARS # "N" THEN GOSUB 2000 ELSE GOSUB 3000
+
+*IF CO.ARS = "Y" OR CO.ARS = "" THEN
+*	GOSUB 2000
+*END ELSE
+*	GOSUB 3000
+*END 
+
+*MATREAD JOB.REC FROM JOB, CONO:JOB.NO ELSE MAT JOB.REC = ""
+*STATUS = RBO.getProperty('','CustomerCodes',JOB.NO :":": IVC.JOB.NO)
+IF IVC.JOB.NO # '' AND IVC.JOB.NO # 0 THEN
+	IF JOB.NO # IVC.JOB.NO THEN
+		RELEASE DAILY.INVOICE, CONO:CRD.NO 
+	       ERRMSG = "Invoice # ":CRD.NO:" is for job # ":IVC.JOB.NO
+       	GOTO 99999
+	END
+END
+*IF JOB.NO # IVC.JOB.NO THEN
+*	RELEASE DAILY.INVOICE, CONO:CRD.NO 
+*       ERRMSG = "Invoice # ":CRD.NO:" is for job # ":IVC.JOB.NO
+*       GOSUB 99999
+*END
+
+IVC.NO = CRD.NO
+
+*----
+SAVE.IVC.LAST=IVC.LAST
+*CALL INVOICE.MAINT.SUB.F4(CONO,JOB.NO,IVC.NO,MENU,""); JCSME_CHKCRDNO_SUB IS DOING THE SAME
+CALL JCSDME_CHKCRDNO_SUB
+**** this below line added to get tax jurs 
+TMP_TAX_JURS = ""
+MATREAD IVC.REC FROM DAILY.INVOICE,CONO:IVC.NO ELSE
+END
+TMP_TAX_JURS = IVC.TAX.JURS
+STATUS = RBO.setProperty('','JOB_JURS',TMP_TAX_JURS)
+********END
+
+RELEASE DAILY.INVOICE, CONO:IVC.NO
+STATUS = RBO.setProperty('','CRD_NO',CRD.NO)
+STATUS = RBO.setProperty('','CRD_MODE',MODE)
+RETURN
+
+2000*
+  FLAG = ""
+  REC = ""
+  MATREAD IVC.REC FROM INVOICE, CONO:CRD.NO ELSE FLAG<1,1> = "N"
+  READ REC FROM DAILY.INVOICE, CONO:CRD.NO ELSE FLAG<1,2> = "N"
+  READ REC FROM OPEN.RECV, CONO:CRD.NO ELSE FLAG<1,3> = "N"
+  READ REC FROM VOID.INVOICES, CONO:CRD.NO ELSE FLAG<1,4> = "N"
+
+  BEGIN CASE
+    CASE FLAG<1,4> # "N"
+      ERRMSG = "This is a voided invoice"; GOTO 99999
+    CASE FLAG<1,3> # "N" AND FLAG<1,2> = "N" AND FLAG<1,1> = "N"
+      ERRMSG = "This is a manual invoice"; GOTO 99999
+    CASE FLAG<1,1> # "N" AND FLAG<1,2> = "N" AND FLAG<1,3> # "N"
+      MODE = "OLD"
+    CASE FLAG<1,1> = "N" AND FLAG<1,3> = "N"      
+      MATREAD IVC.REC FROM DAILY.INVOICE,CONO:CRD.NO THEN
+		MODE = "OLD"
+	IF JOB.STATUS<1,1> > 6 THEN
+ 	       ERRMSG = "Cannot add new invoices to job because of status"
+         	GOTO 99999
+       END      
+      END ELSE
+		MODE = "NEW"
+      END
+    CASE 1
+      ERRMSG = "*** ERROR ***";  GOTO 99999
+  END CASE
+RETURN
+
+3000*
+  MATREAD IVC.REC FROM INVOICE, CONO:CRD.NO ELSE
+    MATREADU IVC.REC FROM DAILY.INVOICE, CONO:CRD.NO ELSE
+      IF JOB.STATUS<1,1> > 6 THEN
+        ERRMSG = "Cannot add new invoices to job because of status"
+        GOTO 99999
+      END
+    END
+  END
+RETURN
+
+
+99999*
+STATUS = RBO.setProperty('','ServerStatus',1)
+STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+RETURN
+

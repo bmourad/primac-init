@@ -1,0 +1,784 @@
+*********************************************************************
+*
+* REVISION - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+*
+* PROGRAM  - EST.REPORT.RES
+*
+* AUTHOR   - NICK AMENDOLA, COMPUTER BUSINESS ASSOCIATES
+*
+* DATE     - 04/18/86
+*
+* DESCRIPTION
+*
+* This program will print the estimate report.
+*
+* MOD TASK 18148 DMT 7/5/94 ALLOW SELECTION OF QUANTITIES IF MORE THAN 3
+* MOD TASK 18484 RKB 10/19/94 ADD 99 QTY SUPPORT FOR ROLL LABEL REPORTS
+*T25515 cm 11/13/2000 * Change how selection process works to make it
+*                       more user friendly.
+*T25978 adelgado 02/19/2002 * Add the use of prompts (S,SR,SB,ST).
+*T26090 cmykleb 04/04/2002 * Add View/Email options and rpt #.
+*T27924 cmykleb 03/22/2004 * Allow up to 6 qtys or (A)ll qtys to print.
+*T29032 cmyklebu 01/04/2007 * Move pgm from rev12 to rev14.
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>JES.CPYLIB>SCOMMON.ESTIMATE
+*COPY>JES.CPYLIB>ESTIMATE
+*COPY>JES.CPYLIB>ESTIMATE.RES
+*COPY>JES.CPYLIB>ESTIMATOR
+*COPY>JES.CPYLIB>ESTIMATE.RPT
+*COPY>JES.CPYLIB>JES.FILE.VARS
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>DIVISION
+*COPY>PMC.CPYLIB>SALESMAN
+*COPY>PMC.CPYLIB>PMC_REPORTS           ; * T26090
+*COPY>JCS.CPYLIB>JOB.CATEGORY
+*COPY>CPYLIB>SCREEN.COM
+*COPY>CPYLIB>GEN.XREF.SUB
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+   MAT SYSCOM.REC =  ""; SYS.TYPE = 2
+*
+*---- OPEN ALL FILES
+*
+   OPEN "","COMPANY" TO COMPANY ELSE
+      P_X  = 3 ; P_Y = 23 ; P_VALUE = "CANNOT OPEN COMPANY FILE" ; P_OPT = ""
+      CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      STOP
+   END
+   OPEN "","CONTROL" TO CONTROL ELSE
+      P_X  = 3 ; P_Y = 23 ; P_VALUE = "CANNOT OPEN CONTROL FILE" ; P_OPT = ""
+      CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      STOP
+   END
+   OPEN "","ESTIMATE" TO ESTIMATE ELSE
+      P_X  = 3 ; P_Y = 23 ; P_VALUE = "CANNOT OPEN ESTIMATE FILE" ; P_OPT = ""
+      CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      STOP
+   END
+   OPEN "","ESTIMATE.RES" TO ESTIMATE.RES ELSE
+      P_X  = 3 ; P_Y = 23 ; P_VALUE = "CANNOT OPEN ESTIMATE.RES FILE" ; P_OPT = ""
+      CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      STOP
+   END
+   OPEN "","ESTIMATOR" TO ESTIMATOR ELSE
+      P_X  = 3 ; P_Y = 23 ; P_VALUE = "CANNOT OPEN ESTIMATOR FILE" ; P_OPT = ""
+      CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      STOP
+   END
+   OPEN "","ESTIMATE.DEPT" TO ESTIMATE.DEPT ELSE
+      P_X  = 3 ; P_Y = 23 ; P_VALUE = "CANNOT OPEN ESTIMATE.DEPT FILE" ; P_OPT = ""
+      CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      STOP
+   END
+   OPEN "","ESTIMATE.MATL" TO ESTIMATE.MATL ELSE
+      P_X  = 3 ; P_Y = 23 ; P_VALUE = "CANNOT OPEN ESTIMATE.MATL FILE" ; P_OPT = ""
+      CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      STOP
+   END
+   OPEN "","DIVISION" TO DIVISION ELSE
+      P_X  = 3 ; P_Y = 23 ; P_VALUE = "CANNOT OPEN DIVISION FILE" ; P_OPT = ""
+      CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      STOP
+   END
+   OPEN "","COST.CNTR" TO COST.CNTR ELSE
+      P_X  = 3 ; P_Y = 23 ; P_VALUE = "CANNOT OPEN COST.CNTR FILE" ; P_OPT = ""
+      CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      STOP
+   END
+   OPEN "","CUSTOMER" TO CUSTOMER ELSE
+      P_X  = 3 ; P_Y = 23 ; P_VALUE = "CANNOT OPEN CUSTOMER FILE" ; P_OPT = ""
+      CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      STOP
+   END
+   OPEN "","SALESMAN" TO SALESMAN ELSE
+      P_X  = 3 ; P_Y = 23 ; P_VALUE = "CANNOT OPEN SALESMAN FILE" ; P_OPT = ""
+      CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      STOP
+   END
+   OPEN "","JOB.CATEGORY" TO JOB.CATEGORY ELSE
+      P_X  = 3 ; P_Y = 23 ; P_VALUE = "CANNOT OPEN JOB.CATEGORY FILE" ; P_OPT = ""
+      CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      STOP
+   END
+   OPEN "","COLOR" TO COLOR ELSE
+      P_X  = 3 ; P_Y = 23 ; P_VALUE = "CANNOT OPEN COLOR FILE" ; P_OPT = ""
+      CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      STOP
+   END
+   OPEN "","FINISH" TO FINISH ELSE
+      P_X  = 3 ; P_Y = 23 ; P_VALUE = "CANNOT OPEN FINISH FILE" ; P_OPT = ""
+      CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      STOP
+   END
+*T29032 v
+*  OPEN "","REV12A.SCREENS" TO M.SCREENS ELSE
+*     P_X  = 3 ; P_Y = 23 ; P_VALUE = "CANNOT OPEN REV12A.SCREENS FILE" ; P_OPT = ""
+*     CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+*     STOP
+*  END
+   OPEN "","JES.SCREENS" TO M.SCREENS ELSE
+      P_X  = 3 ; P_Y = 23 ; P_VALUE = "CANNOT OPEN JES.SCREENS FILE" ; P_OPT = ""
+      CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      STOP
+   END
+*T29032 ^
+   OPEN "","ESTIMATE.RPT" TO ESTIMATE.RPT ELSE
+      P_X  = 3 ; P_Y = 23 ; P_VALUE = "CANNOT OPEN ESTIMATE.RPT FILE" ; P_OPT = ""
+      CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      STOP
+   END
+   OPEN "","INVENTORY" TO INVENTORY ELSE
+      P_X  = 3 ; P_Y = 23 ; P_VALUE = "CANNOT OPEN INVENTORY FILE" ; P_OPT = ""
+      CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      STOP
+   END
+   OPEN "","ESTIMATE.WORK" TO ESTIMATE.WORK ELSE
+      P_X  = 3 ; P_Y = 23 ; P_VALUE = "CANNOT OPEN ESTIMATE.WORK FILE" ; P_OPT = ""
+      CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      STOP
+   END
+   OPEN "","XREF.DATA" TO XREF.DATA ELSE
+      P_X  = 3 ; P_Y = 23 ; P_VALUE = "CANNOT OPEN XREF.DATA FILE" ; P_OPT = ""
+      CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      STOP
+   END
+*T26090 v
+   OPEN "","PMC_REPORTS" TO PMC_REPORTS ELSE
+      P_X  = 3 ; P_Y = 23 ; P_VALUE = "CANNOT OPEN PMC_REPORTS FILE" ; P_OPT = ""
+      CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      STOP
+   END
+   PROCREAD INBUFF ELSE
+      PRINT "MUST BE RUN FROM A PROC"
+      STOP
+   END
+   REPORT_ID = INBUFF<1>
+*T26090 ^
+*
+*---- INITIALIZATION
+*
+   CONO = ""
+   CALL GET.CONO1 (CONO,MAT COMP.REC,COMPANY,CONTROL)
+   PROMPT ""
+   PAGE.NO = 0
+   SCREEN INIT;#
+   S$SCR = 1
+   SCREEN DEFINE;EST.REPORT
+   SCREEN FORMAT
+   SCREEN COUNT;EST.REPORT;11
+   LINE.COUNT = S$LCNT
+   LINE.SPACE = S$LSPC
+   CURR.REF.NO = ""
+   REF.NO = 1
+   PRT.QTY = ''
+   MAT GEN.XREF.REC=""
+   GXR.CO=CONO
+   DIM SAVE.EST.REC(300)
+*T26090 v
+   PORT_NO = 'TTY'
+   CALL SYSVARS.SUB(PORT_NO)
+   ACCT_NO = "ACCT"
+   CALL SYSVARS.SUB(ACCT_NO)
+   USER_ID = UPCASE(@LOGNAME)
+   HF_NAME = PORT_NO :"_": USER_ID
+   READ EMAIL_FORMAT FROM CONTROL, CONO:"EMAIL_FORMAT" ELSE
+      EMAIL_FORMAT = ""
+   END
+   IF EMAIL_FORMAT<1> # "PDF" AND EMAIL_FORMAT<1> # "RTF" AND EMAIL_FORMAT<1> # "BOTH" THEN
+      EMAIL_FORMAT<1> = ""
+   END
+   P.MSG = ""
+   P.VALDAT = ""
+   MATREAD PRPT.REC FROM PMC_REPORTS, REPORT_ID ELSE
+      MAT PRPT.REC = ""
+      PRPT.HEADING = INBUFF<1>
+      ERRMSG = "PROC IS NOT CONVERTED"
+      GOSUB 90000
+      STOP
+   END
+   HEAD = PRPT.HEADING
+   P.MSG = "Enter Number to Change"
+   P.VALDAT = ""
+   IF PRPT.VIEW.FLAG = "Y" THEN
+      P.MSG := ", (V)iew"
+      P.VALDAT := ",V"
+   END
+   IF PRPT.EMAIL.FLAG = "Y" AND EMAIL_FORMAT<1> # "" THEN
+      P.MSG := ", e(M)ail"
+      P.VALDAT := ",M"
+   END
+   P.MSG := ", (C)ontinue or (E)nd"
+   P.VALDAT := ",C,E"
+*T26090 ^
+   GOTO 110
+*
+*---- MAIN PROCESSING
+*
+100 *
+   RELEASE
+   SCREEN CLEAR
+110 *
+   S$DATA(1)<S$SCR> = DATE()
+   SCREEN DISPLAY;EST.REPORT;1
+*T26090 v
+   S$DATA(24)<S$SCR> = REPORT_ID
+   SCREEN DISPLAY;EST.REPORT;24
+*T26090 ^
+120 *
+   SCREEN FIELD;EST.REPORT;2
+   SCREEN INPUT;EST.REPORT;2
+   IF S$VALUE = "END" THEN GOTO 99999
+   MATREAD DIV.REC FROM DIVISION, CONO:S$VALUE ELSE
+      ERRMSG = "Invalid division. Try again! "
+      GOSUB 90000
+      GOTO 120
+   END
+   DIV.ID = S$VALUE
+   S$DATA(3)<S$SCR> = DIV.DESC
+   SCREEN DISPLAY;EST.REPORT;3
+   NEW.REC = 0
+   MATREADU ESTR.REC FROM ESTIMATE.RPT, CONO:DIV.ID ELSE
+      MAT ESTR.REC = ""
+      NEW.REC = 1
+   END
+   IF NEW.REC THEN
+      LINE.CNT = 0
+      OPTION = "A"
+      GOTO 510
+   END ELSE
+      LINE.CNT = COUNT(ESTR.EST.ID,VM) + (ESTR.EST.ID # "")
+      GOSUB 80000
+      REF.NO = 1
+      CURR.REF.NO = ""
+      GOSUB 50000
+   END
+*
+*---- GET OPERATOR REPLY
+*
+500 *
+   S$DATA(20)<S$SCR> = ""
+   SCREEN DISPLAY;EST.REPORT;20
+*T26090 v
+*  SCREEN FIELD;EST.REPORT;21
+*  SCREEN INPUT;EST.REPORT;21
+   SCREEN FIELD;EST.REPORT;25
+   SCREEN INPUT;EST.REPORT;25
+*T26090 ^
+   OPTION = S$VALUE
+510 *
+   BEGIN CASE
+      CASE OPTION = "A"
+         MODE = "A"
+         DONE = 0
+         FOR REF.NO = LINE.CNT+1 TO 99 UNTIL DONE
+            GOSUB 50000
+            GOSUB 1000
+            IF S$VALUE = "END" THEN
+               DONE = 1
+               GOSUB 700
+            END ELSE
+               LINE.CNT = REF.NO
+            END
+         NEXT REF.NO
+         REF.NO = LINE.CNT
+         CURR.REF.NO = ""
+         GOSUB 50000
+      CASE OPTION = "C" AND LINE.CNT > 0
+         MODE = "C"
+         GOSUB 600
+         IF S$VALUE # "" AND S$VALUE # "END" THEN
+            REF.NO = S$VALUE
+            GOSUB 1000
+         END
+      CASE OPTION = "D" AND LINE.CNT > 0
+         MODE = "D"
+         GOSUB 600
+         IF S$VALUE # "" AND S$VALUE # "END" THEN
+            REF.NO = S$VALUE
+            GOSUB 700
+            LINE.CNT = LINE.CNT - 1
+            IF REF.NO > LINE.CNT THEN REF.NO = REF.NO - 1
+            CURR.REF.NO = ""
+            GOSUB 50000
+         END
+      CASE OPTION = "I" AND LINE.CNT > 0
+         MODE = "I"
+         GOSUB 600
+         IF S$VALUE # "" AND S$VALUE # "END" THEN
+            REF.NO = S$VALUE
+            GOSUB 800
+            LINE.CNT = LINE.CNT + 1
+            CURR.REF.NO = ""
+            GOSUB 50000
+            GOSUB 1000
+            IF S$VALUE = "END" THEN
+               GOSUB 700
+               LINE.CNT = LINE.CNT - 1
+               CURR.REF.NO = ""
+               GOSUB 50000
+            END
+         END
+      CASE OPTION = "S" AND LINE.CNT > 0
+         REF.NO = CURR.REF.NO + LINE.COUNT
+         IF REF.NO > LINE.CNT THEN REF.NO = 1
+         GOSUB 50000
+    * T25978 v
+      CASE OPTION = 'SR' AND LINE.CNT > 0
+         REF.NO = CURR.REF.NO - LINE.COUNT
+         IF REF.NO < 1 THEN REF.NO = 1
+         GOSUB 50000
+      CASE OPTION = 'ST'
+         REF.NO = 1
+         GOSUB 50000
+      CASE OPTION = 'SB'
+         REF.NO = LINE.CNT
+         GOSUB 50000
+    * T25978 ^
+      CASE OPTION = "E" OR OPTION = "END"
+*T26090 v
+         READU HF_REC FROM CONTROL, HF_NAME THEN
+            DELETE CONTROL, HF_NAME
+         END ELSE
+            RELEASE CONTROL, HF_NAME
+         END
+*T26090 ^
+         GOTO 100
+      CASE OPTION = "F"
+         MATWRITE ESTR.REC ON ESTIMATE.RPT, CONO:DIV.ID
+*T26090 v
+         READU HF_REC FROM CONTROL, HF_NAME THEN
+            DELETE CONTROL, HF_NAME
+         END ELSE
+            RELEASE CONTROL, HF_NAME
+         END
+*T26090 ^
+         GOTO 100
+*T26090 v
+*     CASE OPTION = "P"
+      CASE OPTION = "P" OR OPTION = "V" OR OPTION = "M"
+         BEGIN CASE
+            CASE OPTION = "P"
+               READU HF_REC FROM CONTROL, HF_NAME THEN
+                  DELETE CONTROL, HF_NAME
+               END ELSE
+                  RELEASE CONTROL, HF_NAME
+               END
+            CASE 1
+               READU HF_REC FROM CONTROL, HF_NAME ELSE HF_REC = ""
+               HF_REC<1> = OPTION
+               WRITE HF_REC ON CONTROL, HF_NAME
+               CMD = 'SETPTR ,,,,,3,BRIEF,BANNER ':HF_NAME:',NOMESSAGE,NHEAD'
+               EXECUTE CMD CAPTURING JUNK
+         END CASE
+*T26090 ^
+         FOR REF = 1 TO LINE.CNT
+            EST.KEY = ESTR.EST.ID<1,REF>
+            FND = 1
+            MATREAD EST.REC FROM ESTIMATE, CONO:EST.KEY ELSE FND = 0
+            MATREAD EST.RL.REC FROM ESTIMATE.RES, CONO:EST.KEY ELSE MAT EST.RL.REC=""
+            IF FND THEN
+               RPT.TYPE = ESTR.RPT.TYPE<1,REF>
+               PRT.QTY = ESTR.QTY.SEL<1,REF>
+               IF PRT.QTY = 'ALL' THEN GO 520 ; * T27924
+               SAVE.PRT.QTY = ''
+               QCNT = DCOUNT(PRT.QTY,SVM)
+               FOR Q = 1 TO QCNT
+                  LOCATE PRT.QTY<1,1,Q> IN EST.QTY<1>,1 SETTING Q1 THEN
+                     SAVE.PRT.QTY<1,1,Q> = PRT.QTY<1,1,Q>
+                  END
+               NEXT Q
+               PRT.QTY = SAVE.PRT.QTY
+               ESTR.QTY.SEL<1,REF> = SAVE.PRT.QTY
+520 *
+               GOSUB 5000
+            END
+         NEXT REF
+         DELETE ESTIMATE.RPT, CONO:DIV.ID
+         PRINTER CLOSE
+         PRINTER OFF
+         GOTO 99999; * T26090
+   END CASE
+   GOTO 500
+*
+*---- GET LINE REFERENCE NUMBER
+*
+600 *
+   SCREEN FIELD;EST.REPORT;22
+   S$MINV = CURR.REF.NO
+   S$MAXV = S$MINV + LINE.COUNT - 1
+   IF S$MAXV > LINE.CNT THEN S$MAXV = LINE.CNT
+   SCREEN INPUT;EST.REPORT;22
+   RETURN
+*
+*---- DELETE MULTI-LINE DATA
+*
+700 *
+   ESTR.EST.ID = DELETE(ESTR.EST.ID,1,REF.NO,0)
+   ESTR.CUST.NAME = DELETE(ESTR.CUST.NAME,1,REF.NO,0)
+   ESTR.SUB.FLAG = DELETE(ESTR.SUB.FLAG,1,REF.NO,0)
+   ESTR.RPT.TYPE = DELETE(ESTR.RPT.TYPE,1,REF.NO,0)
+   ESTR.QTY.SEL = DELETE(ESTR.QTY.SEL,1,REF.NO,0)
+   GOSUB 80000
+   RETURN
+*
+*---- INSERT MULTI-LINE DATA
+*
+800 *
+   ESTR.EST.ID = INSERT(ESTR.EST.ID,1,REF.NO,0,"")
+   ESTR.CUST.NAME = INSERT(ESTR.CUST.NAME,1,REF.NO,0,"")
+   ESTR.SUB.FLAG = INSERT(ESTR.SUB.FLAG,1,REF.NO,0,"")
+   ESTR.RPT.TYPE = INSERT(ESTR.RPT.TYPE,1,REF.NO,0,"")
+   ESTR.QTY.SEL = INSERT(ESTR.QTY.SEL,1,REF.NO,0,"")
+   GOSUB 80000
+   RETURN
+*
+*---- GET MULTI-LINE DATA
+*
+1000 *
+   S$VAL = REF.NO
+   SCREEN DISPLAY;EST.REPORT;11
+1010 *
+   S$VAL = REF.NO
+   SCREEN FIELD;EST.REPORT;12
+   SCREEN INPUT;EST.REPORT;12;RETURN
+   MATREAD EST.REC FROM ESTIMATE, CONO:S$VALUE ELSE
+      ERRMSG = "Estimate not on file. Try again! "
+      GOSUB 90000
+      GOTO 1010
+   END
+   EST.ID = S$VALUE
+1020 *
+   S$VAL = REF.NO
+   S$DATA(13)<S$SCR,REF.NO> = EST.CUST.NAME
+   SCREEN DISPLAY;EST.REPORT;13
+   S$DATA(20)<S$SCR> = EST.COMMENTS<1,1>
+   SCREEN DISPLAY;EST.REPORT;20
+*
+*---> Estimate quantities
+1030 *
+   MAT SAVE.EST.REC = MAT EST.REC
+   PRT.QTY = ''
+   EC=COUNT(EST.QTY,VM)+(EST.QTY # "")
+   BEGIN CASE
+      CASE EC < 4 
+         PRT.QTY<1,1>=CHANGE(EST.QTY,VM,SVM)
+*T25515 v
+*     CASE EC < 6
+      CASE EC GT 99999
+*T25515 ^
+         S$VALUE = 1
+         FOR IPTR = 1 TO 3 UNTIL S$VALUE = '' OR S$VALUE = 'END'
+            S$VALUE = ''
+            S$VAL = REF.NO
+            SCREEN FIELD;;23
+            S$MINV=1;S$MAXV=EC
+            S$PMSG="Enter Quantity"
+            IF IPTR = 1 THEN
+               FOR EP=1 TO EC
+                  S$PMSG=S$PMSG:"  (":EP:") ":EST.QTY<1,EP>
+                  IF EP = 1 THEN
+                     S$VALDAT = EP
+                  END ELSE
+                     S$VALDAT = S$VALDAT:",":EP
+                  END
+               NEXT EP
+               SAVE.VALDAT = S$VALDAT
+               SAVE.PMSG = S$PMSG
+            END ELSE
+               S$DEFAULT = ''
+            END
+            S$PMSG = SAVE.PMSG
+            S$VALDAT = SAVE.VALDAT
+            SCREEN INPUT;;23
+            IF S$VALUE # '' AND S$VALUE # 'END' THEN
+               S$VALDAT = SAVE.VALDAT
+               S$VALDAT = CHANGE(S$VALDAT,",",VM)
+               LOCATE S$VALUE IN S$VALDAT<1>,1 SETTING VPTR THEN
+                  DEL S$VALDAT<1,VPTR>
+               END
+               S$VALDAT = CHANGE(S$VALDAT,VM,",")
+               PRT.QTY<1,1,IPTR>=EST.QTY<1,S$VALUE>
+               SAVE.VALDAT = S$VALDAT
+               SEL.QTY = EST.QTY<1,S$VALUE>
+               SEL.PTR = "(":S$VALUE:") ":SEL.QTY
+               NEW.PTR = "(":S$VALUE:") SELECTED"
+               SAVE.PMSG = CHANGE(SAVE.PMSG,SEL.PTR,NEW.PTR)
+            END
+         NEXT IPTR
+      CASE 1
+         GXR.ID = 1
+*T27924 v
+*        FOR IPTR = 1 TO 99 UNTIL GXR.ID = '' OR DCOUNT(PRT.QTY<1,1>,SVM) = 4
+         CALL GET.CRTMODE(CRTMODE)
+         IF CRTMODE = 'termulator' THEN
+            XNAME = 'EST.QTY.SEL.GUI'
+         END ELSE
+            XNAME = 'EST.QTY.SEL'
+         END
+         FOR IPTR = 1 TO 99 UNTIL GXR.ID = '' OR DCOUNT(PRT.QTY<1,1>,SVM) = 99
+*T27924 ^
+            GXR.ID = ''
+            GXR.NAME = 'EST.QTY.SEL'
+            GXR.XREF = ESTIMATE.WORK
+            GXR.SRCH.ID = EST.ID
+            IF IPTR = 1 THEN
+               MATWRITE EST.REC ON ESTIMATE.WORK, CONO:EST.ID
+            END
+*T27924 v
+*           CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+            CALL EST.QTY.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+*T27924 ^
+            IF GXR.ID # "" THEN 
+               MATREADU EST.REC FROM ESTIMATE.WORK, CONO:EST.ID ELSE NULL
+               SEL.QTY = EST.QTY<1,GXR.ID>
+*T25515        PRT.QTY<1,1,IPTR> = SEL.QTY
+               LOCATE SEL.QTY IN EST.QTY<1>,1 SETTING EPTR THEN
+*T25515 v
+*                 DEL EST.QTY<1,EPTR>
+                  IF EST.QTY.SELECT<1,EPTR> = '' THEN
+*T27924 v
+*                    IF DCOUNT(PRT.QTY<1,1>,SVM) = 3 THEN
+*                       ERRMSG = "The Max # of quantities to print is 3"
+                     IF DCOUNT(PRT.QTY<1,1>,SVM) = 99 THEN
+                        ERRMSG = "The Max # of quantities to print is 99"
+*T27924 ^
+                        GOSUB 90000
+                        GOTO 1035
+                     END
+                     PRT.QTY<1,1,-1> = SEL.QTY
+                     EST.QTY.SELECT<1,EPTR>='*'
+                  END ELSE
+                     EST.QTY.SELECT<1,EPTR>=''
+                     LOCATE SEL.QTY IN PRT.QTY<1,1>,1 SETTING SVAR THEN
+                        DEL PRT.QTY<1,1,SVAR>
+                     END
+                  END
+*T25515 ^
+                  MATWRITE EST.REC ON ESTIMATE.WORK, CONO:EST.ID
+               END
+            END
+1035 *
+         NEXT IPTR
+         DELETE ESTIMATE.WORK, CONO:EST.ID
+         SCREEN FORMAT
+         CURR.REF.NO = ""
+         GOSUB 50000
+   END CASE
+   MAT EST.REC = MAT SAVE.EST.REC
+*
+1040 *
+   S$VAL = REF.NO
+   IF EST.SUBS = "" THEN
+      SUB.FLAG = "Y"
+      S$DATA(14)<S$SCR,REF.NO> = "Y"
+      SCREEN DISPLAY;EST.REPORT;14
+   END ELSE
+      SCREEN FIELD;EST.REPORT;14
+      SCREEN INPUT;EST.REPORT;14;RETURN
+      SUB.FLAG = S$VALUE
+   END
+1050 *
+   S$VAL = REF.NO
+   SCREEN FIELD;EST.REPORT;15
+   S$VALDAT = ''
+   IF CO.JES.PARAM<1,7> # "" THEN
+      S$O.R = "O"
+      S$DEFAULT = CO.JES.PARAM<1,7>
+   END
+   SCREEN INPUT;EST.REPORT;15;RETURN
+   RPT.TYPE = S$VALUE
+1090 *
+   ESTR.EST.ID<1,REF.NO> = EST.ID
+   ESTR.CUST.NAME<1,REF.NO> = EST.CUST.NAME
+   ESTR.SUB.FLAG<1,REF.NO> = SUB.FLAG
+   ESTR.RPT.TYPE<1,REF.NO> = RPT.TYPE
+*T27924 v
+*  ESTR.QTY.SEL<1,REF.NO> = PRT.QTY
+   IF GXR.ACTION = 'ALL' THEN
+      ESTR.QTY.SEL<1,REF.NO> = 'ALL'
+   END ELSE
+      ESTR.QTY.SEL<1,REF.NO> = PRT.QTY
+   END
+*T27924 ^
+   IF ESTR.QTY.SEL<1,REF.NO> = '' THEN
+      QCNT = DCOUNT(EST.QTY,VM)
+      IF QCNT > 3 THEN QCNT = 3
+      FOR Q = 1 TO QCNT
+         ESTR.QTY.SEL<1,REF.NO,Q> = EST.QTY<1,Q>
+      NEXT Q
+   END
+   S$DATA(20)<S$SCR> = ""
+   SCREEN DISPLAY;EST.REPORT;20
+   RETURN
+*
+*---- PRINT ESTIMATE REPORT
+*
+5000 *
+*T27924 v
+*  XCNT = DCOUNT(PRT.QTY,SVM)
+*  HOLD.QTY = PRT.QTY
+*  IF XCNT GT 6 THEN
+*     PRT.QTY = ''
+*     FOR X = 1 TO 6
+*        PRT.QTY<1,1,X> = HOLD.QTY<1,1,X>
+*     NEXT X
+*  END
+*T27924 ^
+   DESC = EST.COMMENTS<1,1>
+   FOR TP = 1 TO LEN(RPT.TYPE)
+      TYPE = RPT.TYPE[TP,1]
+*T26090 v
+      BEGIN CASE
+         CASE TYPE = 1 AND EST.RL.JOB.TYPE = ""
+            REPORT.NUM = "JE420"
+         CASE TYPE = 1 AND EST.RL.JOB.TYPE # ""
+            REPORT.NUM = "JE426"
+         CASE TYPE = 2 AND EST.RL.JOB.TYPE = ""
+            REPORT.NUM = "JE421"
+         CASE TYPE = 2 AND EST.RL.JOB.TYPE # ""
+            REPORT.NUM = "JE427"
+         CASE TYPE = 3
+            REPORT.NUM = "JE422"
+         CASE TYPE = 4 AND EST.RL.JOB.TYPE = ""
+            REPORT.NUM = "JE423"
+         CASE TYPE = 4 AND EST.RL.JOB.TYPE # ""
+            REPORT.NUM = "JE428"
+         CASE TYPE = 5 AND EST.RL.JOB.TYPE = ""
+            REPORT.NUM = "JE424"
+         CASE TYPE = 5 AND EST.RL.JOB.TYPE # ""
+            REPORT.NUM = "JE429"
+         CASE TYPE = 6 AND EST.RL.JOB.TYPE = ""
+            REPORT.NUM = "JE425"
+         CASE TYPE = 6 AND EST.RL.JOB.TYPE # ""
+            REPORT.NUM = "JE430"
+         CASE 1
+            REPORT.NUM = "JE420"
+      END CASE
+      CONO.NAME = ""
+      REPORT.NAME = ""
+      HD1 = "" ; HD2 = ""
+      CALL GET.PROG.HEAD(CONO,CONO.NAME,REPORT.NAME,REPORT.NUM,"",HD1,HD2)
+*T26090 ^
+      BEGIN CASE
+         CASE TYPE = "1"
+            P_X  = 3 ; P_Y = 21 ; P_VALUE = "(":EST.KEY:") Processing Demographics" ; P_OPT = "CL"
+            CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            IF EST.RL.JOB.TYPE = "" THEN
+*T26090 v
+*              CALL EST.REPORT.1 (CONO, CO.NAME, EST.KEY, PAGE.NO,PRT.QTY)
+               CALL EST.REPORT.1 (CONO, CO.NAME, EST.KEY, PAGE.NO,PRT.QTY,HD1,HD2)
+*T26090 ^
+            END ELSE
+*T26090 v
+*              CALL EST.RES.REPORT.1 (CONO,CO.NAME,EST.KEY,PAGE.NO,PRT.QTY)
+               CALL EST.RES.REPORT.1 (CONO,CO.NAME,EST.KEY,PAGE.NO,PRT.QTY,HD1,HD2)
+*T26090 ^
+            END
+         CASE TYPE = "2"
+            P_X  = 3 ; P_Y = 21 ; P_VALUE = "(":EST.KEY:") Processing Recap Report" ; P_OPT = "CL"
+            CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            IF EST.RL.JOB.TYPE = "" THEN
+*T26090 v
+*              CALL EST.RECAP.RPT (CONO, CO.NAME, EST.KEY, PAGE.NO,PRT.QTY)
+               CALL EST.RECAP.RPT (CONO, CO.NAME, EST.KEY, PAGE.NO,PRT.QTY,HD1,HD2)
+*T26090 ^
+            END ELSE
+*T26090 v
+*              CALL EST.RES.RECAP.RPT (CONO, CO.NAME, EST.KEY, PAGE.NO,PRT.QTY)
+               CALL EST.RES.RECAP.RPT (CONO, CO.NAME, EST.KEY, PAGE.NO,PRT.QTY,HD1,HD2)
+*T26090 ^
+            END
+         CASE TYPE = "3"
+            IF EST.RL.JOB.TYPE = "" THEN
+               P_X  = 3 ; P_Y = 21 ; P_VALUE = "(":EST.KEY:") Processing Component/Department Summary Report" ; P_OPT = "CL"
+               CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+*T26090 v
+*              CALL EST.COMP.DEPT.SUM.RPT (CONO, CO.NAME, EST.KEY, DESC, PAGE.NO,PRT.QTY)
+               CALL EST.COMP.DEPT.SUM.RPT (CONO, CO.NAME, EST.KEY, DESC, PAGE.NO,PRT.QTY,HD1,HD2)
+*T26090 ^
+            END
+         CASE TYPE = "4"
+            P_X  = 3 ; P_Y = 21 ; P_VALUE = "(":EST.KEY:") Processing Department/Component Summary Report" ; P_OPT = "CL"
+            CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            IF EST.RL.JOB.TYPE = "" THEN
+*T26090 v
+*              CALL EST.DEPT.COMP.SUM.RPT (CONO, CO.NAME, EST.KEY, DESC, PAGE.NO,PRT.QTY)
+               CALL EST.DEPT.COMP.SUM.RPT (CONO, CO.NAME, EST.KEY, DESC, PAGE.NO,PRT.QTY,HD1,HD2)
+*T26090 ^
+            END ELSE
+*T26090 v
+*              CALL EST.RES.DEPT.COMP.SUM.RPT (CONO, CO.NAME, EST.KEY, DESC, PAGE.NO,PRT.QTY)
+               CALL EST.RES.DEPT.COMP.SUM.RPT (CONO, CO.NAME, EST.KEY, DESC, PAGE.NO,PRT.QTY,HD1,HD2)
+*T26090 ^
+            END
+         CASE TYPE = "5"
+            P_X  = 3 ; P_Y = 21 ; P_VALUE = "(":EST.KEY:") Processing Detail Recap Report" ; P_OPT = "CL"
+            CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            IF EST.RL.JOB.TYPE = "" THEN
+*T26090 v
+*              CALL EST.DETAIL.RECAP (CONO, CO.NAME, EST.KEY, DESC, PAGE.NO,PRT.QTY)
+               CALL EST.DETAIL.RECAP (CONO, CO.NAME, EST.KEY, DESC, PAGE.NO,PRT.QTY,HD1,HD2)
+*T26090 ^
+            END ELSE
+*T26090 v
+*              CALL EST.RES.DETAIL.RECAP (CONO, CO.NAME, EST.KEY, DESC, PAGE.NO,PRT.QTY)
+               CALL EST.RES.DETAIL.RECAP (CONO, CO.NAME, EST.KEY, DESC, PAGE.NO,PRT.QTY,HD1,HD2)
+*T26090 ^
+            END
+         CASE TYPE = "6"
+            P_X  = 3 ; P_Y = 21 ; P_VALUE = "(":EST.KEY:") Processing Detail Report" ; P_OPT = "CL"
+            CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            IF EST.RL.JOB.TYPE = "" THEN
+*T26090 v
+*              CALL EST.DETAIL.RPT.1 (CONO, CO.NAME, EST.KEY, PAGE.NO,PRT.QTY)
+               CALL EST.DETAIL.RPT.1 (CONO, CO.NAME, EST.KEY, PAGE.NO,PRT.QTY,HD1,HD2)
+*T26090 ^
+            END ELSE
+*T26090 v
+*              CALL EST.RES.DETAIL.RPT.1 (CONO, CO.NAME, EST.KEY, PAGE.NO,PRT.QTY)
+               CALL EST.RES.DETAIL.RPT.1 (CONO, CO.NAME, EST.KEY, PAGE.NO,PRT.QTY,HD1,HD2)
+*T26090 ^
+            END
+      END CASE
+   NEXT TP
+   P_X  = 0 ; P_Y = 21 ; P_VALUE = "" ; P_OPT = "CL"
+   CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   RETURN
+*---- DISPLAY MULTI-LINE DATA
+*
+50000 *
+   START.REF.NO = 1 + INT((REF.NO-1)/LINE.COUNT)*LINE.COUNT
+   IF START.REF.NO = CURR.REF.NO THEN RETURN
+   CURR.REF.NO = START.REF.NO
+   S$VAL = START.REF.NO
+   S$CNT = COUNT(S$DATA(12)<S$SCR>,VM) + (S$DATA(12)<S$SCR> # "")
+   SCREEN MULTI;EST.REPORT;C;11;12;13;14;15
+   RETURN
+*
+*---- LOAD SCREEN DATA
+*
+80000 *
+   S$DATA(1)<S$SCR> = DATE()
+   S$DATA(2)<S$SCR> = DIV.ID
+   S$DATA(3)<S$SCR> = DIV.DESC
+   S$DATA(12)<S$SCR> = ESTR.EST.ID
+   S$DATA(13)<S$SCR> = ESTR.CUST.NAME
+   S$DATA(14)<S$SCR> = ESTR.SUB.FLAG
+   S$DATA(15)<S$SCR> = ESTR.RPT.TYPE
+80090 *
+   SCREEN DISPLAY;EST.REPORT;ALL
+   RETURN
+*
+*---- ERROR ROUTINE
+*
+90000 ERR.TYPE=1;CALL SI_SYSCOM(MAT SYSCOM.REC);RETURN
+*
+*---- END OF PROGRAM
+*
+99999 *
+   SCREEN CLOSE

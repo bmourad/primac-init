@@ -1,0 +1,226 @@
+*COPY>CPYLIB>COM1
+*********************************************************************
+*
+*  PROGRAM - JANUS.PHANTOM
+*
+*  AUTHOR  - DUANE GREEN, COMPUTER BUSINESS ASSOCIATES
+*
+*  DATE    - 05/21/96
+*
+*  DESCRIPTION
+*
+*  This program is used to interface to the Intermec handheld barcode
+*  reader.
+*
+*
+*T25934 adelgado 07/01/2002 * Allow Physical Inventory through Intermec
+*                             Guns
+*T26198 adelgado 07/10/2002 * Rev12 Conversion.
+*T27904 cmykleb 02/16/2004 * Add po line # to receipt transaction.
+*T29032 cmyklebu 12/29/2006 * Move pgm from rev12 to rev14.
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>ICS.CPYLIB>INTERMEC.TRAN
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+*
+*
+*---- PRE-INITIALIZATION
+*
+*
+*---- OPEN ALL FILES
+*
+   OPEN "","COMPANY" TO COMPANY ELSE
+      ERRMSG = "CANNOT OPEN COMPANY FILE"
+      GOTO 90000
+   END
+   OPEN "","CONTROL" TO CONTROL ELSE
+      ERRMSG = "CANNOT OPEN CONTROL FILE"
+      GOTO 90000
+   END
+   OPEN '','JANUS.CONTROL' TO JANUS.CONTROL ELSE
+      ERRMSG = 'JANUS.CONTROL FILE MISSING'
+      GOTO 90000
+   END
+   OPEN "","INTERMEC.TRAN" TO INTERMEC.TRAN ELSE
+      ERRMSG = "CANNOT OPEN INTERMEC.TRAN FILE"
+      GOTO 90000
+   END
+*
+*---- INITIALIZATION
+*
+   BREAK OFF
+*  ECHO OFF
+   TRACE = 1                                    ;*** T R A C E ***
+   TMSG = ""
+   TREC = ''
+   RECCNT = 0
+   HOLD.RECS = ""
+*
+* Set The Record Lock On The Port
+*
+10 *
+*  XXX = 1
+*  XXX<2> = '001'
+*  WRITE XXX ON JANUS.CONTROL,'MYPORT'
+   READVU PORTNO FROM JANUS.CONTROL,"MYPORT",1 ELSE
+      TMSG = 'CANT FIND MY PORT'
+      WRITEV TMSG ON JANUS.CONTROL,"TRACE",1
+   END
+   READVU CONO FROM JANUS.CONTROL,"MYPORT",2 ELSE
+      TMSG = 'COMPANY NOT SET ON MYPORT'
+      WRITEV TMSG ON JANUS.CONTROL,"TRACE",1
+   END
+   DELETE JANUS.CONTROL,"MYPORT"
+   IF TMSG # "" THEN GOTO 99999
+   READU LREC FROM JANUS.CONTROL,'JANUS.SERVER.LOCK.':PORTNO ELSE NULL
+   READVU LASTREC FROM JANUS.CONTROL,CONO:"INT.ID",1 ELSE LASTREC = '1'
+   SLEEP 5
+*
+*-------------------------------------------------------------------*
+*
+*
+*---- UPLOAD DATA FILE FROM INTERMEC READER
+*
+3000 *
+   BREAK OFF
+   GOSUB 10200 ;* Contact The Reader
+   TREC<-1> = RESP
+   IF RESP # 'XFER.OK' THEN
+      WRITE TREC ON JANUS.CONTROL,PORTNO:"TRACE"
+      GOTO 99999
+   END
+   WRITE TREC ON JANUS.CONTROL,PORTNO:"TRACE"
+*
+3100 * Send Transaction Prompt
+   PRINT 'TRAN'
+*T27904 v
+   INPUT SFLAG,-1
+   IF SFLAG = 0 THEN SLEEP 1;GOTO 3100
+*T27904 ^
+   INPUT INTERMEC.REC:
+   HOLD.RECS<-1> = INTERMEC.REC
+   BEGIN CASE
+      CASE INTERMEC.REC = ''
+         GO 3100
+      CASE INTERMEC.REC = "XFER.COMPLETE"
+         TREC<-1> = INTERMEC.REC
+         GOTO 3200
+      CASE INDEX(INTERMEC.REC,"\",1) = 0
+         TREC<-1> = INTERMEC.REC
+         GOTO 3200
+   END CASE
+   RECCNT = RECCNT + 1
+   TCNT = DCOUNT(INTERMEC.REC,"\")
+   DATAREC = TRIM(FIELD(INTERMEC.REC,"\",1))
+   FOR TPTR = 2 TO TCNT
+      DATAREC<TPTR> = TRIM(FIELD(INTERMEC.REC,"\",TPTR))
+   NEXT TPTR
+   MAT INT.REC = ""
+   Intermec.TTYPE = DATAREC<1>
+   BEGIN CASE
+      CASE Intermec.TTYPE = "TS"
+         TDATE       = ICONV(DATAREC<2>,"D")
+         TTIME       = ICONV(DATAREC<3>,"MTS")
+         Intermec.TDATE   = TDATE
+         Intermec.TTIME   = TTIME
+      CASE Intermec.TTYPE = "M"
+         XTIME       = TTIME + DATAREC<2>
+         Intermec.TDATE   = TDATE + INT(XTIME/86400)
+         Intermec.TTIME   = MOD(XTIME,86400)
+         Intermec.PO.NO   = OCONV(DATAREC<3>,'MCU')      ;* T26198
+         Intermec.MAN.ID  = OCONV(DATAREC<4>,'MCU')      ;* T26198
+         IF DATAREC<5> # "" THEN                         ;* T26198
+            Intermec.MAN.TOT = INT(DATAREC<5>*100+0.5)    ;* T26198
+         END
+      CASE Intermec.TTYPE = "R"
+         XTIME       = TTIME + DATAREC<2>
+         Intermec.TDATE   = TDATE + INT(XTIME/86400)
+         Intermec.TTIME   = MOD(XTIME,86400)
+*T27904 v
+*        Intermec.SERIAL  = OCONV(DATAREC<3>,'MCU')      ;* T26198
+*        Intermec.MILL.ID = DATAREC<4>
+*        Intermec.QTY     = INT(DATAREC<5>*100+0.5)
+*        Intermec.LOC     = OCONV(DATAREC<6>,'MCU')
+         Intermec.PO.LINE.NO = DATAREC<3>
+         Intermec.SERIAL     = OCONV(DATAREC<4>,'MCU') 
+         Intermec.MILL.ID    = DATAREC<5>
+         Intermec.QTY        = INT(DATAREC<6>*100+0.5)
+         Intermec.LOC        = OCONV(DATAREC<7>,'MCU')
+*T27904 ^
+      CASE Intermec.TTYPE = "T"
+         XTIME       = TTIME + DATAREC<2>
+         Intermec.TDATE   = TDATE + INT(XTIME/86400)
+         Intermec.TTIME   = MOD(XTIME,86400)
+         Intermec.SERIAL  = OCONV(DATAREC<3>,'MCU')      ;* T26198
+         Intermec.WHSE    = OCONV(DATAREC<4>,'MCU')
+         Intermec.LOC     = OCONV(DATAREC<5>,'MCU')
+* T25934 v
+      CASE Intermec.TTYPE = "P" 
+         XTIME       = TTIME + DATAREC<2> ; * T27904
+         Intermec.TDATE  = TDATE + INT(XTIME/86400)
+         Intermec.TTIME  = MOD(XTIME,86400)
+         Intermec.EMP    = DATAREC<3>
+         Intermec.SEQ.NO = DATAREC<4>
+         Intermec.SRP    = OCONV(DATAREC<5>,'MCU')
+         Intermec.QTY    = DATAREC<6>
+         Intermec.DIA    = DATAREC<7> ; * T27904
+* T25934 ^
+   END CASE
+   MATWRITE INT.REC ON INTERMEC.TRAN, CONO:LASTREC:"*":PORTNO
+   LASTREC += 1
+   GOTO 3100
+*
+3200 * Transfer Is Complete
+   WRITEV LASTREC ON JANUS.CONTROL,CONO:"INT.ID",1
+*
+   BEGIN CASE
+      CASE RECCNT = 0 AND INTERMEC.REC = "XFER.COMPLETE"
+         TREC<-1> = "NO TRANSACTIONS RECEIVED."
+      CASE INTERMEC.REC = "XFER.COMPLETE"
+         TREC<-1> = RECCNT:" TRANSACTIONS RECEIVED."
+         CALL RS.JANUS.UPDATE(CONO,PORTNO)
+      CASE 1
+         TREC<-1> = 'XXX'
+         TREC<-1> = "UPLOAD ABORTED."
+   END CASE
+   WRITE TREC ON JANUS.CONTROL,PORTNO:"TRACE"
+   STOP
+*
+*-------------------------------------------------------------------*
+*                                                                   *
+*               G E N E R I C   S U B R O U T I N E S               *
+*                                                                   *
+*-------------------------------------------------------------------*
+*
+*
+*---- INITIATE Intermec COMMUNICATIONS
+*
+10200 *
+   PRINT
+   PRINT 'XFER.REQUEST'
+*T27904 v
+   INPUT SFLAG,-1
+   IF SFLAG = 0 THEN SLEEP 1;GOTO 10200
+*T27904 ^
+   INPUT RESP:
+   IF RESP = 'XFER.OK' THEN
+      COMM.OPEN = 1
+   END ELSE
+      RESP = " Janus is not responding!"
+   END
+   RETURN
+*
+*---- ERROR ROUTINE
+*
+90000 *
+   WRITEV ERRMSG ON JANUS.CONTROL,CONO:"TRACE",1
+   STOP
+*
+*---- END OF PROGRAM
+*
+99999 *
+   STOP

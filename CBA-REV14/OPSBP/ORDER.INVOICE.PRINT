@@ -1,0 +1,839 @@
+*COPY>CPYLIB>COM1
+*************************************************************
+* REVISION    - [08.1]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* PROGRAM       - ORDER.INVOICE.PRINT.F4
+* SYSTEM        - OPSBP
+* BY            - JULIANNE RIVERA, VERCOM SOFTWARE, INC.
+* DATE          - 07/29/92
+* DESCRIPTION   -
+* This program prints the invoices.
+* TASK 20532 JR EXPAND INVOICE AMOUNT TO 8.2
+*T21324 lanny 12/12/1996 * On DM need to get qty from REF.QTY same as
+*                          for CM.
+*T21494 lanny 01/21/1997 * Total line floats.
+*T21647 bill 04/08/1997 * TOTAL AMOUNT SHOULD PRINT @ THE BOTTOM OF
+*                         INVOICE. THE TEXT TOTAL SHOULD NOT PRINT.
+*T21938 lanny 05/15/1997 * Rounding problem on price extension (UNIDATA
+*                          problem)
+*T21646 larryt 06/02/1997 * PRINT DAILY INVOICE ADDRESS
+*T22154 stefanie 08/19/1997 * Fix Rev10B to Rev11 match problems.
+*T22433 rik 01/02/1998 * CALCULATE HIDDEN LI UNIT PRICE IN PRICE.
+*T23006 renee 02/18/1999 * Print product and description even if the
+*                          invoice print flag is set to summary
+*T25159 alex 05/11/2000 * Add PMC.CPYLIB>COUNTRY.CODE, since the
+*                         COUNTRY.CODE file can hold multiple attributes
+*                         of data.
+*T26805 epitka 08/20/2002 * Add e-mail.
+*T27738 cmykleb 10/02/2003 * Have the pgm use the terms code from the
+*                            invoice instead of the terms code from the
+*                            customer record.
+*T29162 lross 02/27/2008 * Mods for Laser printing.
+*ENDDOC
+*************************************************************
+*
+*---- FILE EQUATES
+*
+*COPY>PMC.CPYLIB>INVOICE.CODE
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>COMP.OPS
+*COPY>OPS.CPYLIB>ORDER
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>OPS.CPYLIB>BOL
+*COPY>OPS.CPYLIB>DAILY.ORDER.INVOICE
+*COPY>OPS.CPYLIB>ORDER.INVOICE
+*COPY>PMC.CPYLIB>SHIP.TO
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>CHAR
+*COPY>PMC.CPYLIB>SALESMAN
+*COPY>PMC.CPYLIB>SALES.CODE
+*COPY>PMC.CPYLIB>SHIP.VIA
+*COPY>PMC.CPYLIB>TERMS
+*COPY>PMC.CPYLIB>COUNTRY.CODE
+   ;* T26805 v                                                        
+*COPY>PMC.CPYLIB>PMC_REPORTS                                          
+*COPY>PMC.CPYLIB>SECURITY                                             
+ *                                                                     
+   IVC.IDS='' ; PM.LIST=''                                            
+   ;* PM.LIST to contain print/mailing info:                          
+   ;* value loc 1 specifies print/mail/or both                        
+   ;* value loc 2 specifies email addresses (comma seperated)         
+   ;* value loc 3 specifies background form image to use              
+   USERNO="USERNO"                                                    
+   CALL SYSVARS.SUB(USERNO)                                           
+   LOGNAME="LOGNAME"                                                  
+   CALL SYSVARS.SUB(LOGNAME)                                          
+   RESTORE.PRINTER.CMD="SETPTR ":GETPTR(0):",BRIEF"                   
+   NEW.PRINTER.CMD    ="SETPTR ,,,,,3,BRIEF,NOMESSAGE,NOHEAD,BANNER " 
+   ;*26805 ^                                                          
+*
+*---- SETUP FOR SYSTEM ERROR MESSAGES
+*
+   SYS.TYPE=1
+   CALL SYSCOM(MAT SYSCOM.REC)
+*
+*---- DIMENSION VARIABLES
+*
+   DIM PL(31);DIM PR(31)
+   PROCREAD BUFFER ELSE BUFFER=""
+*
+*---- OPEN FILES
+*
+   BTYPE=BUFFER<6>
+   IF BTYPE="M" THEN
+      OPEN "","ORDER.INVOICE" TO DAILY.ORDER.INVOICE ELSE
+         ERRMSG="ORDER.INVOICE FILE MISSING";GOTO 93000
+      END
+   END ELSE
+      OPEN "","DAILY.ORDER.INVOICE" TO DAILY.ORDER.INVOICE ELSE
+         ERRMSG="DAILY.ORDER.INVOICE FILE MISSING";GOTO 93000
+      END
+   END
+   OPEN '','INVOICE.CODE' TO INVOICE.CODE ELSE
+      ERRMSG='INVOICE.CODE FILE MISSING';GOTO 93000
+   END
+   OPEN '','INVENTORY' TO INVENTORY ELSE
+      ERRMSG='INVENTORY FILE MISSING';GOTO 93000
+   END
+   OPEN '','SALESMAN' TO SALESMAN ELSE
+      ERRMSG='SALESMAN FILE MISSING';GOTO 93000
+   END
+   OPEN '','CUSTOMER' TO CUSTOMER ELSE
+      ERRMSG='CUSTOMER FILE MISSING';GOTO 93000
+   END
+   OPEN '','COMPANY' TO COMPANY ELSE
+      ERRMSG='COMPANY FILE MISSING';GOTO 93000
+   END
+   OPEN '','CONTROL' TO CONTROL ELSE
+      ERRMSG='CONTROL FILE MISSING';GOTO 93000
+   END
+   OPEN '','BOL' TO BOL ELSE ERRMSG='BOL FILE MISSING';GOTO 93000
+   OPEN '','ORDER' TO ORDER ELSE ERRMSG='ORDER FILE MISSING';GOTO 93000
+   OPEN '','SALES.CODE' TO SALES.CODE ELSE
+      ERRMGS='SALES CODE FILE IS MISSING';GOTO 93000
+   END
+   OPEN '','SHIP.VIA' TO SHIP.VIA ELSE
+      ERRMGS='SHIP VIA FILE IS MISSING';GOTO 93000
+   END
+   OPEN '','TERMS' TO TERMS ELSE
+      ERRMGS='TERMS FILE IS MISSING';GOTO 93000
+   END
+   OPEN '','SHIP.TO' TO SHIP.TO ELSE
+      ERRMGS='SHIP.TO FILE IS MISSING';GOTO 93000
+   END
+   OPEN '','COUNTRY.CODE' TO COUNTRY.CODE ELSE
+      ERRMGS='COUNTRY.CODE FILE IS MISSING';GOTO 93000
+   END
+   ;*26805 v                                                 
+   HOLD.FILE.NAME="_HOLD_"                                   
+   OPEN "",HOLD.FILE.NAME TO HOLD.FILE ELSE                  
+      ERRMSG=HOLD.FILE.NAME:" FILE IS MISSING" ; GOTO 93000  
+   END                                                       
+   OPEN "","PMC_REPORTS" TO PMC_REPORTS ELSE                 
+      ERRMSG="PMC_REPORTS FILE IS MISSING" ; GOTO 93000      
+   END                                                       
+   OPEN "","SECURITY" TO SECURITY ELSE                       
+      ERRMSG="SECURITY FILE IS MISSING" ; GOTO 93000         
+   END                                                       
+   CONO=""                                                   
+   CALL GET.CONO(CONO,MAT COMP.REC)                          
+   IF CONO='END' THEN GOTO 99999                             
+   ;*                                                        
+   ;* Read the buffer and get the report number              
+   ;*                                                        
+   RPT.NO=BUFFER<2>                                          
+   MATREAD PRPT.REC FROM PMC_REPORTS, RPT.NO ELSE            
+      ERRMSG="Cannot read the PMC_REPORTS record for this report. "     
+      ERRMSG:= "Make sure that the Report Screen flag is 'R'."          
+      GOSUB 91000; RETURN                                               
+   END                                                                  
+   ;*                                                                   
+   ;* Read the security record and get the user's email                 
+   ;*                                                                   
+   USER.EMAIL.ADDR=''                                                    
+   MATREAD SEC.REC FROM SECURITY, CONO:UPCASE(LOGNAME) THEN             
+      IF SEC.EMAIL # '' THEN USER.EMAIL.ADDR=',':SEC.EMAIL               
+   END                                                                  
+   ;* 26805 ^                                                           
+*
+*---- INITIALIZATION
+*
+   MAT DI.REC=''
+   MAT ORD.REC=''
+   MAT CUST.REC=''
+   MAT SALESMAN.REC=''
+   LINE.CNT=0
+   SP1=" ";SP2="  "
+   SP='                                                                      '
+   XS=STR('X',48)
+   UNKNOWN=STR("?",30)
+   DESC2=""
+   ERRMSG=""
+   DESC=""
+   UM=''
+   LINE=STR("-",13)
+   TOTAL=0
+   HIDDEN.FLAG=0
+   PRINTED.TOT=0
+   FIRST.SW=1
+*
+   MATREAD OPCO.REC FROM CONTROL, CONO:"OPS" ELSE
+      MAT OPCO.REC=""
+   END
+*
+*---- MAIN PROCESSING
+*
+   LASER.FLAG=''
+   IF OCONV(CONO:OCONV(@LOGNAME,'MCU'):'!LASER','TSECURITY;X;0;0') # '' THEN
+      LASER.FLAG=1
+   END
+   IF LASER.FLAG='' THEN
+      GOSUB ALIGNMENT.SUB
+   END ELSE
+      PRINTER ON
+   END
+   EOP=0
+   LOOP
+      READNEXT DI.KEY ELSE EOP=1
+   UNTIL (EOP) DO
+      INVOICE.NUM=DI.KEY[4,99]
+      CR.KEY=DI.KEY[(LEN(DI.KEY) - 1),2]
+      MATREADU DI.REC FROM DAILY.ORDER.INVOICE,DI.KEY THEN
+         MATREAD CUST.REC FROM CUSTOMER,CONO:DI.CUST.NO ELSE MAT CUST.REC=""
+         MATREAD ORD.REC FROM ORDER,CONO:DI.ORDER.NO ELSE MAT ORD.REC=""
+         ;*26805 v                                                       
+         IVC.IDS<-1>=DI.KEY                                            
+         ;* Save each INVOICE in a new file                              
+         PRINTER CLOSE                                                   
+         UDTEXECUTE NEW.PRINTER.CMD:"IVC-":USERNO:"-":DI.KEY             
+         IVC.PRINT.MAIL.ITEM="Y":SVM:DI.PRT.FLG<1,2>         
+         ;* ^
+         ;*                                                              
+         ;* Get the background form image for this PO                    
+         ;*                                                              
+         OCCUR.IDX=1                                                     
+         LOOP                                                            
+            FIND CONO IN PRPT.FORM.CONO,OCCUR.IDX SETTING F,V THEN       
+               ;* If an image is found for the CONO/DIV then stop looking
+               IF PRPT.FORM.DIV<1,V>=ORD.DIV THEN                         
+                  IVC.PRINT.MAIL.ITEM<1,2>=PRPT.FORM.PATH<1,V>          
+                  EXIT                                                   
+               END                                                       
+               ;* Otherwise look for the next combination                
+               OCCUR.IDX+=1                                              
+            END ELSE                                                     
+               ;* If there are no more occurences of the CONO then exit  
+               ;* and specify no background                      
+               IVC.PRINT.MAIL.ITEM<1,2>=''                      
+               OCCUR.IDX=0                                       
+            END                                                  
+         UNTIL OCCUR.IDX=0 DO REPEAT                             
+         ;*                                                      
+         ;* Get the company defined carbon copy emails           
+         ;*                                                      
+         ADD.EMAIL.ADDR = USER.EMAIL.ADDR
+         FCCE.ID=CONO:"_FORMS_CC_EMAILS_":ORD.DIV:"IVC"           
+         READ FCCE.ADDRESSES FROM CONTROL, FCCE.ID THEN          
+            FOR FCCE.IDX=1 TO DCOUNT(FCCE.ADDRESSES,@VM)         
+               ADD.EMAIL.ADDR:= ',':FCCE.ADDRESSES<1,FCCE.IDX>   
+            NEXT FCCE.IDX                                        
+         END                                                     
+         ;* Add the customer email to value loc 3,               
+         ;* and add the record to the list                       
+         IF CUST.EMAIL # '' THEN                                 
+            IVC.PRINT.MAIL.ITEM<1,3>=CUST.EMAIL:ADD.EMAIL.ADDR  
+         END ELSE                                                
+            IVC.PRINT.MAIL.ITEM<1,3>=''                         
+         END                                                     
+         PM.LIST<-1>=IVC.PRINT.MAIL.ITEM 
+         MATREAD BOL.REC FROM BOL,CONO:DI.BOL.NO ELSE MAT BOL.REC=""
+         MATREAD SALESMAN.REC FROM SALESMAN,CONO:ORD.SLSMN ELSE
+            SALS.NAME=UNKNOWN[1,20]
+         END
+*T27738 v
+*        MATREAD TERMS.REC FROM TERMS,CONO:CUST.TERMS ELSE MAT TERMS.REC=''
+         MATREAD TERMS.REC FROM TERMS,CONO:DI.TERMS ELSE MAT TERMS.REC=''
+*T27738 ^
+         MATREAD SHIP.VIA.REC FROM SHIP.VIA, CONO:BOL.SHIP.VIA ELSE
+            MAT SHIP.VIA.REC=""
+         END
+         MATREAD SPT.REC FROM SHIP.TO,CONO:BOL.CUST:"!":BOL.SHIP.TO ELSE
+            MAT SPT.REC=""
+         END
+         BILL.TO.CNTY=CUST.ADDL.OPS<1,4>
+         IF BILL.TO.CNTY # "" THEN
+            MATREAD CTY.REC FROM COUNTRY.CODE, CONO:BILL.TO.CNTY THEN
+               BILL.TO.CNTY=CTY.DESC
+            END
+         END
+         SHIP.TO.CNTY=SPT.CNTY
+         IF SHIP.TO.CNTY # '' THEN
+            MATREAD CTY.REC FROM COUNTRY.CODE, CONO:SHIP.TO.CNTY ELSE
+               MAT CTY.REC=''
+            END
+            SHIP.TO.CNTY=CTY.DESC
+         END
+         CHG.CODE.CNT=COUNT(DI.CHG.CODE,VM)+(DI.CHG.CODE # "")
+         DONE=0;EXEMPT.NO=""
+         FOR ZZ=1 TO CHG.CODE.CNT UNTIL DONE
+            IF DI.CHG.CAT<1,ZZ>="TAX" THEN
+               LOCATE DI.TAX.JURS<1,ZZ> IN CUST.TAX.JUR<1>,1 SETTING E ELSE GOTO 11
+               IF CUST.TAXABLE<1,E>="N" THEN
+                  EXEMPT.NO=CUST.EXEMPT<1,E>
+                  DONE=1
+               END
+            END
+11 *
+         NEXT ZZ
+         GOSUB TOP.FORM.PRINT
+         FOR Z=1 TO CHG.CODE.CNT
+            IF DI.CHG.CODE # "" THEN
+               IF DI.HIDDEN<1,Z>='Y' THEN GOTO 14
+               CODE=DI.CHG.CODE<1,Z>
+               NEXT.CODE=DI.CHG.CODE<1,Z+1>
+               CHG.CODE=DI.CHG.CAT<1,Z>
+               DONE=0;HIDDEN.AMT=0;HIDDEN.QTY=0
+               HIDDEN.PRICE=0;*T22433
+               FOR Q=1 TO CHG.CODE.CNT UNTIL DONE=1
+                  IF DI.HIDDEN<1,Z+Q>='Y' THEN
+                     HIDDEN.AMT=HIDDEN.AMT+DI.AMOUNT<1,Z+Q>
+                     HIDDEN.QTY=HIDDEN.QTY+DI.QUANTITY<1,Z+Q>
+                     HIDDEN.PRICE=HIDDEN.PRICE+DI.UNIT.PRICE<1,Z+Q>;*T22433
+                  END ELSE
+                     DONE=1
+                  END
+               NEXT Q
+               DESC2=""
+               IF DI.PROD<1,Z> # "" AND OPCO.INV.PRT="D" THEN
+                  PRODCNT=DCOUNT(DI.PROD<1,Z>,SVM)
+                  FOR P=1 TO PRODCNT
+                     IF CR.KEY # 'CM' AND CR.KEY # 'DM' THEN
+                        AMT=((DI.SHP.QTY<1,Z,P> / DI.COST.UNIT<1,Z>) * DI.UNIT.PRICE<1,Z>)
+                     END ELSE
+                        AMT=((DI.REF.QTY<1,Z,P> / DI.COST.UNIT<1,Z>) * DI.UNIT.PRICE<1,Z>)
+                     END
+                     AMT=ICONV(OCONV(AMT,'MD2'),'MD0')+HIDDEN.AMT
+                     IF CR.KEY # 'CM' AND CR.KEY # 'DM' THEN
+                        QUANTITY=DI.SHP.QTY<1,Z,P>+HIDDEN.QTY
+                     END ELSE
+                        QUANTITY=DI.REF.QTY<1,Z,P>+HIDDEN.QTY
+                     END
+                     UNIT.PRICE=DI.UNIT.PRICE<1,Z>+HIDDEN.PRICE
+                     UM=DI.UM<1,Z>
+                     IF HIDDEN.AMT+0 # 0 AND QUANTITY+0 # 0 THEN
+                        BEGIN CASE
+                           CASE UM='M'
+                              FACTOR=1000
+                           CASE UM='C'
+                              FACTOR=100
+                           CASE 1
+                              FACTOR=1
+                        END CASE
+                        UNIT.PRICE=ICONV((AMT/100) / (QUANTITY/FACTOR),'MD4')
+                     END
+                     IF UNIT.PRICE=0 THEN UNIT.PRICE=''
+                     DESC=DI.PROD<1,Z,P>
+                     MATREAD INV.REC FROM INVENTORY, CONO:DI.PROD<1,Z,P> ELSE
+                        MAT INV.REC=""
+                        INV.FULL.DESC=UNKNOWN
+                     END
+                     DESC2=INV.FULL.DESC
+                     UM=DI.UM<1,Z>
+                     IF AMT="" OR AMT=0 THEN
+                        AMOUNT=""
+                     END ELSE
+                        IF CODE="SUB" OR CODE="SUBT" OR CODE="TOT" THEN
+                           IF CR.KEY="CM" THEN
+                              AMOUNT=OCONV(AMT * (-1),"MD2,$")
+                           END ELSE
+                              AMOUNT=OCONV(AMT,"MD2,$")
+                           END
+                        END ELSE
+                           IF CR.KEY="CM" THEN
+                              AMOUNT=OCONV(AMT * (-1),"MD2,")
+                           END ELSE
+                              AMOUNT=OCONV(AMT,"MD2,")
+                           END
+                        END
+                     END
+                     IF CODE="SUB" OR CODE="SUBT" THEN GOTO 12
+                     IF CODE # "TOT" THEN
+                        IF CR.KEY="CM" THEN
+                           TOTAL=TOTAL+(AMT * (-1))
+                        END ELSE
+                           TOTAL=TOTAL+AMT
+                        END
+                     END
+12 *
+                     IF LINE.CNT >= 60 THEN
+                        PRINT;PRINT
+                        PRINT SP[1,69]:"(CONTINUED)"
+                        GOSUB TOP.FORM.PRINT
+                     END
+                     IF CODE # "TOT" THEN
+                        GOSUB INVOICE.BODY.PRINT
+                     END ELSE
+                        PRINTED.TOT=1
+                        GOSUB TOTAL.PRINT
+                     END
+                  NEXT P
+               END ELSE
+                  AMT=DI.AMOUNT<1,Z>+HIDDEN.AMT
+                  QUANTITY=DI.QUANTITY<1,Z>+HIDDEN.QTY
+                  UNIT.PRICE=DI.UNIT.PRICE<1,Z>+HIDDEN.PRICE
+                  UM=DI.UM<1,Z>
+                  IF HIDDEN.AMT+0 # 0 AND QUANTITY+0 # 0 THEN
+                     BEGIN CASE
+                        CASE UM='M'
+                           FACTOR=1000
+                        CASE UM='C'
+                           FACTOR=100
+                        CASE 1
+                           FACTOR=1
+                     END CASE
+                     UNIT.PRICE=ICONV((AMT/100) / (QUANTITY/FACTOR),'MD4')
+                  END
+                  IF UNIT.PRICE=0 THEN UNIT.PRICE=''
+                  IF DI.PROD<1,Z> NE "" THEN
+                     DESC=DI.PROD<1,Z,1>
+                     MATREAD INV.REC FROM INVENTORY, CONO:DI.PROD<1,Z,1> ELSE
+                        MAT INV.REC=""
+                        INV.FULL.DESC=UNKNOWN
+                     END
+                     DESC2=INV.FULL.DESC
+                  END ELSE
+                     DESC=DI.DESC<1,Z,1>
+                  END
+                  UM=DI.UM<1,Z>
+                  IF AMT="" OR AMT=0 THEN
+                     AMOUNT=""
+                  END ELSE
+                     IF CODE="SUB" OR CODE="SUBT" OR CODE="TOT" THEN
+                        IF CR.KEY="CM" THEN
+                           AMOUNT=OCONV(AMT * (-1),"MD2,$")
+                        END ELSE
+                           AMOUNT=OCONV(AMT,"MD2,$")
+                        END
+                     END ELSE
+                        IF CR.KEY="CM" THEN
+                           AMOUNT=OCONV(AMT * (-1),"MD2,")
+                        END ELSE
+                           AMOUNT=OCONV(AMT,"MD2,")
+                        END
+                     END
+                  END
+                  IF CODE="SUB" OR CODE="SUBT" THEN GOTO 13
+                  IF CODE # "TOT" THEN
+                     IF CR.KEY="CM" THEN
+                        TOTAL=TOTAL+(AMT * (-1))
+                     END ELSE
+                        TOTAL=TOTAL+AMT
+                     END
+                  END
+13 *
+                  IF LINE.CNT >= 60 THEN
+                     PRINT;PRINT
+                     PRINT SP[1,69]:"(CONTINUED)"
+                     GOSUB TOP.FORM.PRINT
+                  END
+                  IF CODE # "TOT" THEN
+                     GOSUB INVOICE.BODY.PRINT
+                  END ELSE
+                     PRINTED.TOT=1
+                     GOSUB TOTAL.PRINT
+                  END
+               END
+            END
+14 *
+         NEXT Z
+         IF PRINTED.TOT THEN
+            D=61 - LINE.CNT
+            FOR L=1 TO D
+               PRINT
+            NEXT L
+            PRINT SP[1,66]:OCONV(TOTAL,'MD2,$') "R#14"
+         END ELSE
+            GOSUB TOTAL.PRINT
+         END
+         DI.PRT.DATE=DATE()
+         MATWRITE DI.REC ON DAILY.ORDER.INVOICE,DI.KEY
+         TOTAL=0
+         PRINTED.TOT=0
+      END ELSE
+         RELEASE DAILY.ORDER.INVOICE,DI.KEY
+      END
+   REPEAT
+*
+   ;* 26805 v                                                              
+   ;* Restore original printer settings, and output saved reports          
+   UDTEXECUTE RESTORE.PRINTER.CMD                                          
+   CALL DOC.PRINT.MAIL(HOLD.FILE,IVC.IDS,PM.LIST,MAT COMP.REC,'OPSIVC')   
+   ;* T26805 ^
+   GOTO 99999
+*
+**************************************************************************
+**** S U B R O U T I N E S ***********************************************
+**************************************************************************
+*
+*
+************************
+TOP.FORM.PRINT: 
+************************
+*
+   MAT PL=''
+   MAT PR=''
+   ;*
+   ;* Print right side
+   ;*
+*T29162 v
+IF NOT(LASER.FLAG) THEN
+   PR(3)=INVOICE.NUM
+   PR(4)=OCONV(DI.DATE,"D2/")
+   PR(5)=OCONV(BOL.SHP.DATE,"D2/")
+   PR(6)=DI.PO.NO
+   PR(7)=ORD.SLSMN"L#4": SALS.NAME[1,17]
+   PR(8)=DI.ORDER.NO
+   PR(9)=SHPV.DESC
+   PR(10) =TERMS.DESC
+END ELSE
+   PR(2)=INVOICE.NUM
+   PR(3)=OCONV(DI.DATE,"D2/")
+   PR(4)=OCONV(BOL.SHP.DATE,"D2/")
+   PR(5)=DI.PO.NO
+   PR(6)=ORD.SLSMN"L#4": SALS.NAME[1,17]
+   PR(7)=DI.ORDER.NO
+   PR(8)=SHPV.DESC
+   PR(9) =TERMS.DESC
+END
+   ;*
+   ;* Print left side
+   ;*
+   PP=0
+   IF DI.CUST.NAME # "" THEN
+      PP=PP+1
+      PL(PP)=SP[1,7]:DI.CUST.NAME
+      IF DI.ADDR1 # "" THEN
+         PP=PP+1
+         PL(PP)=SP[1,7]:DI.ADDR1
+      END
+      IF DI.ADDR2 # "" THEN
+         PP=PP+1
+         PL(PP)=SP[1,7]:DI.ADDR2
+      END
+      IF DI.ADDR3 # "" THEN
+         PP=PP+1
+         PL(PP)=SP[1,7]:DI.ADDR3
+      END
+      IF DI.ADDR4 # "" THEN
+         PP=PP+1
+         PL(PP)=SP[1,7]:DI.ADDR4
+      END
+      IF DI.ATTENTION # "" THEN
+         IF LASER.FLAG='' THEN
+            PP=PP+2
+            PL(PP)=SP[1,7]:"ATTN: ":DI.ATTENTION
+         END ELSE
+            PP=PP+1
+            PL(PP)=SP[1,7]:"ATTN: ":DI.ATTENTION
+            PP=PP+1
+            PL(PP)=SP[1,7]
+         END
+      END
+   END ELSE
+      PL(1)=SP[1,7]:CUST.NAME
+      PP=1
+      IF CUST.ADDR1 # '' THEN
+         PP=PP+1
+         PL(PP)=SP[1,7]:CUST.ADDR1
+      END
+      IF CUST.ADDR2 # '' THEN
+         PP=PP+1
+         PL(PP)=SP[1,7]:CUST.ADDR2
+      END
+      IF CUST.ADDR3 # '' THEN
+         PP=PP+1
+         PL(PP)=SP[1,7]:CUST.ADDR3
+      END
+      IF CUST.ADDR4 # '' THEN
+         PP=PP+1
+         BILL.TO.CNTY=CUST.ADDL.OPS<1,4>
+         IF BILL.TO.CNTY # '' THEN
+            MATREAD CTY.REC FROM COUNTRY.CODE, CONO:BILL.TO.CNTY THEN
+               BILL.TO.CNTY=CTY.DESC
+            END
+         END
+         PL(PP)=SP[1,7]:CUST.ADDR4:"  ":CUST.ZIP:"  ":BILL.TO.CNTY
+      END
+      IF CUST.ATTENTION # '' THEN
+         IF LASER.FLAG='' THEN
+            PP=PP+2
+            PL(PP)=SP[1,7]:"ATTN: ":CUST.ATTENTION
+         END ELSE
+            PP=PP+1
+            PL(PP)=SP[1,7]:"ATTN: ":CUST.ATTENTION
+            PP=PP+1
+            PL(PP)=SP[1,7]
+         END
+      END
+*     PP=PP+1
+*     PL(PP)=SP[1,7]:CUST.NAME
+*     IF CUST.ADDR1 # '' THEN
+*        PP=PP+1
+*        PL(PP)=SP[1,7]:CUST.ADDR1
+*     END
+*     IF CUST.ADDR2 # '' THEN
+*        PP=PP+1
+*        PL(PP)=SP[1,7]:CUST.ADDR2
+*     END
+*     IF CUST.ADDR3 # '' THEN
+*        PP=PP+1
+*        PL(PP)=SP[1,7]:CUST.ADDR3
+*     END
+*     IF CUST.ADDR4 # '' THEN
+*        PP=PP+1
+*CSF
+**       PL(PP)=SP[1,7]:CUST.ADDR4:"  ":CUST.ZIP
+*        PL(PP)=SP[1,7]:CUST.ADDR4:"  ":CUST.ZIP:"  ":BILL.TO.CNTY
+*     END
+*     IF CUST.ATTENTION # '' THEN
+*        PP=PP+2
+*        PL(PP)=SP[1,7]:"ATTN: ":CUST.ATTENTION
+*     END
+*T29162 ^
+   END
+   PP=8
+   IF SPT.NAME # '' THEN
+      PL(8)= SP[1,7]:SPT.NAME
+      IF SPT.ADDR1 # '' THEN
+         PP=PP+1
+         PL(PP)=SP[1,7]:SPT.ADDR1
+      END
+      IF SPT.ADDR2 # '' THEN
+         PP=PP+1
+         PL(PP)=SP[1,7]:SPT.ADDR2
+      END
+      IF SPT.CITY # '' THEN
+         PP=PP+1
+         PL(PP)=SP[1,7]:SPT.CITY:", ":SPT.STATE"L#3":SPT.ZIP:"  ":SHIP.TO.CNTY
+      END
+      IF SPT.ATTN # '' THEN
+         PP=PP+2
+         PL(PP)=SP[1,7]:"ATTN: ":SPT.ATTN
+      END
+   END ELSE
+      PL(8)= SP[1,7]:DI.CUST.NAME
+      IF DI.ADDR1 # '' THEN
+         PP=PP+1
+         PL(PP)=SP[1,7]:DI.ADDR1
+      END
+      IF DI.ADDR2 # '' THEN
+         PP=PP+1
+         PL(PP)=SP[1,7]:DI.ADDR2
+      END
+      IF DI.ADDR3 # '' THEN
+         PP=PP+1
+         PL(PP)=SP[1,7]:DI.ADDR3
+      END
+      IF DI.ADDR4 # '' THEN
+         PP=PP+1
+         PL(PP)=SP[1,7]:DI.ADDR4
+      END
+      IF DI.ATTENTION # '' THEN
+         PP=PP+2
+         PL(PP)=SP[1,7]:"ATTN: ":DI.ATTENTION
+      END
+   END
+   ;*
+   ;* Print heading
+   ;*
+   IF NOT(FIRST.SW) THEN PRINT CHAR(12) ELSE PRINT; FIRST.SW=0
+   LINE.CNT=27
+*T29162 v
+ IF NOT(LASER.FLAG) THEN
+   FOR X=1 TO 5
+      PRINT
+   NEXT X
+ END ELSE
+   FOR X=1 TO 6
+      PRINT
+   NEXT X
+ END
+*T29162 ^
+   FOR NN=1 TO 14
+*T29162 v PRINT PL(NN)"L#58":PR(NN)
+      PRINT PL(NN)"L#59":PR(NN)
+   NEXT NN
+*T29162 v
+   IF LASER.FLAG='' THEN
+      FOR I=1 TO 3
+         PRINT
+      NEXT I
+   END ELSE
+      FOR I=1 TO 2; PRINT; NEXT I
+   END
+*T29162 ^
+   RETURN
+*
+*********************
+INVOICE.BODY.PRINT: 
+*********************
+*
+   IF QUANTITY=0 THEN QUANTITY=""
+   IF CODE="SUB" OR CODE="SUBT" THEN
+*T29162 v  PRINT SP[1,69]:LINE
+      PRINT SP[1,67]:LINE
+      LINE.CNT=LINE.CNT+1
+   END
+*T29162 v   PLINE=DESC "L#44":SP2:OCONV(QUANTITY,"MD0")"R#8"
+   PLINE=DESC "L#43":SP1:OCONV(QUANTITY,"MD0")"R#8"
+   IF CHG.CODE= "OTH" OR CHG.CODE= "MSC" THEN
+*T29162 v PLINE=PLINE: SP1 : UM 'L#3':OCONV(UNIT.PRICE,'MD4')"R#10"
+      PLINE=PLINE: SP1 : UM 'R#3 ':OCONV(UNIT.PRICE,'MD4')"R#9"
+   END ELSE
+*T29162 v PLINE=PLINE: SP[1,4]:OCONV(UNIT.PRICE,'MD4')"R#10"
+      PLINE=PLINE: SP[1,5]:OCONV(UNIT.PRICE,'MD4')"R#9"
+   END
+*T29162 v
+   IF LASER.FLAG='' THEN
+      PLINE=PLINE:AMOUNT "R#14"
+   END ELSE 
+      PLINE=PLINE:AMOUNT "R#13"
+   END
+*T29162 ^
+   PRINT PLINE
+   LINE.CNT=LINE.CNT+1
+   IF DESC2 # "" THEN PRINT DESC2"L#44"; LINE.CNT=LINE.CNT+1 ;*T21494
+   IF LINE.CNT >= 60 THEN
+      PRINT;PRINT
+      PRINT SP[1,69]:"(CONTINUED)"
+      GOSUB TOP.FORM.PRINT
+   END
+   IF CODE="SUB" OR CODE="SUBT" THEN
+      PRINT
+      LINE.CNT=LINE.CNT+1
+   END
+39 *
+   RETURN
+*
+****************
+TOTAL.PRINT: 
+****************
+*
+   IF PRINTED.TOT THEN
+*T29162 v
+    IF LASER.FLAG THEN PRINT
+*     PRINT SPACE(69) : LINE
+      PRINT SPACE(67) : LINE
+*     PRINT DESC "L#44":SP[1,23]: OCONV(TOTAL,'MD2,$') "R#14"
+      PRINT DESC "L#43":SP[1,23]: OCONV(TOTAL,'MD2,$') "R#14"
+      IF NOT(LASER.FLAG) THEN PRINT
+      LINE.CNT=LINE.CNT+3
+   END ELSE
+*     D=62 - LINE.CNT
+      D=61 - LINE.CNT
+      FOR L=1 TO D
+         PRINT
+      NEXT L
+      IF LASER.FLAG THEN PRINT
+      IF LASER.FLAG='' THEN
+         PRINT SP[1,66]:OCONV(TOTAL,'MD2,$') "R#14"
+      END ELSE
+         PRINT SP[1,66]:OCONV(TOTAL,'MD2,$') "R#14":
+      END
+      IF LASER.FLAG='' THEN PRINT;PRINT 
+*     PRINT SP[1,69]:OCONV(TOTAL,'MD2,$') "R#12"
+*     PRINT;PRINT
+*T29162 ^
+   END
+   RETURN
+*
+**********************
+ALIGNMENT.SUB: 
+**********************
+*
+*
+*T29162 v
+   PRINT @(14,15):CL:"DO YOU WANT TO PRINT AN ALIGNMENT? (Y/N) ":
+   INPUT ANSWER:
+   IF ANSWER # 'Y' AND ANSWER # 'N' THEN GOTO ALIGNMENT.SUB
+   PRINTER ON
+   IF ANSWER='N' THEN GOTO 199
+110 *
+   PRINT CHAR(12)
+   FOR XX=1 TO 5;PRINT;NEXT XX
+*T29162 v chg from 6 to 7 and 58 to 59
+   PRINT SP[1,7]:XS[1,20]
+   PRINT SP[1,7]:XS[1,20]
+   PRINT SP[1,7]:XS[1,20]:SP[1,32]:'99999999'
+   PRINT SP[1,7]:XS[1,20]:SP[1,32]:'MM/DD/YY'
+   PRINT SP[1,7]:XS[1,20]:SP[1,32]:'MM/DD/YY'
+   PRINT SP[1,59]:'99999'
+*  PRINT SP[1,59]:'999 ':XS[1,20]
+   PRINT SP[1,59]:'999 ':XS[1,17]
+   PRINT SP[1,7]:XS[1,20]:SP[1,32]:'9999999'
+   PRINT SP[1,7]:XS[1,20]:SP[1,32]:XS[1,20]
+   PRINT SP[1,7]:XS[1,20]:SP[1,32]:XS[1,20]
+   PRINT SP[1,7]:XS[1,20]
+   PRINT SP[1,7]:XS[1,20]
+* Dup 2 LINES ABOVE
+   PRINT SP[1,7]:XS[1,20]
+   PRINT SP[1,7]:XS[1,20]
+*  FOR XX=1 TO 5
+   FOR XX=1 TO 3
+      PRINT
+   NEXT XX
+*      PRINT XS[1,45]:SP1:'99999999':SP1:'XXX':SP1:'999999999':SP1:'999999999999'
+*  PRINT XS[1,44]:SP2:'99999999':SP1:'XXX':SP1:'999999999':SP1:'999999999999'
+   PRINT XS[1,43]:SP1:'99999999':SP1:'XXX':SP1:'999999999':SP1:'9999999999999'
+   FOR XX=1 TO 34
+      PRINT
+   NEXT XX
+*  PRINT SP[1,69] : "999999999999"
+   PRINT SP[1,67] : "9999999999999"
+   PRINTER CLOSE
+   PRINTER OFF
+   PRINT @(0,15):CL:
+   PRINT @(14,15):"DID ALIGNMENT PRINT CORRECTLY ? (Y/N):":
+   INPUT ANSWER:
+   IF ANSWER="Y" THEN
+      PRINT @(0,15):CL:
+      PRINTER ON
+      GOTO 199
+   END ELSE
+      PRINT @(14,15):"RE-ALIGN PAPER AND HIT <RETURN> TO CONTINUE":
+      INPUT ANSW:
+      PRINTER ON
+*     GOTO ALIGNMENT.SUB
+      GOTO 110
+   END
+199 *
+   RETURN
+*
+*---- CALLS FOR SYSCOM
+*
+91000 *
+   PRINTER OFF
+   ERR.TYPE=1
+   CALL SYSCOM(MAT SYSCOM.REC)
+   PRINTER ON
+   RETURN
+92000 *
+   ERR.TYPE=2
+   CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+93000 *
+   PRINTER OFF
+   ERR.TYPE=3
+   CALL SYSCOM(MAT SYSCOM.REC)
+99999 *
+   PRINTER OFF
+   PRINTER CLOSE
+   PRINT @(-1)
+   IF LASER.FLAG # '' THEN
+      READ TEMP.REC FROM SECURITY, CONO:OCONV(@LOGNAME,'MCU'):'!LASER' THEN
+         DELETE SECURITY, CONO:OCONV(@LOGNAME, 'MCU'):'!LASER'
+      END
+   END
+END

@@ -1,0 +1,1211 @@
+  SUBROUTINE RELEASE.LINE.SUB(CONO,ORDNUM,SHPNO)
+*COPY>CPYLIB>COM1
+*COPY>JCS.CPYLIB>COM.JCS.LINK  
+*COPY>ICS.CPYLIB>COM.INV.MAIN  
+*COPY>ICS.CPYLIB>COM.INV.SERIAL
+*COPY>JCS.CPYLIB>COM.INV.STATS 
+*COPY>PMC.CPYLIB>COM.CUST
+*COPY>OPS.CPYLIB>COM.ORDER
+*COPY>ICS.CPYLIB>COM.INV.CNV
+********************************************************************
+* REVISION    - [08.1]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SOURCE        - OPSBP
+* PROGRAM       - RELEASE.LINE.SUB
+* BY            - Ziad Yamout, VERCOM Software Inc.
+* DATE          - 01/23/90
+* DESCRIPTION   -
+* 18606 - KITTING
+*
+*T20852 doug 08/20/1996 * Pick ticket tracking
+*T21199 lanny 11/11/1996 * When 'C'hg line, if no release avail get hung
+*                          in routine.
+*T21177 diane 11/06/1996 * REV11 UPG
+*T21505 lanny 01/22/1997 * Locking problem on ORDER record.
+*T22146 renee 09/08/1997 * Check to see if a pick ticket has been
+*                          printed and is not associated to a release.
+*                          If so, then display message and do not allow
+*                          the release to be created until the pick
+*                          ticket is deleted.
+*T23278 markt 10/21/1998 * Add check for divisional security
+*T24604 alex 12/06/1999 * FIX BUG, WASN'T ALLOWING THE USER TO DELETE
+*                         THE RELEASE.
+*T25740 epitka 01/31/2002 * REV12
+*T26126 adelgado 03/07/2002 * Implement the LOCKED clause for READU.
+*T28354 lross 12/08/2004 * Allow 999 lines.
+********************************************************************
+*COPY>PMC.CPYLIB>COMP.OPS
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>PMC.CPYLIB>SHIP.TO
+*COPY>OPS.CPYLIB>ORDER
+*COPY>OPS.CPYLIB>ORDER.RELEASE
+*COPY>OPS.CPYLIB>ORDER.DETAIL
+*COPY>OPS.CPYLIB>ORDER.DETAIL.INQ
+*COPY>OPS.CPYLIB>PICK.TICKET            ; * T22146
+*COPY>ICS.CPYLIB>CATEGORY
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>ICS.CPYLIB>INV.WHSE.LOC
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>ICS.CPYLIB>FNGD.STATS
+*COPY>ICS.CPYLIB>FNGD.ORDER.STATS
+*COPY>ICS.CPYLIB>FNGD.JOB.STATS
+*COPY>CPYLIB>GEN.XREF.SUB
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+*
+*--- SETUP SYSTEM ERROR MESSAGES
+*
+  SYS.TYPE = 1
+  CALL SYSCOM(MAT SYSCOM.REC)
+*
+*---- Display screen
+*
+  TODAY = DATE()
+  LINE.SPACE = 2
+  PAGE.SIZE = 3
+  BEGIN.PAGE = 13
+  GEN.SHPNO = "000"
+  OPEN.FLAG=1
+*
+  MAT GEN.XREF.REC = ""
+  GXR.CO = CONO
+*
+  ESN = ECD.SCRN.NO
+1100*
+  RELEASE        ;* T26126
+  MAT ORR.REC = ""
+  ORDNO = ORDNUM
+  RELNO = ""
+  LINES = 0
+  P.NUM = 41
+  IF ORDNUM = "" THEN
+    MAT ORD.REC = ""; MAT CUST.REC = ""
+    SHPNO = ""; JOBNO = ""
+    MAT SCV.REC = ""
+  END ELSE
+    IF ORD.REL.NO = "" THEN GOTO 99990
+    FOR ECD.NUM = 1 TO SCV.REC.SIZE
+      SCV.REC(ECD.NUM)<ESN> = ""
+    NEXT ECD.NUM
+    GOSUB 8100
+  END
+*
+*---- Release
+  ECD.NUM = 4; SCV.REC(ECD.NUM)<ESN> = RELNO
+  IF ORDNO = "" THEN
+    ECD.DEFAULT = "N"
+    ECD.ACTION = 4; CALL SCRN.EDIT
+  END ELSE
+    ECD.RET.VALUE = ""
+  END
+  RPTR = 0; RCNT = DCOUNT(ORD.REL.NO,VM)
+  BEGIN CASE
+    CASE ECD.RET.VALUE = "END"
+      GOTO 99990
+    CASE ECD.RET.VALUE = "S"
+      BEGIN CASE
+        CASE ORDNO = ""
+          ERRMSG = "The order has not been defined yet."
+          GOSUB 91000; SCV.REC(ECD.NUM)<ESN> = ""; GOTO 1100
+        CASE RCNT < 1
+          ERRMSG = "There are no releases for this order"
+          GOSUB 91000; SCV.REC(ECD.NUM)<ESN> = ""; GOTO 1100
+        CASE RCNT < 2
+          ERRMSG = "There is only one release for this order"
+          GOSUB 91000; SCV.REC(ECD.NUM)<ESN> = ""; GOTO 1100
+      END CASE
+      LOCATE RELNO IN ORD.REL.NO<1>,1 SETTING RPTR THEN
+        IF RPTR = RCNT THEN
+          RPTR = 1
+        END ELSE
+          RPTR = RPTR + 1
+        END
+      END ELSE
+        RPTR = 1
+      END
+      ECD.NUM = 4; SCV.REC(ECD.NUM)<ESN> = RELNO
+      ECD.ACTION = 5; CALL SCRN.EDIT
+    CASE (ECD.RET.VALUE = "" OR ECD.RET.VALUE = "???") AND ORDNUM # ""
+      GXR.NAME = "ORDER.RELEASE"
+      GXR.XREF = ORDER
+      GXR.FILE = ORDER.RELEASE
+      GXR.SRCH.ID = ORDNUM
+      CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+      ECD.ACTION = 2; CALL SCRN.EDIT
+      ECD.ACTION = 3; CALL SCRN.EDIT
+      IF GXR.ID = "" THEN GOTO 99990
+      RELNO = GXR.ID
+    CASE ECD.RET.VALUE = "N"
+      RELNO = "N"
+      IF ORDNO = "" THEN
+        GOSUB 1110
+        IF ECD.RET.VALUE = "END" THEN GOTO 1100
+        ORDNO = ECD.RET.VALUE
+      END
+      MAT ORR.REC = ""
+      ORR.ORD = ORDNO
+      GOSUB 1200
+      GOTO 1109
+    CASE ECD.RET.VALUE = "" OR ECD.RET.VALUE = "???"
+      IF ORDNO = "" THEN
+        GOSUB 1110
+        IF ECD.RET.VALUE = "END" THEN GOTO 1100
+      END ELSE
+        ECD.RET.VALUE = ORDNO
+      END
+      GXR.NAME = "ORDER.RELEASE"
+      GXR.XREF = ORDER
+      GXR.FILE = ORDER.RELEASE
+      GXR.SRCH.ID = ECD.RET.VALUE
+      CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+      ECD.ACTION = 2; CALL SCRN.EDIT
+      IF GXR.ID = "" THEN
+        GOSUB 8200; GOTO 1100
+      END
+      SCV.REC(4)<ESN> = GXR.ID; GOSUB 8200
+      RELNO = GXR.ID
+    CASE 1
+      RELNO = ECD.RET.VALUE
+  END CASE
+  MAT ORR.REC = ""
+  LOCATE RELNO IN ORD.REL.NO<1>,1 SETTING RPTR ELSE
+    IF ORDNUM # "" THEN
+      ERRMSG = "Cannot locate release (":RELNO:") for order # ":ORDNUM
+      GOSUB 91000; GOTO 1100
+    END
+  END
+  * T26126 v
+  MATREADU ORR.REC FROM ORDER.RELEASE, CONO:RELNO LOCKED
+    ERRMSG = 'RELEASE record is locked by user - ':GETUSERNAME(STATUS())
+    GOSUB 91000;GOTO 1100 
+  END THEN
+  * T26126 ^
+    IF ORDNO # "" AND ORDNO # ORR.ORD THEN
+      ERRMSG = "Release (":RELNO:") is already linked to order # ":ORR.ORD
+      GOSUB 91000; GOTO 1100
+    END
+  END ELSE
+    ECD.NUM = 43; SCV.REC(ECD.NUM)<ESN> = ""
+    ECD.ACTION = 4; CALL SCRN.EDIT
+    BEGIN CASE
+      CASE ECD.RET.VALUE # "Y"
+        GOTO 1100
+      CASE ORDNO # ""
+        ECD.RET.VALUE = ORDNO
+      CASE 1
+        GOSUB 1110
+        BEGIN CASE
+          CASE ECD.RET.VALUE = "END"
+            GOTO 1100
+          CASE DISPLAY
+            ECD.ACTION = 2; CALL SCRN.EDIT
+            SCV.REC(1)<ESN> = ECD.RET.VALUE; GOSUB 8210
+        END CASE
+    END CASE
+    ORR.ORD = ECD.RET.VALUE
+    GOSUB 1200
+    IF ECD.RET.VALUE = "END" THEN GOTO 1100
+  END
+  IF ORDNO = ORR.ORD THEN GOTO 1010
+1109*
+  * T26126 v
+  MATREADU ORD.REC FROM ORDER, CONO:ORR.ORD LOCKED
+    ERRMSG = 'ORDER record is locked by user - ':GETUSERNAME(STATUS())
+    GOSUB 91000;GOTO 1100 
+  END ELSE
+  * T26126 ^
+    ERRMSG = "Cannot locate order # ":ORR.ORD
+    RELEASE ORDER, CONO:ORR.ORD
+    GOSUB 91000; GOTO 1100
+  END
+  DIV.CODE = ORD.DIV; USER.ID = UPCASE(@LOGNAME); ERRMSG = ''
+  CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+  IF ERRMSG # '' THEN
+    GOSUB 91000; GOTO 1100
+  END
+  MATREAD CUST.REC FROM CUSTOMER, CONO:ORD.CUST ELSE
+    MAT ORD.REC = ""
+    ERRMSG = "Cannot locate customer # ":ORD.CUST
+    GOSUB 91000; GOTO 1100
+  END
+  ORDNO = ORR.ORD
+*
+*---- Build ORD.DET.INQ & ORD.DET.SUM
+*
+  STATUS = "L"; SHPNO = "ALL"
+  CALL ORDER.LINE.UPD(CONO,ORDNO,SHPNO,STATUS)
+1010*
+  SHPNO = ORR.SHIP.TO
+  GOSUB 8100
+  RCNT = DCOUNT(ORD.REL.NO,VM)
+1020*
+  ECD.NUM = 5; SCV.REC(ECD.NUM)<ESN> = RPTR "R%2"
+  ECD.ACTION = 5; CALL SCRN.EDIT
+  ECD.NUM = 6; SCV.REC(ECD.NUM)<ESN> = RCNT "R%2"
+  ECD.ACTION = 5; CALL SCRN.EDIT
+  LN = 1; OLD.SHPNO = SHPNO
+*
+  BEGIN CASE
+    CASE SHPNO # ""
+      ECD.NUM = 8; SCV.REC(ECD.NUM)<ESN> = SHPNO
+      ECD.ACTION = 5; CALL SCRN.EDIT
+      ECD.RET.VALUE = SHPNO; GOSUB 1310
+    CASE ORD.SHIP.TO<1,3> # ""
+      GOSUB 1300
+    CASE ORD.SHIP.TO<1,2> # ""
+      SHPNO = ORD.SHIP.TO<1,2>
+      ECD.NUM = 8; SCV.REC(ECD.NUM)<ESN> = SHPNO
+      ECD.ACTION = 5; CALL SCRN.EDIT
+      ECD.RET.VALUE = SHPNO; GOSUB 1310
+    CASE ORD.SHIP.TO<1,1> # ""
+      SHPNO = ORD.SHIP.TO<1,1>
+      ECD.NUM = 8; SCV.REC(ECD.NUM)<ESN> = SHPNO
+      ECD.ACTION = 5; CALL SCRN.EDIT
+      ECD.RET.VALUE = SHPNO; GOSUB 1310
+    CASE 1
+      GOSUB 1300
+  END CASE
+  IF SHPNO = "" THEN GOTO 1100
+  ORR.SHIP.TO = SHPNO
+  IF ORR.STATUS<1,1> # "" THEN P.NUM = 47
+*
+*---- Prompt line
+*
+  MORE = 1
+  LOOP
+    ECD.NUM = P.NUM; SCV.REC(ECD.NUM)<ESN> = ""
+    ECD.ACTION = 4; CALL SCRN.EDIT
+    OPTION = ECD.RET.VALUE
+    BEGIN CASE
+      CASE OPTION = "END" OR OPTION = "E"
+        IF ORDNUM # "" THEN
+          FOR P = 1 TO ORD.DET.REC.SIZE
+            ORD.DET.SUM(P,SPTR) = ORD.DET.REC(P)
+          NEXT P
+          STATUS = "L"
+          CALL ORDER.LINE.UPD(CONO,ORDNO,SHPNO,STATUS)
+          MORE = 0
+        END ELSE
+          MAT ORD.REC = ""; MAT CUST.REC = ""
+          ORDNO = ""; SHPNO = ""; JOBNO = ""
+          RELNO = ""
+          MAT SCV.REC = ""
+          ECD.ACTION = 6; CALL SCRN.EDIT
+          MORE = 0 - 1
+        END
+      CASE OPTION = "D"
+        ERRMSG = ""
+        LOCATE RELNO IN ORD.REL.NO<1>, 1 SETTING RPTR THEN
+          FOR PLN = 1 TO LINES WHILE ERRMSG = ""
+            LOCATE RELNO IN OSD.REL.NO<1,PLN>,1 SETTING RLOC THEN
+              ERRMSG = "All quantities must be unreserved from this release before deleting"
+              GOSUB 91000
+            END
+          NEXT PLN
+          IF ERRMSG = "" THEN
+            HMSG = "Do you want to delete this Release record (Y/N) "
+            PMSG = "Do you want to delete this Release record (Y/N) "
+            X = 0 ; Y = 21 ; TYP = 18 ; PVALUE = ''
+            MAXL = 2 ; MINL = 1 ; MINV = '' ; MAXV = ''
+            SCALER = '' ; O.R = 'R' ; DEFAULT = ''
+            CALL EDIT.SUB
+            P_X = 0 ; P_Y = 21 ; P_VALUE = '' ; P_OPT = 'CL'
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            IF VALUE = "Y" THEN   
+              ORD.REL.NO = DELETE(ORD.REL.NO,1,RPTR,0)
+              FOR P = 1 TO ORD.DET.REC.SIZE
+                ORD.DET.SUM(P,SPTR) = ORD.DET.REC(P)
+              NEXT P
+              STATUS = "L"
+              CALL ORDER.LINE.UPD(CONO,ORDNO,SHPNO,STATUS)
+              STATUS = "U"; SHPNO = ""
+              CALL ORDER.LINE.UPD(CONO,ORDNO,SHPNO,STATUS)
+              DELETE ORDER.RELEASE, CONO:RELNO
+              PCNT = DCOUNT(ORD.PICK.NO,@VM) ; PKT.FOUND = 0
+              FOR P = 1 TO PCNT UNTIL (PKT.FOUND)   
+                MATREADU PKT.REC FROM PICK.TICKET, CONO:ORD.PICK.NO<1,P> THEN
+                  IF PKT.REL.NO = RELNO THEN 
+                    PKT.REL.NO = '' ; PKT.FOUND = 1 
+                    MATWRITE PKT.REC ON PICK.TICKET, CONO:ORD.PICK.NO<1,P>
+                  END
+                END
+                RELEASE PICK.TICKET, CONO:ORD.PICK.NO<1,P> 
+              NEXT P
+              SHPWHS = ""
+              FOR P = 1 TO LINES
+                SHPWH = ORR.SHIP.TO:"!":OSD.WHSE<1,P>
+                LOCATE SHPWH IN SHPWHS,1 SETTING FND ELSE
+                  PKT.ID = CONO:ORDNO:"!":SHPWH
+                  READU REC FROM PICK.TICKET.PRT, PKT.ID THEN
+                    LOCATE RELNO IN REC,1 SETTING PTR THEN
+                      REC = DELETE(REC,PTR,0,0)
+                      IF REC = "" THEN
+                        DELETE PICK.TICKET.PRT, PKT.ID
+                      END ELSE
+                        WRITE REC ON PICK.TICKET.PRT, PKT.ID
+                      END
+                      SHPWHS<FND> = SHPWH
+                    END
+                  END ELSE
+                    RELEASE PICK.TICKET.PRT, PKT.ID
+                  END
+                END
+              NEXT P
+              IF ORDNUM # "" THEN
+                FOR P = 1 TO ORD.DET.REC.SIZE
+                  ORD.DET.SUM(P,SPTR) = ORD.DET.REC(P)
+                NEXT P
+                STATUS = "L"; SHPNO = "ALL"
+                CALL ORDER.LINE.UPD(CONO,ORDNO,SHPNO,STATUS)
+                MORE = 0
+              END ELSE
+                MAT ORD.REC = ""; MAT CUST.REC = ""
+                ORDNO = ""; SHPNO = ""; JOBNO = ""
+                RELNO = ""
+                MAT SCV.REC = ""
+                ECD.ACTION = 6; CALL SCRN.EDIT
+                MORE = 0 - 1
+              END
+            END
+          END
+        END
+      CASE OPTION = "F"
+        IF RELNO = "N" THEN
+          RELKEY = ""
+          RELNO = 0
+          LOOP
+            FND = 1
+            RELNO = RELNO + 1
+            IF RELNO > 99 THEN RELNO = 1
+            RELKEY = ORR.ORD:"-":STR('0',2-LEN(RELNO)):RELNO
+            READU O.RECORD FROM ORDER.RELEASE, CONO:RELKEY ELSE FND = 0
+          WHILE FND DO
+            RELEASE ORDER.RELEASE, CONO:RELKEY
+          REPEAT
+          RELNO = RELKEY
+          ERRMSG = "Please Note Assigned Release Number : ":RELNO
+          GOSUB 91000
+          FOR PLN = 1 TO LINES
+            LOOP
+              LOCATE "N" IN OSD.REL.NO<1,PLN>,1 SETTING RLOC ELSE RLOC = 0
+            WHILE RLOC DO
+              OSD.REL.NO<1,PLN,RLOC> = RELNO
+            REPEAT
+          NEXT PLN
+        END
+        LOCATE RELNO IN ORD.REL.NO<1>,1 SETTING FND ELSE
+          ORD.REL.NO<1,FND> = RELNO
+        END
+        FOR P = 1 TO ORD.DET.REC.SIZE
+          ORD.DET.SUM(P,SPTR) = ORD.DET.REC(P)
+        NEXT P
+        STATUS = "L"
+        CALL ORDER.LINE.UPD(CONO,ORDNO,SHPNO,STATUS)
+        STATUS = "U"; SHPNO = ""
+        CALL ORDER.LINE.UPD(CONO,ORDNO,SHPNO,STATUS)
+        MATWRITE ORR.REC ON ORDER.RELEASE, CONO:RELNO
+        MATREAD OPCO.REC FROM CONTROL, CONO:"OPS" ELSE
+          MAT OPCO.REC = ""
+        END
+        IF ORD.PRINT # "N" AND OPCO.SHP.FRM # "O" THEN
+          SHPWHS = ""
+          FOR P = 1 TO LINES
+            R = 1
+            PICK.QTY = 0
+            LOOP
+              LOCATE RELNO IN OSD.REL.NO<1,P>,R SETTING RLOC ELSE RLOC = 0
+            WHILE RLOC DO
+              PICK.QTY = PICK.QTY + (OSD.REL.QTY<1,P,RLOC> - OSD.P.QTY<1,P,RLOC>)
+              R = RLOC + 1
+            REPEAT
+            IF PICK.QTY > 0 THEN
+              SHPWH = ORR.SHIP.TO:"!":OSD.WHSE<1,P>
+              LOCATE SHPWH IN SHPWHS,1 SETTING FND ELSE
+                PKT.ID = CONO:ORDNO:"!":SHPWH
+                READ REC FROM PICK.TICKET.PRT, PKT.ID THEN
+                  LOCATE RELNO IN REC,1 SETTING PTR ELSE SHPWHS<FND> = SHPWH
+                END ELSE
+                  SHPWHS<FND> = SHPWH
+                END
+              END
+            END
+          NEXT P
+          SHPWHSCNT = DCOUNT(SHPWHS,AM)
+          IF SHPWHSCNT THEN
+            ECD.NUM = 45
+            ECD.ACTION = 4; CALL SCRN.EDIT
+            IF ECD.RET.VALUE = "Y" THEN
+              FOR T = 1 TO SHPWHSCNT
+                SHPWH = SHPWHS<T>
+                PKT.ID = CONO:ORDNO:"!":SHPWH
+                READU REC FROM PICK.TICKET.PRT, PKT.ID THEN
+                  LOCATE RELNO IN REC,1 SETTING PTR ELSE REC<PTR> = RELNO
+                END ELSE
+                  REC = RELNO
+                END
+                WRITE REC ON PICK.TICKET.PRT, PKT.ID
+              NEXT T
+            END
+          END
+        END
+        IF ORDNUM # "" THEN
+          FOR P = 1 TO ORD.DET.REC.SIZE
+            ORD.DET.SUM(P,SPTR) = ORD.DET.REC(P)
+          NEXT P
+          STATUS = "L"; SHPNO = "ALL"
+          CALL ORDER.LINE.UPD(CONO,ORDNO,SHPNO,STATUS)
+          MORE = 0
+        END ELSE
+          MAT ORD.REC = ""; MAT CUST.REC = ""
+          ORDNO = ""; SHPNO = ""; JOBNO = ""
+          RELNO = ""
+          MAT SCV.REC = ""
+          ECD.ACTION = 6; CALL SCRN.EDIT
+          MORE = 0 - 1
+        END
+      CASE OPTION = "C"
+        GOSUB 7800
+        IF LN.NO THEN
+          LN = LN.NO
+          SLN = BEGIN.PAGE + LINE.SPACE * MOD(LN-1,PAGE.SIZE)
+          GOSUB 7010
+        END
+      CASE OPTION = "Q"
+        FOR LN = OLD.START.LINE TO LAST.LINE
+          SLN = BEGIN.PAGE + LINE.SPACE * MOD(LN-1,PAGE.SIZE)
+          IF OSD.O.QTY<1,LN> + 0 > 0 THEN
+            GOSUB 7010
+          END
+        NEXT LN
+        LN = LAST.LINE
+      CASE OPTION = "P"
+        GOSUB 7800
+        IF LN.NO THEN
+          ECD.SCRN.NO = ESN + 2
+          ECD.ACTION = 2; CALL SCRN.EDIT
+          FOR P = 1 TO ORD.DET.REC.SIZE
+            ORD.DET.SUM(P,SPTR) = ORD.DET.REC(P)
+          NEXT P
+          STATUS = "L"
+          CALL ORDER.LINE.UPD(CONO,ORDNO,SHPNO,STATUS)
+          PDNO = OSD.PROD<1,LN.NO>; WHNO = OSD.WHSE<1,LN.NO>
+          PROD.SEQ = OSD.PROD.SEQ<1,LN.NO>
+          PROD.KIT = OSD.KIT<1,LN.NO>
+          UNPRC = OSD.PRICE<1,LN.NO>
+          CALL ORDER.LINE.DIST(CONO,ORDNO,SHPNO,PDNO,WHNO,UNPRC,PROD.SEQ,PROD.KIT)
+          STATUS = "D"
+          CALL ORDER.LINE.UPD(CONO,ORDNO,SHPNO,STATUS)
+          FOR P = 1 TO ORD.DET.REC.SIZE
+            ORD.DET.REC(P) = ORD.DET.SUM(P,SPTR)
+          NEXT P
+          SCNT = DCOUNT(ORD.SHIP.TO,VM)
+          SCV.REC(10)<ESN> = SCNT "R%2"
+          LINES = DCOUNT(OSD.PROD,VM)
+          ECD.SCRN.NO = ESN; GOSUB 8000
+        END
+      CASE OPTION = "V"
+        GOSUB 7800
+        IF LN.NO THEN
+          ECD.SCRN.NO = ESN + 3
+          ECD.ACTION = 2; CALL SCRN.EDIT
+          FOR P = 1 TO ORD.DET.REC.SIZE
+            ORD.DET.SUM(P,SPTR) = ORD.DET.REC(P)
+          NEXT P
+          STATUS = "L"
+          CALL ORDER.LINE.UPD(CONO,ORDNO,SHPNO,STATUS)
+          PDNO = OSD.PROD<1,LN.NO>; WHNO = OSD.WHSE<1,LN.NO>
+          CALL ORDER.LINE.DELV(CONO,ORDNO,SHPNO,PDNO,WHNO)
+          STATUS = "D"
+          CALL ORDER.LINE.UPD(CONO,ORDNO,SHPNO,STATUS)
+          FOR P = 1 TO ORD.DET.REC.SIZE
+            ORD.DET.REC(P) = ORD.DET.SUM(P,SPTR)
+          NEXT P
+          ECD.SCRN.NO = ESN; GOSUB 8000
+        END
+      CASE OPTION = "S" OR OPTION = "SF"
+        LN = 1 + INT((LN-1)/PAGE.SIZE) * PAGE.SIZE + PAGE.SIZE
+        IF LN > LINES THEN LN = 1
+        GOSUB 7900
+      CASE OPTION = "SR"
+        LN = 1 + INT((LN-1)/PAGE.SIZE) * PAGE.SIZE - PAGE.SIZE
+        IF LN < 1 THEN LN = 1
+        GOSUB 7900
+      CASE OPTION = "ST"
+        LN = 1
+        GOSUB 7900
+      CASE OPTION = "SB"
+        LN = LINES
+        GOSUB 7900
+      CASE OPTION[1,1] = "S" AND NUM(OPTION[2,99])
+        LN.NO = OPTION[2,99] + 0
+        IF LN.NO < 1 OR LN.NO > LINES THEN
+          ERRMSG = "** Invalid selection **"
+          GOSUB 91000
+        END ELSE
+          LN = LN.NO
+          GOSUB 7900
+        END
+      CASE NOT(NUM(OPTION))
+        ERRMSG = "Invalid entry, please re-enter"
+        GOSUB 91000
+      CASE OPTION = 1
+        FOR P = 1 TO ORD.DET.REC.SIZE
+          ORD.DET.SUM(P,SPTR) = ORD.DET.REC(P)
+        NEXT P
+        STATUS = "L"
+        CALL ORDER.LINE.UPD(CONO,ORDNO,SHPNO,STATUS)
+        IF ORDNUM = "" THEN
+          MAT SCV.REC = ""
+        END ELSE
+          FOR ECD.NUM = 1 TO SCV.REC.SIZE
+            SCV.REC(ECD.NUM)<ESN> = ""
+          NEXT ECD.NUM
+        END
+        ECD.ACTION = 6; CALL SCRN.EDIT
+        GOSUB 8200
+        MORE = 0 - 1
+      CASE OPTION = 2
+        GOSUB 1200
+      CASE OPTION = 3 AND SUM(ORR.QTY) = 0 AND RQTY = 0
+        FOR P = 1 TO ORD.DET.REC.SIZE
+          ORD.DET.SUM(P,SPTR) = ORD.DET.REC(P)
+        NEXT P
+        STATUS = "L"
+        CALL ORDER.LINE.UPD(CONO,ORDNO,SHPNO,STATUS)
+        OLD.SHPNO = SHPNO; GOSUB 1300
+        ORR.SHIP.TO = SHPNO
+      CASE OPTION = 3
+      CASE OPTION = 4
+        GOSUB 1400
+      CASE OPTION = 5
+        GOSUB 1500
+      CASE OPTION = 6
+        GOSUB 1600
+      CASE OPTION = 7
+        GOSUB 1700
+      CASE 1
+        ERRMSG = "Out of range, please re-enter"
+        GOSUB 91000
+    END CASE
+  WHILE MORE > 0 DO REPEAT
+  IF MORE < 0 THEN GOTO 1100
+  GOTO 99990
+*
+*---- Get order number
+1110*
+  DISPLAY = 0
+  ECD.NUM = 1; ECD.ACTION = 4; CALL SCRN.EDIT
+  BEGIN CASE
+    CASE ECD.RET.VALUE = "END"
+      GOTO 1119
+    CASE ECD.RET.VALUE = ""
+*
+*---- Customer
+1120*
+      ECD.NUM = 2; ECD.ACTION = 4; CALL SCRN.EDIT
+      BEGIN CASE
+        CASE ECD.RET.VALUE = "END"
+          GOTO 1110
+        CASE ECD.RET.VALUE = ""
+          ECD.NUM = 3; ECD.ACTION = 4; CALL SCRN.EDIT
+          IF ECD.RET.VALUE = "" OR ECD.RET.VALUE = "END" THEN
+            GOTO 1120
+          END
+          DISPLAY = 1
+          GXR.NAME = "CUSTOMER"
+          GXR.XREF = CUSTOMER.XREF
+          GXR.FILE = CUSTOMER
+          GXR.SRCH.ID = ECD.RET.VALUE
+          CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+          ECD.ACTION = 2; CALL SCRN.EDIT
+          SCV.REC(2)<ESN> = GXR.ID
+          ECD.ACTION = 3; CALL SCRN.EDIT
+          IF GXR.ID = "" THEN
+            GOSUB 8200; DISPLAY = 0
+            GOTO 1120
+          END
+          ECD.RET.VALUE = GXR.ID
+      END CASE
+      DISPLAY = 1
+      GXR.NAME = "ORDER"
+      GXR.XREF = CUSTOMER
+      GXR.FILE = ORDER
+      GXR.SRCH.ID = ECD.RET.VALUE
+      CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+      ECD.ACTION = 2; CALL SCRN.EDIT
+      SCV.REC(1)<ESN> = GXR.ID
+      ECD.ACTION = 3; CALL SCRN.EDIT
+      IF GXR.ID = "" THEN
+        GOSUB 8200; DISPLAY = 0
+        GOTO 1110
+      END
+      ECD.RET.VALUE = GXR.ID
+  END CASE
+  MATREAD ORD.REC FROM ORDER, CONO:ECD.RET.VALUE ELSE
+    ERRMSG = "Cannot locate order # ":ECD.RET.VALUE
+    GOSUB 91000; GOTO 1110
+  END
+  DIV.CODE = ORD.DIV; USER.ID = UPCASE(@LOGNAME); ERRMSG = ''
+  CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+  IF ERRMSG # '' THEN
+    GOSUB 91000; GOTO 1110
+  END
+  PT.NO = 0
+  PT.CHECK.DONE = 0
+  LOOP
+    PT.NO = PT.NO + 1
+    IF LEN(PT.NO) = 1 THEN PT.NO = "0":PT.NO
+    PT.ID = CONO:ECD.RET.VALUE:"-":PT.NO
+    MATREAD PKT.REC FROM PICK.TICKET,PT.ID ELSE
+      MAT PKT.REC = "" ; PT.CHECK.DONE = 1  ; * dont check anymore if null
+    END
+    IF PKT.PRINT.DATE NE "" THEN  ; * check if record really exists
+      IF PKT.REL.NO = "" THEN
+        ERRMSG = "Cannot create release. Delete the picking ticket "
+        ERRMSG = ERRMSG:"already printed for this order"
+        GOSUB 91000  ; PT.CHECK.DONE = 1
+        ECD.RET.VALUE = "END"
+        ECD.NUM = 1; ECD.ACTION = 6; CALL SCRN.EDIT
+      END 
+    END
+  UNTIL PT.CHECK.DONE DO REPEAT
+1119*
+  RETURN
+*
+*---- Release date
+1200*
+  ECD.NUM = 7
+  ECD.DEFAULT = TODAY
+  ECD.ACTION = 4; CALL SCRN.EDIT
+  IF ECD.RET.VALUE # "END" THEN
+    ORR.DATE = ECD.RET.VALUE
+  END
+  RETURN
+*
+*---- Ship to
+1300*
+  ECD.NUM = 8; ECD.ACTION = 4; CALL SCRN.EDIT
+1310*
+  SPTR = 0; SCNT = DCOUNT(ORD.SHIP.TO,VM)
+  BEGIN CASE
+    CASE ECD.RET.VALUE = "END"
+      IF OLD.SHPNO = "" THEN
+        SHPNO = ""; LINES = 0
+        GOTO 1399
+      END ELSE
+        ECD.RET.VALUE = OLD.SHPNO; GOTO 1310
+      END
+    CASE ECD.RET.VALUE = "S"
+      BEGIN CASE
+        CASE SCNT < 1
+          ERRMSG = "There is no ship to for this order"
+          GOSUB 91000; SCV.REC(ECD.NUM)<ESN> = ""; GOTO 1300
+        CASE SHPNO = ""
+          IF SCNT = 1 THEN
+            SPTR = 1
+          END ELSE
+            SPTR = 2
+          END
+          SHPNO = ORD.SHIP.TO<1,SPTR>
+          ECD.NUM = 8; SCV.REC(ECD.NUM)<ESN> = SHPNO
+          ECD.ACTION = 5; CALL SCRN.EDIT
+        CASE SCNT < 2
+          ERRMSG = "There is only one ship to for this order"
+          GOSUB 91000; SCV.REC(ECD.NUM)<ESN> = ""; GOTO 1300
+        CASE 1
+          LOCATE SHPNO IN ORD.SHIP.TO<1>,1 SETTING SPTR ELSE
+            ERRMSG = "Cannot locate the current ship to # ":SHPNO
+            GOSUB 91000; GOTO 1300
+          END
+          IF SPTR = SCNT THEN
+            SPTR = 1
+          END ELSE
+            SPTR = SPTR + 1
+          END
+          SHPNO = ORD.SHIP.TO<1,SPTR>
+          ECD.NUM = 8; SCV.REC(ECD.NUM)<ESN> = SHPNO
+          ECD.ACTION = 5; CALL SCRN.EDIT
+      END CASE
+    CASE ECD.RET.VALUE = ""
+      BEGIN CASE
+        CASE CUST.SHIP.TO < 1
+          ERRMSG = "There is no ship to for this customer"
+          GOSUB 91000; GOTO 1300
+        CASE CUST.SHIP.TO = 1
+          SHPNO = CUST.SHIP.TO "R%3"
+          ECD.NUM = 8; SCV.REC(ECD.NUM)<ESN> = SHPNO
+          ECD.ACTION = 5; CALL SCRN.EDIT
+        CASE 1
+          GXR.NAME = "SHIP.TO"
+          GXR.FILE = SHIP.TO
+          GXR.SRCH.ID = ORD.CUST:" : ":CUST.NAME
+          GXR.IDLIST = ORD.CUST:"!":ORD.SHIP.TO<1,2> "R%3"
+          OCNT = DCOUNT(ORD.SHIP.TO,VM)
+          FOR SNO = 3 TO OCNT
+            GXR.IDLIST<1,SNO-1> = ORD.CUST:"!":ORD.SHIP.TO<1,SNO> "R%3"
+          NEXT SNO
+          CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+          ECD.ACTION = 2; CALL SCRN.EDIT
+          SHPNO = FIELD(GXR.ID,"!",2)
+          IF SHPNO = "" THEN
+            GOSUB 8000; GOTO 1300
+          END
+          STATUS = "D"
+          CALL ORDER.LINE.UPD(CONO,ORDNO,SHPNO,STATUS)
+          LOCATE SHPNO IN ORD.SHIP.TO<1>,1 SETTING S THEN
+            FOR P = 1 TO ORD.DET.REC.SIZE
+              ORD.DET.REC(P) = ORD.DET.SUM(P,S)
+            NEXT P
+          END
+          LINES = DCOUNT(OSD.PROD,VM)
+          SCV.REC(8)<ESN> = SHPNO; GOSUB 8000
+      END CASE
+    CASE 1
+      IF LEN(ECD.RET.VALUE) < 3 THEN
+        ECD.RET.VALUE = ECD.RET.VALUE "R%3"
+        ECD.NUM = 8; SCV.REC(ECD.NUM)<ESN> = ECD.RET.VALUE
+        ECD.ACTION = 5; CALL SCRN.EDIT
+      END
+      SHPNO = ECD.RET.VALUE
+  END CASE
+  IF OPCO.SHP.FLW # "B" AND SHPNO = GEN.SHPNO THEN
+    ERRMSG = "CANNOT CREATE RELEASE FOR GENERAL SHIP TO"
+    GOSUB 91000
+    GOTO 1300
+  END
+  IF SHPNO = GEN.SHPNO THEN
+    MAT SPT.REC = ""
+    SPT.NAME = CUST.NAME
+    SPT.ADDR1 = CUST.ADDR1
+    SPT.ADDR2 = CUST.ADDR2
+    SPT.STATE = TRIM(FIELD(CUST.ADDR4,",",2))
+    SPT.CITY = TRIM(FIELD(CUST.ADDR4,",",1))
+    SPT.ZIP = CUST.ZIP
+    SPT.TAX.JUR = CUST.TAX.JUR
+    SPT.TAXABLE = CUST.TAXABLE
+    SPT.EXEMPT = CUST.EXEMPT
+    SPT.EXMT.DATE = CUST.EXMT.DATE
+    SPT.SLSMN = CUST.SALESMAN
+    SPT.FOB = CUST.ADDL.OPS<1,3>
+    SPT.SHP.TERMS = CUST.ADDL.OPS<1,4>
+  END ELSE
+    MATREAD SPT.REC FROM SHIP.TO, CONO:ORD.CUST:"!":SHPNO ELSE
+      ERRMSG = "Cannot locate ship to # ":SHPNO
+      GOSUB 91000; GOTO 1300
+    END
+  END
+  ECD.NUM = 11; SCV.REC(ECD.NUM)<ESN> = SPT.NAME
+  ECD.ACTION = 5; CALL SCRN.EDIT
+  ECD.NUM = 13; SCV.REC(ECD.NUM)<ESN> = SPT.ADDR1
+  ECD.ACTION = 5; CALL SCRN.EDIT
+  ECD.NUM = 15; SCV.REC(ECD.NUM)<ESN> = SPT.CITY
+  ECD.ACTION = 5; CALL SCRN.EDIT
+  ECD.NUM = 16; SCV.REC(ECD.NUM)<ESN> = SPT.STATE
+  ECD.ACTION = 5; CALL SCRN.EDIT
+  ECD.NUM = 18; SCV.REC(ECD.NUM)<ESN> = SPT.ZIP
+  ECD.ACTION = 5; CALL SCRN.EDIT
+  IF SPTR THEN
+    STATUS = "D"
+    CALL ORDER.LINE.UPD(CONO,ORDNO,SHPNO,STATUS)
+    FOR P = 1 TO ORD.DET.REC.SIZE
+      ORD.DET.REC(P) = ORD.DET.SUM(P,SPTR)
+    NEXT P
+    IF SHPNO = GEN.SHPNO THEN OSD.PO = ORD.PO
+    ECD.NUM = 12; SCV.REC(ECD.NUM)<ESN> = OSD.PO
+    ECD.ACTION = 5; CALL SCRN.EDIT
+  END ELSE
+    LOCATE SHPNO IN ORD.SHIP.TO<1>,1 SETTING SPTR THEN
+      STATUS = "D"
+      CALL ORDER.LINE.UPD(CONO,ORDNO,SHPNO,STATUS)
+      FOR P = 1 TO ORD.DET.REC.SIZE
+        ORD.DET.REC(P) = ORD.DET.SUM(P,SPTR)
+      NEXT P
+      IF SHPNO = GEN.SHPNO THEN OSD.PO = ORD.PO
+      ECD.NUM = 12; SCV.REC(ECD.NUM)<ESN> = OSD.PO
+      ECD.ACTION = 5; CALL SCRN.EDIT
+    END ELSE
+      ERRMSG = "Ship to is not setup on the order"
+      GOSUB 91000; GOTO 1300
+    END
+  END
+  IF RELNO = "N" THEN
+    FOR T = 1 TO 3 UNTIL ECD.RET.VALUE = "END"
+      ON T GOSUB 1500,1600,1700
+    NEXT T
+    IF ECD.RET.VALUE = "END" THEN GOTO 1100
+  END
+  ECD.NUM = 9; SCV.REC(ECD.NUM)<ESN> = SPTR "R%2"
+  ECD.ACTION = 5; CALL SCRN.EDIT
+  ECD.NUM = 10; SCV.REC(ECD.NUM)<ESN> = SCNT "R%2"
+  ECD.ACTION = 5; CALL SCRN.EDIT
+  LN = 1; LINES = DCOUNT(OSD.PROD,VM)
+  ECD.NUM = 32
+  SCV.REC(ECD.NUM)<ESN> = INT(LINES/PAGE.SIZE+.9) "R%2"
+  ECD.ACTION = 5; CALL SCRN.EDIT
+  OLD.START.LINE = 0; GOSUB 7900
+1399*
+  RETURN
+*
+*---- Ship to PO
+1400*
+  IF SHPNO = GEN.SHPNO THEN
+    OSD.PO = ORD.PO
+    ECD.NUM = 12; SCV.REC(ECD.NUM)<ESN> = OSD.PO
+    ECD.ACTION = 5; CALL SCRN.EDIT
+  END ELSE
+    IF OSD.PO = "" THEN ECD.DEFAULT = ORD.PO
+    ECD.NUM = 12; ECD.ACTION = 4; CALL SCRN.EDIT
+    IF ECD.RET.VALUE # "END" THEN
+      OSD.PO = ECD.RET.VALUE
+    END
+  END
+  RETURN
+*
+*---- ENTER CUSTOMER RELEASE NUMBER
+1500*
+  ECD.NUM = 46
+  ECD.ACTION = 4; CALL SCRN.EDIT
+  IF ECD.RET.VALUE # "END" THEN
+    ORR.CUST.REL = ECD.RET.VALUE
+  END
+  RETURN
+*
+*---- ENTER REQUESTED DATE
+1600*
+  ECD.NUM = 19
+  IF ORR.REQ.DATE = "" AND ORR.DATE # "" THEN
+    ECD.DEFAULT = ORR.DATE
+  END
+  ECD.ACTION = 4; CALL SCRN.EDIT
+  IF ECD.RET.VALUE # "END" THEN
+    ORR.REQ.DATE = ECD.RET.VALUE
+  END
+  RETURN
+*
+*---- ENTER DUE DATE
+1700*
+  ECD.NUM = 20
+  IF ORR.DUE.DATE = "" AND ORR.DATE # "" THEN
+    ECD.DEFAULT = ORR.DATE
+  END
+  ECD.ACTION = 4; CALL SCRN.EDIT
+  IF ECD.RET.VALUE # "END" THEN
+    ORR.DUE.DATE = ECD.RET.VALUE
+  END
+  RETURN
+*
+*---- Scrolling line prompt
+7000*
+  GOSUB 7900
+  SLN = BEGIN.PAGE + LINE.SPACE * MOD(LN-1,PAGE.SIZE)
+7010*
+  N = LN; GOSUB 9000
+*
+*---- Release Qty
+7020*
+*T28354  X = 50; Y = SLN; TYP = ICR.TYPE; SCALER = ICR.SCAL; MAXL = 10
+  X = 51; Y = SLN; TYP = ICR.TYPE; SCALER = ICR.SCAL; MAXL = 10
+  HMSG = "Enter Release Quantity"
+  MINV = 0; MAXV = OSD.O.QTY<1,LN> - OSD.S.QTY<1,LN>
+  IF MAXV < 0 THEN MAXV = 0
+  O.R = "O"
+  IF ORR.QTY<1,LN> # "" THEN
+    DEFAULT = OCONV(INT(((ORR.QTY<1,LN> / ICR.DV1) * ICR.MT1) / ICR.DV2 + .5),ICR.CNV)
+  END ELSE
+    DQTY = OSD.R.QTY<1,LN>
+    DCNT = DCOUNT(OSD.RECP.NO<1,LN>,SM)
+    FOR DPTR = 1 TO DCNT
+      IF OSD.REL.NO<1,LN,DPTR> # RELNO THEN
+        DQTY = DQTY - OSD.REL.QTY<1,LN,DPTR>
+      END
+    NEXT DPTR
+    DEFAULT = OCONV(INT(((DQTY / ICR.DV1) * ICR.MT1) / ICR.DV2 + .5),ICR.CNV)
+  END
+  CALL EDIT.SUB
+  IF VALUE = "END" THEN
+    N = LN; GOSUB 7910
+    GOTO 7099
+  END
+  VALUE = INT(((VALUE/ICR.MT1) * ICR.DV1) * ICR.DV2 + .5)
+  ORR.QTY<1,LN> = VALUE
+*T28354  P_X = 50 ; P_Y = SLN ; P_VALUE = OCONV(INT(((ORR.QTY<1,LN> / ICR.DV1) * ICR.MT1) / ICR.DV2 + .5),ICR.CNV1) "R#10" ; P_OPT = ""
+  P_X = 51 ; P_Y = SLN ; P_VALUE = OCONV(INT(((ORR.QTY<1,LN> / ICR.DV1) * ICR.MT1) / ICR.DV2 + .5),ICR.CNV1) "R#10" ; P_OPT = ""
+  CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+*
+*---- Reserve Qty
+7030*
+  X = 69; Y = SLN+1; TYP = ICR.TYPE; SCALER = ICR.SCAL; MAXL = 10
+  ORVALDAT = 1; VALDAT = "S"
+  HMSG = "Enter A Release Quantity or (S) to Select from receipts"
+  MINV = 0; MAXV = OSD.R.QTY<1,LN>
+  RELQTY = 0; PTR = 1
+  LOOP
+    LOCATE RELNO IN OSD.REL.NO<1,LN>,PTR SETTING FND THEN
+      RELQTY = RELQTY + OSD.REL.QTY<1,LN,FND>
+    END ELSE
+      PTR = 0
+    END
+  WHILE PTR DO
+    PTR = FND + 1
+  REPEAT
+  O.R = "O"
+  IF RELQTY > 0 THEN
+    DEFAULT = OCONV(INT(((RELQTY / ICR.DV1) * ICR.MT1) / ICR.DV2 + .5),ICR.CNV)
+  END ELSE
+    DQTY = OSD.R.QTY<1,LN> - SUM(OSD.REL.QTY<1,LN>)
+    DEFAULT = OCONV(INT(((DQTY / ICR.DV1) * ICR.MT1) / ICR.DV2 + .5),ICR.CNV)
+  END
+  CALL EDIT.SUB
+  BEGIN CASE
+    CASE VALUE = "END"
+      GOTO 7020
+    CASE VALUE = "S"
+      IF OSD.KIT<1,LN> = "N" THEN
+        ECD.SCRN.NO = ESN + 5
+        RTYPE = "M"
+        ORDNO = ORR.ORD
+        PDNO = OSD.PROD<1,LN>
+        WHNO = OSD.WHSE<1,LN>
+        PROD.SEQ = OSD.PROD.SEQ<1,LN> ; KIT.TYPE = OSD.KIT<1,LN>
+        IWH.ID=CONO:PDNO:"!":WHNO
+        MATREAD IWH.REC FROM INV.WHSE,IWH.ID THEN
+          ERR.FLG='';ERRMSG='';PERIOD=''
+          CALL BUILD.IWH.FI(IWH.ID,MAT IWH.REC,PERIOD,ERR.FLG,ERRMSG,OPEN.FLAG)
+        END ELSE
+          MAT IWH.REC = ""
+        END
+        RTOT = OSD.R.QTY<1,LN>
+        RQTY = OSD.FI.QTY<1,LN>
+        RSV.NO = OSD.RECP.NO<1,LN>
+        REL.NO = OSD.REL.NO<1,LN>
+        REL.QTY = OSD.REL.QTY<1,LN>
+        IF RELQTY = 0 THEN
+          RELQTY = OSD.R.QTY<1,LN> - SUM(OSD.REL.QTY<1,LN>)
+          CALL ORDER.RESERVE.SEL(CONO,"S",ORD.CUST,ORDNO,SHPNO,PDNO,WHNO,"B",RTOT,RQTY,RSV.NO,REL.NO,REL.QTY,RELNO,RELQTY,PROD.SEQ,KIT.TYPE,"");* T20852
+        END
+        MAXQTY = OSD.R.QTY<1,LN>
+        DCNT = DCOUNT(OSD.RECP.NO<1,LN>,SM)
+        FOR DPTR = 1 TO DCNT
+          BEGIN CASE
+            CASE OSD.REL.NO<1,LN,DPTR> = RELNO
+              RELQTY = RELQTY + OSD.REL.QTY<1,LN,DPTR>
+            CASE OSD.REL.NO<1,LN,DPTR> # ""
+              MAXQTY = MAXQTY - OSD.REL.QTY<1,LN,DPTR>
+          END CASE
+        NEXT DPTR
+        CALL ORDER.RESERVE.SEL(CONO,"S",ORD.CUST,ORDNO,SHPNO,PDNO,WHNO,RTYPE,RTOT,RQTY,RSV.NO,REL.NO,REL.QTY,RELNO,MAXQTY,PROD.SEQ,KIT.TYPE,"")
+        OSD.RECP.NO<1,LN> = RSV.NO
+        OSD.FI.QTY<1,LN> = RQTY
+        OSD.REL.NO<1,LN> = REL.NO
+        OSD.REL.QTY<1,LN> = REL.QTY
+        OSD.R.QTY<1,LN> = RTOT
+        ECD.SCRN.NO = ESN; GOSUB 8000
+        SLN = BEGIN.PAGE + LINE.SPACE * MOD(LN-1,PAGE.SIZE)
+        N = LN; GOSUB 7910
+      END ELSE
+        RTOT = OSD.R.QTY<1,LN>
+        RQTY = OSD.FI.QTY<1,LN>
+        RSV.NO = OSD.RECP.NO<1,LN>
+        REL.NO = OSD.REL.NO<1,LN>
+        REL.QTY = OSD.REL.QTY<1,LN>
+        ERRMSG = 'Cannot select for Kitted item'
+        GOSUB 91000
+      END
+    CASE 1
+      RTYPE = "B"
+      ORDNO = ORR.ORD
+      PDNO = OSD.PROD<1,LN>
+      WHNO = OSD.WHSE<1,LN>
+      PROD.SEQ = OSD.PROD.SEQ<1,LN> ; KIT.TYPE = OSD.KIT<1,LN>
+      IWH.ID=CONO:PDNO:"!":WHNO
+      MATREAD IWH.REC FROM INV.WHSE,IWH.ID THEN
+        ERR.FLG='';ERRMSG='';PERIOD=''
+        CALL BUILD.IWH.FI(IWH.ID,MAT IWH.REC,PERIOD,ERR.FLG,ERRMSG,OPEN.FLAG)
+      END ELSE
+        MAT IWH.REC = ""
+      END
+      RTOT = OSD.R.QTY<1,LN>
+      RELQTY = INT(((VALUE / ICR.MT1) * ICR.DV1) * ICR.DV2 + .5)
+      RQTY = OSD.FI.QTY<1,LN>
+      RSV.NO = OSD.RECP.NO<1,LN>
+      REL.NO = OSD.REL.NO<1,LN>
+      REL.QTY = OSD.REL.QTY<1,LN>
+      CALL ORDER.RESERVE.SEL(CONO,"S",ORD.CUST,ORDNO,SHPNO,PDNO,WHNO,RTYPE,RTOT,RQTY,RSV.NO,REL.NO,REL.QTY,RELNO,RELQTY,PROD.SEQ,KIT.TYPE,"")
+      OSD.RECP.NO<1,LN> = RSV.NO
+      OSD.FI.QTY<1,LN> = RQTY
+      OSD.REL.NO<1,LN> = REL.NO
+      OSD.REL.QTY<1,LN> = REL.QTY
+      OSD.R.QTY<1,LN> = RTOT
+  END CASE
+  RQTY = 0; PTR = 1
+  LOOP
+    LOCATE RELNO IN OSD.REL.NO<1,LN>,PTR SETTING FND THEN
+      RQTY = RQTY + OSD.REL.QTY<1,LN,FND>
+    END ELSE
+      PTR = 0
+    END
+  WHILE PTR DO
+    PTR = FND + 1
+  REPEAT
+*T28354  P_X = 61 ; P_Y = SLN ; P_VALUE = OCONV(INT(((RTOT / ICR.DV1) * ICR.MT1) / ICR.DV2 + .5),ICR.CNV1) "R#10" ; P_OPT = ""
+  P_X = 62 ; P_Y = SLN ; P_VALUE = OCONV(INT(((RTOT / ICR.DV1) * ICR.MT1) / ICR.DV2 + .5),ICR.CNV1) "R#10" ; P_OPT = ""
+  CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+  P_X = 69 ; P_Y = SLN+1 ; P_VALUE = OCONV(INT(((RQTY / ICR.DV1) * ICR.MT1) / ICR.DV2 + .5),ICR.CNV1) "R#10" ; P_OPT = ""
+  CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+  IF OSD.R.QTY<1,LN> > OSD.O.QTY<1,LN> THEN
+    ERRMSG = "Reserve is more than required"
+    GOSUB 91000
+  END
+7099*
+  RETURN
+*
+*---- Line # to change or delete
+7800*
+  GOSUB 7900
+  ECD.NUM = 44; SCV.REC(ECD.NUM)<ESN> = ""
+  ECD.MINV = OLD.START.LINE; ECD.MAXV = LAST.LINE
+  ECD.ACTION = 4; CALL SCRN.EDIT
+  LN.NO = ECD.RET.VALUE
+  IF LN.NO = "" OR LN.NO = "END" THEN LN.NO = 0
+  IF LN.NO # 0 THEN
+    IF OSD.KIT<1,LN.NO> = "K" THEN
+      IF OSD.G.QTY<1,LN.NO> + 0 LE 0 THEN
+        ERRMSG = "Cannot Release if nothing has been ordered"
+        GOSUB 91000; GOTO 7800
+      END
+    END ELSE
+      IF OSD.G.QTY<1,LN.NO> + 0 LE 0 THEN
+        ERRMSG = "Cannot Release if nothing has been ordered"
+        GOSUB 91000; GOTO 7800
+      END
+    END
+  END
+  RETURN
+*
+*---- Display scrolling lines
+7900*
+  START.LINE = 1 + INT((LN-1)/PAGE.SIZE)*PAGE.SIZE
+  LAST.LINE = START.LINE + PAGE.SIZE - 1
+  IF LAST.LINE > LINES THEN LAST.LINE = LINES
+  IF START.LINE = OLD.START.LINE THEN GOTO 7990
+  OLD.START.LINE = START.LINE
+  ECD.NUM = 31
+  SCV.REC(ECD.NUM)<ESN> = INT(LAST.LINE/PAGE.SIZE+.9) "R%2"
+  ECD.ACTION = 5; CALL SCRN.EDIT
+  CNT = 1
+  FOR N = START.LINE TO LAST.LINE
+    SLN = BEGIN.PAGE + LINE.SPACE * MOD(N-1,PAGE.SIZE)
+    GOSUB 7910
+    CNT = CNT + 1
+  NEXT N
+  FOR M = CNT TO PAGE.SIZE
+    SLN = BEGIN.PAGE + LINE.SPACE * MOD(M-1,PAGE.SIZE)
+    P_X = 0 ; P_Y = SLN ; P_VALUE = "" ; P_OPT = "CL"
+    CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+    P_X = 0 ; P_Y = SLN+1 ; P_VALUE = "" ; P_OPT = "CL"
+    CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+  NEXT M
+7990*
+  RETURN
+*
+*---- Display a single line
+7910*
+  GOSUB 9000
+  ORDER.AMT = OSD.G.QTY<1,N>
+  SHIP.AMT  = OSD.S.QTY<1,N>
+  RESV.AMT  = OSD.R.QTY<1,N>
+*T28354  P_X = 0 ; P_Y = SLN ; P_VALUE = N "R%2" ; P_OPT = "CL"
+  P_X = 0 ; P_Y = SLN ; P_VALUE = N "R%3" ; P_OPT = "CL"
+*T28354  P_X := AM:3 ; P_Y := AM:SLN ;  P_VALUE := AM:OSD.PROD<1,N> "L#15" 
+  P_X := AM:4 ; P_Y := AM:SLN ;  P_VALUE := AM:OSD.PROD<1,N> "L#15" 
+*T28354  P_X := AM:19 ; P_Y := AM:SLN ; P_VALUE := AM: OSD.WHSE<1,N> "L#4" 
+  P_X := AM:20 ; P_Y := AM:SLN ; P_VALUE := AM: OSD.WHSE<1,N> "L#4" 
+*T28354  P_X := AM:24 ; P_Y := AM:SLN ; P_VALUE := AM:INV.UNIT<1,3> "L#3" 
+  P_X := AM:25 ; P_Y := AM:SLN ; P_VALUE := AM:INV.UNIT<1,3> "L#3" 
+*T28354  P_X := AM:28 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(INT(((ORDER.AMT / ICR.DV1) * ICR.MT1) / ICR.DV2 + .5),ICR.CNV1) "R#10" 
+  P_X := AM:29 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(INT(((ORDER.AMT / ICR.DV1) * ICR.MT1) / ICR.DV2 + .5),ICR.CNV1) "R#10" 
+*T28354  P_X := AM:39 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(INT(((SHIP.AMT / ICR.DV1) * ICR.MT1) / ICR.DV2 + .5),ICR.CNV1) "R#10" 
+  P_X := AM:40 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(INT(((SHIP.AMT / ICR.DV1) * ICR.MT1) / ICR.DV2 + .5),ICR.CNV1) "R#10" 
+*T28354  P_X := AM:50 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(INT(((ORR.QTY<1,N> / ICR.DV1) * ICR.MT1) / ICR.DV2 + .5),ICR.CNV1) "R#10" 
+  P_X := AM:51 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(INT(((ORR.QTY<1,N> / ICR.DV1) * ICR.MT1) / ICR.DV2 + .5),ICR.CNV1) "R#10" 
+*T28354  P_X := AM:61 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(INT(((RESV.AMT / ICR.DV1) * ICR.MT1) / ICR.DV2 + .5),ICR.CNV1) "R#10" 
+  P_X := AM:62 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(INT(((RESV.AMT / ICR.DV1) * ICR.MT1) / ICR.DV2 + .5),ICR.CNV1) "R#10" 
+  CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+  RQTY = 0; PTR = 1
+  LOOP
+    LOCATE RELNO IN OSD.REL.NO<1,N>,PTR SETTING FND THEN
+      RQTY = RQTY + OSD.REL.QTY<1,N,FND>
+    END ELSE
+      PTR = 0
+    END
+  WHILE PTR DO
+    PTR = FND + 1
+  REPEAT
+*T28354  P_X = 3 ; P_Y = SLN+1 ; P_VALUE = INV.FULL.DESC "L#45" ; P_OPT = ""
+  P_X = 4 ; P_Y = SLN+1 ; P_VALUE = INV.FULL.DESC "L#45" ; P_OPT = ""
+  P_X := AM:69 ; P_Y := AM:SLN+1 ; P_VALUE := AM: OCONV(INT(((RQTY / ICR.DV1) * ICR.MT1) / ICR.DV2 + .5),ICR.CNV1) "R#10" 
+  CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+  RETURN
+7950*
+  SCNT = 0
+  RETURN
+*
+*---- Display data
+8000*
+  ECD.ACTION = 3; CALL SCRN.EDIT
+  OLD.START.LINE = 0; GOSUB 7900
+  RETURN
+8100*
+  ECD.NUM = 1; SCV.REC(ECD.NUM)<ESN> = ORDNO
+  ECD.NUM = 2; SCV.REC(ECD.NUM)<ESN> = ORD.CUST
+  ECD.NUM = 3; SCV.REC(ECD.NUM)<ESN> = CUST.NAME
+  ECD.NUM = 4; SCV.REC(ECD.NUM)<ESN> = RELNO
+  ECD.NUM = 7; SCV.REC(ECD.NUM)<ESN> = ORR.DATE
+  IF ORR.STATUS<1,1> = "" THEN
+    REL.STATUS = "OPEN"
+  END ELSE
+    REL.STATUS = ORR.STATUS<1,1>
+  END
+  ECD.NUM = 14; SCV.REC(ECD.NUM)<ESN> = REL.STATUS
+  ECD.NUM = 19; SCV.REC(ECD.NUM)<ESN> = ORR.REQ.DATE
+  ECD.NUM = 20; SCV.REC(ECD.NUM)<ESN> = ORR.DUE.DATE
+  ECD.NUM = 46; SCV.REC(ECD.NUM)<ESN> = ORR.CUST.REL
+  ECD.ACTION = 3; CALL SCRN.EDIT
+*
+  RETURN
+8200*
+  SCV.REC(1)<ESN> = ORDNO
+8210*
+  SCV.REC(2)<ESN> = ORD.CUST
+  SCV.REC(3)<ESN> = CUST.NAME
+  ECD.ACTION = 3; CALL SCRN.EDIT
+  RETURN
+*
+9000*
+  MATREAD INV.REC FROM INVENTORY, CONO:OSD.PROD<1,N> ELSE
+    MAT INV.REC = ""; INV.FULL.DESC = "Unknown"
+  END
+  MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE ELSE
+    MAT CATG.REC = ""
+  END
+*COPY>ICSBP>INV.UM.CNV
+  RETURN
+*
+*--- CALLS FOR SYSCOM
+*
+91000 *
+  ERR.TYPE = 1;CALL SYSCOM(MAT SYSCOM.REC); RETURN
+92000 *
+  ERR.TYPE = 2;CALL SYSCOM(MAT SYSCOM.REC); RETURN
+93000 *
+  ERR.TYPE = 3;CALL SYSCOM(MAT SYSCOM.REC)
+99990 *
+  ECD.ACTION = 99 ; CALL SCRN.EDIT
+*
+99999 *
+*  RETURN
+END

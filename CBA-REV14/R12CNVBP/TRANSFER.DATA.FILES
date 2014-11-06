@@ -1,0 +1,129 @@
+*
+OPEN '','CONTROL' TO CONTROL ELSE STOP 'CONTROL'
+;*
+;* create file that will hold the list of files per module
+;*
+CMD = 'CREATE.FILE  FILE.LIST 3'
+UDTEXECUTE CMD CAPTURING MSG
+OPEN '','FILE.LIST' TO FILE.LIST ELSE STOP 'FILE.LIST'
+;*
+;* get home directory so we know where to return 
+;*
+UDTEXECUTE "!pwd" CAPTURING HOME
+;* change LOGIN in the home directory to allow use of LOGTO
+CMD='COPY FROM VOC LOGIN,LOGIN.BACKUP OVERWRITING '
+UDTEXECUTE CMD
+REC=''
+REC<1>='PQN'
+REC<2>='X'
+OPEN '','VOC' TO VOC ELSE STOP 'VOC'
+WRITE REC ON VOC,'LOGIN'
+CLOSE VOC
+;*
+ERR=''
+PRINT @(-1)
+;*
+;* create the list of modules
+;*
+MOD.LIST="APS":@VM:"ARS":@VM:"FAS":@VM:"GLS":@VM:"ICS"
+MOD.LIST:=@VM:"JCS":@VM:"JES":@VM:"OPS":@VM:"POS":@VM:"PRS"
+MOD.LIST:=@VM:"PSS":@VM:"SAS"
+MOD.LIST:=@VM:"PSS":@VM:"SAS":@VM:"PMC"
+MOD.CNT=DCOUNT(MOD.LIST<1>,@VM)
+;*
+PRINT @(5,5):'Input base from path':
+INPUT FROM.PATH
+PRINT @(5,7):'Input base to path':
+INPUT TO.PATH
+PRINT @(5,9):'Are you sure (Y/N) ':
+INPUT ANS
+IF ANS='N' THEN
+  STOP "No files have been transfered"
+END
+;*
+;* get the list of data files per module
+;*
+FOR M=1 TO MOD.CNT
+  MODULE=MOD.LIST<1,M>
+  ;*
+  ;* get list of the data files in module
+  ;*
+  IF MODULE='PMC' THEN
+    DESTINATION=FROM.PATH
+  END ELSE
+    DESTINATION=FROM.PATH:"-":MODULE
+  END
+  CMD='SETFILE ':DESTINATION:'/VOC VOC.POINTER OVERWRITING'
+  UDTEXECUTE CMD
+  CMD='COPY FROM VOC.POINTER LOGIN, LOGIN.BACKUP OVERWRITING'
+  UDTEXECUTE CMD
+  OPEN '','VOC.POINTER' TO VOC.POINTER ELSE STOP VOC.POINTER
+  WRITE REC ON VOC.POINTER,"LOGIN"
+  CLOSE VOC.POINTER
+  CMD='LOGTO ':DESTINATION
+  UDTEXECUTE CMD
+  CMD='SELECT VOC WITH F1="F" AND WITH @ID=F2 AND WITH @ID UNLIKE _...'
+  UDTEXECUTE CMD CAPTURING MSG
+  DONE=0; FILES=''
+  LOOP
+    READNEXT FILE.ID ELSE DONE=1
+  UNTIL DONE DO
+    FILES<-1>=FILE.ID
+  REPEAT
+  CMD='COPY FROM VOC LOGIN.BACKUP,LOGIN OVERWRITING DELETING '
+  UDTEXECUTE CMD
+  ;* come back to home direcotry and write a file list
+  CMD='LOGTO ':HOME
+  UDTEXECUTE CMD CAPTURING MSG
+  WRITE FILES ON FILE.LIST,MODULE
+NEXT M
+;* now re-establish old VOC,LOGIN in the home directory
+CMD='COPY FROM VOC LOGIN.BACKUP,LOGIN OVERWRITING'
+UDTEXECUTE CMD
+;*
+;* start copying files
+;*
+FOR M=1 TO MOD.CNT
+  MODULE=MOD.LIST<1,M>
+  PRINT @(-1)
+  PRINT @(1,5):"Transfering ":MODULE:" data file "
+  READ FILES FROM FILE.LIST,MODULE THEN
+    FCNT=DCOUNT(FILES,@AM)
+    FOR F=1 TO FCNT
+      FILE.ID=FILES<F>
+      PRINT @(35,5):FILE.ID:@(-3)
+      IF FILE.ID#'VOC' AND FILE.ID#'CTLGTB' THEN
+        IF MODULE='PMC' THEN
+*          FROM.PATH="/usr/ud/primac/rev11/base/REV11/":FILE.ID
+          FROM.FILE=FROM.PATH:"/":FILE.ID
+*          TO.PATH="/vsi/rev12cnv/DEV12/":FILE.ID
+          TO.FILE=TO.PATH:"/":FILE.ID
+        END ELSE
+*          FROM.PATH="/usr/ud/primac/rev11/base/REV11-":MODULE:"/":FILE.ID
+          FROM.FILE=FROM.PATH:"-":MODULE:"/":FILE.ID
+*          TO.PATH="/vsi/rev12cnv/DEV12-":MODULE:"/":FILE.ID
+          TO.FILE=TO.PATH:"-":MODULE:"/":FILE.ID
+        END
+*        CMD='SETFILE ':FROM.PATH:' FROM.FILE OVERWRITING'
+        CMD='SETFILE ':FROM.FILE:' FROM.FILE OVERWRITING'
+        UDTEXECUTE CMD
+*        CMD='SETFILE ':TO.PATH:' TO.FILE OVERWRITING'
+        CMD='SETFILE ':TO.FILE:' TO.FILE OVERWRITING'
+        ERROR=''
+        MSG=''
+        UDTEXECUTE CMD CAPTURING MSG RETURNING ERROR
+        IF MSG[1,12]='No such file' THEN
+          PRINT @(1,15):ERROR
+          ERR<-1>=ERROR
+        END ELSE
+          CMD='CLEAR.FILE TO.FILE'
+          UDTEXECUTE CMD
+          CMD='COPY FROM FROM.FILE TO TO.FILE ALL OVERWRITING'
+          UDTEXECUTE CMD
+        END
+      END
+    NEXT F
+  END
+NEXT M
+UDTEXECUTE "DELETE.FILE FILE.LIST"
+END

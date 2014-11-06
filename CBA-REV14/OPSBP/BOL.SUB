@@ -1,0 +1,1175 @@
+   SUBROUTINE BOL.SUB(CONO,BOLNO,ITYPE,ICODE)
+*COPY>CPYLIB>COM1
+*COPY>JCS.CPYLIB>COM.JCS.LINK  
+*COPY>ICS.CPYLIB>COM.INV.MAIN  
+*COPY>ICS.CPYLIB>COM.INV.SERIAL
+*COPY>JCS.CPYLIB>COM.INV.STATS 
+*COPY>PMC.CPYLIB>COM.CUST
+*COPY>OPS.CPYLIB>COM.ORDER
+*COPY>PMC.CPYLIB>COM.SHIP.TO
+*COPY>OPS.CPYLIB>COM.BOL
+********************************************************************
+* REVISION    - [08.1]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SOURCE        - OPSBP
+* PROGRAM       - BOL.SUB
+* AUTHOR        - NICK AMENDOLA
+* DATE          - 08/15/93
+* DESCRIPTION
+* TASK
+*    18606 LLH KITTING 
+* T20661
+*
+*T20852 doug 08/21/1996 * Pick ticket tracking
+*T21177 diane 11/06/1996 * REV11 UPG
+*T24647 alex 12/13/1999 * FIX BUG TO DISPLAY MULTI KITS WITH THE SAME
+*                         COMPONENTS CORRECTLY.
+*T24693 alex 01/05/1999 * DOESN'T DISPLAY PRODUCTS IF MULTIPLE PICK
+*                         TICKET WERE CREATED FOR IT.
+*T24732 alex 01/18/2000 * MODS TO DISPLAY THE RIGHT LOCATION IF THE
+*                         RECEIPT BUCKET IS TIED TO MORE THAN ONE
+*                         LOCATION.
+*T25122 renee 05/03/2000 * Since order numbers are allowed to have
+*                          dashes, we need to use the last occurence of
+*                          a dash insted of the first to distinguish the
+*                          order number from the pick ticket sequence
+*                          number. 
+*T25740 epitka 02/01/2002 * REV12
+*T27670 cmykleb 08/28/2003 * Correct problems found with bol sub screen.
+*T27896 cmykleb 01/21/2004 * Expand the line # field to 3 digits.
+*T28141 lross 05/21/2004 * LOC can be chg'd to other than where recp is.
+********************************************************************
+*COPY>PMC.CPYLIB>COMP.OPS
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>ICS.CPYLIB>FNGD.BOM
+*COPY>PMC.CPYLIB>SHIP.TO
+*COPY>PMC.CPYLIB>TAX
+*COPY>PMC.CPYLIB>FOB
+*COPY>OPS.CPYLIB>ORDER
+*COPY>OPS.CPYLIB>BOL
+*COPY>OPS.CPYLIB>PICK.TICKET
+*COPY>OPS.CPYLIB>ORDER.RELEASE
+*COPY>OPS.CPYLIB>ORDER.DETAIL
+*COPY>OPS.CPYLIB>ORDER.DETAIL.INQ
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>ICS.CPYLIB>CATEGORY
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>ICS.CPYLIB>INV_SERIAL       
+*COPY>ICS.CPYLIB>INV_RECEIPTS     
+*COPY>ICS.CPYLIB>INV_RECP_WHSE    
+*COPY>CPYLIB>GEN.XREF.SUB
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>XREF.DATA
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+   MAT SYSCOM.REC =  ""; SYS.TYPE = 2
+*---- SETUP UNIT MEASURE CONVERSION AND DISPLAY
+   ICR.CNV = "MD0"; ICR.CNV1 = "MD0,"
+   ICR.DV1 = 1; ICR.MT1 = 1; ICR.DV2 = 1000
+   ICR.TYPE = 3; ICR.SCAL = 0
+*----
+*
+*---- Display screen
+*
+   GEN.SHPNO = "000"
+   TODAY = DATE()
+   LINE.SPACE = 2
+   PAGE.SIZE = 6
+   BEGIN.PAGE = 7
+   OLD.START.LINE = 0
+   LN = 1
+   FIRST = 0
+   TEMP.DESC = ""
+   TEMP.AVAIL = ""
+   TEMP.SID = ""
+   TEMP.LOC.AVAIL = "" ; *used only to pass qty. avail to BOL.LOC.SUB
+   NUM.ON.SCRN = ""
+   INDX = 1 ; * T27670
+   RELNO=''
+*
+   ESN = ECD.SCRN.NO
+   ECD.NUM = 2; SCV.REC(ECD.NUM)<ESN> = BOL.CUST
+   ECD.ACTION = 5; CALL SCRN.EDIT
+   ECD.NUM = 3; SCV.REC(ECD.NUM)<ESN> = CUST.NAME
+   ECD.ACTION = 5; CALL SCRN.EDIT
+   ECD.NUM = 4; SCV.REC(ECD.NUM)<ESN> = BOL.SHIP.TO
+   ECD.ACTION = 5; CALL SCRN.EDIT
+   IF BOL.SHIP.TO = GEN.SHPNO THEN
+      SPT.NAME = CUST.NAME
+   END ELSE
+      MATREAD SPT.REC FROM SHIP.TO, CONO:BOL.CUST:"!":BOL.SHIP.TO ELSE
+         MAT SPT.REC = ""; SPT.NAME = STR("?",20)
+      END
+   END
+   IF BOL.FOB = "" THEN
+      MAT FOB.REC = ""
+   END ELSE
+      MATREAD FOB.REC FROM FOB, CONO:BOL.FOB ELSE
+         MAT FOB.REC = ""
+      END
+   END
+   ECD.NUM = 8; SCV.REC(ECD.NUM)<ESN> = SPT.NAME
+   ECD.ACTION = 5; CALL SCRN.EDIT
+   LINES = DCOUNT(BOL.PROD,VM) 
+   IF LINES > 0 THEN
+      FOR REF = 1 TO LINES
+         PROD = BOL.PROD<1,REF>
+         WHSE = BOL.WHSE<1,REF>
+         ORDNO = BOL.ORDER<1,REF>
+         RECP = BOL.RECP.NO<1,REF,1>
+         KIT   = BOL.KIT<1,REF>
+         PROD.SEQ = BOL.SEQ<1,REF>
+         TEMP.SID<1,REF> = PROD:"!":WHSE:"!":ORDNO:"!":RECP
+         MATREAD ORD.DET.REC FROM ORDER.DETAIL, CONO:ORDNO:"!":BOL.SHIP.TO ELSE
+            MAT ORD.DET.REC = ""
+         END
+         PTR = 1
+         LOOP
+            LOCATE PROD IN OSD.PROD<1>,PTR SETTING PLOC THEN
+               IF (OSD.WHSE<1,PLOC> = WHSE) AND (OSD.KIT<1,PLOC> = KIT) AND (OSD.PROD.SEQ<1,PLOC> = PROD.SEQ) THEN PTR = 0
+            END ELSE
+               PTR = 0; PLOC = 0
+            END
+         WHILE PTR > 0 DO
+            PTR = PLOC+1
+         REPEAT
+         IF PLOC > 0 THEN
+            LCNT = DCOUNT(BOL.LOC<1,REF>,SM)
+            PREV.RECP.NO = 0       ;*T24732
+            FOR LPTR = 1 TO LCNT
+               WLOC = BOL.LOC<1,REF,LPTR>
+               RECP = BOL.RECP.NO<1,REF,LPTR>
+               LOCATE RECP IN OSD.RECP.NO<1,PLOC>,1 SETTING P ELSE NULL
+               AQTY = OSD.FI.QTY<1,PLOC,P>+0
+               IF PREV.RECP.NO = 0 OR PREV.RECP.NO # RECP THEN                  
+                  TEMP.AVAIL<1,REF> = TEMP.AVAIL<1,REF> + AQTY
+               END             
+               RSVBLE.QTY=0;RSVD.QTY=0
+               ISTK.ID=CONO:"R":RECP:"!":WHSE:"!":WLOC             
+               IF RECORDLOCKED(INV_SERIAL_TEMP,ISTK.ID)=0 THEN     
+                  DELETE INV_SERIAL_TEMP,ISTK.ID                    
+               END                                                 
+               MATREADU ISTK.REC FROM INV_SERIAL_TEMP,ISTK.ID ELSE 
+                  MATREADU ISTK.REC FROM INV_SERIAL,ISTK.ID THEN    
+                     IF (RELNO='') THEN                              
+                        LOCATE ORDNO IN ISTK.ORDER<1> SETTING OPOS THEN  
+                           RSVD.QTY=ISTK.ORSVD.QTY<1,OPOS>              
+                        END                                           
+                     END ELSE                                        
+                        LOCATE RELNO IN ISTK.RELNO<1> SETTING RELPOS THEN
+                           RSVD.QTY=ISTK.RRSVD.QTY<1,RELPOS>            
+                        END                                           
+                     END                                             
+                     ;* return back quantity that has been reserved  
+                     ;* for this order/release into reservable qty   
+                     RSVBLE.QTY=ISTK.RSVB.QTY+RSVD.QTY                
+                  END                                               
+                  RELEASE INV_SERIAL,ISTK.ID                        
+               END                                                 
+               RELEASE INV_SERIAL_TEMP,ISTK.ID                     
+               TEMP.LOC.AVAIL<1,REF,LPTR>=TEMP.LOC.AVAIL<1,REF,LPTR>+RSVBLE.QTY
+               PREV.RECP.NO = RECP
+            NEXT LPTR
+         END ELSE
+            TEMP.AVAIL<1,REF> = 0
+         END
+      NEXT REF
+      K = 0
+      FOR I = 1 TO LINES
+         IF TEMP.AVAIL<1,I> > 0 THEN
+            K = K + 1
+            NUM.ON.SCRN<1,K> = I
+         END
+      NEXT I
+      LINES = DCOUNT(NUM.ON.SCRN,VM)  ;*T24647
+   END ELSE
+      FIRST = 1
+      ECD.NUM = 31; SCV.REC(ECD.NUM)<ESN> = 1 "R%2"
+      ECD.ACTION = 5; CALL SCRN.EDIT
+      ECD.NUM = 32; SCV.REC(ECD.NUM)<ESN> = 1 "R%2"
+      ECD.ACTION = 5; CALL SCRN.EDIT
+      MODE = "A"
+      OPTION = "A"
+      LINES = DCOUNT(NUM.ON.SCRN,VM)
+      LOOP
+         LN = LINES + 1
+         OLD.LINES = LINES
+         GOSUB 7000
+      WHILE LINES > OLD.LINES DO
+      REPEAT
+      LN = LINES
+   END
+   GOSUB 7900 
+   GOTO 500
+*
+*---- Prompt line
+*
+   IF FIRST = 0 THEN
+      INDX = DCOUNT(BOL.TYPE,VM) +1
+      NUM.ON.SCRN<1,LN> = INDX
+   END
+500 *
+   MORE = 1
+   LOOP
+      P_X  = 0 ; P_Y = 23 ; P_VALUE = "" ; P_OPT = "CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      ECD.NUM = 41; SCV.REC(ECD.NUM)<ESN> = ""
+      ECD.ACTION = 4; CALL SCRN.EDIT
+      OPTION = ECD.RET.VALUE
+      BEGIN CASE
+         CASE OPTION = "END" OR OPTION = "E" OR OPTION = ""
+            MORE = 0
+         CASE OPTION = "A"
+            MODE = "A"
+            LOOP
+               LN = LINES + 1
+               OLD.LINES = LINES
+               GOSUB 7000
+            WHILE LINES > OLD.LINES DO
+            REPEAT
+            LN = LINES; GOSUB 7900 
+         CASE OPTION = "C"
+            MODE = "C"
+            GOSUB 7800
+            IF LN.NO THEN
+               LOCATE "Y" IN BOL.POST.FLAG<1,LN.NO>,1 SETTING PF THEN
+                  ERRMSG = "Line item already posted. Cannot modify! "
+                  GOSUB 91000
+               END ELSE
+                  LN = LN.NO
+                  GOSUB 7030
+               END
+            END
+         CASE OPTION = "D"
+            GOSUB 7800
+            IF LN.NO THEN
+               LINE.INDX = NUM.ON.SCRN<1,LN.NO>
+               TO.DELETE = LINE.INDX
+               IF BOL.KIT<1,LINE.INDX> = "M" OR BOL.KIT<1,LINE.INDX> = "K" THEN
+                  ERRMSG = "Item is either a Kit or a Component make sure you delete the entire Kit "
+                  GOSUB 91000
+               END
+               LOCATE "Y" IN BOL.POST.FLAG<1,LINE.INDX>,1 SETTING PF THEN
+                  ERRMSG = "Line item already posted. Cannot delete! "
+                  GOSUB 91000
+               END ELSE
+                  LN = LN.NO; GOSUB 7700
+                  LINES = DCOUNT(NUM.ON.SCRN,VM)
+                  IF LN > LINES THEN LN = LN - 1
+                  OLD.START.LINE = 0; GOSUB 7900 
+               END 
+            END
+         CASE OPTION = "RO"
+            GOSUB 7800
+            IF LN.NO THEN
+               LN = LN.NO 
+               ECD.SCRN.NO = ECD.SCRN.NO + 1
+               CALL BOL.ORDER.SUB(CONO,BOL.ORDER<1,LN>,BOL.SHIP.TO)
+               ECD.SCRN.NO = ESN
+               ECD.ACTION = 3; CALL SCRN.EDIT
+               OLD.START.LINE = 0; GOSUB 7900 
+            END 
+         CASE OPTION = "S" OR OPTION = "SF"
+            LN = 1 + INT((LN-1)/PAGE.SIZE) * PAGE.SIZE + PAGE.SIZE
+            IF LN > LINES THEN LN = 1
+            GOSUB 7900
+         CASE OPTION = "SR"
+            LN = 1 + INT((LN-1)/PAGE.SIZE) * PAGE.SIZE - PAGE.SIZE
+            IF LN < 1 THEN LN = 1
+            GOSUB 7900
+         CASE OPTION = "ST"
+            LN = 1
+            GOSUB 7900
+         CASE OPTION = "SB"
+            LN = LINES
+            GOSUB 7900
+         CASE OPTION[1,1] = "S" AND NUM(OPTION[2,99])
+            LN.NO = OPTION[2,99] + 0
+            IF LN.NO < 1 OR LN.NO > LINES THEN
+               ERRMSG = "** Invalid selection **"
+               GOSUB 91000
+            END ELSE
+               LN = LN.NO
+               GOSUB 7900
+            END
+         CASE 1
+            ERRMSG = "Invalid entry, please re-enter"
+            GOSUB 91000
+      END CASE
+   WHILE MORE > 0 DO REPEAT
+   GOTO 99999
+*
+*---- Scrolling line prompt
+7000 *
+   GOSUB 7900
+   SLN = BEGIN.PAGE + LINE.SPACE * MOD(LN-1,PAGE.SIZE)
+   ECD.NUM = 31; SCV.REC(31)<ESN> = INT(LN/PAGE.SIZE+.9) "R%2"
+   ECD.ACTION = 5; CALL SCRN.EDIT
+   ECD.NUM = 32; SCV.REC(32)<ESN> = INT(LN/PAGE.SIZE+.9) "R%2"
+   ECD.ACTION = 5; CALL SCRN.EDIT
+*T27896 v
+*  P_X  = 0 ; P_Y = SLN ; P_VALUE = LN "R%2" ; P_OPT = "CL"
+   P_X  = 0 ; P_Y = SLN ; P_VALUE = LN "R%3" ; P_OPT = "CL"
+*T27896 ^
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+*
+*---- Type
+7010 *
+   IF ITYPE = "" THEN
+      X=4; Y=SLN; TYP=1; MAXL=1
+      VALDAT="O":VM:"R":VM:"T":VM:"P"
+      BEGIN CASE
+         CASE OPCO.SHP.FRM = "R"
+            VALDAT="R":VM:"T"
+            HMSG="Enter (R)elease, picking (T)icket "
+            O.R="O"; DEFAULT="R"
+         CASE OPCO.SHP.FRM = "O"
+            VALDAT="O":VM:"T"
+            HMSG="Enter (O)rder, picking (T)icket"
+         CASE 1
+            VALDAT="O":VM:"R":VM:"T"
+            HMSG="Enter (O)rder, (R)elease, picking (T)icket "
+      END CASE
+      CALL EDIT.SUB
+   END ELSE
+      VALUE = ITYPE
+      ITYPE = ""
+      P_X  = 4 ; P_Y = SLN ; P_VALUE = VALUE"L#1" ; P_OPT = ""
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   END
+   BEGIN CASE
+      CASE VALUE = "END" AND OPTION = "A"
+         P_X  = 0 ; P_Y = SLN ; P_VALUE = "" ; P_OPT = "CL"
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         P_X  = 0 ; P_Y = SLN+1 ; P_VALUE = "" ; P_OPT = "CL"
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         TO.DELETE = DCOUNT(BOL.PROD,VM) + 1
+         GOSUB 7700; GOTO 7099
+      CASE VALUE = "END"
+         N = LN; GOSUB 7910
+         GOTO 7099
+   END CASE
+   TEMP.TYPE = VALUE
+*
+*---- Item
+7020 *
+   UPDCNT = 0
+   BEGIN CASE
+      CASE TEMP.TYPE = "O"
+         GOSUB 7500
+      CASE TEMP.TYPE = "T"
+         GOSUB 7510
+      CASE TEMP.TYPE = "R"
+         GOSUB 7520
+   END CASE
+   NUM.ON.SCRN = ""
+   K = 0
+   NUM.PROD = DCOUNT(BOL.PROD,VM)
+   FOR I = 1 TO NUM.PROD
+      IF TEMP.AVAIL<1,I> > 0 THEN
+         K = K + 1
+         NUM.ON.SCRN<1,K> = I
+      END
+   NEXT I
+   BEGIN CASE
+      CASE VALUE = "END" AND OPTION = "A"
+         GOTO 7010
+      CASE VALUE = "END"
+         GOTO 7010
+      CASE UPDCNT = 1
+         LINES = DCOUNT(BOL.PROD,VM)
+         OLD.START.LINE = 0; GOSUB 7900
+      CASE UPDCNT > 1
+         LINES = DCOUNT(NUM.ON.SCRN,VM)
+         OLD.START.LINE = 0; GOSUB 7900
+      CASE 1
+         ERRMSG = "No lines added. Press <RETURN> to continue."
+         GOSUB 91000
+         GOTO 7010
+   END CASE
+*
+*---- Input skid #, location and quantity
+7030 *
+   IF MODE = "A" THEN
+      LLN = DCOUNT(NUM.ON.SCRN,VM)
+   END ELSE
+      LLN = LN
+   END
+   LN1 = LN
+   FOR LN = LN1 TO LLN
+      GOSUB 7900
+      SLN = BEGIN.PAGE + LINE.SPACE * MOD(LN-1,PAGE.SIZE)
+      INDX = NUM.ON.SCRN<1,LN>
+      LOCCNT = DCOUNT(BOL.LOC<1,INDX>,SM)
+      BEGIN CASE
+         CASE LOCCNT <= 1
+            MULTI.LOC = 0
+         CASE BOL.LOC<1,INDX,1> = BOL.LOC<1,INDX,LOCCNT>
+            MULTI.LOC = 0
+         CASE 1
+            MULTI.LOC = 1
+      END CASE
+      ;* there is only one scenario when this multi location
+      ;* logic would be executed and that is if quantity for fifo
+      ;* bucket is in multiple locations and user is entering 
+      ;* BOL without having a pick ticket.
+      IF MULTI.LOC THEN
+         ECD.SCRN.NO = ECD.SCRN.NO + 3
+         CALL BOL.LOC.SUB("M",CONO,INDX,TEMP.AVAIL,TEMP.LOC.AVAIL,TEMP.SID,STATUS)
+         ECD.SCRN.NO = ESN
+         ECD.ACTION = 3; CALL SCRN.EDIT
+         OLD.START.LINE = 0; GOSUB 7900 
+         SLN = BEGIN.PAGE + LINE.SPACE * MOD(LN-1,PAGE.SIZE)
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         LOC.FOUND = 0; TMP.LOC.CNT = DCOUNT(BOL.LOC<1,INDX>,SM)
+         FOR LPOS = 1 TO TMP.LOC.CNT UNTIL (LOC.FOUND)
+            IF BOL.QTY<1,INDX,LPOS> GT 0 THEN
+               LOC.FOUND = LPOS
+            END
+         NEXT LPOS
+         IF LOC.FOUND = 0 THEN LOC.FOUND = 1
+         P_X  = 40 ; P_Y = SLN ; P_VALUE = BOL.LOC<1,INDX,LOC.FOUND>"L#4" ; P_OPT = ""
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         PQTY = SUM(BOL.QTY<1,INDX>)
+         PQTY = INT(((PQTY / ICR.DV1 ) * ICR.MT1) / ICR.DV2 + .5 )
+         P_X  = 56 ; P_Y = SLN ; P_VALUE = OCONV(PQTY,ICR.CNV1) "R#10" ; P_OPT = ""
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         GOTO 7038
+      END
+*
+*---- Location
+7034 *
+      IF NOT(MULTI.LOC) THEN
+         SLN = BEGIN.PAGE + LINE.SPACE * MOD(LN-1,PAGE.SIZE)
+         LCNT = DCOUNT(BOL.LOC<1,INDX>,SM)
+         X=40; Y=SLN; TYP=1; MAXL=4
+         PVALUE = BOL.LOC<1,INDX,1>
+         IF BOL.LOC<1,INDX,1> # "" THEN
+            O.R="O"; DEFAULT=BOL.LOC<1,INDX,1>
+         END
+         CALL EDIT.SUB
+         BEGIN CASE
+            CASE VALUE = "END" AND BOL.LOC<1,INDX,1> = ""
+               GOTO 7034
+            CASE VALUE = "END"
+               P_X  = 40 ; P_Y = SLN ; P_VALUE = BOL.LOC<1,INDX,1>"R#4" ; P_OPT = ""
+               CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            CASE 1
+               PROD = BOL.PROD<1,INDX>
+               WHSE = BOL.WHSE<1,INDX>
+               READ CHECK.REC FROM INV.WHSE.LOC, CONO:PROD:"!":WHSE:"!":VALUE ELSE
+                  ERRMSG = "Invalid location. Try again! "
+                  GOSUB 91000
+                  GOTO 7034
+               END
+*T28141 v
+               TST.SERIAL='R':BOL.RECP.NO<1,INDX,1>:"!":BOL.WHSE<1,INDX,1>:"!":VALUE
+               LOCATE TST.SERIAL IN CHECK.REC<3> SETTING SFND ELSE
+                 ERRMSG='Receipt not available in this location!'
+                 GOSUB 91000
+                 GOTO 7034
+               END
+*T28141 ^
+               BOL.LOC<1,INDX,1> = VALUE
+         END CASE
+      END
+*
+*---- Quantity
+7036 *
+      TEMP.AMT = TEMP.AVAIL<1,INDX> 
+      TMP.RATIO = 1
+      IF NOT(MULTI.LOC) THEN
+         SLN = BEGIN.PAGE + LINE.SPACE * MOD(LN-1,PAGE.SIZE)
+         MAXV=INT(((TEMP.AMT / ICR.DV1 ) * ICR.MT1 ) / ICR.DV2 + .5 )
+         X=56; Y=SLN; TYP=3; MAXL=10; MINV=1 
+         PTR = 1
+*
+* LOGIC FOR KITTING RATIOS
+*
+         IF BOL.KIT<1,INDX> = "M" THEN
+            MATREAD BOM.REC FROM FNGD.BOM, CONO:BOL.BOM.NUM<1,INDX> ELSE
+               MAT BOM.REC = ""
+            END
+            LOCATE BOL.PROD<1,INDX> IN BOM.PROD<1>,1 SETTING BOM.FND THEN
+               TMP.RATIO = BOM.Q.RATIO<1,BOM.FND> / 10000
+            END ELSE
+               TMP.RATIO = 1
+            END
+         END
+         PVALUE=BOL.QTY<1,INDX>+0
+         PVALUE=INT(((PVALUE / ICR.DV1 ) * ICR.MT1 ) / ICR.DV2 + .5)
+         IF PVALUE > 0 THEN DEFAULT=PVALUE ELSE DEFAULT=MAXV
+         O.R="O"
+         CALL EDIT.SUB
+         BEGIN CASE
+            CASE VALUE = "END" AND BOL.QTY<1,INDX> = ""
+               BOL.QTY<1,INDX> = 0
+               P_X  = 56 ; P_Y = SLN ; P_VALUE = BOL.QTY<1,INDX>"R#10" ; P_OPT = ""
+               CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            CASE VALUE = "END"
+               PQTY=INT(((BOL.QTY<1,INDX> / ICR.DV1 ) * ICR.MT1 ) / ICR.DV2 + .5)
+               P_X  = 56 ; P_Y = SLN ; P_VALUE = PQTY<1,INDX>"R#10" ; P_OPT = ""
+               CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            CASE 1
+               LEFT.OVER = REM(VALUE,TMP.RATIO)
+               IF LEFT.OVER > 0 THEN 
+                  ERRMSG = "Quantity shipped must be proportional to Product Ratio in BOM of ":TMP.RATIO:" to 1."
+                  GOSUB 91000
+                  GOTO 7036
+               END
+               VALUE = INT(((VALUE/ICR.MT1) * ICR.DV1) * ICR.DV2 + .5)
+               BOL.QTY<1,INDX> = VALUE
+         END CASE
+      END
+*
+*---- Gross Weight
+7038 *
+      SLN = BEGIN.PAGE + LINE.SPACE * MOD(LN-1,PAGE.SIZE)
+      X=67; Y=SLN; TYP=3; MAXL=10; MINV=1; MAXV=9999999; JUSTIFY='L'
+      HMSG = "Enter gross weight"
+      IF BOL.SHP.WT<1,INDX> # "" THEN
+         PVALUE = BOL.SHP.WT<1,INDX>
+         O.R="O"; DEFAULT = BOL.SHP.WT<1,INDX>
+      END
+      CALL EDIT.SUB
+      BEGIN CASE
+         CASE VALUE = "END" AND BOL.SHP.WT<1,INDX> = ""
+            BOL.SHP.WT<1,INDX> = 0
+            P_X  = 67 ; P_Y = SLN ; P_VALUE = BOL.SHP.WT<1,INDX>"R#10" ; P_OPT = ""
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         CASE VALUE = "END"
+            P_X  = 67 ; P_Y = SLN ; P_VALUE = BOL.SHP.WT<1,INDX>"R#10" ; P_OPT = ""
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         CASE 1
+            BOL.SHP.WT<1,INDX> = VALUE
+      END CASE
+      X=70; Y=SLN+1; TYP=3; MAXL=4; MINV=0; MAXV=9999  
+      HMSG = "Enter skid count"                        
+      IF BOL.SKD.CNT<1,INDX> # "" THEN                 
+         PVALUE = BOL.SKD.CNT<1,INDX>                   
+         O.R="O"; DEFAULT = BOL.SKD.CNT<1,INDX>         
+      END                                              
+      CALL EDIT.SUB                                    
+      BEGIN CASE                                       
+         CASE VALUE = "END" AND BOL.SKD.CNT<1,INDX> = ""
+            BOL.SKD.CNT<1,INDX> = 0                      
+            P_X  = 70 ; P_Y = SLN+1 ; P_VALUE = BOL.SKD.CNT<1,INDX>"R#4" ; P_OPT = ""
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)                             
+         CASE VALUE = "END"                                                  
+            P_X  = 70 ; P_Y = SLN+1 ; P_VALUE = BOL.SKD.CNT<1,INDX>"R#4" ; P_OPT = ""
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT) 
+         CASE 1                                  
+            BOL.SKD.CNT<1,INDX> = VALUE           
+      END CASE                                  
+      X=75; Y=SLN+1; TYP=3; MAXL=4; MINV=0; MAXV=9999
+      HMSG = "Enter carton count"
+      IF BOL.CRTN.CNT<1,INDX> # "" THEN
+         PVALUE = BOL.CRTN.CNT<1,INDX>
+         O.R="O"; DEFAULT = BOL.CRTN.CNT<1,INDX>
+      END
+      CALL EDIT.SUB
+      BEGIN CASE
+         CASE VALUE = "END" AND BOL.CRTN.CNT<1,INDX> = ""
+            BOL.CRTN.CNT<1,INDX> = 0
+            P_X  = 75 ; P_Y = SLN ; P_VALUE = BOL.CRTN.CNT<1,INDX>"R#4" ; P_OPT = ""
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         CASE VALUE = "END"
+            P_X  = 75 ; P_Y = SLN ; P_VALUE = BOL.CRTN.CNT<1,INDX>"R#4" ; P_OPT = ""
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         CASE 1
+            BOL.CRTN.CNT<1,INDX> = VALUE
+      END CASE
+*
+*---- CALCULATE SHIP AMOUNT
+*
+      WGT = BOL.SHP.WT<1,INDX>
+      WCNT = DCOUNT(FOB.WEIGHT,VM)
+      IF WCNT = 0 THEN
+         BOL.SHP.AMT<1,INDX> = 0
+      END ELSE
+         LOCATE WGT IN FOB.WEIGHT<1>,1 BY "AR" SETTING WPTR ELSE NULL
+         IF WPTR > WCNT THEN WPTR = WCNT
+         AMT = INT((WGT/100) * FOB.RATE<1,WPTR> + 0.5)
+         SAMT = INT(AMT * (100+(FOB.SURCHARGE/100)/100) + 0.5)
+         DAMT = INT(AMT * (100+(FOB.DISCOUNT/100)/100) + 0.5)
+         BOL.SHP.AMT<1,INDX> = AMT + SAMT - DAMT
+      END
+   NEXT LN
+7099 *
+   RETURN
+*
+*---- ENTER ORDER NUMBER
+7500 *
+   ICODE = BOL.ORDER<1,1>
+   IF ICODE = "" THEN
+      X=7; Y=SLN; TYP=1; MAXL=11
+      HMSG = "Enter Order Number"
+      IF BOL.ORDER<1,INDX> # "" THEN
+         O.R="O"; DEFAULT=BOL.ORDER<1,INDX>
+      END
+      CALL EDIT.SUB
+      IF VALUE = "END" THEN RETURN
+   END ELSE
+      VALUE = ICODE
+      ICODE = ""
+      P_X  = 7 ; P_Y = SLN ; P_VALUE = VALUE"L#11" ; P_OPT = ""
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   END
+   ORDNO = VALUE
+   GOSUB 7600
+   IF BAD.ORD THEN RETURN
+   IF ORD.PICK.NO # "" THEN
+      ERRMSG = "Picking Ticket # required for this order."
+      GOSUB 91000; RETURN
+   END
+   IF OPCO.SHP.FRM = "R" OR ORD.REL.NO # "" THEN
+      ERRMSG = "Release # required for this order."
+      GOSUB 91000; RETURN
+   END
+   IF ITYPE = "" THEN
+      IPTR = DCOUNT(BOL.PROD,VM)
+   END ELSE
+      IPTR = LN-1
+   END
+   PCNT = DCOUNT(OSD.PROD,VM)
+   FOR PPTR = 1 TO PCNT
+      PROD = OSD.PROD<1,PPTR>
+      WHSE = OSD.WHSE<1,PPTR>
+      KIT  = OSD.KIT<1,PPTR>
+      PSEQ = OSD.PROD.SEQ<1,PPTR>
+      BOM.NUMBER = OSD.BOM.NUM<1,PPTR>
+      GOSUB 7650
+      IF NOT(BAD.PROD) THEN
+         RCNT = DCOUNT(OSD.RECP.NO<1,PPTR>,SM)
+         IF RCNT = 0 THEN RCNT = 1
+         FOR RPTR = 1 TO RCNT
+            RECP = OSD.RECP.NO<1,PPTR,RPTR>
+            RELNO = OSD.REL.NO<1,PPTR,RPTR>   ;*T24693
+            PKTKT=""; WLOC=""; WGHT=""
+            RQTY = OSD.FI.QTY<1,PPTR,RPTR>+0
+            AQTY = RQTY
+            GOSUB 7550
+         NEXT RPTR
+      END
+   NEXT PPTR
+   RETURN
+*
+*---- ENTER PICKING TICKET NUMBER
+7510 *
+   IF ICODE = "" THEN
+      X=7; Y=SLN; TYP=1; MAXL=11
+      IF BOL.PKTKT<1,INDX> # "" THEN
+         O.R="O"; DEFAULT=BOL.PKTKT<1,INDX>
+      END
+      CALL EDIT.SUB
+      IF VALUE = "END" THEN RETURN
+   END ELSE
+      VALUE = ICODE
+      ICODE = ""
+   END
+   MATREAD PKT.REC FROM PICK.TICKET, CONO:VALUE ELSE
+      ERRMSG = "Pick Ticket is not on File"
+      GOSUB 91000
+      GOTO 7510
+   END
+   BEGIN CASE
+      CASE SUM(PKT.SHIP.QTY) > 0
+         ERRMSG = "Ticket has already been shipped"
+         GOTO 7510
+      CASE PKT.BOL # "" AND PKT.BOL # BOLNO
+         ERRMSG = "Ticket is on Bill of Lading ":PKT.BOL
+         GOTO 7510
+   END CASE
+   DASH.FOUND = 0
+   CHARCNT = LEN(VALUE)
+   FOR XX = CHARCNT TO 1 STEP (-1) UNTIL DASH.FOUND
+      IF VALUE[XX,1] = "-" THEN
+         ORD.VALUE = VALUE[1,XX-1]
+         DASH.FOUND = 1
+      END
+   NEXT XX
+   IF ORD.VALUE # BOL.ORDER<1,1> AND BOL.ORDER<1,1> # "" THEN
+      ERRMSG = "Pick Ticket is NOT for the same Order"
+      GOSUB 91000
+      GOTO 7510
+   END
+   IF PKT.SHIP.TO # BOL.SHIP.TO THEN
+      ERRMSG = "Pick Ticket is NOT for the same Ship-To."
+      GOSUB 91000
+      GOTO 7510
+   END
+   PKTKT = VALUE
+   RELNO = PKT.REL.NO
+   ORDNO = ORD.VALUE
+   GOSUB 7600
+   IF BAD.ORD THEN GOTO 7510
+   IF RELNO = "" THEN
+      IF ORD.REL.NO # "" THEN
+         ERRMSG = "Release required for shipment! "
+         GOTO 7510
+      END
+   END ELSE
+      MATREAD ORR.REC FROM ORDER.RELEASE, CONO:RELNO ELSE
+         ERRMSG = "Release is NOT on File"
+         GOSUB 91000
+         GOTO 7510
+      END
+      IF (ORR.STATUS<1,1> # "") AND (ORR.BOL # BOLNO) THEN
+         ERRMSG = "Release ":RELNO:" ":ORR.STATUS<1,1>
+         GOSUB 91000
+         GOTO 7510
+      END
+   END
+   IPTR = LN-1
+   PCNT = DCOUNT(OSD.PROD,VM)
+   FOR PPTR = 1 TO PCNT
+      PROD = OSD.PROD<1,PPTR>
+      WHSE = OSD.WHSE<1,PPTR>
+      PROD.SEQ = OSD.PROD.SEQ<1,PPTR>
+      PSEQ     = OSD.PROD.SEQ<1,PPTR>
+      KIT      = OSD.KIT<1,PPTR>
+      BOM.NUMBER = OSD.BOM.NUM<1,PPTR>
+      PTR = 1
+      LOOP
+         LOCATE PROD IN PKT.PROD<1>,PTR SETTING TPTR THEN
+            IF (PKT.WHSE<1,TPTR> = WHSE) AND (PKT.KIT<1,TPTR> = KIT) AND (PKT.SEQ<1,TPTR> = PROD.SEQ) THEN PTR = 0
+         END ELSE
+            TPTR=0; PTR=0
+         END
+      UNTIL PTR = 0 DO
+         PTR = TPTR+1
+      REPEAT
+      IF TPTR = 0 THEN GOTO 7519
+      IF PKT.SHIP.QTY<1,TPTR> > 0 THEN GOTO 7519
+      GOSUB 7650
+      IF NOT(BAD.PROD) THEN
+         RCNT = DCOUNT(PKT.RECP.NO<1,TPTR>,SM)
+         IF RCNT = 0 THEN RCNT = 1
+         LOCATE RELNO IN OSD.REL.NO<1,PPTR> SETTING REL.POS ELSE REL.POS = 0
+         FOR RPTR = 1 TO RCNT
+            RECP = PKT.RECP.NO<1,TPTR,RPTR>
+            IF ((KIT="K" OR KIT="M") AND OSD.REL.NO<1,PPTR,RPTR>="") OR (REL.POS) THEN      ;*T24693
+               WLOC=""; WGHT=""
+               WLOC = PKT.SERIAL.LOC<1,TPTR,RPTR>;* T20852
+               RQTY = PKT.R.QTY<1,TPTR,RPTR>+0;* T20852
+               AQTY = RQTY
+               GOSUB 7550
+            END
+7518     NEXT RPTR
+      END
+7519 NEXT PPTR
+   RETURN
+*
+*---- ENTER RELEASE NUMBER
+7520 *
+   IF ICODE = "" THEN
+      X=7; Y=SLN; TYP=1; MAXL=11
+      IF BOL.RELEASE<1,INDX> # "" THEN
+         O.R="O"; DEFAULT=BOL.RELEASE<1,INDX>
+      END
+      CALL EDIT.SUB
+      IF VALUE = "END" THEN RETURN
+   END ELSE
+      VALUE = ICODE
+      ICODE = ""
+   END
+   MATREAD ORR.REC FROM ORDER.RELEASE, CONO:VALUE ELSE
+      ERRMSG = "Release is NOT on File"
+      GOSUB 91000
+      GOTO 7520
+   END
+   IF ORR.ORD # BOL.ORDER<1,1> AND BOL.ORDER<1,1> # "" THEN
+      ERRMSG = "Release is NOT for the Same Order"
+      GOSUB 91000
+      GOTO 7520
+   END
+   IF ORR.SHIP.TO # BOL.SHIP.TO THEN
+      ERRMSG = "Release is NOT for the Same Ship-To."
+      GOSUB 91000
+      GOTO 7520
+   END
+   IF (ORR.STATUS<1,1> # "") AND (ORR.BOL # BOLNO) THEN
+      ERRMSG = "Release ":VALUE:" ":ORR.STATUS<1,1>
+      GOSUB 91000
+      GOTO 7520
+   END
+   RELNO = VALUE
+   ORDNO = ORR.ORD
+   GOSUB 7600
+   IF BAD.ORD THEN GOTO 7520
+   IF ORD.PICK.NO # "" THEN
+      ERRMSG = "Picking Ticket # required for this order."
+      GOSUB 91000; GOTO 7520
+   END
+   IPTR = LN-1
+   PCNT = DCOUNT(OSD.PROD,VM)
+   FOR PPTR = 1 TO PCNT
+      PROD = OSD.PROD<1,PPTR>
+      WHSE = OSD.WHSE<1,PPTR>
+      PROD.SEQ = OSD.PROD.SEQ<1,PPTR>
+      PSEQ     = OSD.PROD.SEQ<1,PPTR>
+      KIT      = OSD.KIT<1,PPTR>
+      BOM.NUMBER = OSD.BOM.NUM<1,PPTR>
+      GOSUB 7650
+      IF NOT(BAD.PROD) THEN
+         RCNT = DCOUNT(OSD.RECP.NO<1,PPTR>,SM)
+         IF RCNT = 0 THEN RCNT = 1
+         FOR RPTR = 1 TO RCNT
+            RECP = OSD.RECP.NO<1,PPTR,RPTR>
+            IF ((KIT = "K" OR KIT = "M") AND OSD.REL.NO<1,PPTR,RPTR> = "") OR OSD.REL.NO<1,PPTR,RPTR> = RELNO THEN
+               PKTKT=""; WLOC=""; WGHT=""
+               RQTY = OSD.REL.QTY<1,PPTR,RPTR>+0
+               AQTY = RQTY
+               GOSUB 7550
+            END
+         NEXT RPTR
+      END
+   NEXT PPTR
+   RETURN
+*
+*---- INSERT LINE ITEM
+7550 *
+   IF FIRST THEN
+      BOL.ORDER = ""
+      FIRST = 0
+   END
+   SID = PROD:"!":WHSE:"!":ORDNO:"!":RECP
+   SPTR = DCOUNT(TEMP.SID<1>,VM) + 1
+   IF SPTR THEN
+      UPDCNT = UPDCNT + 1
+      IPTR = IPTR + 1
+      TEMP.SID = INSERT(TEMP.SID,1,IPTR,0,SID)
+      BOL.TYPE = INSERT(BOL.TYPE,1,IPTR,0,TEMP.TYPE)
+      BOL.ORDER = INSERT(BOL.ORDER,1,IPTR,0,ORDNO)
+      BOL.PROD = INSERT(BOL.PROD,1,IPTR,0,PROD)
+      BOL.WHSE = INSERT(BOL.WHSE,1,IPTR,0,WHSE)
+      BOL.LOC = INSERT(BOL.LOC,1,IPTR,0,"")
+      BOL.KIT = INSERT(BOL.KIT,1,IPTR,0,KIT)
+      BOL.SEQ = INSERT(BOL.SEQ,1,IPTR,0,PSEQ)
+      BOL.BOM.NUM = INSERT(BOL.BOM.NUM,1,IPTR,0,BOM.NUMBER)
+      BOL.RECP.NO = INSERT(BOL.RECP.NO,1,IPTR,0,"")
+      TEMP.AVAIL = INSERT(TEMP.AVAIL,1,IPTR,0,AQTY)
+      BEGIN CASE
+         CASE WLOC = ""
+            BOL.QTY = INSERT(BOL.QTY,1,IPTR,0,"")
+         CASE RQTY <= AQTY
+            BOL.QTY = INSERT(BOL.QTY,1,IPTR,0,RQTY)
+         CASE 1
+            BOL.QTY = INSERT(BOL.QTY,1,IPTR,0,AQTY)
+      END CASE
+      BOL.RELEASE = INSERT(BOL.RELEASE,1,IPTR,0,RELNO)   ;*T24693
+      BOL.PKTKT = INSERT(BOL.PKTKT,1,IPTR,0,PKTKT)
+      BOL.SHP.WT = INSERT(BOL.SHP.WT,1,IPTR,0,WGHT)
+      BOL.SHP.AMT = INSERT(BOL.SHP.AMT,1,IPTR,0,"")
+      BOL.POST.FLAG = INSERT(BOL.POST.FLAG,1,IPTR,0,"")
+      BOL.SKD.CNT = INSERT(BOL.SKD.CNT,1,IPTR,0,"");* T20661
+      BOL.CRTN.CNT = INSERT(BOL.CRTN.CNT,1,IPTR,0,"");* T20661
+      TEMP.LOC.AVAIL = INSERT(TEMP.LOC.AVAIL,1,IPTR,0,"")
+      TEMP.DESC = INSERT(TEMP.DESC,1,IPTR,0,"")
+   END
+*
+   IF WLOC # "" THEN
+      RSVBLE.QTY=0;RSVD.QTY=0
+      BOL.LOC<1,IPTR> = WLOC
+      BOL.RECP.NO<1,IPTR> = RECP
+      ISTK.ID=CONO:"R":RECP:"!":WHSE:"!":WLOC
+      IF RECORDLOCKED(INV_SERIAL_TEMP,ISTK.ID)=0 THEN     
+         DELETE INV_SERIAL_TEMP,ISTK.ID                    
+      END                                                 
+      MATREADU ISTK.REC FROM INV_SERIAL_TEMP,ISTK.ID ELSE  
+         MATREADU ISTK.REC FROM INV_SERIAL,ISTK.ID THEN    
+            IF (RELNO='') THEN                             
+               LOCATE ORDNO IN ISTK.ORDER<1> SETTING OPOS THEN  
+                  RSVD.QTY=ISTK.ORSVD.QTY<1,OPOS>              
+               END                                           
+            END ELSE                                        
+               LOCATE RELNO IN ISTK.RELNO<1> SETTING RELPOS THEN
+                  RSVD.QTY=ISTK.RRSVD.QTY<1,RELPOS>            
+               END                                           
+            END                                             
+            ;* return back quantity that has been reserved  
+            ;* for this order/release into reservable qty   
+            RSVBLE.QTY=ISTK.RSVB.QTY+RSVD.QTY                
+         END ELSE
+            RELEASE INV_SERIAL_TEMP,ISTK.ID
+            RELEASE INV_SERIAL,ISTK.ID
+         END
+      END
+      IF RQTY > RSVBLE.QTY THEN
+         ERRMSG='Receipt ':RECP:' does not have enough reservable qty. for whse/loc ':WHSE:'/':WLOC
+         GOSUB 91000
+      END
+   END ELSE
+      CHKQTY=0
+      INVR.ID=CONO:RECP
+      IF RECORDLOCKED(INV_RECEIPTS_TEMP,INVR.ID)=0 THEN           
+         DELETE INV_RECEIPTS_TEMP,INVR.ID                          
+      END                                                         
+      MATREADU INVR.REC FROM INV_RECEIPTS_TEMP,INVR.ID ELSE       
+         MATREADU INVR.REC FROM INV_RECEIPTS,INVR.ID THEN          
+            IRW.ID=CONO:RECP:"!":WHSE
+            IF RECORDLOCKED(INV_RECP_WHSE_TEMP,IRW.ID)=0 THEN       
+               DELETE INV_RECP_WHSE_TEMP,IRW.ID                      
+            END                                                     
+            MATREADU IRW.REC FROM INV_RECP_WHSE_TEMP,IRW.ID ELSE    
+               MATREADU IRW.REC FROM INV_RECP_WHSE,IRW.ID THEN       
+                  SCNT=DCOUNT(IRW.SERIAL.NO,VM)                       
+                  FOR S=1 TO SCNT
+                     RSVBLE.QTY =0;RSVD.QTY=0
+                     ISTK.ID=CONO:IRW.SERIAL.NO<1,S>                   
+                     IF RECORDLOCKED(INV_SERIAL_TEMP,ISTK.ID)=0 THEN   
+                        DELETE INV_SERIAL_TEMP,ISTK.ID                  
+                     END                                               
+                     MATREAD ISTK.REC FROM INV_SERIAL_TEMP,ISTK.ID ELSE
+                        MATREADU ISTK.REC FROM INV_SERIAL,ISTK.ID THEN  
+                           IF RELNO='' THEN
+                              LOCATE ORDNO IN ISTK.ORDER<1> SETTING OPOS THEN
+                                 RSVD.QTY=ISTK.ORSVD.QTY<1,OPOS>
+                              END
+                           END ELSE
+                              LOCATE RELNO IN ISTK.RELNO<1> SETTING RELPOS THEN   
+                                 RSVD.QTY=ISTK.RRSVD.QTY<1,RELPOS>
+                              END
+                           END
+                           ;* return back quantity that has been reserved
+                           ;* for this order/release into reservable qty
+                           RSVBLE.QTY=ISTK.RSVB.QTY+RSVD.QTY
+                           IF RSVBLE.QTY > 0 THEN                     
+                              WLOC=ISTK.LOC
+                              PTR = 1
+                              LOOP
+                                 LOCATE WLOC IN BOL.LOC<1,IPTR>,PTR BY "AL" SETTING P THEN
+                                    IF BOL.RECP.NO<1,IPTR,P> >= RECP THEN PTR = 0
+                                 END ELSE
+                                    PTR = 0
+                                 END
+                              UNTIL PTR = 0 DO
+                                 PTR = P + 1
+                              REPEAT
+                              IF BOL.LOC<1,IPTR,P>=WLOC AND BOL.RECP.NO<1,IPTR,P>=RECP THEN
+                                 TEMP.LOC.AVAIL<1,IPTR,P>+=RSVBLE.QTY
+                              END ELSE
+                                 BOL.LOC = INSERT(BOL.LOC,1,IPTR,P,WLOC)
+                                 BOL.RECP.NO = INSERT(BOL.RECP.NO,1,IPTR,P,RECP)
+                                 BOL.QTY = INSERT(BOL.QTY,1,IPTR,P,0)
+                                 BOL.POST.FLAG = INSERT(BOL.POST.FLAG,1,IPTR,P,"")
+                                 TEMP.LOC.AVAIL=INSERT(TEMP.LOC.AVAIL,1,IPTR,P,RSVBLE.QTY)
+                              END
+                              CHKQTY+=RSVBLE.QTY
+                           END                                                   
+                        END ELSE
+                           RELEASE INV_SERIAL_TEMP,ISTK.ID
+                           RELEASE INV_SERIAL, ISTK.ID
+                        END
+                     END                                                     
+                  NEXT S                                                    
+               END                                                           
+               RELEASE INV_RECP_WHSE,IRW.ID
+            END                                                             
+            RELEASE INV_RECP_WHSE_TEMP,IRW.ID
+         END
+         RELEASE INV_RECEIPTS,INVR.ID        
+      END
+      RELEASE INV_RECEIPTS_TEMP,INVR.ID
+      IF CHKQTY < RQTY THEN
+         ERRMSG="Cannot locate reserved quantity in inventory"
+         GOSUB 91000
+      END
+   END
+   RETURN
+*
+*---- READ ORDER RELATED DATA
+7600 *
+   BAD.ORD = 0
+   MATREAD ORD.REC FROM ORDER, CONO:ORDNO ELSE
+      ERRMSG = "Invalid Order number."
+      GOSUB 91000
+      BAD.ORD = 1
+      RETURN
+   END
+   IF ORD.STATUS<1,1> = "CLOSED" OR ORD.STATUS<1,1> = "CANCEL" THEN
+      ERRMSG = "Order has either been closed or cancelled"
+      GOSUB 91000
+      BAD.ORD = 1
+      RETURN
+   END
+   IF ORD.CUST # BOL.CUST THEN
+      ERRMSG = "This order belongs to customer ":ORD.CUST
+      GOSUB 91000
+      BAD.ORD = 1
+      RETURN
+   END
+   MATREAD ORD.DET.REC FROM ORDER.DETAIL, CONO:ORDNO:"!":BOL.SHIP.TO ELSE
+      MAT ORD.DET.REC = ""
+      ERRMSG = "Cannot locate ORDER.DETAIL for specified Ship-to."
+      GOSUB 91000
+      BAD.ORD = 1
+      RETURN
+   END
+   RETURN
+*
+*---- READ PRODUCT RELATED DATA
+7650 *
+   BAD.PROD = 0
+   MATREAD INV.REC FROM INVENTORY, CONO:PROD ELSE
+      ERRMSG = "Invalid Product number."
+      GOSUB 91000
+      BAD.PROD = 1
+      RETURN
+   END
+   MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE ELSE
+      ERRMSG = "Cannot locate CATEGORY ":INV.LINE:" for product ":PROD
+      GOSUB 91000
+      BAD.PROD = 1
+      RETURN
+   END
+   MATREAD IWH.REC FROM INV.WHSE, CONO:PROD:"!":WHSE ELSE
+      ERRMSG = "Cannot locate INV.WHSE - ":PROD:"!":WHSE
+      GOSUB 91000
+      BAD.PROD = 1
+      RETURN
+   END
+   RETURN
+*
+*---- Delete a line
+7700 *
+   BOL.TYPE = DELETE(BOL.TYPE,1,TO.DELETE,0)
+   BOL.ORDER = DELETE(BOL.ORDER,1,TO.DELETE,0)
+   BOL.PROD = DELETE(BOL.PROD,1,TO.DELETE,0)
+   BOL.WHSE = DELETE(BOL.WHSE,1,TO.DELETE,0)
+   BOL.LOC = DELETE(BOL.LOC,1,TO.DELETE,0)
+   BOL.QTY = DELETE(BOL.QTY,1,TO.DELETE,0)
+   BOL.RELEASE = DELETE(BOL.RELEASE,1,TO.DELETE,0)
+   BOL.PKTKT = DELETE(BOL.PKTKT,1,TO.DELETE,0)
+   BOL.SHP.WT = DELETE(BOL.SHP.WT,1,TO.DELETE,0)
+   BOL.SHP.AMT = DELETE(BOL.SHP.AMT,1,TO.DELETE,0)
+   BOL.RECP.NO = DELETE(BOL.RECP.NO,1,TO.DELETE,0)
+   BOL.POST.FLAG = DELETE(BOL.POST.FLAG,1,TO.DELETE,0)
+   BOL.KIT = DELETE(BOL.KIT,1,TO.DELETE,0)
+   BOL.SEQ = DELETE(BOL.SEQ,1,TO.DELETE,0)
+   BOL.BOM.NUM = DELETE(BOL.BOM.NUM,1,TO.DELETE,0)
+   BOL.SKD.CNT = DELETE(BOL.SKD.CNT,1,TO.DELETE,0);* T20661
+   BOL.CRTN.CNT = DELETE(BOL.CRTN.CNT,1,TO.DELETE,0);* T20661
+   TEMP.SID = DELETE(TEMP.SID,1,TO.DELETE,0)
+   TEMP.DESC = DELETE(TEMP.DESC,1,TO.DELETE,0)
+   TEMP.AVAIL = DELETE(TEMP.AVAIL,1,TO.DELETE,0)
+   TEMP.LOC.AVAIL = DELETE(TEMP.LOC.AVAIL,1,TO.DELETE,0)
+*
+   NUM.ON.SCRN = ""
+   K = 0
+   NUM.PROD = DCOUNT(BOL.PROD,VM)
+   FOR I = 1 TO NUM.PROD
+      IF TEMP.AVAIL<1,I> > 0 THEN
+         K = K + 1
+         NUM.ON.SCRN<1,K> = I
+      END
+   NEXT I
+   RETURN
+*
+*---- Line # to change or delete
+7800 *
+   GOSUB 7900
+   ECD.NUM = 48; SCV.REC(ECD.NUM)<ESN> = ""
+   ECD.MINV = OLD.START.LINE; ECD.MAXV = LAST.LINE
+   ECD.ACTION = 4; CALL SCRN.EDIT
+   LN.NO = ECD.RET.VALUE
+   IF LN.NO = "" OR LN.NO = "END" THEN LN.NO = 0
+   RETURN
+*
+*---- Display scrolling lines
+7900 *
+   START.LINE = 1 + INT((LN-1)/PAGE.SIZE)*PAGE.SIZE
+   LAST.LINE = START.LINE + PAGE.SIZE - 1
+   IF LAST.LINE > LINES THEN LAST.LINE = LINES
+   IF START.LINE = OLD.START.LINE THEN GOTO 7990
+   OLD.START.LINE = START.LINE
+   ECD.NUM = 31
+   SCV.REC(ECD.NUM)<ESN> = INT(LAST.LINE/PAGE.SIZE+.9) "R%2"
+   ECD.ACTION = 5; CALL SCRN.EDIT
+   ECD.NUM = 32
+   SCV.REC(ECD.NUM)<ESN> = INT(LINES/PAGE.SIZE+.9) "R%2"
+   ECD.ACTION = 5; CALL SCRN.EDIT
+   CNT = 1
+   FOR N = START.LINE TO LAST.LINE
+      SLN = BEGIN.PAGE + LINE.SPACE * MOD(N-1,PAGE.SIZE)
+      IF NUM.ON.SCRN<1,N> = "" THEN 
+         N = LAST.LINE + 1
+      END ELSE
+         GOSUB 7910
+         CNT = CNT + 1
+      END
+   NEXT N
+   FOR M = CNT TO PAGE.SIZE
+      SLN = BEGIN.PAGE + LINE.SPACE * MOD(M-1,PAGE.SIZE)
+      P_X  = 0 ; P_Y = SLN ; P_VALUE = "" ; P_OPT = "CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      P_X  = 0 ; P_Y = SLN+1 ; P_VALUE = "" ; P_OPT = "CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   NEXT M
+7990 *
+   RETURN
+*
+*---- Display a single line
+7910 *
+   LNPTR = NUM.ON.SCRN<1,N>
+   PRINT.AVAIL = TEMP.AVAIL<1,LNPTR>
+*T27896 v
+*  P_X  = 0 ; P_Y = SLN ; P_VALUE = N "R%2" ; P_OPT = "CL"
+   P_X  = 0 ; P_Y = SLN ; P_VALUE = N "R%3" ; P_OPT = "CL"
+*T27896 ^
+   P_X  := AM:4 ; P_Y := AM:SLN ; P_VALUE := AM:BOL.TYPE<1,LNPTR> "L#1"
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   BEGIN CASE
+      CASE BOL.TYPE<1,LNPTR> = "O"
+         P_X  = 7 ; P_Y = SLN ; P_VALUE = BOL.ORDER<1,LNPTR> "L#11" ; P_OPT = ""
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      CASE BOL.TYPE<1,LNPTR> = "T"
+         P_X  = 7 ; P_Y = SLN ; P_VALUE = BOL.PKTKT<1,LNPTR> "L#11" ; P_OPT = ""
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      CASE BOL.TYPE<1,LNPTR> = "R"
+         P_X  = 7 ; P_Y = SLN ; P_VALUE = BOL.RELEASE<1,LNPTR> "L#11" ; P_OPT = ""
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   END CASE
+   P_X  = 19 ; P_Y = SLN ; P_VALUE = BOL.PROD<1,LNPTR> "L#15" ; P_OPT = ""
+   P_X  := AM:35 ; P_Y := AM:SLN ; P_VALUE := AM:BOL.WHSE<1,LNPTR> "L#4"
+   LOC.FOUND = 0 ; LOCCNT = DCOUNT(BOL.LOC<1,LNPTR>,SM)
+   FOR LPOS = 1 TO LOCCNT UNTIL (LOC.FOUND)
+      IF BOL.QTY<1,LNPTR,LPOS> GT 0 THEN
+         LOC.FOUND = LPOS
+      END
+   NEXT LPOS
+   IF LOC.FOUND = 0 THEN LOC.FOUND = 1
+   P_X  := AM:40 ; P_Y := AM:SLN ; P_VALUE := AM:BOL.LOC<1,LNPTR,LOC.FOUND> "L#4"
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   PQTY = INT(((PRINT.AVAIL / ICR.DV1 ) * ICR.MT1) / ICR.DV2 + .5 )
+   P_X  = 45 ; P_Y = SLN ; P_VALUE = OCONV(PQTY,ICR.CNV1) "R#10" ; P_OPT = ""
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   PQTY = SUM(BOL.QTY<1,LNPTR>)
+   PQTY = INT(((PQTY / ICR.DV1 ) * ICR.MT1) / ICR.DV2 + .5 )
+   P_X  = 56 ; P_Y = SLN ; P_VALUE = OCONV(PQTY,ICR.CNV1) "R#10" ; P_OPT = ""
+   P_X  := AM:67 ; P_Y := AM:SLN ; P_VALUE := AM:BOL.SHP.WT<1,LNPTR> "L#10"
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   MATREAD INV.REC FROM INVENTORY, CONO:BOL.PROD<1,LNPTR> ELSE
+      MAT INV.REC = ""; INV.FULL.DESC = STR("?",45)
+   END
+   P_X  = 19 ; P_Y = SLN+1 ; P_VALUE = INV.FULL.DESC "L#45" ; P_OPT = ""
+   P_X := AM:70 ; P_Y := AM:SLN+1 ; P_VALUE := AM:BOL.SKD.CNT<1,LNPTR> "R#4" ;* T20661
+   P_X := AM:75 ; P_Y := AM:SLN+1 ; P_VALUE := AM:BOL.CRTN.CNT<1,LNPTR> "R#4" ;* T20661
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   RETURN
+*
+*---- Display data
+8000 *
+   ECD.ACTION = 3; CALL SCRN.EDIT
+   OLD.START.LINE = 0; GOSUB 7900
+   RETURN
+*
+91000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+93000 ERR.TYPE=3;CALL SYSCOM(MAT SYSCOM.REC)
+99999 *
+   ECD.ACTION=99;CALL SCRN.EDIT
+   RETURN
+END

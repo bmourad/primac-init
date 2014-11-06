@@ -1,0 +1,1029 @@
+*********************************************************************
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - PRSBP
+* PROGRAM     - PAYCALC
+* BY          - WALID YAMOUT, CBA
+* DATE        - 06/11/85
+* DESCRIPTION -
+* MOD TASK   - 13400]14330]14345
+* MOD BY     - MT]RRG]RRG
+* MOD DATE   - 2/13/89]7/20/89]8/9/89]04/13/94
+* MOD DESC   - Process multiple payrolls simultaneously.]Before tax
+*              maximum only checked for 401k]Remove multi batch logic
+* MOD        - CSF11109 RWW 12.8.89 OTH INCOME TO BE FICA TAXED
+* MOD        - CSF12100 GG 3.7.90  FIX FICA ON OTH INCOME
+* MOD        - CSF 12049 RWW 4.11.90 STATE INCOME TAX FIX
+* MOD        - CSF13520 RWW 7.9.90 FICA CALC OFF WHEN BEFORE FICA CLC
+*             ENCOUNTERS A NEG CHECK SITUATION -- DEDUCTIONS TOO HI
+* MOD        -CSF 19843 MWS 10/27/93 CHANGE 401K TEST TO TOTAL ONLY
+*             401K DEDUCTIONS NOT ALL BEFORE TAX DEDUCTIONS, THEN TEST
+*             AGAINST COMPANY MAX.
+*             CSF 20701 INDIVIDUAL HR/EARN CALCS ROUND TO NEAREST PENNY
+*             BUT WHEN SUMMED TOTAL MORE THAN TOTAL HRS X RATE.
+*
+*********************************************************************
+*ENDDOC
+*
+*--- INSERT CPYLIB
+*
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>FICA.TABLE
+*COPY>PMC.CPYLIB>EMPLOYEE
+*COPY>PRS.CPYLIB>QTD-YTD
+*COPY>PRS.CPYLIB>PAYREG
+*COPY>PRS.CPYLIB>DEDREG
+*COPY>PRS.CPYLIB>UNPAY.DEDUCT
+*COPY>PRS.CPYLIB>PETTY.CASH
+*COPY>PRS.CPYLIB>TAX2
+*COPY>PRS.CPYLIB>MISCDED
+*COPY>PRS.CPYLIB>HEADER
+*COPY>CPYLIB>CHAR
+      PROMPT""
+      PRECISION 6
+      VACATIONHRS = ''  ;  NORMHRS = 0
+      DIM ERN(11),HR(11)
+      EQUATE HR1 TO HR(1),HR2 TO HR(2),HR3 TO HR(3),HR4 TO HR(4),HR5 TO HR(5),HR6 TO HR(6),HR7 TO HR(7),HR8 TO HR(8),HR9 TO HR(9),HR10 TO HR(10),HR11 TO HR(11)
+      EQUATE ERN1 TO ERN(1),ERN2 TO ERN(2),ERN3 TO ERN(3),ERN4 TO ERN(4),ERN5 TO ERN(5),ERN6 TO ERN(6),ERN7 TO ERN(7),ERN8 TO ERN(8),ERN9 TO ERN(9)
+      EQUATE ERN10 TO ERN(10),ERN11 TO ERN(11)
+      MAT DED.REC="";MAT EMP.REC="";MAT TAX.TAB.REC="";MAT PAY.REC="";MAT ERN="";MAT HR=""; MAT MDED.REC=""
+      COHOLD = ""
+      OPEN "UNPAY.DEDUCT" TO UNPAY.DEDUCT ELSE PRINT "CAN'T OPEN UNPAY.DEDUCT FILE";INPUT R;STOP
+      CLEARFILE UNPAY.DEDUCT
+      OPEN "TAX2" TO TAX2 ELSE PRINT "CAN'T OPEN TAX2 FILE";INPUT R;STOP
+      OPEN "PAYREG" TO PAYREG ELSE PRINT "CAN'T OPEN PAYREG";INPUT R;STOP
+      OPEN "DEDREG" TO DEDREG ELSE PRINT "CAN'T OPEN DEDREG";INPUT R;STOP
+      OPEN "EMPLOYEE" TO EMPLOYEE ELSE PRINT "CAN'T OPEN EMPLOYEE";INPUT R;STOP
+      OPEN "PAYTYPE" TO PAYTYPE ELSE PRINT "CAN'T OPEN PAYTYPE";INPUT R;STOP
+      OPEN "COMPANY" TO COMPANY ELSE PRINT "CAN'T OPEN COMPANY";INPUT R;STOP
+      OPEN "QTD-YTD" TO QTD.YTD ELSE PRINT "CAN'T OPEN QTD.YTD";INPUT R;STOP
+      OPEN "MISCDED" TO MISCDED ELSE PRINT "CAN'T OPEN MISCDED";INPUT R;STOP
+      OPEN "CONTROL" TO CONTROL ELSE PRINT "CAN'T OPEN CONTROL";INPUT R;STOP
+      OPEN "PETTY.CASH" TO PETTY.CASH ELSE PRINT "CAN'T OPEN PETTY.CASH";INPUT R;STOP
+      OPEN "MTH-UNION" TO MTH.UNION ELSE PRINT "CAN'T OPEN MTH-UNION";INPUT R;STOP
+      OPEN "UNION" TO UNION ELSE PRINT "UNION FILE ZAP";INPUT R;STOP
+      OPEN "OTHER-INC" TO OTHER.INC ELSE PRINT "CAN'T OPEN OTHER-INC FILE":;INPUT R;STOP
+      OPEN "FICA.TABLE" TO FICA.TABLE ELSE PRINT "CAN'T OPEN FICA.TABLE FILE":;INPUT R;STOP
+*
+**** PROC READ
+*
+      PROCREAD BUFFER ELSE ERRMSG = 'MUST RUN FROM PROC'; GOSUB 91000; STOP
+*
+      PRINT@(5,21):"NOW PROCESSING EMPLOYEE NUMBER:"
+*****
+** GET NEXT EMPLOYEE
+100   READNEXT ID ELSE STOP
+      MAT PAY.REC="";MAT DED.REC="";NEG="";TOTDED=0;VAC='';TOTHRS=0
+*CSF13520
+      DED.FICA=0; SAL2=0
+*
+      MATREAD PAY.REC FROM PAYREG,ID ELSE GOTO 100
+      PAY.TAXED = 0; PAY.NON.TAXED = 0
+      PAY.CONO = ID[1,3]
+      IF PAY.STATUS = "DELETE" OR PAY.STATUS = "UPDATE" THEN GOTO 100
+      PRINT@(37,21):PAY.EMP"R#4"
+      MATREAD EMP.REC FROM EMPLOYEE,ID[1,7] ELSE GOTO 100
+      IF EMP.STATUS # "S" AND EMP.STATUS # "H" THEN
+         ERRMSG = "EMPLOYEE IS NOT SETUP CORRECTLY"
+         GOSUB 91000
+         GOTO 100
+      END
+      DED.CONO = ID[1,3]; DED.DEPT = EMP.DEPT; DED.EMP = ID[4,4]
+      DED.DIV = EMP.DIV
+      DED.CCTR = EMP.COST.CNTR
+      TOT.NON.TAX = 0
+      TOT.NTX.401 = 0
+      NON.TAX.DED = 0
+      NON.TAX.401 = 0
+      MATREAD QTD.REC FROM QTD.YTD, ID[1,7] ELSE MAT QTD.REC = ""
+      TOTFICA = QTD.FICA<1,1> + QTD.FICA<1,2> + QTD.FICA<1,3> + QTD.FICA<1,4>
+      TOTFICA1 = QTD.LVL1.FICA<1,1> + QTD.LVL1.FICA<1,2> + QTD.LVL1.FICA<1,3> + QTD.LVL1.FICA<1,4>
+      TOTFICA2 = QTD.LVL2.FICA<1,1> + QTD.LVL2.FICA<1,2> + QTD.LVL2.FICA<1,3> + QTD.LVL2.FICA<1,4>
+      TOTSUI = QTD.SUI<1,1> + QTD.SUI<1,2> + QTD.SUI<1,3> + QTD.SUI<1,4>
+      DED.CNT = COUNT(QTD.DED,VM) + (QTD.DED # "")
+      FOR DD = 1 TO DED.CNT
+         MATREAD MDED.REC FROM MISCDED, ID[1,3]:QTD.DED<1,DD> ELSE MAT MDED.REC = ""
+         IF MDED.TAXABLE = "B" THEN
+            TOT.NON.TAX = TOT.NON.TAX + QTD.AMNT<1,DD,1> + QTD.AMNT<1,DD,2> + QTD.AMNT<1,DD,3> + QTD.AMNT<1,DD,4>
+            IF QTD.DED<1,DD> = 'BM' OR QTD.DED<1,DD> = 'BU' THEN
+               TOT.NTX.401 = TOT.NTX.401 + QTD.AMNT<1,DD,1> + QTD.AMNT<1,DD,2> + QTD.AMNT<1,DD,3> + QTD.AMNT<1,DD,4>
+            END
+         END
+      NEXT DD
+      MATREAD QTD.REC FROM QTD.YTD, ID[1,3]:STR("0",4-LEN(EMP.ALT.NO)):EMP.ALT.NO ELSE MAT QTD.REC = ""
+      TOTFICA = TOTFICA + QTD.FICA<1,1> + QTD.FICA<1,2> + QTD.FICA<1,3> + QTD.FICA<1,4>
+      TOTFICA1 = TOTFICA1 + QTD.LVL1.FICA<1,1> + QTD.LVL1.FICA<1,2> + QTD.LVL1.FICA<1,3> + QTD.LVL1.FICA<1,4>
+      TOTFICA2 = TOTFICA2 + QTD.LVL2.FICA<1,1> + QTD.LVL2.FICA<1,2> + QTD.LVL2.FICA<1,3> + QTD.LVL2.FICA<1,4>
+      TOTSUI = TOTSUI + QTD.SUI<1,1> + QTD.SUI<1,2> + QTD.SUI<1,3> + QTD.SUI<1,4>
+      DED.CNT = COUNT(QTD.DED,VM) + (QTD.DED # "")
+      FOR DD = 1 TO DED.CNT
+         MATREAD MDED.REC FROM MISCDED, ID[1,3]:QTD.DED<1,DD> ELSE MAT MDED.REC = ""
+         IF MDED.TAXABLE = "B" THEN
+            TOT.NON.TAX = TOT.NON.TAX + QTD.AMNT<1,DD,1> + QTD.AMNT<1,DD,2> + QTD.AMNT<1,DD,3> + QTD.AMNT<1,DD,4>
+            IF QTD.DED<1,DD> = 'BM' OR QTD.DED<1,DD> = 'BU' THEN
+               TOT.NTX.401 = TOT.NTX.401 + QTD.AMNT<1,DD,1> + QTD.AMNT<1,DD,2> + QTD.AMNT<1,DD,3> + QTD.AMNT<1,DD,4>
+            END
+         END
+      NEXT DD
+      IF COHOLD#ID[1,3] THEN
+         MAT COMP.REC = "";COHOLD=ID[1,3]
+         MATREAD COMP.REC FROM COMPANY,ID[1,3] ELSE GOTO 100
+         MATREAD FIC.REC FROM FICA.TABLE,ID[1,3] ELSE GOTO 100
+         CO.FICA.PCNT = CO.FICA.PCNT/10000; CO.FICA.MAX = CO.FICA.MAX/100; *FICA % AND MAX
+         FIC.TOTAL.PCNT = FIC.TOTAL.PCNT/10000
+         FIC.LVL1.FICA.PCNT = FIC.LVL1.FICA.PCNT/10000; FIC.LVL1.FICA.MAX = FIC.LVL1.FICA.MAX/100
+         FIC.LVL2.FICA.PCNT = FIC.LVL2.FICA.PCNT/10000; FIC.LVL2.FICA.MAX = FIC.LVL2.FICA.MAX/100
+         MAT PTHR.REC = ""
+         MATREAD PTHR.REC FROM PAYTYPE,ID[1,3]:"HEADER" ELSE
+            ERRMSG = 'PAYTYPE HEADER cannot be found'
+            GOSUB 91000
+            STOP
+         END
+         READ PETTY.CODE FROM CONTROL, COHOLD:"PETTY.CASH.CODE" ELSE PRINT "PETTY CASH CODE FOR COMPANY ":COHOLD:" IS NOT ON CONTROL"; STOP
+      END
+      NW=OCONV(PAY.WEEKS,"MD3");IF NW=0 OR NW="" THEN NW=100
+      IF EMP.STATUS="H" THEN
+         TAXPAY=0;TAXFICA=0;VAR=0;TOTREGHRS=0;PAY.EARNINGS=""
+* DOUBLE ** SURROUND MODS FOR CSF 20701
+**
+         SUM.PAY=0;SUM.REG=0;SUM.OT=0;SUM.DT=0
+         TAXREG=0;TAXOT=0;TAXDT=0
+         PAYRG=''; PAYOT=''; PAYDT=''
+**
+         FOR Y1=1 TO PAY.RECORDS
+            IF PAY.RATE<1,Y1> # "" AND PAY.RATE<1,Y1> # 0 THEN
+               RATE = OCONV(PAY.RATE<1,Y1>,"MD4")
+               IF PAY.SHIFT<1,Y1> = 2 THEN
+                  IF CO.SEC.SHIFT<1,1> # "" THEN RATE = RATE * (1 + CO.SEC.SHIFT<1,1>/10000) ELSE RATE = RATE + CO.SEC.SHIFT<1,2>/100
+               END
+               IF PAY.SHIFT<1,Y1> = 3 THEN
+                  IF CO.TRD.SHIFT<1,1> # "" THEN RATE = RATE * (1 + CO.TRD.SHIFT<1,1>/10000) ELSE RATE = RATE + CO.TRD.SHIFT<1,2>/100
+               END
+               FOR Y=1 TO 11;HR(Y)=OCONV(PAY.HOURS<1,Y1,Y>,"MD2");TOTHRS=TOTHRS+HR(Y);NEXT Y
+               VACATIONHRS = PAY.HOURS<1,Y1,6>
+               TOTREGHRS=TOTREGHRS+HR1+HR4+HR5+HR6+HR7+HR8+HR10
+               ERN1=HR1*RATE;ERN2=HR2*RATE*1.5;ERN3=HR3*RATE*2
+               ERN9=HR9*RATE*1.5
+               ERN10=HR10*RATE
+               ERN11=HR11*RATE*1.5
+** WAS MD2 BELOW
+               ERN1=ICONV(ERN1,'MD3');ERN1=ERN1/1000
+               ERN2=ICONV(ERN2,'MD3');ERN2=ERN2/1000
+               ERN3=ICONV(ERN3,'MD3');ERN3=ERN3/1000
+               ERN9=ICONV(ERN9,'MD3');ERN9=ERN9/1000
+               ERN10=ICONV(ERN10,'MD3');ERN10=ERN10/1000
+               ERN11=ICONV(ERN11,'MD3');ERN11=ERN11/1000
+               TAXREG=TAXREG+ERN1+ERN10
+               TAXOT=TAXOT+ERN2+ERN9+ERN11
+               TAXDT=TAXDT+ERN3
+               PAYRG<1,Y1> = ''; PAYOT<1,Y1> = ''; PAYDT<1,Y1> = ''
+**
+               FOR Y=4 TO 8
+                  ERN(Y)=HR(Y)*RATE
+** WAS MD2
+                  ERN(Y)=ICONV(ERN(Y),'MD3')
+                  ERN(Y)=ERN(Y)/1000
+                  IF Y = 8 THEN TAXREG=TAXREG+ERN(Y)
+**
+               NEXT Y
+**             TAXPAY=TAXPAY+ERN1+ERN2+ERN3+ERN4+ERN5+ERN6+ERN7+ERN8+ERN9+ERN10+ERN11
+               IF EMP.SK.FICA="N" THEN TAXFICA=TAXFICA+ERN4
+               FOR Y=1 TO 11
+**
+**
+                  ERN(Y)=ICONV(ERN(Y),"MD2")
+                  PAY.EARNINGS<1,Y1,Y>=ERN(Y)
+**
+                  SUM.PAY = SUM.PAY + OCONV(ERN(Y),'MD2')
+                  BEGIN CASE
+                  CASE Y = 2 OR Y = 9 OR Y = 11
+                     SUM.OT = SUM.OT + OCONV(ERN(Y),'MD2')
+                     PAYOT<1,Y1,Y>=ERN(Y)
+                  CASE Y = 3
+                     SUM.DT = SUM.DT + OCONV(ERN(Y),'MD2')
+                     PAYDT<1,Y1,Y>=ERN(Y)
+                  CASE Y = 1 OR Y > 7
+                     SUM.REG = SUM.REG + OCONV(ERN(Y),'MD2')
+                     PAYRG<1,Y1,Y>=ERN(Y)
+                  END CASE
+**
+               NEXT Y
+            END
+            IF PAY.OTH.INC # "" THEN
+               IF PAY.OTH.INC<1,Y1>="" THEN GOTO 105
+               READV TAXFLAG FROM OTHER.INC,ID[1,3]:PAY.OTH.CODE<1,Y1>,3 ELSE TAXFLAG = "N"
+*CSF11109&CSF12100
+               IF TAXFLAG = "N" THEN
+                  PAY.NON.TAXED = PAY.NON.TAXED + PAY.OTH.INC<1,Y1>
+                  TAXFICA=TAXFICA+OCONV(PAY.OTH.INC<1,Y1>,'MD2')*(-1)
+               END
+*
+               IF TAXFLAG = "Y" THEN PAY.TAXED = PAY.TAXED + PAY.OTH.INC<1,Y1>
+            END
+105      NEXT Y1
+**
+**       TAXPAY = OCONV(ICONV(TAXPAY,'MD2'),'MD2')
+         TAXREG = OCONV(ICONV(TAXREG,'MD2'),'MD2')
+         TAXOT = OCONV(ICONV(TAXOT,'MD2'),'MD2')
+         TAXDT = OCONV(ICONV(TAXDT,'MD2'),'MD2')
+         IF TAXREG # SUM.REG THEN
+            DIFF = (TAXREG - SUM.REG) * 100
+            IF DIFF[1,1] = '-' THEN DIFFX = DIFF[1,2] ELSE DIFFX = DIFF[1,1]
+            IF DIFFX + 0 # 0 THEN
+               IF DIFFX > 0 THEN ADJ = 1 ELSE ADJ = (-1)
+               FOR Y1 = 1 TO PAY.RECORDS UNTIL DIFFX + 0 = 0
+                  PTR = 1
+                  LOOP
+                     LOCATE MAXIMUM(PAYRG<1,Y1>) IN PAYRG<1,Y1>,PTR SETTING Y THEN
+                        IF Y = 1 OR Y = 8 OR Y = 10 THEN
+                           IF TAXREG # SUM.REG THEN
+                              IF (PAY.EARNINGS<1,Y1,Y> > 0 AND PAY.EARNINGS<1,Y1,Y> + ADJ >= 0) OR (PAY.EARNINGS<1,Y1,Y> < 0 AND PAY.EARNINGS<1,Y1,Y> + ADJ <= 0) THEN
+                                 PAY.EARNINGS<1,Y1,Y> = PAY.EARNINGS<1,Y1,Y> + ADJ
+                                 SUM.REG = SUM.REG + (ADJ/100)
+                                 SUM.PAY = SUM.PAY + (ADJ/100)
+                                 DIFFX = DIFFX - ADJ
+                                 PAYRG<1,Y1,Y>=0
+                              END
+                           END
+                        END
+                        PTR = Y + 1
+                        END ELSE PTR = 0
+                     WHILE PTR AND DIFFX + 0 # 0 DO REPEAT
+                  NEXT Y1
+               END
+            END
+            IF TAXOT # SUM.OT THEN
+               DIFF = (TAXOT - SUM.OT) * 100
+               IF DIFF[1,1] = '-' THEN DIFFX = DIFF[1,2] ELSE DIFFX = DIFF[1,1]
+               IF DIFFX + 0 # 0 THEN
+                  IF DIFFX > 0 THEN ADJ = 1 ELSE ADJ = (-1)
+                  FOR Y1 = 1 TO PAY.RECORDS UNTIL DIFFX + 0 = 0
+                     PTR = 1
+                     LOOP
+                        LOCATE MAXIMUM(PAYOT<1,Y1>) IN PAYOT<1,Y1>,PTR SETTING Y THEN
+                           IF Y = 2 OR Y = 9 OR Y = 11 THEN
+                              IF TAXOT - SUM.OT # 0 THEN
+                                 IF (PAY.EARNINGS<1,Y1,Y> > 0 AND PAY.EARNINGS<1,Y1,Y> + ADJ >= 0) OR (PAY.EARNINGS<1,Y1,Y> < 0 AND PAY.EARNINGS<1,Y1,Y> + ADJ <= 0) THEN
+                                    PAY.EARNINGS<1,Y1,Y> = PAY.EARNINGS<1,Y1,Y> + ADJ
+                                    SUM.OT = SUM.OT + (ADJ/100)
+                                    SUM.PAY = SUM.PAY + (ADJ/100)
+                                    DIFFX = DIFFX - ADJ
+                                    PAYOT<1,Y1,Y>=0
+                                 END
+                              END
+                           END
+                           PTR = Y + 1
+                           END ELSE PTR = 0
+                        WHILE PTR AND DIFFX + 0 # 0 DO REPEAT
+                     NEXT Y1
+                  END
+               END
+               IF TAXDT # SUM.DT THEN
+                  DIFF = (TAXDT - SUM.DT) * 100
+                  IF DIFF[1,1] = '-' THEN DIFFX = DIFF[1,2] ELSE DIFFX = DIFF[1,1]
+                  IF DIFFX + 0 # 0 THEN
+                     IF DIFFX > 0 THEN ADJ = 1 ELSE ADJ = (-1)
+                     FOR Y1 = 1 TO PAY.RECORDS UNTIL DIFFX + 0 = 0
+                        PTR = 1
+                        LOOP
+                           LOCATE MAXIMUM(PAYDT<1,Y1>) IN PAYDT<1,Y1>,PTR SETTING Y THEN
+                              IF Y = 3 THEN
+                                 IF TAXDT - SUM.DT # 0 THEN
+                                    IF (PAY.EARNINGS<1,Y1,Y> > 0 AND PAY.EARNINGS<1,Y1,Y> + ADJ >= 0) OR (PAY.EARNINGS<1,Y1,Y> < 0 AND PAY.EARNINGS<1,Y1,Y> + ADJ <= 0) THEN
+                                       PAY.EARNINGS<1,Y1,Y> = PAY.EARNINGS<1,Y1,Y> + ADJ
+                                       SUM.OT = SUM.OT + (ADJ/100)
+                                       SUM.PAY = SUM.PAY + (ADJ/100)
+                                       DIFFX = DIFFX - ADJ
+                                       PAYDT<1,Y1,Y>=0
+                                    END
+                                 END
+                              END
+                              PTR = Y + 1
+                              END ELSE PTR = 0
+                           WHILE PTR AND DIFFX + 0 # 0 DO REPEAT
+                        NEXT Y1
+                     END
+                  END
+**
+                  TAXPAY=OCONV(SUM(SUM(PAY.EARNINGS)),'MD2')
+                  TAXPAY=TAXPAY+OCONV(PAY.TAXED,"MD2")
+                  TAXFICA=TAXPAY-TAXFICA;*1* TAXFICA=TAXABLEGROSS - SICKPAY
+                  GROSS=TAXPAY
+                  IF GROSS<0 THEN NEG="YES"
+               END
+               IF EMP.STATUS="S" THEN
+                  TAXPAY=0;TAXFICA=0;VAR=0;TOTREGHRS=0;PAY.EARNINGS=""
+                  FOR Y1=1 TO PAY.RECORDS
+                     IF PAY.RATE<1,Y1> + 0 = 0 THEN
+                        IF EMP.OT.RATE + 0 = 0 THEN GOTO 107
+                        IF PAY.HOURS<1,Y1,2> + 0 = 0 THEN GOTO 107
+                     END
+                     NOHRS = ""; HOURS = 0
+                     RATE = OCONV(PAY.RATE<1,Y1>,"MD2")
+                     FOR Y = 1 TO 11
+                        HR(Y) = OCONV(PAY.HOURS<1,Y1,Y>, "MD2")
+                        IF Y = 2 THEN
+                           IF EMP.OT.RATE + 0 = 0 THEN HOURS = HOURS + HR(Y)
+                        END ELSE
+                           HOURS = HOURS + HR(Y)
+                        END
+                     NEXT Y
+                     VACATIONHRS = PAY.HOURS<1,Y1,6>
+                     TOTREGHRS=TOTREGHRS+HR1+HR4+HR5+HR6+HR7+HR8+HR10+HR11
+                     HOURS=ABS(HOURS)
+                     TOTHRS = TOTHRS + HOURS
+                     IF HOURS="" OR HOURS=0 THEN
+                        NOHRS="Y"; HOURS=1;HR1=1
+                     END
+                     RATE=RATE/HOURS
+                     ERN1=HR1*RATE;ERN3=HR3*RATE
+                     IF EMP.OT.RATE + 0 = 0 THEN
+                        ERN2 = HR2 * RATE
+                        OT.ERN = 0
+                     END ELSE
+                        ERN2 = HR2 * OCONV(EMP.OT.RATE, "MD4")
+                        OT.ERN = ERN2
+                     END
+                     ERN9=HR9*RATE
+                     ERN10=HR10*RATE
+                     ERN11=HR11*RATE
+                     IF NOHRS = "Y" THEN HR1 = 0
+                     ERN1=ICONV(ERN1,'MD2');ERN1=ERN1/100
+                     ERN2=ICONV(ERN2,'MD2');ERN2=ERN2/100
+                     ERN3=ICONV(ERN3,'MD2');ERN3=ERN3/100
+                     ERN9=ICONV(ERN9,'MD2');ERN9=ERN9/100
+                     ERN10=ICONV(ERN10,'MD2');ERN10=ERN10/100
+                     ERN11=ICONV(ERN11,'MD2');ERN11=ERN11/100
+                     FOR Y=4 TO 8
+                        ERN(Y)=HR(Y)*RATE
+                        ERN(Y)=ICONV(ERN(Y),'MD2')
+                        ERN(Y)=ERN(Y)/100
+                     NEXT Y
+                     TEMP.TAXPAY = ERN1+ERN2+ERN3+ERN4+ERN5+ERN6+ERN7+ERN8+ERN9+ERN10+ERN11
+                     DIFF=ABS(TEMP.TAXPAY)-ABS(OCONV(PAY.RATE<1,Y1>,"MD2")+OT.ERN)
+                     IF DIFF = 0 THEN GOTO 106
+                     BLK = 0
+                     FOR EE=1 TO 11 UNTIL BLK
+                        IF EE = 2 THEN
+                           IF EMP.OT.RATE + 0 = 0 THEN
+                              IF ERN(EE)#0 AND ERN(EE) # "" THEN
+                                 ERN(EE)=ERN(EE)-DIFF
+                                 BLK = 1
+                              END
+                           END
+                        END ELSE
+                           IF ERN(EE)#0 AND ERN(EE) # "" THEN
+                              ERN(EE)=ERN(EE)-DIFF
+                              BLK = 1
+                           END
+                        END
+                     NEXT EE
+106                  IF EMP.SK.FICA="N" THEN TAXFICA=TAXFICA+ERN4
+                     TAXPAY=TAXPAY+ERN1+ERN2+ERN3+ERN4+ERN5+ERN6+ERN7+ERN8+ERN9+ERN10+ERN11
+                     FOR Y=1 TO 11
+                        ERN(Y)=ICONV(ERN(Y),"MD2")
+                        PAY.EARNINGS<1,Y1,Y>=ERN(Y)
+                     NEXT Y
+107*
+                     IF PAY.OTH.INC # "" THEN
+                        IF PAY.OTH.INC<1,Y1>="" THEN GOTO 108
+                        READV TAXFLAG FROM OTHER.INC,ID[1,3]:PAY.OTH.CODE<1,Y1>,3 ELSE TAXFLAG = "N"
+*CSF11109&CSF12100
+                        IF TAXFLAG = "N" THEN
+                           PAY.NON.TAXED = PAY.NON.TAXED + PAY.OTH.INC<1,Y1>
+                           TAXFICA=TAXFICA+OCONV(PAY.OTH.INC<1,Y1>,'MD2')*(-1)
+                        END
+*
+                        IF TAXFLAG = "Y" THEN PAY.TAXED = PAY.TAXED + PAY.OTH.INC<1,Y1>
+                     END
+108               NEXT Y1
+                  TAXPAY=TAXPAY+OCONV(PAY.TAXED,"MD2")
+                  TAXFICA=TAXPAY-TAXFICA
+*1* TAXFICA=TAXABLEGROSS - SICKPAY
+                  GROSS=TAXPAY
+                  IF GROSS<0 THEN NEG="YES"
+               END
+*****
+*  TAKES OUT DEDUCTIONS
+*   IF ID[8,1] #'1' THEN GOTO 121
+               NTXFED=0;NTXFICA=0;NTXSTATE=0;NTXCITY=0;NTXFUTA=0;NTXSUTA=0
+               IF PAY.MISC.DED#"Y" THEN GOTO 121
+               IF EMP.BONDS<1,4>=PTHR.DED.WEEK OR EMP.BONDS<1,4>=0 THEN
+                  DED.BONDS=EMP.BONDS<1,1>
+                  IF NEG="YES" THEN DED.BONDS=DED.BONDS*(-1)
+                  TOTDED=TOTDED+DED.BONDS
+               END
+               DED.CNT = COUNT(EMP.MSC.CODE,VM) + (EMP.MSC.CODE # "")
+               FOR Y=1 TO DED.CNT
+                  IF EMP.MSC.WK<1,Y> = PTHR.DED.WEEK OR EMP.MSC.WK<1,Y> = 0 THEN
+                     CODE = EMP.MSC.CODE<1,Y>
+                     AMT = EMP.MSC.AMT<1,Y>
+                     BAL = EMP.MSC.DED<1,Y>
+                     IF CODE = PETTY.CODE THEN
+                        MAT PTY.REC = ""
+                        MATREAD PTY.REC FROM PETTY.CASH, ID[1,7] ELSE GOTO 109
+                        AMT = PTY.BALANCE
+                        BAL = AMT
+                        PTY.DEDUCT = PTY.BALANCE
+                        MATWRITE PTY.REC ON PETTY.CASH , ID[1,7]
+                     END
+109                  MATREAD MDED.REC FROM MISCDED,ID[1,3]:CODE ELSE GOTO 120
+                     IF MDED.TYPE="%" THEN
+                        AMT=(OCONV(AMT,"MD2")/100)*GROSS
+                        AMT=ABS(AMT)
+                        AMT=ICONV(AMT,"MD2")
+                     END
+                     IF MDED.TYPE="H" THEN
+                        AMT=OCONV(AMT,"MD2")*TOTHRS
+                        AMT=ABS(AMT)
+                        AMT=ICONV(AMT,"MD2")
+                     END
+                     IF BAL#"N" THEN IF AMT>BAL THEN AMT=BAL
+110*
+                     IF NEG="YES" THEN AMT=AMT*(-1)
+                     IF CODE = "BM" OR CODE = "BU" THEN
+                        IF MDED.TAXABLE="B" AND AMT > 0 THEN
+                           H1 = CO.BT.MAX.PCT<1,2> - TOT.NTX.401 - NON.TAX.401 - AMT
+                           IF H1 <= 0 THEN AMT = AMT + H1
+                           IF AMT < 0 AND NEG # "YES" THEN AMT = 0
+                        END
+                     END
+                     IF AMT # 0 THEN
+                        LOCATE CODE IN DED.MISC.CODE<1>,1 SETTING FND ELSE NULL
+                        DED.MISC.CODE<1,FND> = CODE
+                        DED.MISC.AMT<1,FND> = AMT
+                     END
+                     TOTDED=TOTDED+AMT
+                     IF MDED.TAXABLE="B" THEN
+                        IF MDED.NTXFED  ='Y' THEN NTXFED  =NTXFED+AMT
+                        IF MDED.NTXFICA ='Y' THEN NTXFICA =NTXFICA+AMT
+                        IF MDED.NTXSTATE='Y' THEN NTXSTATE=NTXSTATE+AMT
+                        IF MDED.NTXCITY ='Y' THEN NTXCITY =NTXCITY+AMT
+                        IF MDED.NTXFUTA ='Y' THEN NTXFUTA =NTXFUTA+AMT
+                        IF MDED.NTXSUTA ='Y' THEN NTXSUTA =NTXSUTA+AMT
+                        NON.TAX.DED = NON.TAX.DED + AMT
+                        IF CODE = 'BU' OR CODE = 'BM' THEN
+                           NON.TAX.401 = NON.TAX.401 + AMT
+                        END
+                     END
+                  END
+120            NEXT Y
+*****
+121            IF NEG="YES" THEN TAXPAY=ABS(TAXPAY);TAXFICA=ABS(TAXFICA)
+               IF NEG="YES" THEN NTXFED=ABS(NTXFED);NTXFICA=ABS(NTXFICA);NTXSTATE=ABS(NTXSTATE);NTXCITY=ABS(NTXCITY);NTXFUTA=ABS(NTXFUTA);NTXSUTA=ABS(NTXSUTA)
+               SAL1=((TAXPAY-OCONV(NTXFED,  'MD2'))/NW)*52
+               SAL2=(TAXFICA-OCONV(NTXFICA,'MD2'))
+               SAL3=((TAXPAY-OCONV(NTXSTATE,'MD2'))/NW)*52
+               SAL4=((TAXPAY-OCONV(NTXCITY, 'MD2'))/NW)*52
+               SAL5=((TAXPAY-OCONV(NTXFUTA,'MD2'))/NW)*52
+               SAL6=((TAXPAY-OCONV(NTXSUTA, 'MD2'))/NW)*52
+*****
+*   FWT CALCULATION
+               IF EMP.FIT.CALC<1,1> # "" OR EMP.FIT.CALC<1,2> # "" THEN
+                  IF EMP.FIT.CALC<1,2> # "" THEN
+                     IF NEG = "YES" THEN
+                        DED.FWT = INT((EMP.FIT.CALC<1,2>/100)*GROSS - 0.5)
+                     END ELSE
+                        DED.FWT = INT((EMP.FIT.CALC<1,2>/100)*GROSS + 0.5)
+                     END
+                  END ELSE
+                     IF NEG = "YES" THEN DED.FWT = EMP.FIT.CALC<1,1>*(-1) ELSE DED.FWT = EMP.FIT.CALC<1,1>
+                  END
+                  CALC.FWT = DED.FWT
+                  IF NEG = "YES" THEN
+                     DED.FWT = DED.FWT - EMP.ADD.WHT<1,1>
+                  END ELSE
+                     DED.FWT = DED.FWT + EMP.ADD.WHT<1,1>
+                  END
+                  TOTDED = TOTDED + DED.FWT
+               END ELSE
+                  TAXID=ID[1,3]:"FWT":EMP.MAR.ST
+                  GOSUB 6000
+                  IF ESTAT THEN GOTO 100
+**** USING FEDERAL # OF EXEMPTIONS
+                  DEP=EMP.DEP.NO<1,1>
+                  SAL=SAL1
+                  GOSUB 5000
+                  FWT=(TAMT/52)*NW
+                  DED.FWT=ICONV(FWT,"MD2")+EMP.ADD.WHT<1,1>
+                  IF NEG="YES" THEN DED.FWT=DED.FWT*(-1)
+                  CALC.FWT=ICONV(FWT,"MD2")
+                  IF NEG="YES" THEN CALC.FWT=CALC.FWT*(-1)
+                  TOTDED=TOTDED+DED.FWT
+               END
+******
+*    EARNED INCOME CREDIT CALCULATION
+               IF EMP.EIC#"" AND EMP.EIC[1,1]#" " THEN
+                  TAXID=ID[1,3]:EMP.EIC
+                  GOSUB 6000
+                  IF ESTAT THEN GOTO 100
+                  DEP="0"
+                  SAL=SAL1
+                  GOSUB 5000
+                  IF TAMT<0 THEN TAMT=0
+                  EIC=(TAMT/52)*NW
+                  EIC=0-EIC
+                  DED.EIC=ICONV(EIC,"MD2")
+                  IF NEG="YES" THEN DED.EIC=DED.EIC*(-1)
+                  TOTDED=TOTDED+DED.EIC
+               END
+*****
+*   FICA CALCULATION
+               FICA1=(SAL2*FIC.LVL1.FICA.PCNT)
+               FICA2=(SAL2*FIC.LVL2.FICA.PCNT)
+               H1.L1=FIC.LVL1.FICA.MAX-(FICA1+OCONV(TOTFICA1,"MD2"))
+               H1.L2=FIC.LVL2.FICA.MAX-(FICA2+OCONV(TOTFICA2,"MD2"))
+               IF H1.L1<=0 THEN FICA1=FICA1+H1.L1
+               IF H1.L2<=0 THEN FICA2=FICA2+H1.L2
+               DED.LVL1.FICA=ICONV(FICA1,"MD2")
+               DED.LVL2.FICA=ICONV(FICA2,"MD2")
+               IF NEG="YES" THEN DED.LVL1.FICA=DED.LVL1.FICA*(-1);DED.LVL2.FICA=DED.LVL2.FICA*(-1)
+               DED.FICA = DED.LVL1.FICA + DED.LVL2.FICA
+               TOTDED=TOTDED+DED.FICA
+*****
+*   SUI CALCULATION
+               IF EMP.ST.CODE#"" AND EMP.ST.CODE#" " THEN
+                  TAXID=ID[1,3]:EMP.ST.CODE  ;*GET STATE TAX RECORD WITH SUI % AND LIMIT
+                  IF EMP.ST.CODE = "MN" THEN TAXID = TAXID : EMP.MAR.ST
+                  GOSUB 6000
+                  IF ESTAT THEN GOTO 100
+***** ADD TO ALLOW FOR DEDUCTION OF SICK PAY FOR STATE OF CALIFORNIA SUI DEDUCTION *****
+                  IF EMP.ST.CODE = "CALH" OR EMP.ST.CODE = "CALS" OR EMP.ST.CODE = "CALM" THEN
+*           TAXPAY = TAXPAY - (ERN4/100)
+                     SAL6 = SAL6 - (ERN4/100)
+*           DIAB = TAXPAY * (TTR.DIAB.SUI.PCT/100)
+                     DIAB = SAL6 * (TTR.DIAB.SUI.PCT/100)
+*           TAXPAY = TAXPAY + (ERN4/100)
+                  END ELSE
+*           DIAB=TAXPAY*(TTR.DIAB.SUI.PCT/100)
+                     DIAB=SAL6*(TTR.DIAB.SUI.PCT/100)
+                  END
+                  IF DIAB > TTR.MAX.SUI.DED*NW THEN DIAB=TTR.MAX.SUI.DED*NW ;*CHECK MAX DEDUCTION PER WEEK
+                  H2=TTR.MAX.SUI.TAX-(DIAB+OCONV(TOTSUI,"MD2"))   ;* CHECK AGAINST MAX TAX
+                  IF H2 <=0 THEN DIAB=DIAB+H2
+                  DED.SUI=ICONV(DIAB,"MD2")
+                  IF NEG="YES" THEN DED.SUI=DED.SUI*(-1)
+                  TOTDED=TOTDED+DED.SUI
+               END
+*****
+*    STATE TAX
+               TAMT=0
+               IF EMP.ST.CODE#"" AND EMP.ST.CODE#" " THEN
+                  IF EMP.STATE.CALC<1,1> # "" OR EMP.STATE.CALC<1,2> # "" THEN
+                     IF EMP.STATE.CALC<1,2> # "" THEN
+                        IF NEG = "YES" THEN
+                           DED.STATE = INT((EMP.STATE.CALC<1,2>/100)*GROSS - 0.5)
+                        END ELSE
+                           DED.STATE = INT((EMP.STATE.CALC<1,2>/100)*GROSS + 0.5)
+                        END
+                     END ELSE
+                        IF NEG = "YES" THEN DED.STATE = EMP.STATE.CALC<1,1> * (-1) ELSE DED.STATE = EMP.STATE.CALC<1,1>
+                     END
+                     IF NEG = "YES" THEN
+                        DED.STATE = DED.STATE - EMP.ADD.WHT<1,2>
+                     END ELSE
+                        DED.STATE = DED.STATE + EMP.ADD.WHT<1,2>
+                     END
+*CSF12049
+                     BEGIN CASE
+                     CASE DED.STATE LT 0 AND NEG # "YES"
+                        DED.STATE = 0
+                     CASE DED.STATE GT 0 AND NEG = "YES"
+                        DED.STATE = 0
+                     END CASE
+*
+                     TOTDED = TOTDED + DED.STATE
+                  END ELSE
+                     TAXID=ID[1,3]:EMP.ST.CODE
+                     IF EMP.ST.CODE = "MN" THEN TAXID = TAXID : EMP.MAR.ST
+                     GOSUB 6000
+                     IF ESTAT THEN GOTO 100
+**** USING STATE # OF EXEMPTIONS
+                     DEP=EMP.DEP.NO<1,2>
+                     SAL=SAL3
+                     GOSUB 5000
+                     DED.STATE=(TAMT/52)*NW
+                     DED.STATE=ICONV(DED.STATE,"MD2")+EMP.ADD.WHT<1,2>
+345                  IF NEG="YES" THEN DED.STATE=DED.STATE*(-1)
+*CSF12049
+                     BEGIN CASE
+                     CASE DED.STATE LT 0 AND NEG # "YES"
+                        DED.STATE = 0
+                     CASE DED.STATE GT 0 AND NEG = "YES"
+                        DED.STATE = 0
+                     END CASE
+*
+                     TOTDED=TOTDED+DED.STATE
+                  END
+               END
+*****
+350*    CITY TAX
+               TAMT=0
+               IF EMP.CITY.CODE#"" AND EMP.CITY.CODE#" " THEN
+                  TAXID=ID[1,3]:EMP.CITY.CODE
+                  GOSUB 6000
+                  IF ESTAT THEN GOTO 100
+**** USING STATE # OF EXEMPTIONS
+                  DEP=EMP.DEP.NO<1,2>
+                  SAL=SAL4
+                  GOSUB 5000
+360               CWT=(TAMT/52)*NW
+                  DED.CITY=ICONV(CWT,"MD2")
+                  IF NEG="YES" THEN DED.CITY=DED.CITY*(-1)
+                  TOTDED=TOTDED+DED.CITY
+               END
+*****
+** UNION DEDUCTIONS
+               IF EMP.UNION#"" AND EMP.UNION#" " THEN
+                  PAY.STR.GROSS=TOTREGHRS*RATE
+                  PAY.STR.GROSS=ICONV(PAY.STR.GROSS,"MD2");    *1 ?? WHY HERE?
+               END
+*****
+** UPDATE FILES
+*     PAY.GROSS=ICONV(GROSS+OCONV(PAY.OTH.INC,"MD2"),"MD2");PAY.NET=PAY.GROSS-TOTDED
+               PAY.GROSS=ICONV(GROSS+OCONV(PAY.NON.TAXED,"MD2"),"MD2");PAY.NET=PAY.GROSS-TOTDED
+361            IF NEG="YES" THEN PAY.NET=(PAY.GROSS*(-1))-(TOTDED*(-1));PAY.NET=PAY.NET*(-1)
+***** CHECK FOR NEGITIVE CHECK , IF NEG ADD BACK VOL DEDUCTIONS
+               MAT UPD.REC = ""
+               UPD.DEPT = DED.DEPT
+               UPD.DIV  = EMP.DIV
+               IF NEG#"YES" AND PAY.NET<0 THEN
+                  REV.FLAG = ''
+                  PAY.NET=PAY.NET+DED.BONDS; UPD.BONS = DED.BONDS; DED.BONDS=""
+                  DED.CNT = COUNT(DED.MISC.CODE,VM) + (DED.MISC.CODE # "")
+                  FOR Y = DED.CNT TO 1 STEP -1
+                     IF PAY.NET<0 THEN
+                        PAY.NET = PAY.NET + DED.MISC.AMT<1,Y>
+                        UPD.AMT = INSERT(UPD.AMT,1,1,0,DED.MISC.AMT<1,Y>)
+                        UPD.CODE = INSERT(UPD.CODE,1,1,0,DED.MISC.CODE<1,Y>)
+*CSF13520
+                        MATREAD MDED.REC FROM MISCDED, ID[1,3]:DED.MISC.CODE<1,Y> ELSE MAT MDED.REC = ''
+                        IF MDED.NTXFICA = 'Y' THEN
+                           SAL2 = SAL2 + DED.MISC.AMT<1,Y> / 100
+                           REV.FLAG = 1
+                        END
+*
+                        DED.MISC.AMT<1,Y> = 0
+                     END
+                  NEXT Y
+*CSF13520
+*   FICA CALCULATION
+                  IF REV.FLAG THEN
+                     REV.FLAG = 0
+                     TOTDED = TOTDED - DED.FICA
+                     FICA1=(SAL2*FIC.LVL1.FICA.PCNT)
+                     FICA2=(SAL2*FIC.LVL2.FICA.PCNT)
+                     H1.L1=FIC.LVL1.FICA.MAX-(FICA1+OCONV(TOTFICA1,"MD2"))
+                     H1.L2=FIC.LVL2.FICA.MAX-(FICA2+OCONV(TOTFICA2,"MD2"))
+                     IF H1.L1<=0 THEN FICA1=FICA1+H1.L1
+                     IF H1.L2<=0 THEN FICA2=FICA2+H1.L2
+                     DED.LVL1.FICA=ICONV(FICA1,"MD2")
+                     DED.LVL2.FICA=ICONV(FICA2,"MD2")
+                     DED.FICA = DED.LVL1.FICA + DED.LVL2.FICA
+                     TOTDED = TOTDED + DED.FICA
+                     NET = 0
+                     NET=PAY.GROSS-DED.FWT-DED.FICA-DED.SUI-DED.STATE-DED.CITY-DED.BONDS-DED.EIC
+                     NET = NET - SUM(DED.MISC.AMT)
+                     PAY.NET = NET
+                  END
+**
+               END
+               IF NEG="YES" AND PAY.NET>0 THEN
+                  PAY.NET=PAY.NET+DED.BONDS; UPD.BONS = DED.BONDS; DED.BONDS=""
+                  DED.CNT = COUNT(DED.MISC.CODE,VM) + (DED.MISC.CODE # "")
+                  FOR Y = DED.CNT TO 1 STEP -1
+                     IF PAY.NET>0 THEN
+                        PAY.NET = PAY.NET + DED.MISC.AMT<1,Y>
+                        UPD.AMT = INSERT(UPD.AMT,1,1,0,DED.MISC.AMT<1,Y>)
+                        UPD.CODE = INSERT(UPD.CODE,1,1,0,DED.MISC.CODE<1,Y>)
+                        DED.MISC.AMT<1,Y> = 0
+                     END
+                  NEXT Y
+               END
+               MATWRITE DED.REC ON DEDREG,ID
+               MATWRITE PAY.REC ON PAYREG,ID
+               IF UPD.BONS # "" OR UPD.AMT # "" THEN
+                  MATWRITE UPD.REC ON UNPAY.DEDUCT,ID
+               END
+               IF EMP.UNION="" THEN GOTO  100
+               WRITEV VACATIONHRS ON MTH.UNION,ID[1,7],18
+               GOTO 100
+*
+*   CALCULATE TAXES
+*
+5000*
+               TAMT = 0
+               TXGR = 0
+               ST.ATT = 20
+               EN.ATT = 35
+               BEGIN CASE
+               CASE TTR.TYPE = "01"
+                  GOSUB 6200
+                  IF TXGR < 0 THEN GOTO 5999
+                  CHECK.GROSS = TXGR
+                  GOSUB 6500
+                  GOSUB 6600
+                  TAMT = OCONV(ICONV(TAMT,"MD2"),"MD2")
+               CASE TTR.TYPE = "02"
+                  GOSUB 6200
+                  IF TXGR < TTR.MIN.GROSS THEN GOTO 5999
+                  CHECK.GROSS = TXGR
+                  GOSUB 6500
+                  TXGR=TXGR-TAX.TAB.REC(PT)<1,2>
+                  PERCENT=TAX.TAB.REC(PT)<1,3>/100
+                  TAMT = TXGR*PERCENT
+                  TAMT = OCONV(ICONV(TAMT,"MD2"),"MD2")
+               CASE TTR.TYPE = "03"
+                  IF DEP<TTR.DEP.LIMIT THEN IF SAL<= TTR.MIN.GROSS THEN GOTO 5999
+                  IF DEP>=TTR.DEP.LIMIT THEN IF SAL <= TTR.MAX.GROSS THEN GOTO 5999
+                  TXGR = SAL - DEP * TTR.DEP.ALLOW
+                  IF DEP< TTR.DEP.LIMIT THEN TXGR=TXGR-TTR.MIN.DED.ALL
+                  IF DEP>= TTR.DEP.LIMIT THEN TXGR=TXGR-TTR.MAX.DED.ALL
+                  IF TXGR<0 THEN GOTO 5999
+                  CHECK.GROSS = TXGR
+                  GOSUB 6500
+                  GOSUB 6600
+                  TAMT = OCONV(ICONV(TAMT,"MD2"),"MD2")
+                  IF DEP < TTR.DEP.LIMIT THEN
+                     CREDIT=DEP*TTR.FRST.CREDIT
+                  END ELSE
+                     CREDIT=TTR.DEP.LIMIT*TTR.FRST.CREDIT
+                     CREDIT=CREDIT+ ((DEP-TTR.DEP.LIMIT)*TTR.SCND.CREDIT)
+                  END
+                  TAMT=TAMT-CREDIT
+                  IF TAMT<0 THEN TAMT=0
+               CASE TTR.TYPE = "04"
+                  GOSUB 6400
+                  IF DED.FWT > 0 THEN
+                     FEDS = (DED.FWT/NW)*52
+*           FEDS=OCONV(ICONV(FEDS,"MD2"),"MD2")
+                     FEDS=OCONV(FEDS,'MD2')
+                     IF FEDS<TTR.MIN.GROSS THEN FEDS=TTR.MIN.GROSS
+                     IF FEDS >= TTR.MAX.GROSS THEN FEDS=TTR.MAX.GROSS
+                     TXGR=TXGR-ABS(FEDS)
+                  END
+                  IF TXGR<0 THEN GOTO 5999
+                  CHECK.GROSS = TXGR
+                  GOSUB 6500
+                  GOSUB 6600
+                  TAMT = OCONV(ICONV(TAMT,"MD2"),"MD2")
+               CASE TTR.TYPE = "05"
+                  GOSUB 6400
+                  IF TXGR < 0 THEN GOTO 5999
+                  CHECK.GROSS = TXGR
+                  GOSUB 6500
+                  GOSUB 6600
+                  TAMT = OCONV(ICONV(TAMT,"MD2"),"MD2")
+               CASE TTR.TYPE = "06"
+                  TAMT=ABS(CALC.FWT)*(TTR.ALL.PCT/100)
+                  TAMT=ICONV(TAMT,"MD2")
+                  TAMT=OCONV(TAMT,"MD24")
+                  TAMT = (TAMT*52)/NW
+               CASE TTR.TYPE = "07"
+                  TXGR = SAL - DEP * TTR.DEP.ALLOW
+                  IF TTR.ALL.PCT#"" AND TTR.ALL.PCT#0 THEN
+                     ALLOW = (TTR.ALL.PCT/100)*SAL
+                     ALLOW = OCONV(ICONV(ALLOW,"MD2"),"MD2")
+                     IF ALLOW < TTR.MIN.DED.ALL THEN ALLOW = TTR.MIN.DED.ALL
+                     IF ALLOW > TTR.MAX.DED.ALL THEN ALLOW = TTR.MAX.DED.ALL
+                     TXGR = TXGR - ALLOW
+                     TXGR=TXGR-(ABS(OCONV(DED.FWT,"MD2"))*(52/NW))*(TTR.FRST.CREDIT/100)
+                  END
+                  IF TXGR < 0 THEN GOTO 5999
+                  CHECK.GROSS = TXGR
+                  GOSUB 6500
+                  GOSUB 6600
+                  TAMT = OCONV(ICONV(TAMT,"MD2"),"MD2")
+               CASE TTR.TYPE = "08"
+                  TXGR = SAL
+                  ALLOW=(TTR.ALL.PCT/100)*TXGR
+                  TXGR = TXGR - ALLOW
+                  IF TXGR < 0 THEN GOTO 5999
+                  CHECK.GROSS = TXGR
+                  GOSUB 6500
+                  GOSUB 6600
+                  TAMT=TAMT-DEP*TTR.FRST.CREDIT
+                  IF TAMT<0 THEN TAMT=0
+                  TAMT = OCONV(ICONV(TAMT,"MD2"),"MD2")
+               CASE TTR.TYPE = "09"
+                  TXGR = SAL - DEP * TTR.DEP.ALLOW
+                  IF TTR.ALL.PCT#"" AND TTR.ALL.PCT#0 THEN
+                     ALLOW = (TTR.ALL.PCT/100)*SAL
+                     ALLOW = OCONV(ICONV(ALLOW,"MD2"),"MD2")
+                     IF ALLOW < TTR.MIN.DED.ALL THEN ALLOW = TTR.MIN.DED.ALL
+                     IF ALLOW > TTR.MAX.DED.ALL THEN ALLOW = TTR.MAX.DED.ALL
+                     TXGR = TXGR - ALLOW
+                     TXGR=TXGR-(ABS(OCONV(DED.FICA,"MD2"))*(52/NW))
+                  END
+                  IF TXGR < 0 THEN GOTO 5999
+                  CHECK.GROSS = TXGR
+                  GOSUB 6500
+                  GOSUB 6600
+                  TAMT = OCONV(ICONV(TAMT,"MD2"),"MD2")
+               CASE TTR.TYPE = "10"
+                  TXGR = SAL - ABS(OCONV(DED.FWT,"MD2"))*(52/NW)
+                  IF TTR.ALL.PCT#"" AND TTR.ALL.PCT#0 THEN
+                     ALLOW=(TTR.ALL.PCT/100)*TXGR
+                     ALLOW=OCONV(ICONV(ALLOW,"MD2"),"MD2")
+                     IF ALLOW<TTR.MIN.DED.ALL THEN ALLOW=TTR.MIN.DED.ALL
+                     IF ALLOW>TTR.MAX.DED.ALL THEN ALLOW=TTR.MAX.DED.ALL
+                     TXGR=TXGR-ALLOW
+                  END
+                  IF TXGR<0 THEN GOTO 5999
+                  CHECK.GROSS = TXGR
+                  GOSUB 6500
+                  GOSUB 6600
+                  TAMT = OCONV(ICONV(TAMT,"MD2"),"MD2")
+                  IF DEP < TTR.DEP.LIMIT THEN
+                     CREDIT=DEP*TTR.FRST.CREDIT
+                  END ELSE
+                     CREDIT=TTR.DEP.LIMIT*TTR.FRST.CREDIT
+                     CREDIT=CREDIT+ ((DEP-TTR.DEP.LIMIT)*TTR.SCND.CREDIT)
+                  END
+                  TAMT=TAMT-CREDIT
+                  IF TAMT<0 THEN TAMT=0
+               CASE TTR.TYPE = "11"
+                  EXC=0
+                  IF SAL > TTR.MAX.GROSS THEN EXC=SAL-TTR.MAX.GROSS
+                  SAL=TTR.MAX.GROSS
+                  DEP=DEP*TTR.DEP.ALLOW
+                  TXGR = (TTR.FRST.CREDIT/100) * SAL + TTR.SCND.CREDIT - DEP
+                  GOSUB 6450
+                  IF TXGR<0 THEN GOTO 5999
+                  CHECK.GROSS = TXGR
+                  GOSUB 6500
+                  GOSUB 6600
+                  IF EXC # 0 THEN TAMT = TAMT + TTR.DEP.LIMIT/100 * EXC
+                  TAMT = OCONV(ICONV(TAMT,"MD2"),"MD2")
+               CASE TTR.TYPE = "12"
+                  EXC=0
+                  EXCDEP=0
+                  IF DEP > TTR.DEP.LIMIT THEN EXCDEP=(TTR.DEP.LIMIT-DEP)*TTR.FRST.CREDIT
+                  DEP=DEP*TTR.DEP.ALLOW+EXCDEP
+                  TXGR=SAL-DEP
+                  IF TXGR<0 THEN GOTO 5999
+                  CHECK.GROSS = TXGR
+                  GOSUB 6500
+                  GOSUB 6600
+                  TAMT = OCONV(ICONV(TAMT,"MD2"),"MD2")
+               CASE TTR.TYPE = "13"
+                  DEP=DEP*TTR.DEP.ALLOW
+                  ST.ATT = 31
+                  EN.ATT = 35
+                  CHECK.GROSS = SAL
+                  GOSUB 6500
+                  TT=TAX.TAB.REC(PT)<1,2>
+                  PERCENT=TAX.TAB.REC(PT)<1,3>
+                  TXGR=TT+(SAL*PERCENT)-DEP
+                  ST.ATT = 20
+                  EN.ATT = 30
+                  CHECK.GROSS = TXGR
+                  GOSUB 6500
+                  GOSUB 6600
+                  TAMT = OCONV(ICONV(TAMT,"MD2"),"MD2")
+               CASE TTR.TYPE = "14"
+                  FED=ABS(DED.FWT)*52/NW
+                  FED=FED/100
+                  CHECK.GROSS = FED
+                  GOSUB 6500
+                  TAMT=TAX.TAB.REC(PT)<1,3>/100*FED
+               CASE TTR.TYPE = "15"
+                  FEDS=ABS(OCONV(DED.FWT,"MD2"))
+                  IF TTR.ALL.PCT#"" AND TTR.ALL.PCT#0 THEN
+                     ALLOW=(TTR.ALL.PCT/100)*SAL
+                     ALLOW=OCONV(ICONV(ALLOW,"MD2"),"MD2")
+                     IF ALLOW>TTR.MAX.DED.ALL THEN ALLOW=TTR.MAX.DED.ALL
+                     TXGR=TXGR-ALLOW
+                  END
+                  IF TXGR<0 THEN GOTO 5999
+                  CHECK.GROSS = TXGR
+                  GOSUB 6500
+                  GOSUB 6600
+                  TAMT=OCONV(ICONV(TAMT,"MD2"),"MD2")
+                  IF DEP<TTR.DEP.LIMIT THEN
+                     CREDIT=DEP*TTR.FRST.CREDIT
+                  END ELSE
+                     CREDIT=TTR.DEP.LIMIT*TTR.FRST.CREDIT
+                     CREDIT=CREDIT+((DEP-TTR.DEP.LIMIT)*TTR.SCND.CREDIT)
+                  END
+                  TAMT=TAMT-CREDIT
+                  IF TAMT<0 THEN TAMT=0
+               CASE TTR.TYPE = "16"
+                  BEGIN CASE
+                  CASE SAL < TTR.MIN.GROSS
+                     ALLOW = TTR.DEP.ALLOW
+                  CASE SAL >= TTR.MAX.GROSS
+                     ALLOW = 0
+                  CASE 1
+                     ALLOW = TTR.DEP.ALLOW - (((SAL - TTR.MIN.GROSS)*TTR.ALL.PCT)/100)
+                  END CASE
+                  ALLOW = OCONV(ICONV(ALLOW,"MD2"),"MD2")
+                  TXGR = SAL - ALLOW
+                  IF TXGR <= 0 AND DEP = 0 THEN
+                     TAMT = (SAL*(1-(TTR.MIN.DED.ALL/100)) * (TTR.MAX.DED.ALL/100))
+                  END ELSE
+                     IF TXGR < 0 THEN GOTO 5999
+                     CHECK.GROSS = TXGR
+                     GOSUB 6500
+                     GOSUB 6600
+                  END
+                  TAMT = OCONV(ICONV(TAMT,"MD2"),"MD2")
+                  TAMT = TAMT - (DEP*TTR.FRST.CREDIT)
+                  IF TAMT < 0 THEN TAMT = 0
+               END CASE
+5999*
+               RETURN
+*   READS FOR TAX RECORD
+6000*
+               ESTAT = 0
+               MATREAD TAX.TAB.REC FROM TAX2,TAXID ELSE
+                  MAT TAX.TAB.REC = ""
+                  ERRMSG = "TAX TABLE - ": TAXID[4,4] :" IS MISSING HIT <RETURN>"
+                  GOSUB 91000
+                  ESTAT = 1
+                  GOTO 6099
+               END
+               BEGIN CASE
+               CASE NOT(NUM(TTR.TYPE))
+                  ERRMSG = "TAX TABLE - ": TAXID[1,3] :" HAS THE WRONG TYPE HIT <RETURN>"
+                  GOSUB 91000
+                  ESTAT = 1
+               CASE TTR.TYPE = "01"
+               CASE TTR.TYPE = "02"
+               CASE TTR.TYPE = "03"
+               CASE TTR.TYPE = "04"
+               CASE TTR.TYPE = "05"
+               CASE TTR.TYPE = "06"
+               CASE TTR.TYPE = "07"
+               CASE TTR.TYPE = "08"
+               CASE TTR.TYPE = "09"
+               CASE TTR.TYPE = "10"
+               CASE TTR.TYPE = "11"
+               CASE TTR.TYPE = "12"
+               CASE TTR.TYPE = "13"
+               CASE TTR.TYPE = "14"
+               CASE TTR.TYPE = "15"
+               CASE TTR.TYPE = "16"
+               CASE 1
+                  ERRMSG = "TAX TABLE - ": TAXID[1,3] :" HAS THE WRONG TYPE HIT <RETURN>"
+                  GOSUB 91000
+                  ESTAT = 1
+               END CASE
+6099*
+               RETURN
+* CALCULATE TAXABLE GROSS
+6200*
+               TXGR = SAL - DEP * TTR.DEP.ALLOW
+6250*
+               IF TTR.ALL.PCT#"" AND TTR.ALL.PCT#0 THEN
+                  ALLOW = (TTR.ALL.PCT/100)*SAL
+                  ALLOW = ALLOW - TTR.DEP.ALLOW
+                  ALLOW = OCONV(ICONV(ALLOW,"MD2"),"MD2")
+                  IF ALLOW < TTR.MIN.DED.ALL THEN ALLOW = TTR.MIN.DED.ALL
+                  IF ALLOW > TTR.MAX.DED.ALL THEN ALLOW = TTR.MAX.DED.ALL
+                  TXGR = TXGR - ALLOW
+               END
+               RETURN
+6400*
+               TXGR = SAL - DEP * TTR.DEP.ALLOW
+6450*
+               IF TTR.ALL.PCT#"" AND TTR.ALL.PCT#0 THEN
+                  ALLOW = (TTR.ALL.PCT/100)*SAL
+                  ALLOW = OCONV(ICONV(ALLOW,"MD2"),"MD2")
+                  IF ALLOW < TTR.MIN.DED.ALL THEN ALLOW = TTR.MIN.DED.ALL
+                  IF ALLOW > TTR.MAX.DED.ALL THEN ALLOW = TTR.MAX.DED.ALL
+                  TXGR = TXGR - ALLOW
+               END
+               RETURN
+*    TAX BRACKET
+6500*
+               PT = 0
+               FOR TR = ST.ATT TO EN.ATT UNTIL PT
+                  IF CHECK.GROSS < TAX.TAB.REC(TR)<1,1> THEN PT = TR
+               NEXT TR
+               FOR TR = EN.ATT TO ST.ATT STEP - 1 UNTIL PT
+                  IF TAX.TAB.REC(TR)<1,1> + 0 # 0 THEN PT = TR
+               NEXT TR
+               PT = PT - 1
+               IF PT < ST.ATT THEN PT = ST.ATT
+               RETURN
+*
+*   CALCULATE USING TAX BRACKET
+*
+6600*
+               TAMT = TAX.TAB.REC(PT)<1,2>
+               EXCESS=TXGR-TAX.TAB.REC(PT)<1,1>
+               PERCENT=TAX.TAB.REC(PT)<1,3>/100
+               TAMT = TAMT + (EXCESS*PERCENT)
+               RETURN
+*
+*--- ERROR ROUTINE
+*
+91000*
+               PRINT @(0,23) : CL : ERRMSG :
+               INPUT REPLY,1 :
+               PRINT @(0,23) : CL :
+               RETURN
+*****
+            END

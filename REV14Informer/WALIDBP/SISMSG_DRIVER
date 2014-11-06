@@ -1,0 +1,188 @@
+*********************************************************************
+*
+* PROGRAM  - SISMSG_DRIVER
+*
+*********************************************************************
+*
+   EQU BEL TO CHAR(7)
+*
+*---- PRE-INITIALIZATION
+*
+   PROMPT ""
+   PROCREAD PARAM ELSE PARAM = ""
+   BEGIN CASE
+      CASE PARAM<1> = "INITIATE"
+         ACTION = PARAM<1>[1,1]
+      CASE PARAM<1> = "TERMINATE"
+         ACTION = PARAM<1>[1,1]
+      CASE 1
+         ACTION = ""
+   END CASE
+   PCMD = "END"
+*
+*---- OPEN ALL FILES
+*
+   OPEN "","SIS_CONTROL" TO SIS_CONTROL ELSE
+      PRINT @(0,23):@(-4):"CANNOT OPEN SIS_CONTROL FILE":
+      INPUT REPLY,1:
+      GOTO 99999
+   END
+*
+*---- INITIALIZATION
+*
+   DASHES = STR("-",80)
+   ACTIVE = 0
+*
+   SLINE = @(-1)
+   SLINE = SLINE:@(0,0):"PRIMAC"
+   SLINE = SLINE:@(20,0):"Shop Floor Information System Message Server"
+   SLINE = SLINE:@(72,0):OCONV(DATE(),"D2/")
+   SLINE = SLINE:@(0,1):DASHES
+   SLINE = SLINE:@(0,20):DASHES
+   SLINE = SLINE:@(0,22):DASHES
+   PRINT SLINE:
+*
+   READU TREC FROM SIS_CONTROL, "MSG_LOCK" THEN
+      PRINT @(5,10):"Shop Floor Information Message Server is INACTIVE! ":
+      RELEASE SIS_CONTROL, "MSG_LOCK"
+      ACTIVE = 0
+   END LOCKED
+      PRINT @(5,10):"Shop Floor Information Message Server is ACTIVE! ":
+      ACTIVE = 1
+   END ELSE
+      PRINT @(5,10):"Shop Floor Information Message Server is INACTIVE! ":
+      RELEASE SIS_CONTROL, "MSG_LOCK"
+      ACTIVE = 0
+   END
+   BEGIN CASE
+      CASE ACTION = "I";* Initiate
+      CASE ACTION = "T";* Terminate
+      CASE 1
+         LOOP
+            IF ACTIVE THEN
+               PRINT @(0,21):@(-4):"Enter (T)erminate or (E)xit: ":
+            END ELSE
+               PRINT @(0,21):@(-4):"Enter (I)nitiate or (E)xit: ":
+            END
+            INPUT ACTION,3:_
+            BEGIN CASE
+               CASE ACTION = "E" OR ACTION = "END" OR ACTION = CHAR(27) OR ACTION = "^"
+                  ACTION = "END"
+               CASE ACTION = "I" AND ACTIVE = 0
+               CASE ACTION = "T" AND ACTIVE
+               CASE 1
+                  ACTION = ""
+            END CASE
+         WHILE ACTION = "" DO
+         REPEAT
+         PRINT @(0,21):@(-4):
+   END CASE
+*
+*---- MAIN PROCESSING
+*
+   BEGIN CASE
+      CASE ACTION = "END"
+         GOTO 99999
+      CASE ACTION = "I";* Initate
+         READU TREC FROM SIS_CONTROL, "MSG_LOCK" THEN
+            ACTIVE = 0
+         END LOCKED
+            PRINT @(5,10):"Shop Floor Information Message phantom is already running! "
+            ACTIVE = 1
+         END ELSE
+            ACTIVE = 0
+         END
+         IF ACTIVE = 0 THEN
+            RELEASE SIS_CONTROL, "MSG_LOCK"
+            LOOP
+               PRINT @(0,21):@(-4):"Execute as Phantom (Y/N): ":
+               INPUT ACTION,3:_
+               BEGIN CASE
+                  CASE ACTION = "END" OR ACTION = CHAR(27) OR ACTION = "^"
+                     GOTO 99999
+                  CASE ACTION = "Y"
+                     CDATE = DATE()
+                     CTIME = TIME()
+                     IF CTIME < 10 THEN CDATE = DATE()
+                     XREC = ""
+                     XREC<1> = CDATE
+                     XREC<2> = CTIME
+                     WRITE XREC ON SIS_CONTROL, "PH_CHECK"
+                     CMD = '!udt PHANTOM SISDTM &'
+                     UDTEXECUTE CMD CAPTURING SCREENDATA
+                     PRINT @(0,21):@(-4):"Please Stand-by ":
+                     SLEEP 5
+                     DONE=0; CNT=0
+                     LOOP
+                        READU TREC FROM SIS_CONTROL, "MSG_LOCK" THEN
+                           RELEASE SIS_CONTROL, "MSG_LOCK"
+                        END LOCKED
+                           DONE = 1
+                        END ELSE
+                           RELEASE SIS_CONTROL, "MSG_LOCK"
+                        END
+                     UNTIL CNT = 15 OR DONE DO
+                        SLEEP 1
+                        CNT = CNT + 1
+                        PRINT ".":
+                     REPEAT
+                     IF DONE THEN
+                        PRINT @(5,10):"Shop Floor Information Message phantom initiated successfully! "
+                     END ELSE
+                        PRINT @(5,10):"Shop Floor Information Message phantom initiation failed! "
+                     END
+                  CASE ACTION = "N"
+                     PCMD = "BATCH"
+                     GOTO 99999
+                  CASE 1
+                     ACTION = ""
+               END CASE
+            WHILE ACTION = "" DO
+            REPEAT
+         END
+      CASE ACTION = "T";* Terminate
+         READU TREC FROM SIS_CONTROL, "MSG_LOCK" THEN
+            PRINT @(5,10):"Shop Floor Information Message phantom is not running! "
+            ACTIVE = 0
+         END LOCKED
+            ACTIVE = 1
+         END ELSE
+            PRINT @(5,10):"Shop Floor Information Message phantom is not running! "
+            ACTIVE = 0
+         END
+         IF ACTIVE THEN
+            PRINT @(0,21):@(-4):"Please Stand-by ":
+            READU TREC FROM SIS_CONTROL, "MSG_CNTL" ELSE TREC = ""
+            TREC<1> = "STOP"
+            WRITE TREC ON SIS_CONTROL, "MSG_CNTL"
+            SLEEP 5
+            DONE=0; CNT=0
+            LOOP
+               READU TREC FROM SIS_CONTROL, "MSG_LOCK" THEN
+                  DONE = 1
+               END LOCKED
+                  NULL
+               END ELSE
+                  DONE = 1
+               END
+            UNTIL CNT = 15 OR DONE DO
+               SLEEP 1
+               CNT = CNT + 1
+               PRINT ".":
+            REPEAT
+            IF DONE THEN
+               PRINT @(5,10):"Shop Floor Information Message phantom terminated successfully! "
+            END ELSE
+               PRINT @(5,10):"Shop Floor Information Message phantom termination pending! "
+            END
+         END
+   END CASE
+   RELEASE
+   PRINT @(0,21):@(-4):"Press <RETURN> to continue":
+   INPUT REPLY,1:
+*
+*---- END OF PROGRAM
+*
+99999*
+   PROCWRITE PCMD
+END

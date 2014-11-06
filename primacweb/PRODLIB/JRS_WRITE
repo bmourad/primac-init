@@ -1,0 +1,246 @@
+SUBROUTINE JRS_WRITE
+********************************************************************************
+*   Program name :- JRS_WRITE
+*   Created:- 5/24/2005
+*   Created By :- Zahoor Ahmed
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE CPYLIB PORT.CONTROL
+$INCLUDE CPYLIB CHAR
+$INCLUDE PMC.CPYLIB SECURITY
+$INCLUDE PMC.CPYLIB PMCProcessStatus
+*
+*--- OPEN FILES
+*   
+OPEN '','SECURITY' TO SECURITY ELSE
+      MESG = 'Cannot open SECURITY file!'
+      STATUS = RBO.setProperty('', 'ServerStatus', 1)
+      STATUS = RBO.setProperty('', 'ServerMessage', MESG)
+      RETURN
+END
+OPEN '','WIN.PRINTERS' TO WIN.PRINTERS ELSE
+      MESG = 'Cannot open WIN.PRINTERS file!'
+      STATUS = RBO.setProperty('', 'ServerStatus', 1)
+      STATUS = RBO.setProperty('', 'ServerMessage', MESG)
+      RETURN
+END
+OPEN '','PMC_REPORT_VALUES' TO PMC_REPORT_VALUES ELSE
+      MESG = 'Cannot open PMC_REPORT_VALUES file!'
+      STATUS = RBO.setProperty('', 'ServerStatus', 1)
+      STATUS = RBO.setProperty('', 'ServerMessage', MESG)
+      RETURN
+END
+
+OPEN '','VOC' TO F.VOC ELSE
+      MESG = 'Cannot open VOC file!'
+      STATUS = RBO.setProperty('', 'ServerStatus', 1)
+      STATUS = RBO.setProperty('', 'ServerMessage', MESG)
+      RETURN
+END
+OPEN '','CONTROL' TO CONTROL ELSE
+      MESG = 'Cannot open CONTROL file!'
+      STATUS = RBO.setProperty('', 'ServerStatus', 1)
+      STATUS = RBO.setProperty('', 'ServerMessage', MESG)
+      RETURN
+END
+   OPEN '','PMCProcessStatus' TO PMCProcessStatus ELSE
+      MESG = 'Cannot open PMCProcessStatus file!'
+      STATUS = RBO.setProperty('', 'ServerStatus', 1)
+      STATUS = RBO.setProperty('', 'ServerMessage', MESG)
+      RETURN
+   END
+
+PPSR_ID = ""
+STATUS = RBO.getProperty('', 'ID', PPSD_ID)
+STATUS=RBO.getProperty('','PMCProperty',PMCProperty)
+STATUS = RBO.getProperty('','JRSJCRS_JOB',JOBCODES)
+STATUS = RBO.getProperty('','JRSJCRS_BILL',BILLS)
+STATUS = RBO.getProperty('','JRSJCRS_CONS',CONS)
+*
+* Initialization
+*
+TDString = TIMEDATE ()
+P_DATE = ICONV(TDString[10,11], "D")
+P_TIME = ICONV(FIELD(TDString, " ",1), "MT")
+PPSID = FIELD(PPSD_ID, "!", 2) ;* PMC_PROCESS ID(ASP file name)
+PRPT_ID = ""
+CONO= FIELD(PPSD_ID, "!", 5)
+CONAME =FIELD(PPSD_ID, "!", 6)
+CONAME = FIELD(CONAME, "-", 2)
+UserID = FIELD(PPSD_ID, "!", 1) ;* User IDPORT_NO = "TTY"
+PPSID = FIELD(PPSD_ID, "!", 2);* PMC_PROCESS ID(ASP file name)
+SessionID = FIELD(PPSD_ID, "!", 3) ;* IE Session ID
+OPTION = FIELD(PPSD_ID, "!", 7)
+*
+  READ COMPANY.SECURITY FROM CONTROL, CONO:"DIV.SECURITY" ELSE
+      MESG = 'Cannot Read Div.Security rec from CONTROL File!'
+      STATUS = RBO.setProperty('', 'ServerStatus', 'E')
+      STATUS = RBO.setProperty('', 'ServerMessage', MESG)
+      RETURN
+   END
+*
+PORT_NO = "TTY"
+CALL SYSVARS.SUB(PORT_NO)
+LOG_NAME = @LOGNAME
+HF.NAME = PORT_NO : "_": UPCASE(UserID)
+HF.NAME = CHANGE(HF.NAME,"*","_")
+
+* Build PMCProcessStatus Record
+   MAT PPSR.REC = ""
+   PPSR.PROPERTY = PPSD_ID
+   PPSR.USER = UserID
+   PPSR.SESSION = SessionID
+   PPSR.PPID = PPSID
+   PPSR.PRPT = PRPT_ID
+   PPSR.LAST = ""
+   PPSR.PROMPTS = ""
+   PPSR.STATUS = "Submit"
+   PPSR.PVALUES = OPTION
+*
+   PPSR.STDATE = P_DATE
+   PPSR.STTIME = P_TIME
+   CALL GetSYSVars (PPSR.STSVAL, TDString)
+   READU XXX_REC FROM CONTROL, CONO:"PMCProcessStatus" ELSE XXX_REC = ""
+   PPSR_ID = ""
+*
+   LOOP
+*
+   UNTIL PPSR_ID # "" DO
+      IF XXX_REC<1> = "" OR P_DATE > XXX_REC<1> THEN
+         XXX_REC<1> = P_DATE
+         XXX_REC<2> = 0
+      END
+		XXX_REC<2> += 1
+      PPSR_ID = CONO : P_DATE : "_" : XXX_REC<2>
+      READU DUMMY FROM PMCProcessStatus, PPSR_ID THEN
+         PPSR_ID = ""
+      END LOCKED
+         PPSR_ID = ""
+      END
+   REPEAT
+*
+   DUMMY = ""
+*
+   WRITE XXX_REC ON CONTROL, CONO:"PMCProcessStatus" ;* this contains sequence number with date report run, to generate seq. no with date for file name
+   MATWRITE PPSR.REC ON PMCProcessStatus, PPSR_ID
+*
+*****
+*
+PROC_VALUES<1> = CONO
+PROC_VALUES<2> = CONAME
+PROC_VALUES<3> = CHANGE(JOBCODES,VM,AM)
+PROC_VALUES<4> = CHANGE(BILLS,VM,AM)
+PROC_VALUES<5> = CHANGE(CONS,VM,AM)
+IF OPTION = "Save" THEN
+	PROC_VALUES<6> = "F"
+END ELSE
+	PROC_VALUES<6> = "U"
+END
+WRITE PROC_VALUES ON PMC_REPORT_VALUES, HF.NAME
+*
+***
+*
+MATREAD SEC.REC FROM SECURITY, CONO:UPCASE(UserID) ELSE
+      ERRMSG = "USER ":UserID:" NOT ON FILE"
+      STATUS = RBO.setProperty('', 'ServerStatus', 'E')
+      STATUS = RBO.setProperty('', 'ServerMessage', ERRMSG)
+      RETURN
+END
+SETPTR_QUEUE = SEC.DFLT.QUEUE
+MATREADU USER.REC FROM SECURITY, "R.":PORT_NO ELSE DUMMY = ""
+   MAT USER.REC = ""
+   USER.CONO = CONO
+   USER.ID = OCONV(UserID, 'MCU')
+   USER.DIR = "primacweb"
+   USER.CORP = 0
+   USER.M.CO = 1
+   USER.C.CO = CONO
+   USER.STAT = "PROC"
+   USER.DATE = P_DATE
+   USER.TIME = P_TIME
+   USER.M.DSP = "XXX"
+   USER.VERB = PPSID
+   USER.V.DSP = "XXX"
+   MATWRITE USER.REC ON SECURITY , "R.":PORT_NO
+*
+   PREV_USER4 = @USER4
+   @USER4 = "redback":PPSR_ID:VM:UserID
+*
+*
+*--- SET PRINTER
+*
+	READ WIN.PRINTERS.REC FROM WIN.PRINTERS,SETPTR_QUEUE THEN
+         SETPTR_FORMATSTR = "Orientation=":WIN.PRINTERS.REC<5>:","
+         SETPTR_FORMATSTR := "Font=":WIN.PRINTERS.REC<6>:","
+         SETPTR_FORMATSTR := "FontSize=":WIN.PRINTERS.REC<7>:","
+         SETPTR_FORMATSTR := "TopMargin=":WIN.PRINTERS.REC<8>:","
+         SETPTR_FORMATSTR := "BottomMargin=":WIN.PRINTERS.REC<9>
+*
+         SETPTR_CMD = 'SETPTR 0,132,,,,1,AT '
+         SETPTR_CMD := WIN.PRINTERS.REC<3>
+         SETPTR_CMD := ',"':SETPTR_FORMATSTR:'",NHEAD,BRIEF'
+      END ELSE
+     	 	ERRMSG = "cannot read WIN.PRINTERS"
+      		STATUS = RBO.setProperty('', 'ServerStatus', 'E')
+      		STATUS = RBO.setProperty('', 'ServerMessage', ERRMSG)
+      		RETURN
+	END
+
+*
+*****
+*  
+   PROC_LINE    = "PQN"
+   PROC_LINE<2> = 'MV %1 "' : HF.NAME : '"'
+   IF OPTION = "Save" THEN
+	   PROC_LINE<3> = "H " : SETPTR_CMD
+	   PROC_LINE<4> = "P"
+   END ELSE
+	PROC_LINE<3> = "C"
+       PROC_LINE<4> = "C"
+   END
+   PROC_LINE<5> = "[JCSPROCS JRS.MAINT]"
+
+   WRITE PROC_LINE ON F.VOC, HF.NAME
+   UDTEXECUTE HF.NAME CAPTURING MESG;*execute the proc
+
+   @USER4 = PREV_USER4
+
+   DELETE F.VOC, HF.NAME
+   DELETE CONTROL, HF.NAME
+*
+*After Processing the Proc
+MATREADU PPSR.REC FROM PMCProcessStatus, PPSR_ID ELSE
+      MAT PPSR.REC = ""
+      PPSR.USER = UserID
+      PPSR.SESSION = SessionID
+      PPSR.PPID = PPSID
+      PPSR.STATUS = "Lost"
+      PPSR.STDATE = P_DATE
+      PPSR.STTIME = P_TIME
+      CALL GetSYSVars (PPSR.STSVAL, TDString)
+      PPSR.PVALUES = ""
+   END
+*
+   TDString = TIMEDATE ()
+   P_DATE = ICONV(TDString[10,11], "D")
+   P_TIME = ICONV(FIELD(TDString, " ",1), "MT")
+   PPSR.ENDATE = P_DATE
+   PPSR.ENTIME = P_TIME
+   MATWRITE PPSR.REC ON PMCProcessStatus, PPSR_ID
+
+*DEMO:
+      MESG = 'Report executed'
+      STATUS = RBO.setProperty('', 'ServerStatus', 1)
+      STATUS = RBO.setProperty('', 'ServerMessage', MESG)
+* End of method code
+END

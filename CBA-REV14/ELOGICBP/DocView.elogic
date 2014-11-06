@@ -1,0 +1,224 @@
+SUBROUTINE DocView.elogic(FUNCTION, ARGS)
+**********************************************
+* REVISION    - [12.0]
+* Copyright 1995 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - ELOGICBP
+* PROGRAM     - DocView.elogic
+* BY          - ABDULLAH JIBALY; CBA
+* DATE        - 08/12/2002
+* DESCRIPTION - BUSINESS LOGIC DOCUMENTATION VIEWER
+*
+*ENDDOC
+**********************************************
+  ;*
+  ;* Libraries and initialization
+  ;*
+  DEFFUN toXML(STR) CALLING "XML_FORMAT_CDATA"
+  ;*
+  ;* Function handler
+  ;*
+  ERROR_INVALID_FUNCTION = "Invalid function name."
+  BEGIN CASE
+    CASE FUNCTION = "getDoc"
+      GOSUB getDoc
+    CASE FUNCTION = "getDocList"
+      GOSUB getDocList
+    CASE 1
+      ERR.STRING = ERROR_INVALID_FUNCTION
+      GOSUB setupErrorMsg
+      FUNCTION = ERR.STRING
+  END CASE
+  SWAP @AM WITH "" IN FUNCTION
+  FUNCTION = '<?xml version="1.0"?>':FUNCTION
+RETURN
+
+  ;**
+  ;* Gets the documentation for a elogic module
+  ;*
+  ;* @param  ARGS<1>  The name of the elogic routine
+  ;* @return FUNCTION The documentation for that routine in XML
+  ;*;
+getDoc:
+  ;*
+  ;* Get parameters
+  ;*
+  ELOGIC_NAME = ARGS<1>
+  ;*
+  ;* Setup error strings
+  ;*
+  ERR.NOTEXIST.FILE    = "Database error, please try again later."
+  ERR.INVALID.REC      = "The specified record name does not exist."
+  ERR.INVALID.REC.TYPE = "The specified record is not a valid record type."
+  ;*
+  ;* Open ELOGICBP file
+  ;*
+  OPEN "ELOGICBP" TO ELOGICBP ELSE
+    ERR.STRING = ERR.NOTEXIST.FILE
+    GOSUB setupErrorMsg
+    FUNCTION = ERR.STRING
+    RETURN
+  END
+  ;*
+  ;* Read login record and verify password
+  ;*
+  READ ELOGIC.REC FROM ELOGICBP, ELOGIC_NAME ELSE
+    ERR.STRING = ERR.INVALID.REC
+    GOSUB setupErrorMsg
+    FUNCTION = ERR.STRING
+    RETURN
+  END
+  ;*
+  ;* Beginning parsing the record, and check for correctness
+  ;*
+  ELOGIC.CNT = DCOUNT(ELOGIC.REC,@AM)
+  E.LINE     = TRIM(ELOGIC.REC<1>)
+  IF INDEX(E.LINE,"elogic",1) < 1 THEN
+    ERR.STRING = ERR.INVALID.REC.TYPE
+    GOSUB setupErrorMsg
+    FUNCTION = ERR.STRING
+    RETURN
+  END
+  ;*
+  ;* Setup XML headers
+  ;*
+  FUNCTION = '<edoc id=':QUOTE(ELOGIC_NAME):'>'
+  ;*
+  ;* Find the program header, or give an error if it's not found
+  ;*
+  E.LN.NO = 0
+  FOR E.IDX = 2 TO ELOGIC.CNT
+    IF ELOGIC.REC<E.IDX>[1,1] = '*' THEN
+      IF INDEX(ELOGIC.REC<E.IDX>,"*COPY",1) > 0 THEN EXIT
+      E.LN.NO = E.IDX
+      EXIT
+    END
+  NEXT E.IDX
+  IF E.LN.NO = 0 THEN
+    ERR.STRING = ERR.INVALID.REC.TYPE
+    GOSUB setupErrorMsg
+    FUNCTION = ERR.STRING
+    RETURN
+  END
+  ;*
+  ;* Parse the header
+  ;*
+  HEADER.XML = '<header>'
+  HEADER.XML.ENDTAG = ''
+  FOR E.IDX = E.LN.NO+1 TO ELOGIC.CNT
+    E.LINE = TRIM(ELOGIC.REC<E.IDX>)
+    BEGIN CASE
+      CASE E.LINE[1,1] # '*'
+        ERR.STRING = ERR.INVALID.REC.TYPE
+        GOSUB setupErrorMsg
+        FUNCTION = ERR.STRING
+        RETURN
+      CASE E.LINE = "*ENDDOC"
+        HEADER.XML<-1> = HEADER.XML.ENDTAG
+        HEADER.XML<-1> = '</header>'
+        E.LN.NO = E.IDX + 2
+        EXIT
+      CASE HEADER.XML.ENDTAG # ''
+        HEADER.XML<-1> = ' ':toXML( TRIM(E.LINE[2,LEN(E.LINE)]) )
+      CASE FIELD(E.LINE," ",3) = "-"
+        HEADER.TYPE = FIELD(E.LINE," ",2)
+        HEADER.VAL  = TRIM( E.LINE[INDEX(E.LINE,"-",1)+1,LEN(E.LINE)] )
+        HEADER.XML<-1> = '<':DOWNCASE(HEADER.TYPE):'>'
+        HEADER.XML<-1> = toXML(HEADER.VAL)
+        IF HEADER.TYPE = "DESCRIPTION" THEN
+          HEADER.XML.ENDTAG = '</':DOWNCASE(HEADER.TYPE):'>'
+        END ELSE
+          HEADER.XML<-1> = '</':DOWNCASE(HEADER.TYPE):'>'
+        END
+      CASE 1
+    END CASE
+  NEXT E.IDX
+  FUNCTION<-1> = HEADER.XML
+  ;*
+  ;* Parse the elogic documentation for each routine
+  ;*
+  EDOC.XML = ''
+  EDOC.XML.ENDTAG = ''
+  FOR E.IDX = E.LN.NO+1 TO ELOGIC.CNT
+    E.LINE = TRIM(ELOGIC.REC<E.IDX>)
+    BEGIN CASE
+      CASE E.LINE[1,2] # ";*"
+        EDOC.XML = ''
+        CONTINUE
+      CASE E.LINE[1,3] = ";**"
+        EDOC.XML<-1> = '<function>'
+      CASE EDOC.XML = ''
+        CONTINUE
+      CASE E.LINE[1,4] = ";* @"
+        EDOC.XML<-1> = EDOC.XML.ENDTAG
+        EDOC.FIELD = FIELD(E.LINE," ",2)
+        EDOC.FIELD = TRIM( EDOC.FIELD[2,LEN(EDOC.FIELD)] )
+        EDOC.XML<-1> = '<':EDOC.FIELD:'>'
+        EDOC.XML<-1> = toXML( TRIM( E.LINE[5+LEN(EDOC.FIELD),LEN(E.LINE)] ) )
+        EDOC.XML.ENDTAG = '</':EDOC.FIELD:'>'
+      CASE E.LINE[1,3] = ";*;"
+        EDOC.XML<-1> = EDOC.XML.ENDTAG
+        EDOC.XML<-1> = '</function>'
+        EDOC.FUNCTION = TRIM(ELOGIC.REC<E.IDX+1>)
+        EDOC.FUNCTION = EDOC.FUNCTION[1,LEN(EDOC.FUNCTION)-1]
+        EDOC.XML<1> = '<function id=':QUOTE(EDOC.FUNCTION):'>'
+        FUNCTION<-1> = EDOC.XML
+        EDOC.XML.ENDTAG = ''
+        EDOC.XML = ''
+      CASE 1
+        EDOC.XML<-1> = toXML( TRIM( E.LINE[3,LEN(E.LINE)] ) )
+    END CASE
+  NEXT E.IDX
+  ;*
+  ;* Return information
+  ;*
+  FUNCTION<-1> = '</edoc>'
+  SWAP @AM WITH '' IN FUNCTION
+RETURN
+
+  ;**
+  ;* Gets the list of available elogic routines
+  ;*
+  ;* @return FUNCTION An XML list of elogic routines in ELOGICBP
+  ;*;
+getDocList:
+  ;*
+  ;* Setup error strings
+  ;*
+  ERR.NOTEXIST.FILE    = "Database error, please try again later."
+  ;*
+  ;* Open ELOGICBP file
+  ;*
+  OPEN "ELOGICBP" TO ELOGICBP ELSE
+    ERR.STRING = ERR.NOTEXIST.FILE
+    GOSUB setupErrorMsg
+    FUNCTION = ERR.STRING
+    RETURN
+  END
+  ;*
+  ;* Select all text files in ELOGICBP
+  ;*
+  CMD = "SELECT ELOGICBP WITH @ID LIKE ...elogic AND WITH @ID UNLIKE _..."
+  UDTEXECUTE CMD CAPTURING CMD.CAPTURE RETURNING CMD.RET
+  ;*
+  ;* Create an XML array from the file names
+  ;*
+  DOC.LIST = '<edoc-list>'
+  LOOP
+    READNEXT DOC_ID ELSE EXIT
+    DOC.LIST<-1> = '<edoc>':DOC_ID:'</edoc>'
+  REPEAT
+  DOC.LIST<-1> = '</edoc-list>'
+  FUNCTION = DOC.LIST
+  SWAP @AM WITH '' IN FUNCTION
+RETURN
+
+  ;**
+  ;* Sets up an XML error message
+  ;*
+  ;* @param  ERR.STRING  The error message
+  ;* @return ERR.STRING  The xml error message
+  ;*;
+setupErrorMsg:
+  ERR.STRING = '<error>':toXML(ERR.STRING):'</error>'
+RETURN

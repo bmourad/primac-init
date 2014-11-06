@@ -1,0 +1,368 @@
+**************************************************************************
+*
+* PROGRAM - HNP.XFER
+*
+* AUTHOR  - NICK AMENDOLA, NASTech, Inc.
+*
+* DATE    - 12/16/95
+*
+* DESCRIPTION
+*
+* This program is used to receive file transfer data from PROCOMM
+* using the ASCII file transfer protocol. The program uses a "?"
+* as the pacing character.
+*
+**************************************************************************
+*
+*---- DIMENSIONED ARRAYS
+*
+      REC.SIZE = 4000
+      DIM REC(REC.SIZE)
+*
+*---- OPEN ALL FILES
+*
+      OPEN "","VOC" TO VOC ELSE
+         PRINT "CANNOT OPEN VOC FILE"
+         GOTO 99999
+      END
+      NDC.OK = 1
+      OPEN "","DOWNLOAD" TO DOWNLOAD ELSE NDC.OK = 0
+      IF NDC.OK THEN 
+         OPEN "","OUT.QUEUE" TO OUT.QUEUE ELSE NDC.OK = 0
+      END
+      IF NDC.OK THEN
+         NDC.WARN = 0
+         READ VREC FROM VOC, "DOWNLOAD" THEN
+            IF VREC<1> # "F" THEN NDC.WARN = 1
+         END
+         READ VREC FROM VOC, "OUT.QUEUE" THEN
+            IF VREC<1> # "F" THEN NDC.WARN = 1
+         END
+         IF NDC.WARN THEN
+            PRINT
+            PRINT "CAUTION: NDC-Plus files are not in this account!!!"
+         END
+      END ELSE
+         PRINT
+         PRINT "Cannot transfer to NDC-PLUS from this account!!!"
+      END
+*
+*---- INITIALIZATION
+*
+      PROMPT ""
+      FILENAME = ""
+      ITEMNAME = ""
+      FILETYPE = ""
+      CMDFLAG = CHAR(1)
+      CFL = LEN(CMDFLAG)
+      IF NDC.OK THEN
+         NETIDS = ""
+         FOR NETID = 1 TO 250
+            READ DREC FROM DOWNLOAD, NETID THEN
+               IF NETIDS = "" THEN 
+                  NETIDS = NETID
+               END ELSE
+                  NETIDS = NETIDS:",":NETID
+               END
+            END
+         NEXT NETID
+         IF NETIDS = "" THEN
+            PRINT
+            PRINT "WARNING - No Network Controllers defined!!!"
+            NETIDS = "X"
+         END
+      END ELSE
+         NETIDS = "X"
+      END
+*
+*---- MAIN PROCESSING
+*
+100 *
+      TEMPFILE = "NDCBP"
+      GOSUB 1100                                 ;* GET TEMP FILE NAME
+      IF VALUE = "END" THEN GOTO 99999
+      PRINT
+      PRINT "READY"
+      MAT REC = ""
+      LCNT = 0
+      BCNT = 0
+      APTR = 1
+      LINECOUNT = 0
+      BYTECOUNT = 0
+      XDONE = 0
+      ECHO OFF
+      LOOP
+         INPUT INDATA,1:
+         IF INDATA = CHAR(27) THEN
+            XDONE = 1
+         END ELSE
+            PRINT "?":
+            INPUT INDATA2 FOR 2 ELSE INDATA2 = ""
+            INDATA = INDATA:INDATA2
+            IF INDATA = CMDFLAG:"END" THEN
+               XDONE = 1
+            END
+         END
+      UNTIL XDONE DO
+         IF INDATA[1,CFL] = CMDFLAG THEN
+            P = INDEX(INDATA,"=",1)
+            PARAM = TRIM(INDATA[(CFL+1),(P-(CFL+1))])
+            PVALUE = TRIM(INDATA[(P+1),999])
+         END ELSE
+            PARAM = ""
+         END
+         BEGIN CASE
+         CASE LCNT = 0 AND TRIM(FIELD(INDATA,"=",1)) = "COMMAND-FLAG"
+            CMDFLAG = TRIM(FIELD(INDATA,"=",2))
+            CFL = LEN(CMDFLAG)
+         CASE PARAM = "FILE-NAME"
+            FILENAME = PVALUE
+         CASE PARAM = "ITEM-NAME"
+            ITEMNAME = PVALUE
+         CASE PARAM = "LINE-COUNT"
+            LINECOUNT = PVALUE
+         CASE PARAM = "BYTE-COUNT"
+            BYTECOUNT = PVALUE
+         CASE PARAM = "FILE-TYPE"
+            FILETYPE = PVALUE
+         CASE 1
+            IF ITEMNAME = "" AND INDATA[1,1] = "*" THEN
+               PLINE = TRIM(INDATA[2,99])
+               IF PLINE[1,7] = "PROGRAM" THEN
+                  PLINE = TRIM(PLINE[8,99])
+                  PL1 = PLINE[1,1]
+                  BEGIN CASE
+                  CASE PL1 = "-"
+                     ITEMNAME = TRIM(PLINE[2,99])
+                  CASE PL1 = ":"
+                     ITEMNAME = TRIM(PLINE[2,99])
+                  CASE PL1 = "="
+                     ITEMNAME = TRIM(PLINE[2,99])
+                  END CASE
+               END
+            END
+            LCNT = LCNT + 1
+            BCNT = BCNT + LEN(INDATA)
+            IF LCNT <= REC.SIZE THEN
+               REC(LCNT) = INDATA
+            END ELSE
+               APTR = APTR + 1
+               REC(REC.SIZE)<APTR> = INDATA
+            END
+            BEGIN CASE
+            CASE FILETYPE = "BIN8-1"
+            CASE FILETYPE = "BIN8-2"
+            CASE MOD((LCNT+APTR-1),100) = 0
+               MATWRITE REC ON TFILE, "TEMPXFR"
+            END CASE
+         END CASE
+      REPEAT
+*
+*---- TRANSFER COMPLETE
+*
+      IF LCNT = 0 THEN GOTO 99999
+      ECHO ON
+      PRINT
+      PRINT
+      IF LINECOUNT = 0 THEN
+         LINECOUNT = LCNT+APTR-1
+      END ELSE
+         PRINT OCONV(LINECOUNT,"MD0,")"R#9":" lines sent, ":
+      END
+      PRINT OCONV(LCNT,"MD0,")"R#9":" lines received"
+      IF BYTECOUNT = 0 THEN
+         BYTECOUNT = BCNT
+      END ELSE
+         PRINT OCONV(BYTECOUNT,"MD0,")"R#9":" bytes sent, ":
+      END
+      PRINT OCONV(BCNT,"MD0,")"R#9":" bytes received"
+      IF LINECOUNT = (LCNT+APTR-1) AND BYTECOUNT = BCNT THEN
+         ERRFLAG = 0
+      END ELSE
+         ERRFLAG = 1
+         PRINT
+         PRINT "FILE TRANSFER ERROR"
+      END
+      BEGIN CASE
+      CASE FILETYPE = "BIN8-1" AND ERRFLAG
+      CASE FILETYPE = "BIN8-1"
+         FILENAME = ITEMNAME
+         FILEBASE = FIELD(FILENAME,".",1)
+         GOSUB 1400
+         IF VALUE = "END" THEN GOTO 99999
+         MSG = ""
+         MSG<1> = "@START"
+         MSG<2> = "DELETE^TEMP.XFR"
+         MSG<3> = "OPEN-BIN^78^TEMP.XFR"
+         NCNT = DCOUNT(NETIDS,",")
+         MCNT = DCOUNT(MSG,CHAR(254))
+         FOR N = 1 TO NCNT
+            NETID = TRIM(FIELD(NETIDS,",",N))
+            FOR M = 1 TO MCNT
+               CALL HNP.ADDQUEUE(NETID,MSG<M>,OUT.QUEUE,QPTR,STATUS)
+               IF MSG<M>[1,1] # "@" THEN
+                  CALL HNP.ADDQUEUE(NETID,"@SLEEP^2",OUT.QUEUE,QPTR,STATUS)
+               END
+            NEXT M
+         NEXT N
+         FOR N = 1 TO NCNT
+            NETID = TRIM(FIELD(NETIDS,",",N))
+            FOR M = 1 TO LCNT
+               MSG = "PUT-BIN8^78^":REC(M)
+               CALL HNP.ADDQUEUE(NETID,MSG,OUT.QUEUE,QPTR,STATUS)
+            NEXT M
+         NEXT N
+         MSG = ""
+         MSG<1> = "CLOSE^78"
+         MSG<2> = "DELETE^":FILEBASE:".003"
+         MSG<3> = "RENAME^":FILEBASE:".002":"^":FILEBASE:".003"
+         MSG<4> = "RENAME^":FILEBASE:".001":"^":FILEBASE:".002"
+         MSG<5> = "RENAME^":FILENAME:"^":FILEBASE:".001"
+         MSG<6> = "RENAME^TEMP.XFR^":FILENAME
+         MSG<7> = "DELETE^TEMP.XFR"
+         MSG<8> = "@STOP"
+         NCNT = DCOUNT(NETIDS,",")
+         MCNT = DCOUNT(MSG,CHAR(254))
+         FOR N = 1 TO NCNT
+            NETID = TRIM(FIELD(NETIDS,",",N))
+            FOR M = 1 TO MCNT
+               CALL HNP.ADDQUEUE(NETID,MSG<M>,OUT.QUEUE,QPTR,STATUS)
+               IF MSG<M>[1,1] # "@" THEN
+                  CALL HNP.ADDQUEUE(NETID,"@SLEEP^2",OUT.QUEUE,QPTR,STATUS)
+               END
+            NEXT M
+         NEXT N
+      CASE FILETYPE = "BIN8-2" AND ERRFLAG
+      CASE FILETYPE = "BIN8-2"
+         GOSUB 1400
+         IF VALUE = "END" THEN GOTO 99999
+         FOR N = 1 TO NCNT
+            NETID = TRIM(FIELD(NETIDS,",",N))
+            FOR M = 1 TO LCNT
+               MSG = REC(M)
+               CALL HNP.ADDQUEUE(NETID,MSG,OUT.QUEUE,QPTR,STATUS)
+            NEXT M
+         NEXT N
+      CASE 1
+         MATWRITE REC ON TFILE, "TEMPXFR"
+         PRINT
+         PRINT "Data written to file ":TEMPFILE:", item TEMPXFR"
+         IF FILENAME = "" THEN
+            FILENAME = TEMPFILE
+            GOSUB 1200                           ;* GET FILE NAME
+            IF VALUE = "END" THEN GOTO 99999
+         END
+         IF ITEMNAME = "" THEN ITEMNAME = "TRANSFER"
+         GOSUB 1300                              ;* GET ITEM NAME
+         IF VALUE = "END" THEN GOTO 99999
+         MATWRITE REC ON FVAR, ITEMNAME
+         PRINT
+         PRINT "Data written to file ":FILENAME:", item ":ITEMNAME
+         DELETE TFILE, "TEMPXFR"
+      END CASE
+      GOTO 99999
+*
+*---- GET TEMP FILE NAME
+*
+1100 *
+      PRINT
+      PRINT "File Name (":TEMPFILE:"): ":
+      INPUT VALUE
+      BEGIN CASE
+      CASE VALUE = "END"
+         RETURN
+      CASE VALUE = CHAR(27)
+         VALUE = "END"
+         RETURN
+      CASE VALUE = ""
+         VALUE = TEMPFILE
+      END CASE
+      OPEN "",VALUE TO TFILE ELSE
+         PRINT "INVALID FILE NAME"
+         GOTO 1100
+      END
+      TEMPFILE = VALUE
+      RETURN
+*
+*---- GET FILE NAME
+*
+1200 *
+      PRINT
+      PRINT "File Name (":FILENAME:"): ":
+      INPUT VALUE
+      BEGIN CASE
+      CASE VALUE = "END"
+         RETURN
+      CASE VALUE = CHAR(27)
+         VALUE = "END"
+         RETURN
+      CASE VALUE = ""
+         VALUE = FILENAME
+      END CASE
+      OPEN "",VALUE TO FVAR ELSE
+         PRINT "INVALID FILE NAME"
+         GOTO 1200
+      END
+      FILENAME = VALUE
+      RETURN
+*
+*---- GET ITEM NAME
+*
+1300 *
+      PRINT
+      PRINT "Item Name (":ITEMNAME:"): ":
+      INPUT VALUE
+      BEGIN CASE
+      CASE VALUE = "END"
+         RETURN
+      CASE VALUE = CHAR(27)
+         VALUE = "END"
+         RETURN
+      CASE VALUE = ""
+         VALUE = ITEMNAME
+      END CASE
+      READ XREC FROM FVAR, VALUE THEN
+         LOOP
+            PRINT "Overwrite (Y/N): ":
+            INPUT OWFLAG
+         UNTIL OWFLAG = "Y" OR OWFLAG = "N" DO
+         REPEAT
+         IF OWFLAG = "N" THEN GOTO 1300
+      END
+      ITEMNAME = VALUE
+      RETURN
+*
+*---- GET NETWORK ID
+*
+1400 *
+      IF DCOUNT(NETIDS,",") = 1 AND NUM(NETIDS) THEN RETURN
+      PRINT
+      PRINT "Network ID(s) (":NETIDS:"): ":
+      INPUT VALUE
+      BEGIN CASE
+      CASE VALUE = "END"
+         RETURN
+      CASE VALUE = CHAR(27)
+         VALUE = "END"
+         RETURN
+      CASE VALUE = ""
+         VALUE = NETIDS
+      END CASE
+      NCNT = DCOUNT(VALUE,",")
+      FOR NPTR = 1 TO NCNT
+         NETID = FIELD(VALUE,",",NPTR)
+         READ DREC FROM DOWNLOAD, NETID ELSE
+            PRINT "INVALID NETWORK ID - ":NETID
+            GOTO 1400
+         END
+      NEXT NPTR
+      NETIDS = VALUE
+      RETURN
+*
+*---- END OF PROGRAM
+*
+99999*
+      ECHO ON
+      PRINT
+      PRINT "TERMINATED"
+   END

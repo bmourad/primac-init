@@ -1,0 +1,492 @@
+   SUBROUTINE JRS.WORKSHEET
+*COPY>JCS.CPYLIB>COM.JRS
+*************************************************************
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - JCSBP
+* PROGRAM     - JRS.WORKSHEET
+* BY          - W.R. MCKENZIE, COMPUTER BUSINESS ASSOCIATES
+* DATE        - 05/27/88
+* DESCRIPTION -
+* This program produces a Job Hours/Costing Posted report.
+* TASK 20532 JR EXPAND INVOICE AMOUNT TO 8.2
+*T22464 gat 11/03/1997 * FIX SUBJOBS ON INVOICE T
+*T22834 lanny 05/05/1998 * Prebills & Prepayments area not including all
+*                          invoices/CM's in total.
+*T23547 cindy 01/07/1999 * if cons, prebill/payment don't print;
+*T23573 cindy 01/07/1999 * increase report line from 300 to open
+*                          change PR and PL to non dim from () to <>
+*T23945 gat 05/12/1999 * Change verbiage on Add'l M
+*T24021 cm 06/24/1999 * When printing a sub-job the estimate # is the
+*                       master job estimate # and it should be the
+*                       estimate # associated with the sub-job
+*T26556 ajibaly 05/09/2002 * USER RPT NO. AND GET.PROG.HEAD
+*T27141 bmourad 12/23/2002 * EXPAND TOTAL FIELD TO MILLIONS
+*T28258 lross 09/20/2004 * For CONSOL = 'N' use invoices for JOBNO not
+*                          JOB.MASTER.
+*T28754 thompson 01/06/2006 * Fix issue on display of data
+*************************************************************
+*
+*---- FILE EQUATES
+*
+*COPY>JCS.CPYLIB>JOB
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>FILE.VARS
+*COPY>JCS.CPYLIB>JOB.RPT.SUM
+*COPY>PMC.CPYLIB>COST.CNTR
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>PMC.CPYLIB>DEPARTMENT
+*
+*---- INTITIALIZATION
+*
+   DSH.6 = STR("-",6)
+   DSH.8 = STR("-",8)
+   DSH.10= STR("-",10)
+   DSH.12 = STR("-",12); * T20532
+   DSH.14 = STR("-",14); * T20532
+*T23573 v
+*    DIM PR(300)
+*    DIM PL(300)
+*    MAT PR=''
+*    MAT PL=''
+   PR=' '
+   PL=' ' 
+*T23573 ^
+* T20532
+*     BOX='+---------+'
+   BOX='+------------+'
+* T20532
+   PAYMENT.AMT=''
+   INV.AMT=''
+   QUOTE.AMT=''
+   ACTUAL.AMT=''
+   UNKNOWN = '????????????????????'
+*T26556 v
+   HD1 = ""; HD2 = ""
+   RPT.NAME = ""
+   RPT.DATE = DATE()
+   CALL GET.PROG.HEAD(CONO,C.CO.NAME,RPT.NAME,RPT.NO,RPT.DATE,HD1,HD2)
+   PRINTER ON
+*T26556 ^
+*
+*---- INITIALIZATION
+*
+   IF JRSD.CONS="Y" THEN
+      CONSOL="CONSOLIDATED"
+   END ELSE
+      CONSOL="            "
+   END
+*
+*---- MAIN PROCESSING
+*
+100*
+   GOSUB 105
+   SAVE.PRIOR.JOB=JOB.PRIOR.JOB
+   GOSUB 111
+   MARKUP=JOB.MARKUP/100
+   IF JOB.TRACK.DATE<1,7> = "" THEN
+      Q.REMAIN=0
+      Q.RMD=""
+      OV.UN=""
+   END ELSE
+      Q.REMAIN=Q.DLVD-Q.ORD
+      Q.RMD=OCONV(Q.REMAIN,"MD0,")
+      OV.UN=OCONV(INT((Q.REMAIN/1000)*JOB.PRICE.PER.THOU+.5),"MD2,")
+   END
+   PR<1>="  MARKETABLE SUB-TOTAL="
+* T20532
+*     PR(7)="     OVERS / UNDERS   = ":OV.UN"R#10"
+   PR<7>="     OVERS / UNDERS   = ":OV.UN"R#12"
+* T20532     
+   PR<9>="  MARKETABLE COST     ="
+   PR<11>="     COST ADJUSTMENT  ="
+   PR<12>=SPACE(24):BOX
+* T20532
+*     PR(13)="* ADJ MARKETABLE COST = |         |"
+   PR<13>="* ADJ MARKETABLE COST = |            |"
+* T20532
+   PR<14>=SPACE(24):BOX
+   PR<15>="     MARK-UP":MARKUP"R#7":" % ="
+   PR<17>="     MARKET PRICE     ="
+   PR<20>="  GROSS BILLING PRICE ="
+   PR<22>="     LESS AGENCY DISC ="
+   PR<23>=SPACE(24):BOX
+* T20532
+*     PR(24)="* BILLING PRICE       = |         |"
+   PR<24>="* BILLING PRICE       = |            |"
+* T20532
+   PR<25>=SPACE(24):BOX
+   PR<26>="     SALES TAX ____ % ="
+   PR<28>="     POSTAGE          ="
+   PR<30>="     TRANSPORTATION   ="
+   PR<32>=SPACE(24):BOX
+* T20532
+*     PR(33)="* TOTAL BILLING       = |         |"
+   PR<33>="* TOTAL BILLING       = |            |"
+* T20532
+   PR<34>=SPACE(24):BOX
+   PR<38>="PREBILLS AND PREPAYMENTS"
+   H=40
+   IF JRSD.CONS = "Y" THEN
+      CON.CNT = DCOUNT(JOB.SUBS,VM)+1
+*T23547 v
+*       JOB.SUBS = JOB.SUBS:VM:JOB.MASTER
+      JOB.SUBS.MST = JOB.SUBS:VM:JOB.MASTER
+*T23547 ^
+   END ELSE
+*T23547 v
+*       JOB.SUBS = JOB.MASTER
+*T28258 v
+*     JOB.SUBS.MST = JOB.MASTER
+      JOB.SUBS.MST = JOBNO
+*T23547 ^
+      CON.CNT = 1
+   END
+   SAVE.JOB = JOB.MASTER
+   S.INV = ""
+   FOR C = 1 TO CON.CNT
+*T23547 v
+*    MATREAD JOB.REC FROM JOB,CONO:JOB.SUBS<1,C> ELSE  MAT JOB.REC = ""
+      MATREAD JOB.REC FROM JOB,CONO:JOB.SUBS.MST<1,C> ELSE MAT JOB.REC = ""
+*T23547 ^
+      INV.CNT=DCOUNT(JOB.INV.NO,VM)
+* T22464
+      IF INV.CNT='' OR INV.CNT=0 THEN GOTO 104
+      FOR L=1 TO INV.CNT
+*T22834  INV.AMT=''
+         INV.AMT=''
+         AMT.CNT= DCOUNT(JOB.INV.AMT<1,L>,SVM)
+         FOR M=1 TO AMT.CNT
+            INV.AMT=INV.AMT + JOB.INV.AMT<1,L,M>
+         NEXT M
+*T22834  LOCATE JOB.INV.NO<1,L> IN S.INV SETTING PTR THEN
+         LOCATE JOB.INV.NO<1,L> IN S.INV<1>,1 SETTING PTR THEN
+            S.INV<2,PTR> = S.INV<2,PTR> + SUM(JOB.INV.AMT<1,L>)
+         END ELSE
+            S.INV<1,PTR> = JOB.INV.NO<1,L>
+*T23547 v
+*              S.INV<2,PTR> = JOB.INV.AMT<1,L>
+            S.INV<2,PTR> = SUM(JOB.INV.AMT<1,L>)
+*T23547 ^
+            S.INV<3,PTR> = JOB.INV.DATE<1,L>
+         END
+* T20532
+*        PR(H)=JOB.INV.NO<1,L>"L#8":' ':OCONV(JOB.INV.DATE<1,L>,"D2-")"R#8":' ':OCONV(INV.AMT,"MD2,")"R#10"
+*        PR(H)=JOB.INV.NO<1,L>"L#8":' ':OCONV(JOB.INV.DATE<1,L>,"D2-")"R#8":' ':OCONV(INV.AMT,"MD2,")"R#14"
+* T20532
+         PAYMENT.AMT=PAYMENT.AMT + INV.AMT
+*        H=H + 1
+      NEXT L
+104 *
+   NEXT C
+   IVC.CNT = DCOUNT(S.INV<1>,VM)
+   FOR I = 1 TO IVC.CNT 
+      PR<H>=S.INV<1,I>"L#8":' ':OCONV(S.INV<3,I>,"D2-")"R#8":' ':OCONV(S.INV<2,I>,"MD2,")"R#14"
+      H=H+1
+   NEXT I
+* T20532
+*     PR(H)=SPACE(18):"----------"
+   PR<H>=SPACE(18):"--------------"
+* T20532
+   H=H + 1
+* T20532
+*     PR(H)=SPACE(18):OCONV(PAYMENT.AMT,"MD2,")"R#10"
+   PR<H>=SPACE(18):OCONV(PAYMENT.AMT,"MD2,")"R#14"
+* T20532
+122 H=H + 1
+   PR<H>="INVOICE NO.     INVOICE DATE"
+   H=H + 1
+   PR<H>=BOX:"   +----------+"
+   H=H + 1
+   PR<H>="|            |   |          |"
+   H=H + 1
+   PR<H>=BOX:"   +----------+"
+*T24021 v
+*    MATREAD JOB.REC FROM JOB, CONO:SAVE.JOB ELSE MAT JOB.REC = ""
+   MATREAD JOB.REC FROM JOB, CONO:JOBNO ELSE MAT JOB.REC = ""
+*27141   E.AMT=OCONV(JOB.EST.COST,"MD2,")
+   E.AMT=OCONV(JOB.EST.COST,"MD2") ;*27141
+   E.DATE=OCONV(JOB.TRACK.DATE<1,1>,"D2-")
+*T24021 ^
+   MATREAD CUST.REC FROM CUSTOMER,CONO:JOB.CUST ELSE CUST.NAME=UNKNOWN
+   IF CUST.INVOICE.CNT<1,2> > 0 THEN
+      DAYS.TO.PAY=INT(CUST.DAYS.TO.PAY / CUST.INVOICE.CNT<1,2>)
+   END ELSE
+      DAYS.TO.PAY=0
+   END
+* T20532
+*     PL(1)="CUSTOMER: ":JOB.CUST"L#6":'  ':C.CUST.NAME"L#30":SPACE(13):"P/O #     : ":JOB.CUST.PO"L#18":SPACE(6)
+*     PL(2)="SALESREP: ":JOB.SLSMN"L#3":"     ":C.SALS.NAME"L#30":SPACE(13):"SALES CODE: ":JOB.SALES.CODE"L#5":SPACE(19)
+*     PL(3)=SPACE(61):"JOB CATEG : ":JC.DESC"L#15":SPACE(9)
+*     PL(4)=SPACE(8):"<--------- QUOTE ---------->  <---- ACTUAL ----->    CONF DATE : ":OCONV(JOB.TRACK.DATE<1,2>,'D2-')"R#8":SPACE(16)
+*     PL(5)=" TYPE    NUMBER    DATE     AMOUNT     NUMBER    AMOUNT      CONF $    : ":CONF.AMT"L#10":SPACE(14)
+*     PL(6)=DSH.6:'  ':DSH.8:' ':DSH.8:' ':DSH.10:'  ':DSH.8:' ':DSH.10:"    ORDERED   : ":OCONV(Q.ORD,"MD0,")"L#10":SPACE(14)
+   PL<1>="CUSTOMER: ":JOB.CUST"L#6":'  ':C.CUST.NAME"L#30":SPACE(11):"P/O #     : ":JOB.CUST.PO"L#18":SPACE(5)
+   PL<2>="SALESREP: ":JOB.SLSMN"L#3":"     ":C.SALS.NAME"L#30":SPACE(11):"SALES CODE: ":JOB.SALES.CODE"L#5":SPACE(18)
+   PL<3>=SPACE(59):"JOB CATEG : ":JC.DESC"L#15":SPACE(8)
+   PL<4>=SPACE(8):"<--------- QUOTE ---------->  <---- ACTUAL ----->  CONF DATE : ":OCONV(JOB.TRACK.DATE<1,2>,'D2-')"R#8":SPACE(16)
+   PL<5>=" TYPE    NUMBER    DATE     AMOUNT     NUMBER    AMOUNT    CONF $    : ":CONF.AMT"L#10":SPACE(14)
+   PL<6>=DSH.6:'  ':DSH.8:' ':DSH.8:' ':DSH.10:'  ':DSH.8:' ':DSH.10:"  ORDERED   : ":OCONV(Q.ORD,"MD0,")"L#10":SPACE(14)
+   PL<7>="******  ":JOB.EST"L#8":' '
+   PL<7>=PL<7>:E.DATE"R#8":' '
+   PL<7>=PL<7>:E.AMT"R#10":'  '
+   PL<7>=PL<7>:JOBNO"L#8":' '
+* T20532
+*     PL(7)=PL(7):A.AMT"R#10":'    DELIVERED : '
+   PL<7>=PL<7>:A.AMT"R#10":'  DELIVERED : '
+* T20532
+   PL<7>=PL<7>:OCONV(Q.DLVD,"MD0,")"L#10"
+   PL<7>=PL<7>:SPACE(4):Q.RMD"L#10"
+   QUOTE.AMT=QUOTE.AMT + JOB.EST.COST
+   ACTUAL.AMT=ACTUAL.AMT + JOB.TOT.COST
+   G=8
+   S.CNT=DCOUNT(JOB.SUBS.SAVE,VM)
+   FOR R=1 TO S.CNT
+      GOSUB 115
+* T20532
+*        IF G=8 THEN PL(G)=PL(G):"  PRICE/1000: ":PRICE.PER.THOU"L#10":SPACE(13)
+      IF G=8 THEN PL<G>=PL<G>:"  $ Add'l M : ":PRICE.PER.THOU"L#10":SPACE(13)
+* T20532
+      G = G + 1
+   NEXT R
+   PL<G>=SPACE(26):"----------":SPACE(11):"----------"
+* T20532
+*     IF G=8 THEN PL(G)=PL(G):"    PRICE/1000: ":PRICE.PER.THOU"L#10":SPACE(14)
+   IF G=8 THEN PL<G>=PL<G>:"  $ Add'l M : ":PRICE.PER.THOU"L#10":SPACE(13)
+* T20532
+   IF QUOTE.AMT=0 THEN QUOTE.AMT=''
+   IF ACTUAL.AMT=0 THEN ACTUAL.AMT=''
+   G=G + 1
+*T27141   PL<G>=SPACE(26):OCONV(QUOTE.AMT,"MD2,")"R#10":SPACE(11):OCONV(ACTUAL.AMT,"MD2,")"R#10":SPACE(40)
+   PL<G>=SPACE(26):OCONV(QUOTE.AMT,"MD2")"R#10":SPACE(11):OCONV(ACTUAL.AMT,"MD2")"R#10":SPACE(40); * T27141
+   G=G + 2
+   GOSUB 117
+   QUOTE.AMT=''
+   ACTUAL.AMT=''
+   IF SAVE.PRIOR.JOB # '' THEN
+      MATREAD JOB.REC FROM JOB,CONO:SAVE.PRIOR.JOB ELSE MAT JOB.REC=""
+      BILL.PRICE=''
+      INV.CNT=DCOUNT(JOB.INV.NO,VM)
+      FOR L=1 TO INV.CNT
+         AMT.CNT=DCOUNT(JOB.INV.AMT<1,L>,SVM)
+         FOR M=1 TO AMT.CNT
+            BILL.PRICE=BILL.PRICE + JOB.INV.AMT<1,L,M>
+         NEXT M
+      NEXT L
+      BILL.PRICE=OCONV(BILL.PRICE,"MD2,")
+      GOSUB 111
+      G=G + 2
+*        PL(G)=STR("-",35):" H I S T O R Y ":STR("-",38):SPACE(9)
+*        G=G + 2
+*        PL(G)="SALESREP: ":JOB.SLSMN"L#3":'     ':C.SALS.NAME"L#30":SPACE(13):"SALES CODE: ":JOB.SALES.CODE"L#5":SPACE(19)
+*        G=G + 1
+*        PL(G)=SPACE(61):"JOB CATEG : ":JC.DESC"L#15":SPACE(9)
+*        G=G + 1
+*        PL(G)=SPACE(8):"<--------- QUOTE ---------->  <---- ACTUAL ----->    CONF DATE : ":OCONV(JOB.TRACK.DATE<1,2>,'D2-')"R#8":SPACE(16)
+*        G=G + 1
+*        PL(G)=" TYPE    NUMBER    DATE     AMOUNT     NUMBER    AMOUNT      CONF $    : ":CONF.AMT"L#10":SPACE(14)
+*        G=G + 1
+*        PL(G)=DSH.6:'  ':DSH.8:' ':DSH.8:' ':DSH.10:'  ':DSH.8:' ':DSH.10:"    ORDERED   : ":OCONV(Q.ORD,"MD0,")"R#10":SPACE(14)
+*        G=G + 1
+*        PL(G)="******  ":JOB.EST"L#8":' ':E.DATE"R#8":' ':E.AMT"R#10":'  ':SAVE.PRIOR.JOB"L#8":' ':A.AMT"R#10":"    DELIVERED : ":OCONV(Q.DLVD,"MD0,")"L#10":SPACE(14)
+      PL<G>=STR("-",35):" H I S T O R Y ":STR("-",38):SPACE(6)
+      G=G + 2
+      PL<G>="SALESREP: ":JOB.SLSMN"L#3":'     ':C.SALS.NAME"L#30":SPACE(11):"SALES CODE: ":JOB.SALES.CODE"L#5":SPACE(18)
+      G=G + 1
+      PL<G>=SPACE(58):"JOB CATEG : ":JC.DESC"L#15":SPACE(6)
+      G=G + 1
+      PL<G>=SPACE(8):"<--------- QUOTE ---------->  <---- ACTUAL ----->  CONF DATE : ":OCONV(JOB.TRACK.DATE<1,2>,'D2-')"R#8":SPACE(15)
+      G=G + 1
+      PL<G>=" TYPE    NUMBER    DATE     AMOUNT     NUMBER    AMOUNT    CONF $    : ":CONF.AMT"R#10":SPACE(13)
+      G=G + 1
+      PL<G>=DSH.6:'  ':DSH.8:' ':DSH.8:' ':DSH.10:'  ':DSH.8:' ':DSH.10:"  ORDERED   : ":OCONV(Q.ORD,"MD0,")"R#10":SPACE(13)
+      G=G + 1
+      PL<G>="******  ":JOB.EST"L#8":' ':E.DATE"R#8":' ':E.AMT"R#10":'  ':SAVE.PRIOR.JOB"L#8":' ':A.AMT"R#10":"  DELIVERED : ":OCONV(Q.DLVD,"MD0,")"L#10":SPACE(13)
+      QUOTE.AMT=QUOTE.AMT + JOB.EST.COST
+      ACTUAL.AMT=ACTUAL.AMT + JOB.TOT.COST
+      G=G + 1
+      BP.FLG=''
+      PPT.FLG=''
+      DP.FLG=''
+      S.CNT=DCOUNT(JOB.SUBS.SAVE,VM)
+      FOR R=1 TO S.CNT
+         GOSUB 115
+         BEGIN CASE
+            CASE PPT.FLG = ""
+* T20532
+*              PL(G)=PL(G):"    PRICE/1000: ":PRICE.PER.THOU"L#10":SPACE(14)
+               PL<G>=PL<G>:"  $ Add'l M : ":PRICE.PER.THOU"L#10":SPACE(13)
+* T20532
+               PPT.FLG=1
+            CASE BP.FLG = ""
+* T20532
+*              PL(G)=PL(G):"   *BILL PRICE: ":BILL.PRICE"L#10":SPACE(14)
+               PL<G>=PL<G>:" *BILL PRICE: ":BILL.PRICE"L#10":SPACE(13)
+* T20532
+               BP.FLG=1
+            CASE DP.FLG = ""
+* T20532
+*              PL(G)=PL(G):"    DAYS / PAY: ":DAYS.TO.PAY"L#3":SPACE(21)
+               PL<G>=PL<G>:"  DAYS / PAY: ":DAYS.TO.PAY"L#3":SPACE(20)
+* T20532
+               DP.FLG=1
+         END CASE
+         G=G + 1
+      NEXT R
+      PL<G>=SPACE(26):"----------":SPACE(11):"----------"
+      BEGIN CASE
+         CASE PPT.FLG = ""
+* T20532
+*           PL(G)=PL(G):"    PRICE/1000: ":PRICE.PER.THOU"L#10":SPACE(14)
+            PL<G>=PL<G>:"  $ Add'l M : ":PRICE.PER.THOU"L#10":SPACE(13)
+            PL<G>=PL<G>:" *BILL PRICE: ":BILL.PRICE"L#10":SPACE(13)
+* T20532
+            PPT.FLG=1
+         CASE BP.FLG = ""
+* T20532
+*           PL(G)=PL(G):"   *BILL PRICE: ":BILL.PRICE"L#10":SPACE(14)
+            PL<G>=PL<G>:" *BILL PRICE: ":BILL.PRICE"L#10":SPACE(13)
+* T20532
+            BP.FLG=1
+         CASE DP.FLG = ""
+* T20532
+*           PL(G)=PL(G):"    DAYS / PAY: ":DAYS.TO.PAY"L#3":SPACE(21)
+            PL<G>=PL<G>:"  DAYS / PAY: ":DAYS.TO.PAY"L#3":SPACE(20)
+* T20532
+            DP.FLG=1
+      END CASE
+      IF QUOTE.AMT=0 THEN QUOTE.AMT=''
+      IF ACTUAL.AMT=0 THEN ACTUAL.AMT=''
+      G=G + 1
+*T27141      PL<G>=SPACE(26):OCONV(QUOTE.AMT,"MD2,")"R#10":SPACE(11):OCONV(ACTUAL.AMT,"MD2,")"R#10"
+      PL<G>=SPACE(26):OCONV(QUOTE.AMT,"MD2")"R#10":SPACE(11):OCONV(ACTUAL.AMT,"MD2")"R#10" ;*27141
+      BEGIN CASE
+         CASE BP.FLG = ""
+* T20532
+*           PL(G)=PL(G):"   *BILL PRICE: ":BILL.PRICE"L#10":SPACE(14)
+            PL<G>=PL<G>:" *BILL PRICE: ":BILL.PRICE"L#10":SPACE(13)
+* T20532
+            BP.FLG=1
+         CASE DP.FLG = ""
+* T20532
+*           PL(G)=PL(G):"    DAYS / PAY: ":DAYS.TO.PAY"L#3":SPACE(21)
+            PL<G>=PL<G>:"  DAYS / PAY: ":DAYS.TO.PAY"L#3":SPACE(20)
+* T20532
+            DP.FLG=1
+      END CASE
+      IF DP.FLG='' THEN
+         G=G + 1
+* T20532
+*           PL(G)=SPACE(61):"DAYS / PAY: ":DAYS.TO.PAY"L#3":SPACE(21)
+         PL<G>=SPACE(59):"DAYS / PAY: ":DAYS.TO.PAY"L#3":SPACE(20)
+* T20532
+         G=G + 2
+      END ELSE
+         G=G + 2
+      END
+      GOSUB 117
+   END
+   IF G > H THEN
+      MAXIMUM=G
+   END ELSE
+      MAXIMUM=H
+   END
+   FOR N=1 TO MAXIMUM
+      IF N = 55 THEN GOSUB 105
+* T20532
+*        PRINT PL<N>"L#97":PR<N>
+      PRINT PL<N>"L#94":PR<N>
+* T20532
+   NEXT N
+   GOTO 99999
+*---- PRINT HEADING
+105*
+   PRINT CHAR(12)
+   H.LINE="#":JOBNO"L#8":" ":CONSOL:SPACE(27):"B I L L I N G   W O R K S H E E T":SPACE(28):"#":JOBNO"L#8":" ":CONSOL
+*T26556 v
+*  PRINT H.LINE
+   PRINT HD1
+   PRINT HD2
+   PRINT "Job Number: ":JOBNO "L#8":SPACE(1):CONSOL
+*T26556 ^
+   H.LINE="MASTER JOB #":JOB.MASTER
+   PRINT H.LINE
+   PRINT
+   RETURN
+*---- CONVERT FIELDS
+111*
+   CONF.DATE=OCONV(JOB.TRACK.DATE<1,2>,"D2-")
+   JOB.DESCRIPTION=JOB.DESC
+   JOB.SUBS.SAVE=JOB.SUBS
+   Q.ORD=JOB.QTY<1,1>
+   Q.DLVD=JOB.QTY<1,3>
+*27141   A.AMT=OCONV(JOB.TOT.COST,"MD2,")
+   A.AMT=OCONV(JOB.TOT.COST,"MD2") ;*27141
+   PRICE.PER.THOU=OCONV(JOB.PRICE.PER.THOU,"MD2,")
+   IF JOB.CONF.AMT # '' THEN
+*T28754      CONF.AMT=OCONV(JOB.CONF.AMT,"MD2,")
+      CONF.AMT=OCONV(JOB.CONF.AMT/100, "MD0,")
+   END ELSE
+*T28754      CONF.AMT=OCONV(JOB.EST.COST,"MD2,")
+      CONF.AMT=OCONV(JOB.EST.COST/100,"MD0,")
+   END
+   READ JC.DESC FROM JOB.CATEGORY,CONO:JOB.CATG ELSE
+      JC.DESC = JOB.CATG
+   END
+   IF JRSD.EST = "Y" THEN
+      E.DATE=OCONV(JOB.TRACK.DATE<1,1>,"D2-")
+      E.AMT=OCONV(JOB.EST.COST,"MD2,")
+   END ELSE
+      E.DATE=''
+      E.AMT=''
+      JOB.EST.COST=''
+   END
+112*
+   RETURN
+*---- READ JOB.SUBS
+115*
+   MATREAD JOB.REC FROM JOB,CONO:JOB.SUBS.SAVE<1,R> ELSE MAT JOB.REC=""
+   IF JRSD.EST  = "Y" THEN
+      E.DATE=OCONV(JOB.TRACK.DATE<1,1>,"D2-")
+      E.AMT=OCONV(JOB.EST.COST,"MD2")
+   END ELSE
+      E.DATE=''
+      E.AMT=''
+   END
+*    JOB.EST.COST=''
+   TYPE.NAME="        "
+   IF JOB.TYPE="C" THEN TYPE.NAME="C/0     "
+   IF JOB.TYPE="R" OR JOB.TYPE='' THEN TYPE.NAME="REG     "
+   IF JOB.TYPE="S" THEN TYPE.NAME="SPOIL   "
+   IF JOB.TYPE="N" THEN TYPE.NAME="N-CHG   "
+*27141   A.AMT=OCONV(JOB.TOT.COST,"MD2,")
+   A.AMT=OCONV(JOB.TOT.COST,"MD2") ;*27141
+   JOB.NUMBER=JOB.SUBS.SAVE<1,R>
+   PL<G>=TYPE.NAME:JOB.EST"L#8":' ':E.DATE"R#8":' ':E.AMT"R#10":'  ':JOB.NUMBER"L#8":' ':A.AMT"R#10"
+   QUOTE.AMT=QUOTE.AMT + JOB.EST.COST
+   ACTUAL.AMT=ACTUAL.AMT + JOB.TOT.COST
+   RETURN
+*---- PRINT DESC
+117*
+   DESC.CNT=DCOUNT(JOB.DESCRIPTION,VM)
+   IF DESC.CNT > 5 THEN DESC.CNT = 5
+   FOR T=1 TO DESC.CNT
+      IF T=1 THEN
+* T20532
+*           PL(G)="DESCRIPTION: ":JOB.DESCRIPTION<1,T>"L#75":SPACE(9)
+         PL<G>="DESCRIPTION: ":JOB.DESCRIPTION<1,T>"L#75":SPACE(6)
+* T20532
+      END ELSE
+* T20532
+*           PL(G)=SPACE(13):JOB.DESCRIPTION<1,T>"L#75":SPACE(9)
+         PL<G>=SPACE(13):JOB.DESCRIPTION<1,T>"L#75":SPACE(6)
+* T20532
+      END
+      G=G + 1
+   NEXT T
+   RETURN
+99999*
+   PRINTER OFF
+   RETURN
+END

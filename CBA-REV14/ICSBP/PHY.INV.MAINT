@@ -1,0 +1,1357 @@
+*COPY>CPYLIB>COM1
+*COPY>ICS.CPYLIB>COM.INV.MAIN  
+*COPY>ICS.CPYLIB>COM.INV.SERIAL
+*COPY>ICS.CPYLIB>COM.INV.LINK  
+*********************************************************************
+* REVISION - [08.1]
+* PROGRAM  - PHY.INV.MAINT
+* AUTHOR   - W.R. MCKENZIE, COMPUTER BUSINESS ASSOCIATES
+* DATE     - 04/03/90
+* REVISED  - 02/13/91 - Added Barcode Inventory Support
+* DESCRIPTION
+* This program is used to maintain the PHY.INV file.
+*T25740 edvard   11/13/01   REV12
+*T26126 adelgado 03/01/2002 * Implement the LOCKED clause for READU.
+*T25740 wyamout 05/02/2002 * REV12 PROBLEM 385 & 390
+*T26556 adelgado 05/09/2002 * For Transfer only, fix deletion of the
+*                             serial from the original Seq record.
+*T25936 cmykleb 06/19/2002 * Allow entry of the revised diameter field
+*                            and the system will calculate the remaining
+*                            weight.
+*T25934 adelgado 07/01/2002 * Allow transactions from Intermec Guns.
+*C41028 cmykleb 11/20/2002 * Zero diameter is changing when a line
+*                            is accessed.
+*T27144 epitka 12/20/2002 * CHECK DELETED SERIAL FILE TOO.
+*T27705 lross 10/20/2003 * Expand Serial to 15 pos.
+*T27801 lross 02/16/2004 * Error in RECP ID for FNGD items.
+*T27931 saleem 06/24/2004 * Mill Roll # Xref.
+*T28213 lross 08/06/2004 * 'A'dd line-item was limited to 999.
+*T28207 cmykleb 08/19/2004 * Allow for fngd records to be created thru
+*                            physical inventory.
+*T28893 lross 04/27/2006 * Problems when reruning after posting.
+*T29032 cmyklebu 12/30/2006 * Move pgm from rev12 to rev14.
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>ICS.CPYLIB>DAILY_TRANSFER
+*COPY>ICS.CPYLIB>TRANSFER
+*COPY>ICS.CPYLIB>INV_SERIAL
+*COPY>ICS.CPYLIB>INV_RECP_WHSE
+*COPY>ICS.CPYLIB>INV_RECEIPTS
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>ICS.CPYLIB>INV.WHSE.LOC
+*COPY>ICS.CPYLIB>WAREHOUSE
+*COPY>ICS.CPYLIB>CATEGORY
+*COPY>ICS.CPYLIB>PHY.INV
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>ICS.CPYLIB>MILL_TO_SERIAL
+*COPY>JCS.CPYLIB>JOB
+*COPY>OPS.CPYLIB>JOB.FNGD.STATS
+*COPY>CPYLIB>GEN.XREF.SUB
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*
+   DEFFUN CALC.STK.QTY(COST.QTY,MAT INV.CNV.REC,ROND,LN)
+   DEFFUN CALC.COST.QTY(STK.QTY,MAT INV.CNV.REC,ROND,LN)
+   DEFFUN CALC.DIAM(COST.QTY,STK.QTY,MAT INV.REC)
+   DEFFUN GET.RECP.ID(CONO,CONTROL.FILE,DATE)
+   DEFFUN GET.SERIAL.SEQ(CONO,CONTROL.FILE,INV_SERIAL.FILE)
+   GEN.DIV='00'
+*
+   EQU INV.UOM.STK TO INV.UNIT<1,2>
+   EQU INV.UOM.CST TO INV.UNIT<1,3>
+*
+   MAT SYSCOM.REC =  "";SYS.TYPE = 2
+   DIM SAVE.PHYSI.REC(PHYSI.REC.SIZE)
+*
+   DIM TEMP.REC(18)
+   EQU TEMP.PROD      TO TEMP.REC(1)
+   EQU TEMP.SERIAL    TO TEMP.REC(2)
+   EQU TEMP.ONHAND    TO TEMP.REC(3)
+   EQU TEMP.DIA       TO TEMP.REC(4)
+   EQU TEMP.COST      TO TEMP.REC(5)
+   EQU TEMP.DESC      TO TEMP.REC(6)
+   EQU TEMP.PO        TO TEMP.REC(7)
+   EQU TEMP.VENDOR    TO TEMP.REC(16)
+   EQU TEMP.RECEIPT   TO TEMP.REC(17)
+   EQU TEMP.UNIT      TO TEMP.REC(18)
+*
+*---- OPEN ALL FILES
+*
+   OPEN "","COMPANY" TO COMPANY ELSE
+      ERRMSG = "CANNOT OPEN COMPANY FILE"
+      GOSUB 93000
+   END
+   OPEN "","CONTROL" TO CONTROL ELSE
+      ERRMSG = "CANNOT OPEN CONTROL FILE"
+      GOSUB 93000
+   END
+   OPEN "","INV.WHSE" TO INV.WHSE ELSE
+      ERRMSG = "INV.WHSE FILE IS MISSING"
+      GOSUB 93000
+   END
+   OPEN "","CATEGORY" TO CATEGORY ELSE
+      ERRMSG = "CATEGORY FILE IS MISSING"
+      GOSUB 93000
+   END
+   OPEN "","WAREHOUSE" TO WAREHOUSE ELSE
+      ERRMSG = "WAREHOUSE FILE IS MISSING"
+      GOSUB 93000
+   END
+   OPEN "","INV_SERIAL" TO INV_SERIAL ELSE
+      ERRMSG = "INV_SERIAL FILE IS MISSING"
+      GOSUB 93000
+   END
+   OPEN '','INV_SERIAL_TEMP' TO INV_SERIAL_TEMP ELSE
+      ERRMSG = 'CANNOT LOCATE INV_SERIAL_TEMP FILE'  
+      GOTO 93000                                     
+   END                                              
+   OPEN '','INV_SERIAL_DELETED' TO INV_SERIAL_DELETED ELSE
+      ERRMSG = 'CANNOT LOCATE INV_SERIAL_DELETED FILE'  
+      GOTO 93000                                     
+   END                                              
+   OPEN "","INV_RECP_WHSE" TO INV_RECP_WHSE ELSE
+      ERRMSG = "INV_RECP_WHSE FILE IS MISSING"
+      GOSUB 93000
+   END
+   OPEN "","INV_RECEIPTS" TO INV_RECEIPTS ELSE
+      ERRMSG = "INV_RECEIPTS FILE IS MISSING"
+      GOSUB 93000
+   END
+   OPEN "","INVENTORY" TO INVENTORY ELSE
+      ERRMSG = "INVENTORY FILE IS MISSING"
+      GOSUB 93000
+   END
+   OPEN "","PHY.INV" TO PHY.INV ELSE
+      ERRMSG = "PHY.INV FILE IS MISSING"
+      GOSUB 93000
+   END
+   OPEN "","PHY.XREF" TO PHY.XREF ELSE
+      ERRMSG = "PHY.XREF FILE IS MISSING"
+      GOSUB 93000
+   END
+   OPEN "","ICS.SCREENS" TO M.SCREENS ELSE
+      ERRMSG = "CANNOT OPEN ICS.SCREENS FILE"
+      GOSUB 91000
+   END
+* T29032 v
+*  OPEN '','REV12A.SCREENS' TO SECOND.SCREENS ELSE
+*     ERRMSG = "CANNOT OPEN REV12A.SCREENS FILE"
+*     GOSUB 91000
+*  END
+* T29032 ^
+   OPEN '','SECURITY' TO SECURITY ELSE
+      ERRMSG = 'SECURITY FILE IS MISSING'
+      GOSUB 93000
+   END
+   OPEN '','TRANSFER' TO TRANSFER ELSE
+      ERRMSG = 'TRANSFER FILE IS MISSING'
+      GOSUB 93000
+   END
+   OPEN '','JOB' TO JOB ELSE
+      ERRMSG = 'JOB FILE IS MISSING'
+      GOSUB 93000
+   END
+   OPEN '','JOB.FNGD.STATS' TO JOB.FNGD.STATS ELSE
+      ERRMSG = 'JOB.FNGD.STATS FILE IS MISSING'
+      GOSUB 93000
+   END
+   OPEN '','XREF.DATA' TO XREF.DATA ELSE
+      ERRMSG = 'XREF.DATA FILE IS MISSING'
+      GOSUB 93000
+   END
+   OPEN '','PREFIX' TO PREFIX ELSE
+      ERRMSG = 'PREFIX FILE IS MISSING'
+      GOSUB 93000
+   END
+   OPEN '','INV_AUDIT_HIST' TO INV_AUDIT_HIST ELSE
+      ERRMSG = 'INV_AUDIT_HIST FILE IS MISSING'
+      GOSUB 93000
+   END
+   OPEN '','INV_AUDIT_TAG' TO INV_AUDIT_TAG ELSE
+      ERRMSG = 'INV_AUDIT_TAG FILE IS MISSING'
+      GOSUB 93000
+   END
+   OPEN "","MILL_TO_SERIAL" TO MILL_TO_SERIAL ELSE
+      ERRMSG = "MILL_TO_SERIAL FILE IS MISSING"
+      GOSUB 93000
+   END
+   OPEN '','JOB.STATS' TO JOB.STATS ELSE
+      ERRMSG = 'JOB.STATS FILE IS MISSING'
+      GOSUB 93000
+   END
+   OPEN '','DAILY_TRANSFER' TO DAILY_TRANSFER ELSE
+      ERRMSG = 'DAILY_TRANSFER FILE IS MISSING'
+      GOSUB 93000
+   END
+   ;* following files needed only for transfer function
+   OPEN '','INV_AUDIT_HIST_TEMP' TO INV_AUDIT_HIST_TEMP ELSE 
+      ERRMSG = 'CANNOT LOCATE INV_AUDIT_HIST_TEMP FILE'       
+      GOTO 93000                                              
+   END                                                       
+   OPEN '','INV.WHSE.LOC' TO INV.WHSE.LOC ELSE 
+      ERRMSG = 'CANNOT LOCATE INV.WHSE.LOC FILE'
+      GOTO 93000                                          
+   END                                                   
+   OPEN '','INV.WHSE.LOC.TEMP' TO INV.WHSE.LOC.TEMP ELSE 
+      ERRMSG = 'CANNOT LOC.TEMPATE INV.WHSE.LOC.TEMP FILE'
+      GOTO 93000                                          
+   END                                                   
+   OPEN '','INV_RECEIPTS_TEMP' TO INV_RECEIPTS_TEMP ELSE
+      ERRMSG = 'CANNOT LOCATE INV_RECEIPTS_TEMP FILE'    
+      GOTO 93000                                         
+   END                                                  
+   OPEN '','INV_RECP_WHSE_TEMP' TO INV_RECP_WHSE_TEMP ELSE 
+      ERRMSG = 'CANNOT LOCATE INV_RECP_WHSE_TEMP FILE'      
+      GOTO 93000                                            
+   END                                                     
+*
+   GOSUB INITIALIZE
+*
+   MAT EDIT.COM.DRIVER=''
+   MAT SCV.REC=''
+   ECD.SCRN.CNT=1
+   ECD.SCRN.NAME='PHY.INV.MAINT'
+   ECD.SCRN.NO=1
+* T29032 v
+*  ECD.SCRN.FLAG<1> = 2
+* T29032 ^
+   EQU ESN TO ECD.SCRN.NO
+   ECD.ACTION=1 ; CALL SCRN.EDIT
+   ;*
+   ;* Main Loop
+   ;*
+   DONE=0 
+   LOOP
+      ERR=0
+      TEMP.PREV.QTY = ""
+      TEMP.CURR.QTY = ""
+      MAT TEMP.REC='' ; MAT SCV.REC=''
+      NEW.REC = 0
+      ECD.NUM=27; ECD.ACTION=4 ; CALL SCRN.EDIT 
+      SCV.REC(27)<ESN>=ECD.RET.VALUE
+      IF ECD.RET.VALUE # 'END' THEN             
+         PHY.ID=CONO:ECD.RET.VALUE
+         MATREADU PHYSI.REC FROM PHY.INV,PHY.ID LOCKED
+            ERRMSG = 'PHYSICAL INVENTORY record is locked by user - '
+            ERRMSG :=GETUSERNAME(STATUS())
+            GOSUB 91000;ERR=1 
+         END THEN
+            ECD.NUM=3;ECD.ACTION=5;SCV.REC(3)<ESN>=PHYSI.WHSE;CALL SCRN.EDIT
+         END ELSE
+            ERRMSG='Invalid sequence number'
+            GOSUB 91000
+            ERR=1
+         END
+         IF NOT(ERR) THEN
+            LOC.WAS.NULL=0
+            ;* T26556 v
+            MATREAD WHSE.REC FROM WAREHOUSE, CONO:PHYSI.WHSE ELSE MAT WHSE.REC = ''
+            DIV.CODE = WHS.DIV; USER.ID = UPCASE(@LOGNAME); ERRMSG = ''
+            CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+            IF ERRMSG # '' THEN
+               GOSUB 91000; ERR=1
+            END
+            ;* T26556 ^
+         END
+         IF NOT(ERR) THEN
+            IF PHYSI.LOC='' THEN
+               LOC.WAS.NULL=1
+               GOSUB ENT.LOC
+            END ELSE
+               ECD.NUM=4;ECD.ACTION=5;SCV.REC(4)<ESN>=PHYSI.LOC;CALL SCRN.EDIT
+            END
+            IF NOT(ERR) THEN
+               IF PHYSI.MAINT.DATE='' THEN
+                  GOSUB ENT.DATE
+               END ELSE
+                  ECD.NUM=14;ECD.ACTION=5
+                  SCV.REC(14)<ESN>=PHYSI.MAINT.DATE;CALL SCRN.EDIT
+               END
+            END
+            IF NOT(ERR) THEN
+               LINE.CNT = DCOUNT(PHYSI.PRODUCT,VM)
+               DEL.CNT = LINE.CNT
+               OLD.PROD=""
+               FOR LN = 1 TO LINE.CNT
+                  IF OLD.PROD # PHYSI.PRODUCT<1,LN> THEN    
+                     GOSUB GET.CONV
+                     OLD.PROD=PHYSI.PRODUCT<1,LN>
+                  END
+                  GOSUB SET.DISP.VALUES
+               NEXT LN
+               LN = 1
+               GOSUB BUILD.DETAIL.SCRN
+               IF PHYSI.MAINT.DATE = "" THEN
+                  GOSUB ENT.DATE
+               END
+               IF NOT(ERR) THEN
+                  ECD.ACTION=3;CALL SCRN.EDIT
+                  GOSUB ENT.OPTION
+               END
+            END
+         END
+      END ELSE
+         DONE=1
+      END
+      RELEASE
+      ECD.ACTION=6;CALL SCRN.EDIT
+   UNTIL (DONE) DO REPEAT
+   GOTO 99999
+*
+*************************************************************************
+******* S U B R O U T I N E S *******************************************
+*************************************************************************
+*
+************
+ENT.OPTION: 
+************
+*
+   EOO=0
+   LOOP
+      ERR=0
+      ECD.NUM=21;ECD.ACTION=4;CALL SCRN.EDIT
+      OPT=ECD.RET.VALUE
+      BEGIN CASE
+         CASE OPT = "E" OR OPT = "END"
+            ECD.NUM=23;ECD.ACTION=4;CALL SCRN.EDIT
+            IF ECD.RET.VALUE='Y' THEN
+               RELEASE PHY.INV,PHY.ID
+               EOO=1
+            END
+         CASE OPT = 1
+            GOSUB ENT.DATE
+*T28213 vCASE OPT = "A" AND LINE.CNT < 999
+         CASE OPT = "A" AND LINE.CNT < 999999
+            MODE = "A"
+            EOL = 0
+            NCNT=LINE.CNT+1
+*T28213 v   FOR LN=NCNT TO 999 UNTIL EOL
+            FOR LN=NCNT TO 999999 UNTIL EOL
+               GOSUB DISP.DETAIL
+               GOSUB ENT.DETAIL.SUB
+               IF (ERR) THEN
+                  EOL=1
+                  GOSUB DEL.DETAIL.DATA
+                  GOSUB BUILD.DETAIL.SCRN
+               END
+            NEXT LN
+            LINE.CNT = DCOUNT(PHYSI.PRODUCT,VM)
+            LN = LINE.CNT
+            IF LN < 1 THEN LN = 1
+            OLD.START = 0
+            GOSUB DISP.DETAIL
+         CASE OPT = "C" AND LINE.CNT > 0
+            MODE = "C"
+            GOSUB ENT.LINE.NUM
+            IF ECD.RET.VALUE # "" AND ECD.RET.VALUE # "END" THEN
+               IF ECD.RET.VALUE = "A" THEN
+                  LINE.CNT=DCOUNT(PHYSI.PRODUCT,VM)
+                  FOR LN=1 TO LINE.CNT UNTIL (ERR)
+                     GOSUB DISP.DETAIL
+                     IF PHYSI.STATUS<1,LN>#'POST' THEN
+                        GOSUB ENT.DETAIL.SUB
+                        IF (ERR) THEN 
+                           GOSUB BUILD.DETAIL.SCRN
+                           OLD.START = 0
+                           GOSUB DISP.DETAIL
+                        END
+                     END
+                  NEXT LN
+               END ELSE
+                  LN=ECD.RET.VALUE
+                  IF PHYSI.STATUS<1,LN>#'POST' THEN
+                     GOSUB ENT.DETAIL.SUB
+                     IF ECD.RET.VALUE = "END" THEN
+                        OLD.START = 0
+                        GOSUB DISP.DETAIL
+                     END
+                  END ELSE
+                     ERRMSG='This line has been already posted and cannot be modified.'
+                     GOSUB 91000
+                  END
+               END
+            END
+         CASE OPT = "D" AND LINE.CNT > 0
+            MODE = "D"
+            GOSUB ENT.LINE.NUM
+            IF ECD.RET.VALUE # "" AND ECD.RET.VALUE # "END" THEN
+               LN=ECD.RET.VALUE
+               GOSUB DEL.DETAIL.DATA
+               GOSUB BUILD.DETAIL.SCRN
+               LINE.CNT=DCOUNT(PHYSI.PRODUCT,VM)
+               IF LN>LINE.CNT THEN LN=LN-1
+               OLD.START = 0
+               GOSUB DISP.DETAIL
+            END
+         CASE OPT[1,1]="S" 
+            GOSUB SCROLL
+         CASE OPT = "F"
+            EOO=1
+            FOR I = 1 TO LINE.CNT
+*T28893 v
+              IF PHYSI.STATUS<1,I> # "POST" THEN
+               PHYSI.STATUS<1,I> = "MAINT"
+               PHYSI.OPER.ID<1,I> = OPER.ID
+              END
+*T28893 ^
+            NEXT I
+            MATWRITE PHYSI.REC ON PHY.INV,PHY.ID
+            IF (LOC.WAS.NULL) THEN
+               PXREF.ID=CONO:PHYSI.WHSE
+               READU PHY.SEQ FROM PHY.XREF,PXREF.ID THEN
+                  NEWID=CONO:PHYSI.WHSE:"!":PHYSI.LOC
+                  WRITE PHY.SEQ ON PHY.XREF,NEWID
+                  DELETE PHY.XREF,PXREF.ID
+               END
+            END
+      END CASE
+   UNTIL (EOO) DO REPEAT
+   RETURN
+*
+*****************
+ENT.DETAIL.SUB: 
+*****************
+*
+   MAT TEMP.REC=""
+   TEMP.PO = PHYSI.PO<1,LN>
+   TEMP.VENDOR = PHYSI.VENDOR<1,LN>
+   TEMP.RECEIPT = PHYSI.RECP.NO<1,LN> ; * C42635
+   BAIL.OUT=0
+   FOR FL=1 TO 6 UNTIL BAIL.OUT
+      ON FL GOSUB ENT.PROD,ENT.SER.RECP,10300,ENT.QTY,ENT.DIAM,ENT.UNIT.COST
+      IF (ERR) THEN BAIL.OUT=1
+   NEXT FL
+   IF NOT(ERR) THEN
+      IF INV.M.LINE='FNGD' THEN TEMP.SERIAL=''
+      PHYSI.PRODUCT<1,LN> = TEMP.PROD
+      PHYSI.SERIAL<1,LN>=TEMP.SERIAL
+      IF TEMP.ONHAND < 0 THEN ROND="-.5" ELSE ROND=".5"
+      PHYSI.CURR.QTY<1,LN>=CALC.COST.QTY(TEMP.ONHAND,MAT INV.CNV.REC,ROND,'')
+      BEGIN CASE
+         CASE INV.UOM.STK='SHT' AND INV.UOM.CST='LBS'
+            IF PHYSI.PREV.SQTY<1,LN> = "" THEN PHYSI.PREV.SQTY<1,LN> = 0
+            PHYSI.CURR.SQTY<1,LN> = TEMP.ONHAND
+         CASE INV.UOM.STK='PC' AND INV.UOM.CST='MSI'
+            IF PHYSI.PREV.SQTY<1,LN> = "" THEN PHYSI.PREV.SQTY<1,LN> = 0
+            PHYSI.CURR.SQTY<1,LN> = TEMP.ONHAND
+         CASE INV.UOM.STK='FT' AND INV.UOM.CST='MSI'
+            IF PHYSI.PREV.SQTY<1,LN> = "" THEN PHYSI.PREV.SQTY<1,LN> = 0
+            PHYSI.CURR.SQTY<1,LN> = TEMP.ONHAND
+         CASE 1
+            IF PHYSI.PREV.SQTY<1,LN> = "" THEN PHYSI.PREV.SQTY<1,LN> = 0
+            PHYSI.CURR.SQTY<1,LN> = TEMP.ONHAND
+      END CASE
+      TEMP.PREV.QTY<1,LN>=CALC.STK.QTY(PHYSI.PREV.QTY<1,LN>,MAT INV.CNV.REC,ROND,'')
+      TEMP.PREV.QTY<1,LN>=OCONV(TEMP.PREV.QTY<1,LN>,ICR.CNV)
+      TEMP.CURR.QTY<1,LN> = OCONV(TEMP.ONHAND,ICR.CNV)
+      SCV.REC(10)<ESN,LN>=TEMP.CURR.QTY
+      PHYSI.CURR.DIA<1,LN> = TEMP.DIA
+      PHYSI.UNIT.COST<1,LN> = TEMP.COST
+      SCV.REC(13)<ESN,LN>=TEMP.COST
+      ECD.NUM=13;ECD.SUB.NUM=LN;ECD.ACTION=5;CALL SCRN.EDIT
+      PHYSI.DESC<1,LN> = TEMP.DESC
+      PHYSI.PO<1,LN> = TEMP.PO
+      PHYSI.VENDOR<1,LN> = TEMP.VENDOR
+      PHYSI.RECP.NO<1,LN> = TEMP.RECEIPT
+      PHYSI.UNIT<1,LN> = TEMP.UNIT
+   END
+   GOSUB BUILD.DETAIL.SCRN
+   GOSUB DISP.DETAIL
+   RETURN
+*
+*************
+CHECK.SERIAL: 
+*************
+*
+*T27705ISTK.ID = CONO:TEMP.SERIAL"R%8" 
+   ISTK.ID = CONO:TEMP.SERIAL 
+*T27705MATREADU ISTK.REC FROM INV_SERIAL, CONO:TEMP.SERIAL"R%8" THEN
+   MATREADU ISTK.REC FROM INV_SERIAL, CONO:TEMP.SERIAL THEN
+      IF ISTK.PROD = TEMP.PROD THEN
+         PHY.TRK.ID=ISTK.ID
+         IF PHYSI.WHSE # ISTK.WHSE OR PHYSI.LOC # ISTK.LOC THEN
+            IF PHYSI.TRAN.TO # '' THEN
+               ERRMSG = 'THIS SERIAL HAS BEEN TRANSFERRED OUT TO WHSE ':ISTK.WHSE:' AND LOC ':ISTK.LOC
+               RETURN
+            END
+            ERRMSG = "THIS SERIAL ID IS CURRENTLY IN WAREHOUSE ":ISTK.WHSE
+            ERRMSG:=" AND LOCATION ":ISTK.LOC
+            GOSUB 91000
+            ERRMSG = ""
+            MATREAD WHSE.REC FROM WAREHOUSE,CONO:PHYSI.WHSE THEN
+               IF WHS.DIV='' THEN
+                  FROM.DIV=GEN.DIV
+               END ELSE
+                  FROM.DIV=WHS.DIV
+               END
+            END
+            MATREAD WHSE.REC FROM WAREHOUSE,CONO:ISTK.WHSE THEN
+               IF WHS.DIV='' THEN
+                  TO.DIV=GEN.DIV
+               END ELSE
+                  TO.DIV=WHS.DIV
+               END
+            END
+            ECD.NUM=24;ECD.ACTION=4;CALL SCRN.EDIT
+            IF ECD.RET.VALUE = "Y" THEN
+               IF FROM.DIV # TO.DIV THEN
+                  ERRMSG='WAREHOUSE DIVISIONS DO NOT MATCH. TRANSFER NOT POSSIBLE'
+               END ELSE
+                  GOSUB PROCESS.TRANSFER
+               END
+            END
+         END ELSE
+            IF ISTK.CUR.QTY + 0 = 0 THEN ISTK.CUR.DIAM = 0 ; * C41028
+            PHYSI.PREV.QTY<1,LN> = ISTK.CUR.QTY
+            PHYSI.PREV.DIA<1,LN> = ISTK.CUR.DIAM
+            PHYSI.PREV.SQTY<1,LN> = ISTK.CUR.STK.QTY
+            ROND=0.5
+            IF PHYSI.PREV.QTY+0<0 THEN ROND=-(0.5)
+            TEMP.PREV.QTY<1,LN>=CALC.STK.QTY(PHYSI.PREV.QTY<1,LN>,MAT INV.CNV.REC,ROND,'')
+            TEMP.PREV.QTY<1,LN>=OCONV(TEMP.PREV.QTY<1,LN>,ICR.CNV)
+            SCV.REC(9)<ESN,LN>=TEMP.PREV.QTY<1,LN>
+            ECD.NUM=9;ECD.SUB.NUM=LN;ECD.ACTION=5;CALL SCRN.EDIT
+            SCV.REC(11)<ESN,LN>=PHYSI.PREV.DIA<1,LN>
+            ECD.NUM=11;ECD.SUB.NUM=LN;ECD.ACTION=5;CALL SCRN.EDIT
+         END
+      END ELSE
+         ERRMSG = 'THIS SERIAL BELONGS TO PRODUCT ':ISTK.PROD
+      END
+   END ELSE
+      ;*27144
+      MATREADU ISTK.REC FROM INV_SERIAL_DELETED,ISTK.ID THEN
+         IF ISTK.PROD = TEMP.PROD THEN 
+            PHYSI.PREV.QTY<1,LN> =0
+            PHYSI.PREV.DIA<1,LN> =0
+            PHYSI.PREV.SQTY<1,LN>=0
+            SCV.REC(9)<ESN,LN>=0
+            ECD.NUM=9;ECD.SUB.NUM=LN;ECD.ACTION=5;CALL SCRN.EDIT  
+            SCV.REC(11)<ESN,LN>=0
+            ECD.NUM=11;ECD.SUB.NUM=LN;ECD.ACTION=5;CALL SCRN.EDIT 
+         END ELSE
+            ERRMSG = 'THIS DELETED SERIAL BELONGS TO PRODUCT ':ISTK.PROD   
+         END
+      END ELSE
+         ;*27144
+         ERRMSG = 'NOT ON FILE. ENTER "N" FOR NEW'
+      END
+   END
+   RETURN
+*
+******************
+BUILD.DETAIL.SCRN: 
+******************
+*
+   SCV.REC(7)<ESN>=PHYSI.PRODUCT 
+   SCV.REC(9)<ESN>=TEMP.PREV.QTY
+   SCV.REC(10)<ESN>=TEMP.CURR.QTY
+   SCV.REC(11)<ESN>=PHYSI.PREV.DIA
+   SCV.REC(12)<ESN>=PHYSI.CURR.DIA
+   SCV.REC(13)<ESN>=PHYSI.UNIT.COST
+   SCV.REC(5)<ESN>=PHYSI.DESC
+   SCV.REC(17)<ESN>=PHYSI.PO
+   SCV.REC(25)<ESN>=PHYSI.UNIT
+   LNCNT=DCOUNT(PHYSI.PRODUCT,VM)
+   SCV.REC(6)<ESN>=''
+   SCV.REC(8)<ESN>=''
+   FOR LINE=1 TO LNCNT
+      SCV.REC(6)<ESN,LINE>=LINE
+      IF PHYSI.SERIAL<1,LINE> # "" THEN
+         SCV.REC(8)<ESN,LINE>=PHYSI.SERIAL<1,LINE>
+      END ELSE
+         SCV.REC(8)<ESN,LINE>=PHYSI.RECP.NO<1,LINE>
+      END
+   NEXT LINE
+   RETURN
+*
+****************
+CALC.UNIT.COST: 
+****************
+*
+   BEGIN CASE
+      CASE CATG.PHY.INV.METH = 'LC'
+         CHECK.COST = 0
+         PROD = PHYSI.PRODUCT<1,LN>
+         RECP.CNT=DCOUNT(IWH.RECP.NO,VM)
+         IF RECP.CNT>0 THEN
+            GOT.LAST=0 ; LAST.COST=0
+            ;* inventory received in a future period should not
+            ;* be considered for a last cost
+            FOR R=RECP.CNT TO 1 STEP -1 UNTIL  (GOT.LAST)
+               IF IWH.RECP.PERIOD<1,R> <= PHYSI.PERIOD THEN
+                  RECP.NO=IWH.RECP.NO<1,R>
+                  IRW.ID=CONO:RECP.NO:'!':PHYSI.WHSE
+                  MATREAD IRW.REC FROM INV_RECP_WHSE,IRW.ID THEN
+                     INVR.ID=CONO:RECP.NO
+                     MATREAD INVR.REC FROM INV_RECEIPTS,INVR.ID THEN
+                        LAST.COST = INVR.UNIT.COST
+                        GOT.LAST = 1
+                     END
+                  END
+               END
+            NEXT R
+            CHECK.COST = LAST.COST
+         END
+      CASE CATG.PHY.INV.METH = 'SD'
+         CHECK.COST = IWH.STD.COST
+      CASE CATG.PHY.INV.METH = 'AV'
+         CHECK.COST = IWH.AVG.COST
+      CASE CATG.PHY.INV.METH = 'LT'
+         CHECK.COST = IWH.LIST.COST
+      CASE 1
+         CHECK.COST = 0
+   END CASE
+   RETURN
+*
+***************
+ENT.PROD: 
+***************
+*
+   EOP=0
+   LOOP
+      ERR=0
+      IF MODE = "A" THEN
+         ECD.NUM=7;ECD.SUB.NUM=LN;ECD.ACTION=4
+*    ECD.DEFAULT=PHYSI.PRODUCT<1,LN-1>
+         CALL SCRN.EDIT
+         IF ECD.RET.VALUE #'END' THEN
+            PROD.NUM=ECD.RET.VALUE
+         END ELSE
+            EOP=1;ERR=1
+         END
+      END ELSE
+         PROD.NUM=PHYSI.PRODUCT<1,LN>
+      END
+      IF NOT(ERR) THEN
+         INV.ID=CONO:PROD.NUM
+         MATREAD INV.REC FROM INVENTORY,INV.ID THEN
+            MATREAD CATG.REC FROM CATEGORY,CONO:INV.LINE THEN
+               IF CATG.TRK.LVL='G' THEN
+                  LOCATE TEMP.PROD IN PHYSI.PRODUCT<1>,1 SETTING FND ELSE FND=0
+                  IF FND THEN
+                     ERRMSG = "Product ":TEMP.PROD:" is already on file "
+                     ERR=1
+                     GOSUB 91000
+                  END
+               END
+               IF NOT(ERR) THEN
+                  WHSE.ID=CONO:PROD.NUM:'!':PHYSI.WHSE
+                  MATREAD IWH.REC FROM INV.WHSE, WHSE.ID THEN
+*          LOCATE PHYSI.LOC IN IWH.LOC<1>,1 SETTING LFND THEN
+                     EOP=1
+                     GOSUB GET.INV.UM.CNV
+                     GOSUB SET.DISP.VALUES
+                     TEMP.PROD = PROD.NUM
+                     TEMP.DESC = INV.DESC
+                     SCV.REC(5)<ESN,LN>=TEMP.DESC
+                     ECD.NUM=5;ECD.SUB.NUM=LN;ECD.ACTION=5;CALL SCRN.EDIT
+                     TEMP.UNIT = INV.UOM.STK
+                     SCV.REC(25)<ESN,LN>=TEMP.UNIT
+                     ECD.NUM=25;ECD.SUB.NUM=LN;ECD.ACTION=5;CALL SCRN.EDIT
+*          END ELSE
+*            IF CO.ICS.LOC.TRAN = "N" THEN   
+*              LFND=DCOUNT(IWH.LOC,VM)+1
+*              IWH.LOC<1,LFND>=PHYSI.LOC
+*              ERRMSG='THIS PRODUCT IS NOT SETUP FOR LOCATION - ':PHYSI.LOC
+*              GOSUB 91000
+*            END
+*          END
+                  END ELSE
+                     ERRMSG='INV.WHSE RECORD NOT ON FILE'
+                     GOSUB 91000
+                  END
+               END
+            END ELSE
+               ERRMSG="CATEGORY (":INV.LINE:") IS NOT ON FILE"
+               GOSUB 91000
+            END
+         END ELSE
+            ERRMSG='INVENTORY (':PROD.NUM:') IS NOT ON FILE.'
+            GOSUB 91000
+         END
+      END
+   UNTIL (EOP) DO REPEAT
+   RETURN
+*
+**************
+ENT.SER.RECP: 
+**************
+*
+   EOS=0
+   LOOP
+      BEGIN CASE
+         CASE INV.M.LINE='FNGD' AND PHYSI.PREV.QTY<1,LN>+0=0
+            EOS=1
+*T27801 v
+            IF MODE = "A" THEN
+               TEMP.SERIAL = "NEW"
+               TEMP.RECEIPT = "NEW"
+            END ELSE
+               TEMP.SERIAL = "NEW"
+               TEMP.RECEIPT = PHYSI.RECP.NO<1,LN>
+            END
+*T27801 ^
+            SCV.REC(8)<ESN,LN>=TEMP.RECEIPT
+            ECD.NUM=8;ECD.SUB.NUM=LN;ECD.ACTION=5;CALL SCRN.EDIT
+         CASE MODE = "C" AND CATG.TRK.LVL = "S"
+            TEMP.SERIAL = PHYSI.SERIAL<1,LN>
+            GOSUB CHECK.SERIAL         
+            IF ERRMSG THEN             
+               GOSUB 91000              
+               EOS = 1; ERR = 1 ; ERRMSG = ""
+            END ELSE
+               EOS=1
+            END
+         CASE CATG.TRK.LVL = "S"
+            ECD.NUM=8;ECD.SUB.NUM=LN;ECD.ACTION=4
+            CALL SCRN.EDIT
+            IF ECD.RET.VALUE = "M" THEN
+                ECD.NUM=50; ECD.ACTION=4;CALL SCRN.EDIT
+                IF ECD.RET.VALUE # "END" THEN
+                     MATREAD MTS.REC FROM MILL_TO_SERIAL,CONO:ECD.RET.VALUE THEN
+                          SCV.REC(8)<ESN,LN> = MTS.SERIAL<1,1>
+                          ECD.NUM = 8; ECD.SUB.NUM=LN; ECD.ACTION = 4; CALL SCRN.EDIT
+                     END ELSE
+                         ERRMSG = "Mill Roll # " :ECD.RET.VALUE:" is not on file"
+                         GOSUB 91000
+                         GOTO 97000
+                     END
+                 END ELSE
+                     GOTO 97000
+                 END
+            END
+            IF ECD.RET.VALUE#"END" THEN
+               SERIAL=ECD.RET.VALUE
+               SCV.REC(8)<ESN,LN>=SERIAL
+               ECD.NUM=8;ECD.SUB.NUM=LN
+               ECD.ACTION=5; CALL SCRN.EDIT
+*T27705 IF ECD.RET.VALUE = "N" THEN
+               IF ECD.RET.VALUE = "N" AND CATG.BARCODE = 'Y' THEN
+                  EOS=1
+                  ISTK.SEQ=GET.SERIAL.SEQ(CONO,CONTROL,INV_SERIAL)
+                  MAT ISTK.REC = ""                                        
+                  TEMP.SERIAL = ISTK.SEQ
+                  SCV.REC(8)<ESN,LN>=TEMP.SERIAL                      
+                  ECD.NUM=8;ECD.SUB.NUM=LN;ECD.ACTION=5;CALL SCRN.EDIT
+                  TEMP.RECEIPT = ISTK.RECP                         
+               END ELSE
+                  LOCATE SERIAL IN PHYSI.SERIAL<1>,1 SETTING FND ELSE FND=0
+                  IF FND AND FND # LN THEN
+                     ERRMSG = "SERIAL NUMBER ALREADY ON THIS LIST"
+                     GOSUB 91000
+                  END ELSE
+                     TEMP.SERIAL=SERIAL
+                     GOSUB CHECK.SERIAL
+                     IF ERRMSG THEN
+                        GOSUB 91000
+                     END ELSE
+                        IF TEMP.SERIAL#"" THEN
+                           EOS=1
+                           SCV.REC(8)<ESN,LN>=TEMP.SERIAL
+                           ECD.NUM=8;ECD.SUB.NUM=LN;ECD.ACTION=5;CALL SCRN.EDIT
+                           TEMP.RECEIPT = ISTK.RECP
+                        END
+                     END
+                  END
+               END
+            END ELSE
+               EOS=1 ; ERR=1
+            END
+         CASE MODE='C' AND CATG.TRK.LVL='R'
+            TEMP.RECEIPT=PHYSI.RECP.NO<1,LN>
+            EOS=1
+         CASE CATG.TRK.LVL="G"
+            TEMP.SERIAL = ""
+            TEMP.RECEIPT = ""
+            EOS=1
+      END CASE
+97000 *
+   UNTIL (EOS) DO REPEAT
+   RETURN
+*
+************
+10300 *
+************
+*
+   IF INV.M.LINE='FNGD' THEN
+      ERR=0
+      IF TEMP.RECEIPT[1,3]='NEW' THEN
+         EOJ=0
+         LOOP
+            ECD.NUM=17;ECD.SUB.NUM=LN;ECD.ACTION=4;CALL SCRN.EDIT
+            TEMP.PO = ECD.RET.VALUE
+            BEGIN CASE
+               CASE TEMP.PO='END'
+                  GOSUB DEL.DETAIL.DATA
+                  EOJ=1;ERR=1
+               CASE TEMP.PO='INIT'
+                  EOJ=1
+                  TEMP.VENDOR = "INIT"     
+*T28207 v         IF PHYSI.RECP.NO<1,LN>='' THEN
+                  IF PHYSI.RECP.NO<1,LN>='' OR PHYSI.RECP.NO<1,LN>='NEW' THEN
+                     RECP.ID=GET.RECP.ID(CONO,CONTROL,PHYSI.MAINT.DATE) 
+                     RECP.NO=RECP.ID[4,99]
+                     TEMP.RECEIPT="NEW-":RECP.NO
+                  END ELSE
+                     RECP.NO=PHYSI.RECP.NO<1,LN>
+                  END
+*T27705   SCV.REC(8)<ESN>=RECP.NO;ECD.NUM=8 
+                  SCV.REC(8)<ESN,LN>=RECP.NO;ECD.SUB.NUM=LN;ECD.NUM=8 
+                  ECD.ACTION=5;CALL SCRN.EDIT       
+               CASE TEMP.PO#'INIT'
+                  JOB.ID=CONO:TEMP.PO
+                  MATREAD JOB.REC FROM JOB,JOB.ID THEN
+                     MATREAD JFS.REC FROM JOB.FNGD.STATS,JOB.ID ELSE
+                        MAT JFS.REC=''
+                     END
+                     PTR = 1
+                     LOOP
+                        LOCATE TEMP.PROD IN JFS.PROD<1>,PTR SETTING FND THEN
+                           IF PHYSI.WHSE = JFS.WHSE<1,FND> THEN
+                              PTR = 0
+                           END
+                        END ELSE
+                           PTR = 0
+                           FND = 0
+                        END
+                     WHILE PTR DO
+                        PTR = FND + 1
+                     REPEAT
+                     IF FND THEN
+                        EOJ=1
+                        TEMP.COST = JFS.U.PRICE<1,FND>
+                        TEMP.VENDOR = JOB.CUST
+                        IF PHYSI.RECP.NO<1,LN>='' THEN
+                           RECP.ID=GET.RECP.ID(CONO,CONTROL,PHYSI.MAINT.DATE)
+                           RECP.NO=RECP.ID[4,99]
+                           TEMP.RECEIPT="NEW-":RECP.NO
+                        END ELSE
+                           RECP.NO=PHYSI.RECP.NO<1,LN>
+                        END
+*T27705       SCV.REC(8)<ESN>=RECP.NO;ECD.NUM=8
+                        SCV.REC(8)<ESN,LN>=RECP.NO;ECD.NUM=8;ECD.SUB.NUM=LN
+                        ECD.ACTION=5;CALL SCRN.EDIT
+                     END ELSE
+                        ERRMSG = "Product ":TEMP.PROD:" is not on job ":TEMP.PO
+                        GOSUB 91000
+                     END
+                  END ELSE
+                     ERRMSG = "Job ":TEMP.PO:" is not on file "
+                     GOSUB 91000
+                  END
+            END CASE
+         UNTIL (EOJ) DO REPEAT
+      END
+   END
+   RETURN
+*
+***********
+ENT.QTY: 
+***********
+*
+   IF TEMP.PREV.QTY<1,LN> = "" THEN
+      TEMP.PREV.QTY<1,LN> = "0"
+      SCV.REC(9)<ESN,LN>=OCONV(0,ICR.CNV)
+      ECD.NUM=9;ECD.SUB.NUM=LN;ECD.ACTION=5;CALL SCRN.EDIT
+      PHYSI.PREV.QTY<1,LN> = 0
+   END
+   IF TEMP.ONHAND = "" THEN
+      ECD.NUM=10; ECD.SUB.NUM=LN
+      IF PHYSI.CURR.QTY<1,LN> # "" THEN
+         TMP=CALC.STK.QTY(PHYSI.CURR.QTY<1,LN>,MAT INV.CNV.REC,'.5','')
+      END ELSE
+         TMP=CALC.STK.QTY(PHYSI.PREV.QTY<1,LN>,MAT INV.CNV.REC,'.5','')
+      END
+      SCV.REC(10)<ESN,LN>=OCONV(TMP,ICR.CNV)
+      IF INV.FACTOR+0 >0 AND INV.PAP.WIDTH+0 >0 AND INV.CORE.DIA+0 >0 THEN
+         IF INV.PAP.TYPE="ROLL" OR INV.PAP.TYPE="LROLL" OR INV.PAP.TYPE="PCOAT" THEN
+            ECD.O.R='O'
+         END
+      END
+      BEGIN CASE
+         CASE ICR.SCAL=2
+            ECD.NUM=10
+            ECD.PATRN="0N,0N.1N,0N.2N"
+            ECD.SUB.NUM=LN;ECD.ACTION=4;CALL SCRN.EDIT
+            IF ECD.RET.VALUE='END' THEN
+               ERR=1
+            END ELSE
+               ECD.RET.VALUE = ICONV(ECD.RET.VALUE,'MD2')
+*T27705 v
+               SCV.REC(10)<ESN,LN>=OCONV(ECD.RET.VALUE,ICR.CNV)
+               ECD.SUB.NUM=LN;ECD.ACTION=5;CALL SCRN.EDIT
+*T27705 ^
+            END
+         CASE 1
+            ECD.NUM=10
+            ECD.PATRN="0N"
+            ECD.SUB.NUM=LN;ECD.ACTION=4;CALL SCRN.EDIT 
+            IF ECD.RET.VALUE='END' THEN                
+               ERR=1                                    
+            END ELSE
+               IF ICR.CNV = "MD2" THEN ECD.RET.VALUE = ECD.RET.VALUE * 100  
+            END
+      END CASE
+*C40414 v
+*     IF NOT(ERR) THEN
+      IF NOT(ERR) AND ECD.RET.VALUE+0 GT 0 THEN
+*C40414 ^
+*T27801 v
+         IF CATG.TRK.LVL='S' THEN
+            ISTK.ID = CONO:PHYSI.SERIAL<1,LN>
+         END ELSE
+            ISTK.ID = CONO:'R':PHYSI.SERIAL<1,LN>:"!":PHYSI.WHSE:"!":PHYSI.LOC
+         END
+*T27801 ^
+         MATREAD ISTK.REC FROM INV_SERIAL,ISTK.ID ELSE MAT ISTK.REC=''
+         TMP=CALC.COST.QTY(ECD.RET.VALUE,MAT INV.CNV.REC,'.5','')
+         IF TMP<ISTK.CUR.QTY-ISTK.RSVB.QTY THEN
+            ERRMSG = 'Cannot adjust serial below reserved qty. '
+*T27801 ERRMSG := CALC.STK.QTY(ISTK.RSVB.QTY,MAT INV.CNV.REC,'.5','')
+            ERRMSG := CALC.STK.QTY(ISTK.CUR.QTY-ISTK.RSVB.QTY,MAT INV.CNV.REC,'.5','')
+            GOSUB 91000
+            ERR=1
+            ERRMSG = "" ; * C40353
+            OLD.START = 0 ; * C40414
+         END ELSE
+            TEMP.ONHAND = ECD.RET.VALUE
+         END
+      END
+   END ELSE
+      ERR=1
+   END
+   RETURN
+*
+**********
+ENT.DIAM: 
+**********
+*
+   IF INV.PAP.TYPE="ROLL" OR INV.PAP.TYPE="LROLL" OR INV.PAP.TYPE="PCOAT" THEN
+      IF PHYSI.PREV.DIA<1,LN> = "" THEN
+         PHYSI.PREV.DIA<1,LN> = 0
+         SCV.REC(11)<ESN,LN>=OCONV("0","MD2")
+         ECD.NUM=11;ECD.SUB.NUM=LN;ECD.ACTION=5;CALL SCRN.EDIT
+      END
+      ENT.FLAG = 0 ; * C42635
+      BEGIN CASE
+         CASE TEMP.ONHAND = 0
+            TEMP.DIA = 0
+            SCV.REC(12)<ESN,LN>=TEMP.DIA
+            ECD.NUM=12;ECD.SUB.NUM=LN;ECD.ACTION=5;CALL SCRN.EDIT
+         CASE CATG.TRK.LVL#"S" AND TEMP.PO#"INIT"
+         CASE TEMP.ONHAND#""
+            TMP.WGT=CALC.COST.QTY(TEMP.ONHAND,MAT INV.CNV.REC,'.5','')
+            COST.QTY=TMP.WGT ; STK.QTY=TEMP.ONHAND
+            DIAM=CALC.DIAM(COST.QTY,STK.QTY,MAT INV.REC)
+            IF DIAM#'' THEN
+               TEMP.DIA=DIAM
+               SCV.REC(12)<ESN,LN>=TEMP.DIA
+               ECD.NUM=12;ECD.SUB.NUM=LN;ECD.ACTION=5;CALL SCRN.EDIT
+            END
+         CASE 1
+            ECD.NUM=12;ECD.SUB.NUM=LN;ECD.ACTION=4;CALL SCRN.EDIT
+            IF ECD.RET.VALUE#'END' THEN
+               TEMP.DIA = ECD.RET.VALUE
+               ENT.FLAG = 1 ; * C42635
+            END ELSE
+               ERR=1
+            END
+      END CASE
+*T25936 v
+*C42635 v
+* IF (ECD.RET.VALUE + 0) = 0 THEN
+      IF (ECD.RET.VALUE + 0) = 0 AND ENT.FLAG = 0 THEN
+         ECD.NUM = 12
+         ECD.SUB.NUM = LN
+         ECD.ACTION = 4 ; CALL SCRN.EDIT
+         IF ECD.RET.VALUE # "END" THEN
+            TEMP.DIA = ECD.RET.VALUE
+         END
+      END
+*T25936 ^
+      IF NOT(ERR) THEN
+*T25936 v
+*        IF TEMP.ONHAND = "" THEN
+         IF (TEMP.ONHAND + 0) = 0 THEN
+*T25936 ^
+            BEGIN CASE
+               CASE INV.PAP.TYPE = "ROLL"
+                  TEMP.ONHAND = (((TEMP.DIA/100*TEMP.DIA/100)-(INV.CORE.DIA/100*INV.CORE.DIA/100))*100)
+                  TEMP.ONHAND = INT((TEMP.ONHAND/100)*(INV.PAP.WIDTH/10000)*(INV.FACTOR/10000)/10*100+0.5)
+               CASE INV.PAP.TYPE = "LROLL" OR INV.PAP.TYPE = "PCOAT"
+                  TEMP.ONHAND = (((TEMP.DIA/100*TEMP.DIA/100)-(INV.CORE.DIA/100*INV.CORE.DIA/100))*100)
+                  BEGIN CASE
+                     CASE INV.UOM.STK = "FT"
+                        TEMP.ONHAND = INT((TEMP.ONHAND/100)*3.1416/4*(100000/INV.FACTOR)/12+0.5)
+                     CASE INV.UOM.STK = "PC"
+                        TEMP.ONHAND = INT((TEMP.ONHAND/100)*3.1416/4*(100000/INV.FACTOR)/10+0.5)
+                  END CASE
+            END CASE
+            IF TEMP.ONHAND < 0 THEN TEMP.ONHAND = 0
+*C40414 v
+            ISTK.ID = CONO:PHYSI.SERIAL<1,LN>
+            MATREAD ISTK.REC FROM INV_SERIAL,ISTK.ID ELSE MAT ISTK.REC=''
+            TMP=CALC.COST.QTY(TEMP.ONHAND,MAT INV.CNV.REC,'.5','')
+            IF TMP<ISTK.CUR.QTY-ISTK.RSVB.QTY THEN
+               ERRMSG = 'Cannot adjust serial below reserved qty. '
+               ERRMSG := CALC.STK.QTY(ISTK.RSVB.QTY,MAT INV.CNV.REC,'.5','')
+               GOSUB 91000
+               ERR=1
+               ERRMSG = ""
+               TEMP.ONHAND = TEMP.CURR.QTY
+               TEMP.DIA = PHYSI.CURR.DIA<1,LN>
+               OLD.START = 0
+            END
+*C40414 ^
+            SCV.REC(10)<ESN,LN>=OCONV(TEMP.ONHAND,ICR.CNV)
+            ECD.NUM=10;ECD.SUB.NUM=LN;ECD.ACTION=5;CALL SCRN.EDIT
+         END
+      END
+   END ELSE
+      TEMP.DIA = ""
+   END
+   RETURN
+*
+***************
+ENT.UNIT.COST: 
+***************
+*
+   IF TEMP.ONHAND>ICONV(SCV.REC(9)<ESN,LN>,ICR.CNV) THEN
+      BEGIN CASE
+         CASE INV.M.LINE='FNGD' AND TEMP.RECEIPT[1,3]#'NEW'
+            TEMP.COST = PHYSI.UNIT.COST<1,LN>
+         CASE PHYSI.UNIT.COST<1,LN> = "" AND CATG.PHY.INV.METH # ""
+            TEMP.PREV = PHYSI.PREV.QTY<1,LN>
+            IF TEMP.ONHAND < 0 THEN ROND="-.5" ELSE ROND=".5"
+            TEMP.CURR=CALC.COST.QTY(TEMP.ONHAND,MAT INV.CNV.REC,ROND,'')
+            IF TEMP.COST = "" THEN
+               GOSUB CALC.UNIT.COST
+               TEMP.COST = CHECK.COST
+            END
+            IF CATG.PHY.INV.ALLOW = "Y" THEN
+               ECD.NUM=13;ECD.SUB.NUM=LN;ECD.ACTION=4
+               ECD.DEFAULT=TEMP.COST;ECD.O.R='O'
+               CALL SCRN.EDIT
+               IF ECD.RET.VALUE#'END' THEN
+                  TEMP.COST = ECD.RET.VALUE
+               END ELSE
+                  SCV.REC(10)<ESN,LN>=PHYSI.CURR.QTY<1,LN>
+                  ECD.NUM=5;ECD.SUB.NUM=LN;ECD.ACTION=5;CALL SCRN.EDIT
+                  SCV.REC(12)<ESN,LN>=PHYSI.CURR.DIA<1,LN>
+                  ECD.NUM=5;ECD.SUB.NUM=LN;ECD.ACTION=5;CALL SCRN.EDIT
+                  ERR=1
+               END
+            END
+         CASE 1
+            IF CATG.PHY.INV.ALLOW = "Y" THEN
+               ECD.NUM=13;ECD.SUB.NUM=LN;ECD.ACTION=4
+               CALL SCRN.EDIT
+               IF ECD.RET.VALUE#'END' THEN
+                  TEMP.COST = ECD.RET.VALUE
+               END
+            END ELSE
+               TEMP.COST = PHYSI.UNIT.COST<1,LN>
+            END
+      END CASE
+   END ELSE
+      TEMP.COST = PHYSI.UNIT.COST<1,LN>
+   END
+   RETURN
+*
+**************
+ENT.LINE.NUM: 
+**************
+*
+   LINE.CNT=DCOUNT(PHYSI.PRODUCT<1>,VM)
+   ELN=0
+   LOOP
+      IF MODE = "C" THEN
+         ECD.NUM=22;ECD.ACTION=4
+      END ELSE
+         ECD.NUM=26 ; ECD.ACTION=4
+      END
+      ECD.MINV=START
+      ECD.MAXV=START+PAGE.SIZE-1
+      IF ECD.MAXV>LINE.CNT THEN ECD.MAXV=LINE.CNT    
+      CALL SCRN.EDIT
+      IF ECD.RET.VALUE #'' THEN
+         ELN=1
+         LN=ECD.RET.VALUE
+      END
+   UNTIL (ELN) DO REPEAT
+   RETURN
+*
+*************
+ENT.LOC: 
+*************
+*
+   ECD.NUM=4 ; ECD.ACTION=4 ; CALL SCRN.EDIT
+   IF ECD.RET.VALUE#'END' THEN
+      LOC=ECD.RET.VALUE
+      PHYSI.LOC=LOC
+   END ELSE
+      ERR=1
+   END
+   RETURN
+*
+*********
+ENT.DATE: 
+*********
+*
+   ECD.DEFAULT=OCONV(DATE(),"D2/")
+   ECD.NUM=14;ECD.ACTION=4;CALL SCRN.EDIT
+   IF ECD.RET.VALUE#"END" THEN
+      PHYSI.MAINT.DATE=ECD.RET.VALUE
+   END ELSE
+      ERR=1
+   END
+   RETURN
+*
+************
+GET.CONV: 
+************
+*
+   MATREAD INV.REC FROM INVENTORY,CONO:PHYSI.PRODUCT<1,LN> ELSE
+      MAT INV.REC = ""
+   END
+   MATREAD CATG.REC FROM CATEGORY,CONO:INV.LINE ELSE
+      MAT CATG.REC = ""
+   END
+   WHSE.ID=CONO:PHYSI.PRODUCT<1,LN>:'!':PHYSI.WHSE
+   MATREAD IWH.REC FROM INV.WHSE, WHSE.ID ELSE
+      MAT IWH.REC = ""
+   END
+   GOSUB GET.INV.UM.CNV
+   RETURN
+*
+***************
+GET.INV.UM.CNV: 
+***************
+*
+*COPY>ICSBP>INV.UM.CNV
+   RETURN
+*
+****************
+SET.DISP.VALUES: 
+****************
+*
+   IF PHYSI.PREV.QTY<1,LN> < 0 THEN ROND="-.5" ELSE ROND=".5"
+   TEMP.PREV.QTY<1,LN>=CALC.STK.QTY(PHYSI.PREV.QTY<1,LN>,MAT INV.CNV.REC,ROND,'')
+   TEMP.PREV.QTY<1,LN>=OCONV(TEMP.PREV.QTY<1,LN>,ICR.CNV)
+   IF PHYSI.CURR.QTY<1,LN> = "" THEN
+* T25934 v
+      IF PHYSI.JANUS.FLAG # '' THEN
+         PHYSI.CURR.QTY<1,LN> = 0
+      END ELSE
+         PHYSI.CURR.QTY<1,LN> = PHYSI.PREV.QTY<1,LN>
+      END
+* T25934 ^
+      IF PHYSI.CURR.QTY<1,LN> < 0 THEN ROND="-.5" ELSE ROND=".5"
+      TEMP.CURR.QTY<1,LN>=CALC.STK.QTY(PHYSI.CURR.QTY<1,LN>,MAT INV.CNV.REC,ROND,'')
+      BEGIN CASE
+         CASE INV.UOM.STK='SHT' AND INV.UOM.CST='LBS'
+            IF PHYSI.PREV.SQTY<1,LN> = "" THEN PHYSI.PREV.SQTY<1,LN> = 0
+            PHYSI.CURR.SQTY<1,LN> = TEMP.CURR.QTY<1,LN>
+         CASE INV.UOM.STK='PC' AND INV.UOM.CST='MSI'
+            IF PHYSI.PREV.SQTY<1,LN> = "" THEN PHYSI.PREV.SQTY<1,LN> = 0
+            PHYSI.CURR.SQTY<1,LN> = TEMP.CURR.QTY<1,LN>
+         CASE INV.UOM.STK='FT' AND INV.UOM.CST='MSI'
+            IF PHYSI.PREV.SQTY<1,LN> = "" THEN PHYSI.PREV.SQTY<1,LN> = 0
+            PHYSI.CURR.SQTY<1,LN> = TEMP.CURR.QTY<1,LN>
+         CASE 1
+            PHYSI.CURR.SQTY<1,LN> = ""
+      END CASE
+   END
+   IF PHYSI.CURR.QTY<1,LN> < 0 THEN ROND="-.5" ELSE ROND=".5"
+   TEMP.CURR.QTY<1,LN>=CALC.STK.QTY(PHYSI.CURR.QTY<1,LN>,MAT INV.CNV.REC,ROND,'')
+   TEMP.CURR.QTY<1,LN>=OCONV(TEMP.CURR.QTY<1,LN>,ICR.CNV)
+   RETURN
+*
+****************
+DEL.DETAIL.DATA: 
+****************
+*
+   PHYSI.PRODUCT = DELETE(PHYSI.PRODUCT,1,LN,0)
+   PHYSI.PREV.DIA = DELETE(PHYSI.PREV.DIA,1,LN,0)
+   PHYSI.PREV.QTY = DELETE(PHYSI.PREV.QTY,1,LN,0)
+   PHYSI.CURR.DIA = DELETE(PHYSI.CURR.DIA,1,LN,0)
+   PHYSI.CURR.QTY = DELETE(PHYSI.CURR.QTY,1,LN,0)
+   PHYSI.UNIT.COST = DELETE(PHYSI.UNIT.COST,1,LN,0)
+   PHYSI.SERIAL = DELETE(PHYSI.SERIAL,1,LN,0)
+   PHYSI.OPER.ID = DELETE(PHYSI.OPER.ID,1,LN,0)
+   PHYSI.POST.ERROR = DELETE(PHYSI.POST.ERROR,1,LN,0)
+   PHYSI.DESC = DELETE(PHYSI.DESC,1,LN,0)
+   PHYSI.BSWT = DELETE(PHYSI.BSWT,1,LN,0)
+   PHYSI.MWT = DELETE(PHYSI.MWT,1,LN,0)
+   PHYSI.COLOR = DELETE(PHYSI.COLOR,1,LN,0)
+   TEMP.CURR.QTY = DELETE(TEMP.CURR.QTY,1,LN,0)
+   TEMP.PREV.QTY = DELETE(TEMP.PREV.QTY,1,LN,0)
+   PHYSI.PREV.SQTY = DELETE(PHYSI.PREV.SQTY,1,LN,0)
+   PHYSI.CURR.SQTY = DELETE(PHYSI.CURR.SQTY,1,LN,0)
+   PHYSI.PO = DELETE(PHYSI.PO,1,LN,0)
+   PHYSI.POLN = DELETE(PHYSI.POLN,1,LN,0)
+   PHYSI.VENDOR = DELETE(PHYSI.VENDOR,1,LN,0)
+   PHYSI.RECP.NO = DELETE(PHYSI.RECP.NO,1,LN,0);* T21604
+   PHYSI.UNIT = DELETE(PHYSI.UNIT,1,LN,0);* T21604
+   PHYSI.STATUS = DELETE(PHYSI.STATUS,1,LN,0);* T21604
+   RETURN
+*
+*************
+DISP.DETAIL: 
+*************
+*
+   START=1+INT((LN-1)/PAGE.SIZE)*PAGE.SIZE  
+   IF OLD.START = START THEN RETURN
+   OLD.START = START
+   ECD.NUM=6;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=7;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=8;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=25;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=9;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=10;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=13;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=5;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=17;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=11;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=12;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   RETURN
+*
+*****************
+DISP.HEADER: 
+*****************
+*
+   ECD.NUM=27;ECD.ACTION=5;CALL SCRN.EDIT
+   ECD.NUM=3;ECD.ACTION=5;CALL SCRN.EDIT
+   ECD.NUM=4;ECD.ACTION=5;CALL SCRN.EDIT
+   ECD.NUM=14;ECD.ACTION=5;CALL SCRN.EDIT
+   RETURN
+*
+*****************
+PROCESS.TRANSFER: 
+*****************
+*
+   MAT TRAN.REC=''
+   MAT D.TRAN.REC=''
+   D.TRAN.PRT.DATE=DATE()
+   D.TRAN.PROD.NO = PROD.NUM
+   D.TRAN.EMP=@LOGNAME
+   D.TRAN.SERIAL = TEMP.SERIAL
+   D.TRAN.RECP = ISTK.RECP
+   D.TRAN.PROD.NO= ISTK.PROD
+   D.TRAN.FROM.WHSE = ISTK.WHSE
+   D.TRAN.FROM.LOC = ISTK.LOC
+   D.TRAN.TO.WHSE = PHYSI.WHSE
+   D.TRAN.TO.LOC = PHYSI.LOC
+   D.TRAN.QTY = ISTK.CUR.QTY
+   D.TRAN.DATE.ENTER=DATE()
+   D.TRAN.PERIOD=PHYSI.PERIOD
+   D.TRAN.TOT.QTY = ISTK.CUR.QTY
+   D.TRAN.REASON.DESC = "PHYSICAL"
+   D.TRAN.DATE.ENTER = DATE()
+   D.TRAN.CODE='N'
+*
+   PROCESS.FLAG='Y' ; MAT TRAN.REC='' ; NEW.ERRMSG=''
+   CALL TRAN.UPDATE(CONO,D.TRAN.CODE,MAT TRAN.REC,PROCESS.FLAG,CO.ICS.LOC.TRAN,NEW.ERRMSG)
+   IF NEW.ERRMSG='' THEN
+      ERRMSG='Transfer Unsuccessful. Note new Daily Transfer Number ':D.TRAN.CODE
+      GOSUB 91000
+      TEMP.SERIAL='' ; TEMP.RECEIPT=''
+   END ELSE
+      ERRMSG=NEW.ERRMSG
+      GOSUB 91000
+      ERRMSG=''
+      MAT SAVE.PHYSI.REC = MAT PHYSI.REC
+      READU PHY.SEQ FROM PHY.XREF,CONO:D.TRAN.FROM.WHSE:"!":D.TRAN.FROM.LOC THEN
+         MATREADU PHYSI.REC FROM PHY.INV,CONO:PHY.SEQ THEN
+            SFND = 0
+            REC.CNT = DCOUNT(PHYSI.PRODUCT,VM)
+            FOR DD = 1 TO REC.CNT UNTIL (SFND)
+               IF PHYSI.PRODUCT<1,DD> = PROD.NUM THEN
+                  IF PHYSI.SERIAL<1,DD> = TEMP.SERIAL THEN
+                     IF PHYSI.RECP.NO<1,DD> = ISTK.RECP THEN
+                        SFND = DD
+                     END
+                  END
+               END
+            NEXT DD
+            IF SFND # 0 THEN
+               PHYSI.TRAN.FROM<1,SFND> = D.TRAN.FROM.WHSE:'!':D.TRAN.FROM.LOC
+               PHYSI.TRAN.TO<1,SFND> = D.TRAN.TO.WHSE:'!':D.TRAN.TO.LOC
+               MATWRITE PHYSI.REC ON PHY.INV,CONO:PHY.SEQ
+            END ELSE
+               RELEASE PHY.INV,CONO:PHY.SEQ
+            END
+         END ELSE
+            RELEASE PHY.INV,CONO:PHY.SEQ
+         END
+      END ELSE
+         RELEASE PHY.XREF,CONO:D.TRAN.FROM.WHSE:"!":D.TRAN.FROM.LOC
+      END
+      MAT PHYSI.REC = MAT SAVE.PHYSI.REC
+      PHYSI.PREV.QTY<1,LN> = ISTK.CUR.QTY
+      PHYSI.PREV.DIA<1,LN> = ISTK.CUR.DIAM
+      PHYSI.PREV.SQTY<1,LN> = ISTK.CUR.STK.QTY
+      ROND=0.5
+      IF PHYSI.PREV.QTY<1,LN>+0<0 THEN ROND=-(0.5)
+      TEMP.PREV.QTY<1,LN>=CALC.STK.QTY(PHYSI.PREV.QTY<1,LN>,MAT INV.CNV.REC,ROND,'')
+      TEMP.PREV.QTY<1,LN>=OCONV(TEMP.PREV.QTY<1,LN>,ICR.CNV)
+      SCV.REC(9)<ESN,LN>=TEMP.PREV.QTY<1,LN>
+      ECD.NUM=9;ECD.SUB.NUM=LN;ECD.ACTION=5;CALL SCRN.EDIT
+      SCV.REC(11)<ESN,LN>=PHYSI.PREV.DIA<1,LN>
+      ECD.NUM=11;ECD.SUB.NUM=LN;ECD.ACTION=5;CALL SCRN.EDIT
+   END
+   RETURN
+*
+***************
+SCROLL: 
+***************
+*
+   BEGIN CASE
+      CASE OPT = "S" OR OPT = "SF"
+         LN=1+INT((LN-1)/PAGE.SIZE)*PAGE.SIZE + PAGE.SIZE
+         IF LN>DCOUNT(PHYSI.PRODUCT,VM) THEN LN=1
+         GOSUB DISP.DETAIL
+      CASE OPT = "SR"
+         LN=1+INT((LN-1)/PAGE.SIZE)*PAGE.SIZE - PAGE.SIZE
+         IF LN<1 THEN LN=1
+         GOSUB DISP.DETAIL
+      CASE OPT = "ST"
+         LN=1
+         GOSUB DISP.DETAIL
+      CASE OPT = "SB"
+         LN=DCOUNT(PHYSI.PRODUCT,VM)
+         GOSUB DISP.DETAIL
+   END CASE
+*
+   RETURN
+*
+*************
+INITIALIZE: 
+*************
+*
+   OPER.ID = @LOGNAME
+   CONO = ""
+   ERRMSG = ""
+   CALL GET.CONO(CONO,MAT COMP.REC)
+   TODAY = DATE()
+   PAGE.SIZE=7; START=1
+   OLD.START = 0
+   LN = 1
+   RETURN
+*
+*---- ERROR ROUTINE
+*
+91000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+93000 ERR.TYPE=3;CALL SYSCOM(MAT SYSCOM.REC)
+*
+*---- END OF PROGRAM
+*
+99999 *
+   ECD.ACTION=99 ; CALL SCRN.EDIT
+END

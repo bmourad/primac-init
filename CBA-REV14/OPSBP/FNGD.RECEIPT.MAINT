@@ -1,0 +1,1481 @@
+*COPY>CPYLIB>COM1
+*COPY>JCS.CPYLIB>COM.JCS.LINK  
+*COPY>ICS.CPYLIB>COM.INV.MAIN  
+*COPY>ICS.CPYLIB>COM.INV.SERIAL
+*COPY>JCS.CPYLIB>COM.INV.STATS 
+*COPY>PMC.CPYLIB>COM.CUST      
+*COPY>OPS.CPYLIB>COM.ORDER     
+*COPY>ICS.CPYLIB>COM.INV.CNV   
+*COPY>OPS.CPYLIB>COM.OPS.LINK  
+*********************************************************************
+* REVISION    - [08.X]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - OPSBP
+* PROGRAM     - FNGD.RECEIPT.MAINT
+* BY          - NICK AMENDOLA
+* DATE        - 07/29/93
+* DESCRIPTION
+* 
+* TASK
+*     18573 5/95 LLH 1-52 ACCOUNTING PERIODS
+*
+* TASK 20148 - RESERVE BASED ON ORDER RELEASES
+*T21072 doug 10/07/1996 * Receipt quantity distribution problem
+*T21248 doug 11/20/1996 * Allow reservations to the general ship-to 000
+*T21177 diane 11/06/1996 * REV11 UPG
+*T22030 llh 06/20/1997 * UPDATE JOB.QTY<1,2> WITH JFS.F.QTY AND WRITE
+*                        THE JOB
+*T23278 markt 10/21/1998 * Add check for divisional security.
+*                          Also enable division level EOP posting and
+*                          daily assignment of various costs.
+*T25740 epitka 01/16/2002 * Rev12
+*T26126 adelgado 02/26/2002 * Implement the LOCKED clause for READU.
+*T25740 epitka 04/03/2002 * Rev12
+*T26556 adelgado 04/23/2002 * Fix help msg to the 'Period' field.
+*T27329 cmykleb 03/05/2003 * Correct problem with "END" not starting
+*                            process over.
+*T27375 lhelms 04/10/2003 * Not defaulting in period according to date
+*                           when system generated period flag is set to
+*                           "N".
+*C42046 cmykleb 06/17/2003 * Correct error message problem when user
+*                            accesses the Period field.
+*T27882 cmykleb 01/13/2004 * When the reserve amount is changed on a
+*                            line, when the user returns thru the changed
+*                            line the reserve amount displayed goes back
+*                            to the original amount before the change.
+*T27898 cmykleb 01/23/2004 * When a user escapes/ends out in gui, the
+*                            screen handling errmsg "403..." comes up.
+*T28755 lross 12/28/2005 * TRIM the LOC input to avoid leading/trailing
+*                          blanks.
+*********************************************************************
+*
+*---- Data structure libraries
+*
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>COMP.OPS
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>PMC.CPYLIB>SHIP.TO
+*COPY>PMC.CPYLIB>FISCAL
+*COPY>PMC.CPYLIB>SALESDATES
+*COPY>JCS.CPYLIB>JOB
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>CATEGORY
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>ICS.CPYLIB>INV.WHSE.LOC
+*COPY>ICS.CPYLIB>WAREHOUSE
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>OPS.CPYLIB>DAILY_FNGD_RECEIPT
+*COPY>OPS.CPYLIB>JOB.FNGD.STATS
+*COPY>OPS.CPYLIB>FNGD.WIP.HIST
+*COPY>OPS.CPYLIB>ORDER
+*COPY>OPS.CPYLIB>ORDER.DETAIL
+*COPY>OPS.CPYLIB>ORDER.RELEASE
+*COPY>CPYLIB>GEN.XREF.SUB
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>CHAR
+*
+   DEFFUN DIVISION.POSITION(CONO,CONTROL.FILE,DIV.CODE)
+   DEFFUN CURRENT.PERIOD(CONO,CONTROL.FILE,DIV.POS,FISCAL.FLAG)
+   DEFFUN CALC.STK.QTY(COST.QTY,MAT INV.CNV.REC,ROND,LN)
+   DEFFUN CALC.COST.QTY(STK.QTY,MAT INV.CNV.REC,ROND,LN)
+   DEFFUN GET.RECP.ID(CONO,CONTROL.FILE,DATE)
+*
+*---- SYSCOM setup
+*
+   SYS.TYPE=1
+   CALL SYSCOM(MAT SYSCOM.REC)
+*
+   GOSUB OPEN.FILES
+*
+*---- Get Company
+*
+   CONO=""; MAT COMP.REC=""
+   CALL GET.CONO(CONO,MAT COMP.REC)
+   IF CONO="END" THEN GOTO 99999
+   PORT.NO = "TTY"; CALL SYSVARS.SUB(PORT.NO)   
+   START=1
+*
+   MATREAD OPCO.REC FROM CONTROL, CONO:"OPS" ELSE
+      MAT OPCO.REC=""
+   END
+   MATREAD FISCAL.REC FROM CONTROL, CONO:"ICFISCAL" ELSE
+      ERRMSG="Cannot locate Inventory Control Fiscal Period !!"
+      GOSUB 91000; GOTO 99999
+   END
+   MATREAD SALESDATES.REC FROM CONTROL, CONO:"SALESDATES" ELSE
+      ERRMSG="Cannot locate the Sales period ending dates !!"
+      GOSUB 91000; GOTO 99999
+   END
+   READ DIVISION.REC FROM CONTROL, CONO:"DIVISIONS" ELSE
+      ERRMSG="DIVISIONS CONTROL RECORD IS MISSING"
+      GOTO 93000
+   END
+   READ SECURITY.REC FROM CONTROL, CONO:"DIV.SECURITY" ELSE
+      ERRMSG="DIV.SECURITY CONTROL RECORD IS MISSING"; GOTO 93000
+   END
+  * T26556 v
+   READ PERIOD.REC FROM CONTROL, CONO:"ACCT.PERIODS" ELSE
+      PERIOD.REC = ""
+      PERIOD.REC<1> = 12
+   END
+   NUM.PERIODS = PERIOD.REC<1>
+  * T26556 ^
+*
+*---- Initialization
+*
+10 *
+   BEGIN.FPAGE=10; FPAGE.SIZE=1; FLINE.SPACE=2
+   BEGIN.PAGE=15; PAGE.SIZE=5; LINE.SPACE=1
+*
+   MAT GEN.XREF.REC=""
+   GXR.CO=CONO
+   MAT EDIT.COM.DRIVER=""
+   ECD.SCRN.CNT=1
+   ECD.SCRN.NAME="FNGD.RECEIPT.MAINT"
+   ECD.ACTION=1; CALL SCRN.EDIT
+   ECD.SCRN.NO=1
+   ESN=ECD.SCRN.NO
+*
+   MAT SCV.REC=""
+   ECD.ACTION=2; CALL SCRN.EDIT
+   JOBNUM=""; ORDNUM=""; PDNUM=""; WHNUM=""
+   DIST.TYPE=""
+   OPT3=""
+   HMSG.PR = '' ; DEFAULT.PR = '' ; VALDAT.PR = ''         ;* T26556
+   ;*
+   ;* Main Loop
+   ;*
+   DONE=0
+   LOOP
+      RELEASE
+      ERR=0
+      GOSUB ENT.RECP.NO
+      IF NOT(ERR) THEN
+         IF RCPTNO='N' THEN
+            MAT DFR.REC='' ; LINES=0   
+            LIMIT=5                  
+            FOR OPTION=1 TO LIMIT UNTIL ERR=1
+               ON OPTION GOSUB ENT.JOB,ENT.RECP.DATE,ENT.PERIOD,ENT.LOC,ENT.RECP.QTY
+*T27898 v
+*              IF ECD.RET.VALUE="END" THEN LIMIT=0
+               IF ECD.RET.VALUE="END" THEN
+                  ECD.ACTION=6; CALL SCRN.EDIT
+                  GOTO 100
+               END
+*T27898 ^
+            NEXT OPTION
+            IF NOT(ERR) THEN
+               DIST.TYPE="F"            
+               GOSUB DISTRIBUTE.TO.ORDERS                 
+            END
+         END ELSE
+            DFR.ID=CONO:RCPTNO
+        * T26126 v
+            READU DUMMY FROM INV_RECEIPTS,DFR.ID LOCKED
+               ERRMSG = 'RECEIPT record is locked by user - ':GETUSERNAME(STATUS())
+               GOSUB 91000; ERR=1 
+            END THEN
+        * T26126 ^
+               ERRMSG="Receipt ":RCPTNO:" has been already posted."
+               GOSUB 91000; ERR=1
+            END ELSE
+               DFR.ID=CONO:RCPTNO
+          * T26126 v
+               MATREADU DFR.REC FROM DAILY_FNGD_RECEIPT,DFR.ID LOCKED
+                  ERRMSG = 'RECEIPT record is locked by user - ':GETUSERNAME(STATUS())
+                  GOSUB 91000; ERR=1 
+               END ELSE
+          * T26126 ^
+                  RELEASE DAILY_FNGD_RECEIPT, CONO:ECD.RET.VALUE
+                  ERRMSG="Cannot locate Receipt # ":ECD.RET.VALUE
+                  GOSUB 91000; ERR=1
+               END
+               IF DFR.PERIOD # '' THEN DEF.PERIOD = DFR.PERIOD; * C42046
+            END
+            IF NOT(ERR) THEN
+               WHSE.ID=CONO:DFR.WHSE
+               MATREAD WHSE.REC FROM WAREHOUSE,WHSE.ID ELSE
+                  MAT WHSE.REC=''
+               END
+               DIV.CODE=WHS.DIV; USER.ID=UPCASE(@LOGNAME); ERRMSG=''
+               CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+               IF ERRMSG='' THEN
+                  GOSUB 8500
+                  IF ERRMSG='' THEN
+                     DFR.STATUS=''
+                     JOB.ID=CONO:DFR.JOB
+                     MATREAD JOB.REC FROM JOB,JOB.ID THEN
+                        IF DFR.CUST=JOB.CUST THEN
+                           CUST.ID=CONO:DFR.CUST
+                           MATREAD CUST.REC FROM CUSTOMER,CUST.ID THEN
+                              MATREAD JFS.REC FROM JOB.FNGD.STATS, CONO:DFR.JOB THEN
+                                 GOSUB CHECK.LINKS
+                                 IF ERRMSG='' THEN
+                                    GOSUB GET.PRODUCT
+                                    IF NOT(ERR) THEN
+                                       SCV.REC(2) =DFR.JOB
+                                       SCV.REC(3) =DFR.CUST
+                                       SCV.REC(4) =CUST.NAME
+                                       SCV.REC(5) =DFR.RECP.DATE
+                                       SCV.REC(6) =DFR.PERIOD
+                                       SCV.REC(7) =DFR.WHSE
+                                       SCV.REC(8) =DFR.LOC
+                                       SCV.REC(39)=INT(FLINES/FPAGE.SIZE+.9) "R%2"
+                                       ECD.ACTION=3; CALL SCRN.EDIT
+                                       GOSUB EXTRACT.ORD.INFO
+                                    END ELSE
+                                       RELEASE DAILY_FNGD_RECEIPT, DFR.ID
+                                       ERR=1
+                                    END
+                                 END ELSE
+                                    RELEASE DAILY_FNGD_RECEIPT, DFR.ID
+                                    ERR=1
+                                 END
+                              END ELSE
+                                 RELEASE DAILY_FNGD_RECEIPT, DFR.ID
+                                 ERRMSG="Job ":DFR.JOB 
+                                 ERRMSG:=" is not producing any Finished Goods for Receipt # ":RCPTNO
+                                 GOSUB 91000; ERR=1
+                              END
+                           END ELSE
+                              RELEASE DAILY_FNGD_RECEIPT, DFR.ID
+                              ERRMSG="Cannot locate Customer (":DFR.CUST:") for Receipt # ":RCPTNO
+                              GOSUB 91000; ERR=1
+                           END
+                        END ELSE
+                           RELEASE DAILY_FNGD_RECEIPT, DFR.ID
+                           ERRMSG="Job ":DFR.JOB:" belongs to customer "
+                           ERRMSG:=JOB.CUST:" while Receipt belongs to # ":DFR.CUST
+                           GOSUB 91000; ERR=1
+                        END
+                     END ELSE
+                        RELEASE DAILY_FNGD_RECEIPT,DFR.ID
+                        ERRMSG="Cannot locate Job ":DFR.JOB
+                        ERRMSG:=" for Receipt # ":RCPTNO
+                        GOSUB 91000; ERR=1
+                     END
+                  END
+               END ELSE
+                  GOSUB 91000 ; ERR=1
+               END
+            END ELSE
+               GOSUB 91000
+               ERR=1
+            END
+         END
+         IF NOT(ERR) THEN
+            GOSUB BUILD.DETAIL.SCV
+            GOSUB DISP.ORDERS
+            GOSUB MAIN.PROMPT
+            MAT SCV.REC=""
+            ECD.ACTION=6; CALL SCRN.EDIT
+            IF MORE < 0 THEN
+               ECD.NUM=1; SCV.REC(ECD.NUM)<ESN>=ECD.RET.VALUE
+               ECD.ACTION=5; CALL SCRN.EDIT
+            END
+         END
+      END
+100 *
+   UNTIL (DONE) DO REPEAT
+*
+   GOTO 99999
+*
+*************************************************************************
+***** S U B R O U T I N E S *********************************************
+*************************************************************************
+*
+*****************
+MAIN.PROMPT: 
+*****************
+*
+   MORE=1
+   LOOP
+      ECD.NUM=31; SCV.REC(ECD.NUM)<ESN>=""
+      ECD.ACTION=4; CALL SCRN.EDIT
+      OPTION=ECD.RET.VALUE
+520*
+      BEGIN CASE
+         CASE OPTION="END" OR OPTION="E"
+            IF RCPTNO # "N" THEN
+               RELEASE DAILY_FNGD_RECEIPT, DFR.ID
+            END
+            MORE=0
+         CASE OPTION="Q"
+            GOSUB ENT.RECP.QTY
+            IF NOT(ERR) THEN
+               BEGIN CASE
+                  CASE DIST.TYPE="F"
+                     GOSUB DISTRIBUTE.TO.ORDERS
+                     GOSUB BUILD.DETAIL.SCV
+                     GOSUB DISP.ORDERS
+                  CASE DIST.TYPE="I"
+                     GOSUB DISTRIBUTE.TO.INVENTORY
+                     GOSUB BUILD.DETAIL.SCV
+                     GOSUB DISP.ORDERS
+                  CASE 1
+                     OPTION="R"
+                     GOTO 520
+               END CASE
+            END
+         CASE OPTION="R"
+            ENCORE=1
+            LOOP
+               SCV.REC(35)<ESN>=""
+               ECD.NUM=35; ECD.ACTION=4; CALL SCRN.EDIT
+               OPT2=ECD.RET.VALUE
+               BEGIN CASE
+                  CASE OPT2="" OR OPT2="E" OR OPT2="END"
+                     IF SUM(DFR.QTY) # DFR.TOT.QTY THEN
+                        ERRMSG="Distribution out of balance. Please correct"
+                        GOSUB 91000
+                     END ELSE
+                        LN=LINES
+                        ENCORE=0
+                     END
+                  CASE OPT2="F"
+                     DIST.TYPE="F"
+                     GOSUB DISTRIBUTE.TO.ORDERS
+                     GOSUB BUILD.DETAIL.SCV
+                     GOSUB DISP.ORDERS
+                  CASE OPT2="I"
+                     DIST.TYPE="I"
+                     GOSUB DISTRIBUTE.TO.INVENTORY
+                     GOSUB BUILD.DETAIL.SCV
+                     GOSUB DISP.ORDERS
+                  CASE OPT2="C"
+                     IF LINES=1 THEN
+                        ERRMSG="Sorry, no lines to change! "
+                        GOSUB 91000
+                     END ELSE
+                        GOSUB ENT.LINE.NUM
+                        IF ECD.RET.VALUE # "" AND ECD.RET.VALUE # "END" THEN
+                           IF ECD.RET.VALUE[1,1]="A" THEN
+                              VALUE=""
+                              FOR LN=1 TO (LINES-1) UNTIL VALUE="END"
+                                 GOSUB 7100
+                              NEXT LN
+                           END ELSE
+                              LN=ECD.RET.VALUE
+                              GOSUB 7100
+                           END
+                           GOSUB DISP.ORDERS
+                        END
+                     END
+                  CASE OPT2="CA"
+                     VALUE=""
+                     FOR LN=1 TO (LINES-1) UNTIL VALUE="END"
+                        GOSUB 7100
+                     NEXT LN
+                     GOSUB DISP.ORDERS
+                  CASE OPT2[1,1]='S'
+                     GOSUB SCROLL.ORDERS
+               END CASE
+            WHILE ENCORE DO
+            REPEAT
+         CASE OPTION="P"
+            IF RCPTNO="N" THEN GOSUB GET.RECP.ID
+            REC=RCPTNO
+            FOR N=1 TO DFR.REC.SIZE
+               REC<N+1>=DFR.REC(N)
+            NEXT N
+            WRITE REC ON CONTROL, CONO:"FNGD.RECEIPT.LIST":"!":PORT.NO
+            PERFORM "FNGD.RECEIPT.LIST"
+            DELETE CONTROL, CONO:"FNGD.RECEIPT.LIST":"!":PORT.NO
+            DFR.PRT.DATE=DATE()
+            MATWRITE DFR.REC ON DAILY_FNGD_RECEIPT, DFR.ID
+            ECD.ACTION=2; CALL SCRN.EDIT
+            ECD.ACTION=3; CALL SCRN.EDIT
+            GOSUB DISP.PROD.INFO
+            GOSUB DISP.ORDERS
+         CASE OPTION="F"
+            IF RCPTNO="N" THEN GOSUB GET.RECP.ID
+            MATWRITE DFR.REC ON DAILY_FNGD_RECEIPT,DFR.ID
+            MORE=0
+         CASE OPTION="U"
+            IF RCPTNO="N" THEN GOSUB GET.RECP.ID
+            MATWRITEU DFR.REC ON DAILY_FNGD_RECEIPT, DFR.ID
+            GOSUB UPDATE
+         CASE OPTION="D" AND RCPTNO # "N"
+            ECD.NUM=33
+            ECD.ACTION=4; CALL SCRN.EDIT
+            IF ECD.RET.VALUE="Y" THEN
+               DELETE DAILY_FNGD_RECEIPT, DFR.ID
+               MORE=0
+            END
+         CASE NOT(NUM(OPTION))
+            ERRMSG="Invalid entry, please re-enter"
+            GOSUB 91000
+         CASE OPTION < 1 OR OPTION > 3
+            ERRMSG="Out of range, please re-enter"
+            GOSUB 91000
+         CASE OPTION=1
+            GOSUB ENT.RECP.DATE
+            IF ECD.RET.VALUE#'END' THEN
+               GOSUB ENT.PERIOD
+            END
+         CASE 1
+            ON OPTION GOSUB ENT.RECP.DATE,ENT.PERIOD,ENT.LOC
+      END CASE
+   WHILE MORE > 0 DO REPEAT
+   RETURN
+*
+**************
+UPDATE: 
+**************
+*
+   READU DUMMY FROM INV_RECEIPTS, DFR.ID THEN
+      DFR.STATUS="Receipt already posted"
+      RELEASE INV_RECEIPTS, DFR.ID
+      MATWRITEU DFR.REC ON DAILY_FNGD_RECEIPT, DFR.ID
+      ERRMSG=DFR.STATUS; GOSUB 91000
+   END ELSE
+      DFR.STATUS=""
+      CALL FNGD.RECP.UPDATE(DFR.ID,OPCO.COST.SALE)
+      IF DFR.STATUS="" THEN
+         MATREADU FWH.REC FROM FNGD.WIP.HIST, CONO:DFR.JOB ELSE MAT FWH.REC=""
+         PPTR=1
+         LOOP
+            LOCATE DFR.PROD IN FWH.PROD<1>,PPTR SETTING FND THEN
+               IF DFR.WHSE=FWH.WHSE<1,FND> THEN PPTR=0
+            END ELSE
+               FWH.PROD<1,FND>=DFR.PROD
+               FWH.WHSE<1,FND>=DFR.WHSE
+               PPTR=0
+            END
+         WHILE PPTR DO
+            PPTR=FND + 1
+         REPEAT
+         PPTR=FND
+         LOCATE DFR.PERIOD IN FWH.PERIOD<1,PPTR>,1 SETTING MPTR THEN
+            FWH.RECP<1,PPTR,MPTR>=FWH.RECP<1,PPTR,MPTR>:"!":RCPTNO
+         END ELSE
+            FWH.PERIOD<1,PPTR,MPTR>=DFR.PERIOD
+            FWH.RECP<1,PPTR,MPTR>=RCPTNO
+         END
+         MATWRITE FWH.REC ON FNGD.WIP.HIST, CONO:DFR.JOB
+         WRITE "" ON FNGD_WIP_HIST_TAG, CONO:DFR.JOB
+         DELETE DAILY_FNGD_RECEIPT, DFR.ID
+         MATREADU JOB.REC FROM JOB, CONO:DFR.JOB ELSE
+            MAT JOB.REC=""
+         END
+         MATREAD JFS.REC FROM JOB.FNGD.STATS,CONO:DFR.JOB ELSE
+            MAT JFS.REC=""
+         END
+         JOB.QTY<1,2>=SUM(JFS.F.QTY)  / 1000
+         MATWRITE JOB.REC ON JOB, CONO:DFR.JOB
+         MORE=0
+      END ELSE
+         RELEASE INV_RECEIPTS, DFR.ID
+         MATWRITEU DFR.REC ON DAILY_FNGD_RECEIPT, DFR.ID
+         ERRMSG=DFR.STATUS; GOSUB 91000
+      END
+   END
+   RETURN
+*
+*****************
+EXTRACT.ORD.INFO: 
+*****************
+*
+   DFR.ORDER=""
+   DFR.SHIP.TO=""
+   TEMP.SHPNM=""
+   TEMP.ALLOC=""
+   REL.NO=""; REL.DATE=""; REL.QTY=""
+   OP=0
+   FLN=REFNOS<PLOC,WLOC>
+   OCNT=DCOUNT(JFS.ORDER<1,FLN>,SM)
+   FOR OPTR=1 TO OCNT
+      ORDNO=JFS.ORDER<1,FLN,OPTR>
+      ORD.ID=CONO:ORDNO
+      MATREAD ORD.REC FROM ORDER,ORD.ID THEN
+         SCNT=DCOUNT(ORD.SHIP.TO,VM)
+         FOR SPTR=1 TO SCNT
+            SHPNO=ORD.SHIP.TO<1,SPTR>
+            OSD.ID=ORD.ID:"!":SHPNO
+            MATREAD ORD.DET.REC FROM ORDER.DETAIL,OSD.ID THEN
+               PCNT=DCOUNT(OSD.PROD,VM)
+               PP=0
+               FOR PPTR=1 TO PCNT UNTIL PP > 0
+                  BEGIN CASE
+                     CASE OSD.PROD<1,PPTR> # DFR.PROD
+                     CASE OSD.WHSE<1,PPTR> # DFR.WHSE
+                     CASE OSD.KIT<1,PPTR> # "N"
+                     CASE 1
+                        PP=PPTR
+                        LOCATE DFR.JOB IN OSD.JOB<1,PP>,1 SETTING JP THEN
+                           IF OSD.JOB.QTY<1,PP,JP>+0 > 0 THEN
+                              RCNT=DCOUNT(ORD.REL.NO,VM)
+                              FOR R=1 TO RCNT
+                                 ORR.ID=CONO:ORD.REL.NO<1,R>
+                                 MATREAD ORR.REC FROM ORDER.RELEASE,ORR.ID THEN
+                                    BEGIN CASE
+                                       CASE ORR.STATUS # ""
+                                       CASE ORR.SHIP.TO # SHPNO
+                                       CASE ORR.QTY<1,PP>=0
+                                       CASE 1
+                                          P=1; RESVD=0
+                                          LOOP
+                                             LOCATE ORD.REL.NO<1,R> IN OSD.REL.NO<1,PP>,P SETTING RPTR THEN
+                                                RESVD=RESVD + OSD.REL.QTY<1,PP,RPTR>
+                                                P=RPTR + 1
+                                             END ELSE
+                                                P=0
+                                             END
+                                          WHILE P DO REPEAT
+                                          REL.OPEN=ORR.QTY<1,PP> - RESVD
+                                          IF REL.OPEN > 0 THEN
+                                             LOCATE ORR.DUE.DATE IN REL.DATE,1 BY "AR" SETTING RPTR THEN
+                                                RPTR=RPTR + 1
+                                             END
+                                             REL.NO=INSERT(REL.NO,RPTR,0,0,ORD.REL.NO<1,R>)
+                                             REL.DATE=INSERT(REL.DATE,RPTR,0,0,ORR.DUE.DATE)
+                                             REL.QTY=INSERT(REL.QTY,RPTR,0,0,REL.OPEN)
+                                          END
+                                    END CASE
+                                 END
+                              NEXT R
+                              BEGIN CASE
+                                 CASE OP=0
+                                    OP=1
+                                 CASE DFR.ORDER<1,OP> # ORDNO
+                                    OP=OP + 1
+                                 CASE DFR.SHIP.TO<1,OP> # SHPNO
+                                    OP=OP + 1
+                              END CASE
+                              TEMP.ALLOC<1,OP>=TEMP.ALLOC<1,OP> + OSD.JOB.QTY<1,PP,JP>
+                              DFR.ORDER<1,OP>=ORDNO
+                              DFR.SHIP.TO<1,OP>=SHPNO
+                              MATREAD SPT.REC FROM SHIP.TO, CONO:ORD.CUST:"!":SHPNO ELSE
+                                 MAT SPT.REC=""
+                                 IF SHPNO="000" THEN
+                                    SPT.NAME="GENERAL SHIPTO"
+                                 END ELSE
+                                    SPT.NAME="???????????????"
+                                 END
+                              END
+                              TEMP.SHPNM<1,OP>=SPT.NAME
+                              IF ORD.PRINT="N" OR OPCO.SHP.FRM="R" OR SHPNO="000" THEN;*T21248
+                                 DFR.PICK.FLG<1,OP>="N"
+                              END ELSE
+                                 IF DFR.PICK.FLG<1,OP>="" THEN
+                                    DFR.PICK.FLG<1,OP>="Y"
+                                 END
+                              END
+                           END
+                        END
+                  END CASE
+               NEXT PPTR
+            END
+         NEXT SPTR
+      END
+   NEXT OPTR
+   DFR.ORDER<1,OP+1>="*FNGD*"
+   LN=1; LINES=DCOUNT(DFR.ORDER,VM)
+   ECD.NUM=29; SCV.REC(ECD.NUM)<ESN>=INT(LINES/PAGE.SIZE+.9) "R%2"
+   ECD.ACTION=5; CALL SCRN.EDIT
+   RETURN
+*
+*************
+CHECK.LINKS: 
+*************
+*
+   PDNOS=""; WHNOS=""; REFNOS=""
+   FLINES=DCOUNT(JFS.PROD,VM)
+   IF FLINES < 1 THEN
+      ERRMSG="Cannot locate any Finished Goods for Job # ":DFR.JOB
+      GOSUB 91000
+   END ELSE
+      FOR P=1 TO FLINES
+         PROD=JFS.PROD<1,P>
+         WHSE=JFS.WHSE<1,P>
+         LOCATE PROD IN PDNOS,1 SETTING PLOC THEN
+            ;* i don't get this logic prod/whse is one to one
+            ;* relationship. There can never be more  then one
+            ;* whse in the same multivalue according to cpylib
+            LOCATE WHSE IN WHNOS<PLOC>,1 SETTING WLOC ELSE
+               WHNOS<PLOC,WLOC>=WHSE
+               REFNOS<PLOC,WLOC>=P
+            END
+         END ELSE
+            PDNOS<PLOC>=PROD
+            WHNOS<PLOC>=WHSE
+            REFNOS<PLOC>=P
+         END
+      NEXT P
+      IF DFR.PROD="" THEN
+         FLN=1
+      END ELSE
+         LOCATE DFR.PROD IN PDNOS,1 SETTING PLOC THEN
+            LOCATE DFR.WHSE IN WHNOS<PLOC>,1 SETTING WLOC THEN
+               FLN=REFNOS<PLOC,WLOC>
+               OCNT=DCOUNT(DFR.ORDER,VM)
+               FOR OPTR=OCNT TO 1 STEP -1
+                  ORDNO=DFR.ORDER<1,OPTR>
+                  IF ORDNO # "*FNGD*" THEN
+                     LOCATE ORDNO IN JFS.ORDER<1,FLN>,1 SETTING OLOC ELSE
+                        ERRMSG="Order ":ORDNO:" is de-linked from product "
+                        ERRMSG:=DFR.PROD:"!"
+                        GOSUB 91000
+                        DFR.ORDER=DELETE(DFR.ORDER,1,OPTR,0)
+                        DFR.QTY=DELETE(DFR.QTY,1,OPTR,0)
+                        DFR.SQTY=DELETE(DFR.SQTY,1,OPTR,0)
+*              DFR.UN.SALE=DELETE(DFR.UN.SALE,1,OPTR,0)
+                        DFR.SHIP.TO=DELETE(DFR.SHIP.TO,1,OPTR,0)
+*              DFR.EX.SALE=DELETE(DFR.EX.SALE,1,OPTR,0)
+                     END
+                  END
+               NEXT OPTR
+            END ELSE
+               ERRMSG="Warehouse ":DFR.WHSE:" is de-linked from Job # ":DFR.JOB
+               GOSUB 91000
+            END
+         END ELSE
+            ERRMSG="Product (":DFR.PROD:") is de-linked from Job # ":DFR.JOB
+            GOSUB 91000
+         END
+      END
+   END
+   RETURN
+*
+*****************
+GET.PRODUCT: 
+*****************
+*
+   ;* determine if entry of product is needed
+   BEGIN CASE
+      CASE FLINES=1
+         DFR.PROD=JFS.PROD<1,1>
+         DFR.WHSE=JFS.WHSE<1,1>
+         DFR.UN.PRICE=JFS.U.PRICE<1,1>
+         GOTO 5019
+      CASE DFR.PROD # ""
+         GOTO 5019
+      CASE PDNUM # ""
+         DFR.PROD=PDNUM; PDNUM=""
+         ECD.NUM=12; SCV.REC(ECD.NUM)<ESN>=DFR.PROD
+         ECD.ACTION=5; CALL SCRN.EDIT
+         GOTO 5019
+   END CASE
+5010*
+   ;* enter product #
+   ECD.NUM=12; ECD.ACTION=4; CALL SCRN.EDIT
+   BEGIN CASE
+      CASE ECD.RET.VALUE="END"
+         GOTO 5099 ; ERR=1
+      CASE ECD.RET.VALUE="" OR ECD.RET.VALUE="???"
+         GXR.NAME="INV.FNGD.ORDER.DIST"
+         GXR.FILE=INVENTORY
+         GXR.SRCH.ID=PDNOS<1>
+         I=2
+         LOOP WHILE PDNOS<I> # "" DO
+            GXR.SRCH.ID<1,I>=PDNOS<I>
+            I=I + 1
+         REPEAT
+         CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+         ECD.ACTION=2; CALL SCRN.EDIT
+         SCV.REC(ECD.NUM)<ESN>=GXR.ID
+         ECD.ACTION=3; CALL SCRN.EDIT
+         IF GXR.ID="" THEN GOTO 5010
+         DFR.PROD=GXR.ID
+      CASE 1
+         DFR.PROD=ECD.RET.VALUE
+   END CASE
+5019*
+   ;* verify product
+   LOCATE DFR.PROD IN PDNOS,1 SETTING PLOC ELSE
+      ERRMSG="Cannot locate product (":DFR.PROD:") for this Job."
+      GOSUB 91000; GOTO 5010
+   END
+   MATREAD INV.REC FROM INVENTORY, CONO:DFR.PROD ELSE
+      ERRMSG="Cannot locate Product # ":DFR.PROD
+      GOSUB 91000; GOTO 5010
+   END
+   IF INV.SUBS # "" THEN
+      ERRMSG="Cannot receive finished goods for a Master Product"
+      GOSUB 91000; GOTO 5010
+   END
+   MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE ELSE
+      ERRMSG="Cannot locate Product Line # ":INV.LINE
+      GOSUB 91000; GOTO 5010
+   END
+   IF CATG.TRK.LVL="S" THEN
+      ERRMSG="Cannot use this function to receive palletized goods"
+      GOSUB 91000; GOTO 5010
+   END
+   GOSUB GET.INV.UM.CNV
+   ;* display warehouse
+   WCNT=DCOUNT(WHNOS<PLOC>,VM)
+   BEGIN CASE
+      CASE WCNT=1
+         ECD.RET.VALUE=WHNOS<PLOC,1>
+         ECD.NUM=13; SCV.REC(ECD.NUM)<ESN>=DFR.WHSE
+         ECD.ACTION=5; CALL SCRN.EDIT
+         GOTO 5025
+      CASE DFR.WHSE # ""
+         ECD.RET.VALUE=DFR.WHSE
+         ECD.NUM=13; SCV.REC(ECD.NUM)<ESN>=DFR.WHSE
+         ECD.ACTION=5; CALL SCRN.EDIT
+         GOTO 5025
+      CASE WHNUM # ""
+         DFR.WHSE=WHNUM; WHNUM=""
+         ECD.NUM=13; SCV.REC(ECD.NUM)<ESN>=DFR.WHSE
+         ECD.ACTION=5; CALL SCRN.EDIT
+         GOTO 5025
+   END CASE
+5020*
+   ;*enter warehouse
+   ECD.HMSG="Enter Warehouse - ":WHNOS<PLOC,1>
+   FOR W=2 TO WCNT
+      ECD.HMSG=ECD.HMSG:", ":WHNOS<PLOC,W>
+   NEXT W
+   ECD.NUM=13; ECD.ACTION=4; CALL SCRN.EDIT
+5025*
+   BEGIN CASE
+      CASE ECD.RET.VALUE="END"
+         DFR.WHSE=""; GOTO 5010
+      CASE ECD.RET.VALUE="???"
+         GXR.NAME="INV.WHSE.CODE"
+         GXR.SRCH.ID=WHNOS<PLOC>
+         CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+         ECD.ACTION=2; CALL SCRN.EDIT
+         IF GXR.ID="" THEN
+            ECD.ACTION=3; CALL SCRN.EDIT
+            GOTO 5020
+         END
+         DFR.WHSE=GXR.ID; SCV.REC(ECD.NUM)<ESN>=DFR.WHSE
+         ECD.ACTION=3; CALL SCRN.EDIT
+      CASE 1
+         DFR.WHSE=ECD.RET.VALUE
+   END CASE
+   ;*verify warehouse
+   LOCATE DFR.WHSE IN WHNOS<PLOC>,1 SETTING WLOC ELSE
+      ERRMSG="Warehouse (":DFR.WHSE:") is not valid for product (":DFR.PROD:") on this order"
+      GOSUB 91000; GOTO 5020
+   END
+   FLN=REFNOS<PLOC,WLOC>
+   MATREAD IWH.REC FROM INV.WHSE, CONO:DFR.PROD:"!":DFR.WHSE ELSE
+      ERRMSG="Cannot locate warehouse (":DFR.WHSE:") for product # ":DFR.PROD
+      GOSUB 91000; GOTO 5020
+   END
+   MATREAD WHSE.REC FROM WAREHOUSE, CONO:ECD.RET.VALUE ELSE MAT WHSE.REC=''
+   DIV.CODE=WHS.DIV; USER.ID=UPCASE(@LOGNAME); ERRMSG=''
+   CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+   IF ERRMSG # '' THEN
+      GOSUB 91000; GOTO 5020
+   END
+   GOSUB 8500
+   IF ERRMSG#'' THEN GOTO 5020
+   MATREAD WHSE.REC FROM WAREHOUSE, CONO:DFR.WHSE ELSE MAT WHSE.REC=''
+   IF WHS.DIV # JOB.DIV AND WHS.DIV # "00" THEN
+      ERRMSG="INVENTORY WAREHOUSE DIVISION DOES NOT MATCH JOB DIVISION"
+      GOSUB 91000; GOTO 5020
+   END
+   ECD.NUM=7; SCV.REC(ECD.NUM)<ESN>=DFR.WHSE
+   ECD.ACTION=5; CALL SCRN.EDIT
+   GOSUB DISP.PROD.INFO
+5099*
+   RETURN
+*
+************
+ENT.RECP.NO: 
+************
+*
+   EOR=0
+   LOOP
+      ECD.NUM=1
+      ECD.ACTION=4; CALL SCRN.EDIT
+      BEGIN CASE
+         CASE ECD.RET.VALUE="END"
+            EOR=1 ; ERR=1 ; DONE=1
+            ;*      GOTO 99999
+         CASE ECD.RET.VALUE="N"
+            EOR=1
+            RCPTNO=ECD.RET.VALUE
+         CASE ECD.RET.VALUE="???"
+            ;* replace DAILY_FNGD_RECEIPT with DAILY_FNGD_RECEIPT
+            GXR.NAME="DAILY_FNGD_RECEIPT"
+            GXR.FILE=DAILY_FNGD_RECEIPT
+            CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+            ECD.ACTION=2; CALL SCRN.EDIT
+            SCV.REC(ECD.NUM)<ESN>=GXR.ID
+            IF GXR.ID#'' THEN
+               RCPTNO=GXR.ID
+            END ELSE
+               EOR=1; ERR=1
+            END
+         CASE NUM(ECD.RET.VALUE)
+            RCPTNO=ECD.RET.VALUE
+            EOR=1
+      END CASE
+   UNTIL (EOR) DO REPEAT
+   RETURN
+*
+*********
+ENT.JOB: 
+*********
+*
+   ECD.NUM=2
+   IF JOBNUM="" THEN
+      ECD.ACTION=4; CALL SCRN.EDIT
+   END ELSE
+      ECD.RET.VALUE=JOBNUM; JOBNUM=""
+      SCV.REC(ECD.NUM)<ESN>=ECD.RET.VALUE
+      ECD.ACTION=5; CALL SCRN.EDIT
+   END
+   BEGIN CASE
+      CASE ECD.RET.VALUE="END"
+         ERR=1
+         GOTO 1109
+      CASE ECD.RET.VALUE=""
+         GOSUB ENT.CUST
+         IF ECD.RET.VALUE="END" THEN
+            ECD.ACTION=6; CALL SCRN.EDIT
+            ECD.NUM=1; ECD.ACTION=5; CALL SCRN.EDIT
+            GOTO ENT.JOB
+         END
+         GXR.NAME="JOB"
+         GXR.XREF=CUSTOMER
+         GXR.FILE=JOB
+         GXR.SRCH.ID=ECD.RET.VALUE
+         CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+         ECD.ACTION=2; CALL SCRN.EDIT
+         ECD.NUM=1; ECD.ACTION=5; CALL SCRN.EDIT
+         IF GXR.ID="" THEN GOTO ENT.JOB
+         ECD.NUM=2; SCV.REC(ECD.NUM)=GXR.ID
+         ECD.ACTION=5; CALL SCRN.EDIT
+         ECD.RET.VALUE=GXR.ID
+   END CASE
+   MATREAD JOB.REC FROM JOB, CONO:ECD.RET.VALUE ELSE
+      ERRMSG="Cannot locate Job # ":ECD.RET.VALUE
+      GOSUB 91000; GOTO ENT.JOB
+   END
+   DIV.CODE=JOB.DIV; USER.ID=UPCASE(@LOGNAME); ERRMSG=''
+   CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+   IF ERRMSG # '' THEN
+      GOSUB 91000; GOTO ENT.JOB
+   END
+   GOSUB 8500
+   IF ERRMSG#'' THEN GOTO ENT.JOB
+   MATREAD CUST.REC FROM CUSTOMER, CONO:JOB.CUST ELSE
+      ERRMSG="Cannot locate customer (":JOB.CUST:") for Job # ":ECD.RET.VALUE
+      GOSUB 91000; GOTO ENT.JOB
+   END
+   MATREAD JFS.REC FROM JOB.FNGD.STATS, CONO:ECD.RET.VALUE ELSE
+      MAT JFS.REC=""
+   END
+   ODFR.JOB=DFR.JOB; DFR.JOB=ECD.RET.VALUE
+   GOSUB CHECK.LINKS
+   IF ECD.RET.VALUE="END" THEN
+      DFR.JOB=ODFR.JOB
+      GOTO ENT.JOB
+   END
+   GOSUB GET.PRODUCT
+   IF ECD.RET.VALUE="END" THEN
+      DFR.JOB=ODFR.JOB
+      GOTO ENT.JOB
+   END
+   DFR.CUST=JOB.CUST
+   ECD.NUM=3; SCV.REC(ECD.NUM)<ESN>=DFR.CUST
+   ECD.ACTION=5; CALL SCRN.EDIT
+   ECD.NUM=4; SCV.REC(ECD.NUM)<ESN>=CUST.NAME
+   ECD.ACTION=5; CALL SCRN.EDIT
+   GOSUB EXTRACT.ORD.INFO
+1109*
+   RETURN
+*
+****************
+ENT.CUST: 
+****************
+*
+   ECD.NUM=3; ECD.ACTION=4; CALL SCRN.EDIT
+   BEGIN CASE
+      CASE ECD.RET.VALUE="END"
+         GOTO 1119
+      CASE ECD.RET.VALUE=""
+         ECD.NUM=4; ECD.ACTION=4; CALL SCRN.EDIT
+         IF ECD.RET.VALUE="END" OR ECD.RET.VALUE="" THEN
+            GOTO ENT.CUST
+         END
+         GXR.NAME="CUSTOMER"
+         GXR.XREF=CUSTOMER.XREF
+         GXR.FILE=CUSTOMER
+         GXR.SRCH.ID=ECD.RET.VALUE
+         CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+         IF GXR.ID="" THEN
+            ECD.ACTION=2; CALL SCRN.EDIT
+            GOTO ENT.CUST
+         END
+         ECD.RET.VALUE=GXR.ID
+   END CASE
+   MATREAD CUST.REC FROM CUSTOMER, CONO:ECD.RET.VALUE ELSE
+      ERRMSG="Cannot locate customer # ":ECD.RET.VALUE
+      GOSUB 91000; GOTO ENT.CUST
+   END
+1119*
+   RETURN
+*
+********************
+ENT.RECP.DATE: 
+********************
+*
+   ECD.NUM=5
+   IF DFR.RECP.DATE="" THEN
+      ECD.DEFAULT=DATE()
+   END
+   ECD.ACTION=4; CALL SCRN.EDIT
+   IF ECD.RET.VALUE # "END" THEN
+      DEF.PERIOD = "";ERR.FLG = "";ERRMSG = ""
+      CALL CHECK.PERIOD.DATE(CONO,ECD.RET.VALUE,DEF.PERIOD,DIV.CODE,ERR.FLG,ERRMSG,COMPANY,CONTROL)
+      BEGIN CASE                           
+         CASE ERRMSG = ""                   
+            DFR.RECP.DATE = ECD.RET.VALUE
+         CASE ERR.FLG = 0                   
+            DFR.RECP.DATE = ECD.RET.VALUE
+            GOSUB 91000                      
+         CASE ERR.FLG = 1                   
+            GOSUB 91000;DFR.RECP.DATE="";GOTO ENT.RECP.DATE        
+         CASE ERR.FLG = 2                   
+            GOSUB 91000;ECD.RET.VALUE = "END"
+      END CASE                             
+      ERRMSG = ""                          
+      ERR.FLG = ""                         
+*T27329 v
+   END ELSE
+*T27898 v
+*     GOTO 10
+      RETURN
+*T27898 ^
+*T27329 ^
+   END
+   RETURN
+*
+*************
+ENT.PERIOD: 
+*************
+*
+   IF CO.ICS.PERIOD.FLG='N' THEN
+*T27375
+      IF DFR.PERIOD = "" AND DEF.PERIOD # "" THEN ECD.DEFAULT = DEF.PERIOD
+      ECD.VADAT=DEF.PERIOD
+      ECD.HMSG= "Enter Receipt period ":DEF.PERIOD
+      ECD.NUM=6
+      ECD.ACTION=4; CALL SCRN.EDIT
+      IF ECD.RET.VALUE # "END" THEN
+         ERR.FLG = "";ERRMSG = ""
+         CALL CHECK.PERIOD.DATE(CONO,DFR.RECP.DATE,ECD.RET.VALUE,DIV.CODE,ERR.FLG,ERRMSG,COMPANY,CONTROL)     ;* T26556
+         BEGIN CASE                           
+            CASE ERRMSG = ""                   
+               DFR.PERIOD = ECD.RET.VALUE    
+            CASE ERR.FLG = 0                   
+               DFR.PERIOD = ECD.RET.VALUE    
+               GOSUB 91000                      
+            CASE ERR.FLG = 1                   
+               GOSUB 91000;GOTO ENT.PERIOD      
+            CASE ERR.FLG = 2                   
+               GOSUB 91000;ECD.RET.VALUE = "END"
+         END CASE                             
+         ERRMSG = ""                          
+         ERR.FLG = ""                         
+*T27329 v
+      END ELSE
+*T27898 v
+*        GOTO 10
+         RETURN
+*T27898 ^
+*T27329 ^
+      END
+   END ELSE
+      DFR.PERIOD=DEF.PERIOD
+      SCV.REC(6)<ESN>=DFR.PERIOD
+      ECD.NUM=6; ECD.ACTION=5; CALL SCRN.EDIT
+   END
+   RETURN
+*
+************
+ENT.LOC: 
+************
+*
+   MATREAD WHSE.REC FROM WAREHOUSE , CONO:DFR.WHSE ELSE
+      MAT WHSE.REC=""
+      ERRMSG='WAREHOUSE (':DFR.WHSE:') NOT ON FILE'
+      GOSUB 91000
+   END
+   VLOC=''; HLOC=''
+   HLOC<1,1>='LOCATION - ':WHS.LOC<1,1>
+   VLOC=WHS.LOC<1,1>
+   L.CNT=DCOUNT(WHS.LOC,VM)
+   I=1
+   FOR L=2 TO L.CNT
+      IF LEN(HLOC<1,I>) > 50 THEN
+         I=I + 1
+         HLOC<1,I>='LOCATION - ':WHS.LOC<1,L>
+      END ELSE
+         HLOC<1,I>=HLOC<1,I>:', ':WHS.LOC<1,L>
+      END
+      VLOC=VLOC:VM:WHS.LOC<1,L>
+   NEXT L
+   ECD.NUM=8
+   IF DCOUNT(VLOC,VM)=1 THEN
+      ECD.O.R="O"
+      ECD.DEFAULT=VLOC
+   END
+   ECD.HMSG=HLOC
+   ECD.ACTION=4; CALL SCRN.EDIT
+   BEGIN CASE
+      CASE TRIM(ECD.RET.VALUE)=""
+         GOTO ENT.LOC
+      CASE ECD.RET.VALUE # "END"
+*T28755  DFR.LOC=ECD.RET.VALUE
+         DFR.LOC=TRIM(ECD.RET.VALUE)
+*T27329 v
+      CASE ECD.RET.VALUE = "END"
+*T27898 v
+*        GOTO 10
+         RETURN
+*T27898 ^
+*T27329 ^
+   END CASE
+   RETURN
+*
+*************
+ENT.RECP.QTY: 
+*************
+*
+   ECD.NUM=17 ; ECD.ACTION=4
+   IF DFR.TOT.QTY # "" THEN
+      O.R="O"
+      DEFAULT=CALC.STK.QTY(DFR.TOT.QTY,MAT INV.CNV.REC,'.5','')
+      DEFAULT=OCONV(DEFAULT,ICR.CNV)
+   END
+   CALL SCRN.EDIT
+   IF ECD.RET.VALUE # "END" THEN
+      VALUE=ECD.RET.VALUE
+      VALUE=OCONV(ICONV(VALUE,ICR.CNV),ICR.CNV)
+      ECD.NUM=17;ECD.ACTION=5;SCV.REC(26)<ESN>=VALUE;CALL SCRN.EDIT
+      DFR.TOT.QTY=CALC.COST.QTY(VALUE,MAT INV.CNV.REC,'.5','')
+      DFR.TOT.SQTY=CALC.STK.QTY(DFR.TOT.QTY,MAT INV.CNV.REC,'.5','')
+   END ELSE
+      ERR=1
+   END
+   RETURN
+*
+***************
+DISP.PROD.INFO: 
+***************
+*
+   SCV.REC(11)<ESN>=FLN
+   SCV.REC(12)<ESN>=JFS.PROD<1,FLN>
+   SCV.REC(19)<ESN>=INV.FULL.DESC
+   SCV.REC(13)<ESN>=JFS.WHSE<1,FLN>
+   GOSUB GET.INV.UM.CNV
+   TMP=CALC.STK.QTY(JFS.M.QTY<1,FLN>,MAT INV.CNV.REC,'.5','')
+   TMP=OCONV(TMP,ICR.CNV1)
+   SCV.REC(14)=TMP
+   TMP=CALC.STK.QTY(JFS.F.QTY<1,FLN>,MAT INV.CNV.REC,'.5','')
+   TMP=OCONV(TMP,ICR.CNV1)
+   SCV.REC(15)<ESN>=TMP
+   QTY.LEFT=JFS.M.QTY<1,FLN> - JFS.F.QTY<1,FLN>
+   IF QTY.LEFT < 0 THEN QTY.LEFT=0
+   TMP=CALC.STK.QTY(QTY.LEFT,MAT INV.CNV.REC,'.5','')
+   TMP=OCONV(TMP,ICR.CNV1)
+   SCV.REC(16)<ESN>=TMP
+   SCV.REC(17)<ESN>=OCONV(DFR.TOT.SQTY,ICR.CNV1)
+   ECD.ACTION=3 ; CALL SCRN.EDIT
+   RETURN
+*
+*********************
+DISTRIBUTE.TO.ORDERS: 
+*********************
+*
+   DFR.QTY=""
+   DFR.SQTY=""
+   DQTY=DFR.TOT.QTY
+   RCNT=DCOUNT(REL.NO,AM)
+   FOR R=1 TO RCNT UNTIL DQTY=0
+      ORR.ID=CONO:REL.NO<R>
+      MATREAD ORR.REC FROM ORDER.RELEASE,ORR.ID THEN
+         PTR=1
+         LOOP
+            LOCATE ORR.ORD IN DFR.ORDER<1>,PTR SETTING REF THEN
+               IF ORR.SHIP.TO=DFR.SHIP.TO<1,REF> THEN PTR=0
+            END ELSE
+               PTR=0; REF=0
+            END
+         WHILE PTR DO
+            PTR=REF + 1
+         REPEAT
+         IF REF THEN
+            BEGIN CASE
+               CASE DQTY > REL.QTY<R>
+                  DFR.QTY<1,REF>+=REL.QTY<R>
+                  TMP=CALC.STK.QTY(DFR.QTY<1,REF>,MAT INV.CNV.REC,'.5','')
+                  DFR.SQTY<1,REF>=TMP
+                  DQTY=DQTY - REL.QTY<R>
+               CASE DQTY <= REL.QTY<R>
+                  DFR.QTY<1,REF>+=DQTY
+                  TMP=CALC.STK.QTY(DFR.QTY<1,REF>,MAT INV.CNV.REC,'.5','')
+                  DFR.SQTY<1,REF>=TMP                                  
+                  DQTY=0
+            END CASE
+         END
+      END
+   NEXT R
+   FOR REF=1 TO (LINES-1) UNTIL DQTY=0
+      IF DFR.QTY<1,REF> < TEMP.ALLOC<1,REF> THEN
+         IF DFR.QTY<1,REF> + DQTY > TEMP.ALLOC<1,REF> THEN
+            DQTY=DQTY - (TEMP.ALLOC<1,REF> - DFR.QTY<1,REF>)
+            DFR.QTY<1,REF>=TEMP.ALLOC<1,REF>
+            DFR.SQTY<1,REF>=CALC.STK.QTY(DFR.QTY<1,REF>,MAT INV.CNV.REC,'.5','')
+         END ELSE
+            DFR.QTY<1,REF>+=DQTY
+            DFR.SQTY<1,REF>=CALC.STK.QTY(DFR.QTY<1,REF>,MAT INV.CNV.REC,'.5','')
+            DQTY=0
+         END
+      END
+   NEXT REF
+   DFR.QTY<1,LINES>=DQTY
+   DFR.SQTY<1,LINES>=CALC.STK.QTY(DFR.QTY<1,LINES>,MAT INV.CNV.REC,'.5','')
+   LN=1
+   RETURN
+*
+**************************
+DISTRIBUTE.TO.INVENTORY: 
+**************************
+*
+   DFR.QTY=""
+   DFR.SQTY=""
+   DFR.QTY<1,LINES>=DFR.TOT.QTY
+   DFR.SQTY<1,LINES>=CALC.STK.QTY(DFR.QTY<1,LINES>,MAT INV.CNV.REC,'.5','')
+   LN=LINES
+   RETURN
+*
+*---- Get Order Info
+7100*
+   GOSUB DISP.ORDERS
+   SLN=BEGIN.PAGE + LINE.SPACE * MOD(LN-1,PAGE.SIZE)
+7120*
+   X=64; Y=SLN; MAXL=10; TYP=ICR.TYPE; SCALER=ICR.SCAL
+   IF DFR.QTY<1,LN> # "" THEN
+      O.R="O"
+      DEFAULT=OCONV(INT(((DFR.QTY<1,LN> / ICR.DV1) * ICR.MT1) / ICR.DV2 + .5),ICR.CNV)
+   END
+   QTY=0
+   FOR N=1 TO (LN-1)
+      QTY=QTY + DFR.QTY<1,N>
+   NEXT N
+   MINV=0
+   MAXV=DFR.TOT.QTY - QTY
+   CALL EDIT.SUB
+   IF VALUE # "END" THEN
+      P_X=64 ; P_Y=SLN ; P_VALUE=OCONV(VALUE,ICR.CNV1) "R#10" ; P_OPT=""
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      DFR.QTY<1,LN>=INT(((VALUE / ICR.MT1) * ICR.DV1) * ICR.DV2 + .5)
+      DFR.SQTY<1,LN>=INT(((DFR.QTY<1,LN> / ICR.DV1) * ICR.MT1) / ICR.DV2 + .5)
+      SCV.REC(26)<ESN,LN>=P_VALUE ; * T27882
+   END
+   DFR.QTY<1,LINES>=0
+   DFR.QTY<1,LINES>=DFR.TOT.QTY - SUM(DFR.QTY)
+   IF DFR.QTY<1,LINES> < 0 THEN DFR.QTY<1,LINES>=0
+   DFR.SQTY<1,LINES>=INT(((DFR.QTY<1,LINES> / ICR.DV1) * ICR.MT1) / ICR.DV2 + .5)
+7130*
+   ORDNO=DFR.ORDER<1,LN>
+   IF ORDNO="*FNGD*" THEN
+      DFR.PICK.FLG<1,LN>=""
+   END ELSE
+      MATREAD ORD.REC FROM ORDER, CONO:ORDNO ELSE
+         MAT ORD.REC=""
+         ORD.PRINT="N"
+         ERRMSG="Cannot locate order ":ORDNO
+         GOSUB 91000
+      END
+      IF ORD.PRINT="N" OR OPCO.SHP.FRM="R" OR SHPNO="000" THEN;*T21248
+         DFR.PICK.FLG<1,LN>="N"
+      END ELSE
+         X=77; Y=SLN; TYP=8
+         IF DFR.PICK.FLG<1,LN> # "" THEN
+            O.R="O"
+            DEFAULT=DFR.PICK.FLG<1,LN>
+         END
+         CALL EDIT.SUB
+         IF VALUE # "END" THEN
+            DFR.PICK.FLG<1,LN>=VALUE
+         END
+      END
+   END
+   RETURN
+*
+*****************
+ENT.LINE.NUM: 
+*****************
+*
+   ECD.NUM=32; SCV.REC(ECD.NUM)<ESN>=""
+   ECD.MINV=START; ECD.MAXV=START+PAGE.SIZE-1
+   ECD.ACTION=4; CALL SCRN.EDIT
+   RETURN
+*
+*****************
+SCROLL.ORDERS: 
+*****************
+*
+   BEGIN CASE
+      CASE OPT2="S" OR OPT2="SF"
+         START=START+PAGE.SIZE                           
+         IF START>DCOUNT(DFR.ORDER,VM) THEN START=1  
+         GOSUB DISP.ORDERS
+      CASE OPT2="SR"
+         START=START-PAGE.SIZE   
+         IF START<1 THEN START=1 
+         GOSUB DISP.ORDERS
+      CASE OPT2="ST"
+         START=1     
+         GOSUB DISP.ORDERS
+      CASE OPT2="SB"
+         START = DCOUNT(DFR.ORDER,VM)-PAGE.SIZE+1 
+         IF START<1 THEN START=1                      
+         GOSUB DISP.ORDERS
+   END CASE
+   RETURN
+*
+*****************
+DISP.ORDERS: 
+*****************
+*
+   ECD.NUM=28; SCV.REC(ECD.NUM)<ESN>=INT((START+PAGE.SIZE-1)/PAGE.SIZE+.99) "R%2"
+   ECD.ACTION=5; CALL SCRN.EDIT
+*
+   ECD.NUM=21;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=22;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=23;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=24;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=25;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=26;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=27;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   RETURN
+*
+*******************
+BUILD.DETAIL.SCV: 
+*******************
+*
+   SCV.REC(22)<ESN>=DFR.ORDER
+   SCV.REC(23)<ESN>=DFR.SHIP.TO
+   SCV.REC(24)<ESN>=TEMP.SHPNM
+   SCV.REC(27)<ESN>=DFR.PICK.FLG
+   ORCNT=DCOUNT(DFR.ORDER,VM)
+   FOR ORD=1 TO ORCNT
+      PQTY=CALC.STK.QTY(TEMP.ALLOC<1,ORD>,MAT INV.CNV.REC,'.5','') 
+      PQTY=OCONV(PQTY,ICR.CNV1)
+      SCV.REC(25)<ESN,ORD>=PQTY
+      PQTY=CALC.STK.QTY(DFR.QTY<1,ORD>,MAT INV.CNV.REC,'.5','')
+      PQTY=OCONV(PQTY,ICR.CNV1)
+      SCV.REC(26)<ESN,ORD>=PQTY
+      SCV.REC(21)<ESN,ORD>=ORD
+   NEXT ORD
+   RETURN
+*
+****************
+GET.RECP.ID: 
+****************
+*
+   DFR.ID=GET.RECP.ID(CONO,CONTROL,DFR.RECP.DATE)
+   RCPTNO=DFR.ID[4,99]
+   ECD.NUM=1; SCV.REC(ECD.NUM)<ESN>=RCPTNO
+   ECD.ACTION=5; CALL SCRN.EDIT
+   ERRMSG="Please note the new Receipt Number"
+   GOSUB 91000
+   RETURN
+*
+*---- Retrive Fiscal Months per Division
+*
+*********
+8500: 
+*********
+*
+   DIV.POS=DIVISION.POSITION(CONO,CONTROL,DIV.CODE)
+   BEGIN CASE                                              
+      CASE DIV.POS<1,1>=''                                  
+         DIV.POS=DIV.POS<1,2>                                
+         CUR.PERIOD=CURRENT.PERIOD(CONO,CONTROL,DIV.POS,"IC")
+         IF CUR.PERIOD<1,1>='' THEN                          
+            CUR.PERIOD=CUR.PERIOD<1,2>                        
+            GOSUB GET.DEF.PERIOD        ;* T26556
+         END ELSE                                            
+            IF CUR.PERIOD<1,2>='-2' THEN                      
+               ERRMSG=CUR.PERIOD<1,2>                          
+               GOSUB 93000                                     
+            END                                               
+         END                                                 
+      CASE DIV.POS<1,1>='-1'                                
+         ERRMSG=DIV.POS<1,2>                                 
+         GOSUB 91000                                         
+      CASE DIV.POS<1,1>='-2'                                
+         ERRMSG=DIV.POS<1,2>                                 
+         GOSUB 93000                                         
+   END CASE                                                
+   RETURN
+*
+***************
+GET.INV.UM.CNV: 
+***************
+*
+*COPY>ICSBP>INV.UM.CNV
+   RETURN
+*
+*****************
+OPEN.FILES: 
+*****************
+*
+   OPEN "","DAILY_FNGD_RECEIPT" TO DAILY_FNGD_RECEIPT ELSE
+      ERRMSG="DAILY_FNGD_RECEIPT"; GOTO 93000
+   END
+   OPEN "","INV_RECEIPTS" TO INV_RECEIPTS ELSE
+      ERRMSG="INV_RECEIPTS"; GOTO 93000
+   END
+   OPEN "","OPS.SCREENS" TO M.SCREENS ELSE
+      ERRMSG="OPS.SCREENS"; GOTO 93000
+   END
+   OPEN "","COMPANY" TO COMPANY ELSE
+      ERRMSG="COMPANY"; GOTO 93000
+   END
+   OPEN "","CONTROL" TO CONTROL ELSE
+      ERRMSG="CONTROL"; GOTO 93000
+   END
+   OPEN "","CUSTOMER" TO CUSTOMER ELSE
+      ERRMSG="CUSTOMER"; GOTO 93000
+   END
+   OPEN "","SHIP.TO" TO SHIP.TO ELSE
+      ERRMSG="SHIP.TO"; GOTO 93000
+   END
+   OPEN "","CUSTOMER.XREF" TO CUSTOMER.XREF ELSE
+      ERRMSG="CUSTOMER.XREF"; GOTO 93000
+   END
+   OPEN "","CURR.CODE" TO CURR.CODE ELSE
+      ERRMSG="CURR.CODE"; GOTO 93000
+   END
+   OPEN "","PREFIX" TO PREFIX ELSE
+      ERRMSG="PREFIX"; GOTO 93000
+   END
+   OPEN "","XREF.DATA" TO XREF.DATA ELSE
+      ERRMSG="XREF.DATA"; GOTO 93000
+   END
+   OPEN "","INVENTORY" TO INVENTORY ELSE
+      ERRMSG="INVENTORY"; GOTO 93000
+   END
+   OPEN "","INV.FNGD" TO INV.FNGD ELSE
+      ERRMSG="INV.FNGD"; GOTO 93000
+   END
+   OPEN "","CATEGORY" TO CATEGORY ELSE
+      ERRMSG="CATEGORY"; GOTO 93000
+   END
+   OPEN "","INV.WHSE" TO INV.WHSE ELSE
+      ERRMSG="INV.WHSE"; GOTO 93000
+   END
+   OPEN "","INV.WHSE.LOC" TO INV.WHSE.LOC ELSE
+      ERRMSG="INV.WHSE.LOC"; GOTO 93000
+   END
+   OPEN "","WAREHOUSE" TO WAREHOUSE ELSE
+      ERRMSG="WAREHOUSE"; GOTO 93000
+   END
+   OPEN "","INV_AUDIT_HIST" TO INV_AUDIT_HIST ELSE
+      ERRMSG="INV_AUDIT_HIST"; GOTO 93000
+   END
+   OPEN "","JOB" TO JOB ELSE
+      ERRMSG="JOB"; GOTO 93000
+   END
+   OPEN "","ORDER" TO ORDER ELSE
+      ERRMSG="ORDER"; GOTO 93000
+   END
+   OPEN "","ORDER.DETAIL" TO ORDER.DETAIL ELSE
+      ERRMSG="ORDER.DETAIL"; GOTO 93000
+   END
+   OPEN "","ORDER.RELEASE" TO ORDER.RELEASE ELSE
+      ERRMSG="ORDER.RELEASE"; GOTO 93000
+   END
+   OPEN "","FNGD.STATS" TO FNGD.STATS ELSE
+      ERRMSG="FNGD.STATS"; GOTO 93000
+   END
+   OPEN "","JOB.FNGD.STATS" TO JOB.FNGD.STATS ELSE
+      ERRMSG="JOB.FNGD.STATS"; GOTO 93000
+   END
+   OPEN "","FNGD.JOB.STATS" TO FNGD.JOB.STATS ELSE
+      ERRMSG="FNGD.JOB.STATS"; GOTO 93000
+   END
+   OPEN "","FNGD.WIP.HIST" TO FNGD.WIP.HIST ELSE
+      ERRMSG="FNGD.WIP.HIST"; GOTO 93000
+   END
+   OPEN "","FNGD_WIP_HIST_TAG" TO FNGD_WIP_HIST_TAG ELSE
+      ERRMSG="FNGD_WIP_HIST_TAG"; GOTO 93000
+   END
+   OPEN "","FNGD.ORDER.STATS" TO FNGD.ORDER.STATS ELSE
+      ERRMSG="FNGD.ORDER.STATS"; GOTO 93000
+   END
+   OPEN "","PICK.TICKET.PRT" TO PICK.TICKET.PRT ELSE
+      ERRMSG="PICK.TICKET.PRT"; GOTO 93000
+   END
+   RETURN
+* T26556 v
+*
+GET.DEF.PERIOD: 
+*
+   POST.YR = CUR.PERIOD[1,4]
+   POST.MN = CUR.PERIOD[5,2]
+   IF POST.MN > (NUM.PERIODS - 2) THEN
+      FOR MX = 1 TO 2
+         NXT = OCONV(SALESDATES.REC(MX+1)<1,1>,'D4/')
+         NXTYR = NXT[7,4] + 1
+         NXT = NXT[1,6]:NXTYR
+         SALESDATES.REC(MX+NUM.PERIODS+1)<1,1> = ICONV(NXT,'D4/')
+      NEXT MX
+   END
+   BEGIN CASE
+      CASE POST.MN < 1 OR POST.MN > NUM.PERIODS
+         ERRMSG = "ERROR in the Inventory Control Fiscal Period (":CUR.PERIOD:") !!"
+         GOSUB 91000 ; RETURN
+      CASE POST.MN < (NUM.PERIODS - 1)
+         VALDAT.PR = CUR.PERIOD
+         MN = POST.MN + 1
+         VALDAT.PR = VALDAT.PR :",": POST.YR:STR("0",2-LEN(MN)):MN
+         MN = POST.MN + 2
+         VALDAT.PR = VALDAT.PR :",": POST.YR:STR("0",2-LEN(MN)):MN
+      CASE POST.MN = (NUM.PERIODS - 1)
+         VALDAT.PR = CUR.PERIOD
+         VALDAT.PR = VALDAT.PR :",": POST.YR:NUM.PERIODS
+         VALDAT.PR = VALDAT.PR :",": (POST.YR+1):"01"
+      CASE 1
+         VALDAT.PR = CUR.PERIOD
+         VALDAT.PR = VALDAT.PR :",": (POST.YR+1):"01"
+         VALDAT.PR = VALDAT.PR :",": (POST.YR+1):"02"
+   END CASE
+   HMSG.PR = "Enter Receipt period ":VALDAT.PR
+   TODAY = DATE()
+   IF POST.YR > OCONV(SALESDATES.REC(POST.MN+1)<1,1>,'D4/')[7,4] THEN
+      FOR I = 2 TO (SALESDATES.REC.SIZE - 1)
+         NXT = OCONV(SALESDATES.REC(I)<1,1>,'D4/')
+         NXTYR = NXT[7,4] + 1
+         NXT = NXT[1,6]:NXTYR
+         SALESDATES.REC(I)<1,1> = ICONV(NXT,'D4/')
+      NEXT I
+   END
+   BEGIN CASE
+      CASE TODAY > SALESDATES.REC(POST.MN+2)<1,1>
+         DEFAULT.PR = FIELD(VALDAT.PR,",",3)
+      CASE TODAY > SALESDATES.REC(POST.MN+1)<1,1>
+         DEFAULT.PR = FIELD(VALDAT.PR,",",2)
+      CASE 1
+         DEFAULT.PR = CUR.PERIOD
+   END CASE
+  *
+   RETURN
+* T26556 ^
+*
+91000 ERR.TYPE=1
+   CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+93000 ERR.TYPE=3
+   ERRMSG="Cannot locate the ":ERRMSG:" file"
+   CALL SYSCOM(MAT SYSCOM.REC)
+99999*
+END

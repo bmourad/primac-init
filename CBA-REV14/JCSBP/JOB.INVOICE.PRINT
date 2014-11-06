@@ -1,0 +1,344 @@
+*COPY>CPYLIB>COM1
+*************************************************************
+* REVISION    - [08.1]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - JCSBP
+* PROGRAM     - JOB.INVOICE.PRINT
+* BY          - RHONDA PERRIN, COMPUTER BUSINESS ASSOCIATES
+* DATE        - 01/09/86
+* DESCRIPTION - 
+* This program prints the invoices for Standard Print.
+*************************************************************
+*
+*---- FILE EQUATES
+*
+*COPY>JCS.CPYLIB>DAILY.INVOICE
+*COPY>PMC.CPYLIB>INVOICE.CODE
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>CHAR
+*COPY>JCS.CPYLIB>JOB
+*COPY>CPYLIB>FILE.VARS
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>SALESMAN
+*COPY>PMC.CPYLIB>CUSTOMER
+*
+*---- SETUP FOR SYSTEM ERROR MESSAGES
+*
+      SYS.TYPE = 1
+      CALL SYSCOM(MAT SYSCOM.REC)
+      PROCREAD BUFFER ELSE BUFFER = ""
+      BUFFER = BUFFER<5>
+*
+*---- OPEN FILES
+*
+      IF BUFFER = "M" THEN
+         OPEN "","INVOICE" TO DAILY.INVOICE ELSE
+            ERRMSG = "INVOICE FILE MISSING"; GOTO 93000
+         END
+      END ELSE
+         OPEN "","DAILY.INVOICE" TO DAILY.INVOICE ELSE
+            ERRMSG = "DAILY.INVOICE FILE MISSING"; GOTO 93000
+         END
+      END
+      OPEN "","INVOICE.CODE" TO INVOICE.CODE ELSE ERRMSG = "INVOICE.CODE FILE MISSING";GOTO 93000
+      OPEN "","SALESMAN" TO SALESMAN ELSE ERRMSG = "SALESMAN FILE MISSING";GOTO 93000
+      OPEN "","CUSTOMER" TO CUSTOMER ELSE ERRMSG = "CUSTOMER FILE MISSING";GOTO 93000
+      OPEN "","COMPANY" TO COMPANY ELSE ERRMSG = "COMPANY FILE MISSING";GOTO 93000
+      OPEN "","CONTROL" TO CONTROL ELSE ERRMSG = "CONTROL FILE MISSING";GOTO 93000
+      OPEN "","JOB" TO JOB ELSE ERRMSG = "JOB FILE MISSING";GOTO 93000
+*
+*---- INITIALIZATION
+*
+      MAT DI.REC = ""
+      MAT JOB.REC = ""
+      MAT CUST.REC = ""
+      MAT SALESMAN.REC = ""
+      LINE.CNT=0
+      SP=" ";SP2="  ";SP7="       "
+      SP14=STR(" ",14);SP58=STR(" ",58);SP71=STR(" ",71)
+      UNKNOWN=STR("?",30)
+      ERRMSG = ""
+      DESC = ""
+      LINE = STR("-",13)
+      TOTAL = 0
+      HIDDEN.FLAG = 0
+      PRINTED.TOT = 0
+*
+*---- GET COMPANY NUMBER
+*
+      CONO = ""
+      CALL GET.CONO(CONO,MAT COMP.REC)
+      IF CONO = "END" THEN GOTO 99999
+*
+*---- MAIN PROCESSING
+*
+      GOSUB 100
+10 *
+      READNEXT DI.KEY ELSE GOTO 15
+      INVOICE.NUM = DI.KEY[4,99]
+      CR.KEY = DI.KEY[(LEN(DI.KEY) - 1),2]
+      MATREADU DI.REC FROM DAILY.INVOICE,DI.KEY ELSE
+         RELEASE DAILY.INVOICE,DI.KEY
+         GOTO 10
+      END
+      MATREAD JOB.REC FROM JOB,CONO:DI.JOB.NO ELSE MAT JOB.REC = ""
+      MATREAD SALESMAN.REC FROM SALESMAN,CONO:JOB.SLSMN ELSE SALS.NAME=UNKNOWN[1,20]
+      MATREAD CUST.REC FROM CUSTOMER,CONO:DI.CUST.NO ELSE MAT CUST.REC=""
+      CHG.CODE.CNT = COUNT(DI.CHG.CODE,VM) + (DI.CHG.CODE # "")
+      DONE=0;EXEMPT.NO=""
+      FOR ZZ=1 TO CHG.CODE.CNT UNTIL DONE
+         IF DI.CHG.CAT<1,ZZ>="TAX" THEN
+            LOCATE DI.TAX.JURS<1,ZZ> IN CUST.TAX.JUR<1>,1 SETTING E ELSE GOTO 11
+            IF CUST.TAXABLE<1,E>="N" THEN
+               EXEMPT.NO=CUST.EXEMPT<1,E>
+               DONE=1
+            END
+         END
+11 *
+      NEXT ZZ
+      GOSUB 20
+      FOR Z = 1 TO CHG.CODE.CNT
+         IF DI.CHG.CODE # "" THEN
+            IF DI.HIDDEN<1,Z> = "Y" THEN GOTO 13
+            CODE = DI.CHG.CODE<1,Z>
+            NEXT.CODE = DI.CHG.CODE<1,Z + 1>
+            DONE=0;HIDDEN.AMT=0;HIDDEN.QTY=0
+            FOR Q = 1 TO CHG.CODE.CNT UNTIL DONE = 1
+               IF DI.HIDDEN<1,Z + Q> = "Y" THEN
+                  HIDDEN.AMT = HIDDEN.AMT + DI.AMOUNT<1,Z + Q>
+                  HIDDEN.QTY = HIDDEN.QTY + DI.QUANTITY<1,Z + Q>
+               END ELSE
+                  DONE = 1
+               END
+            NEXT Q
+            AMT = DI.AMOUNT<1,Z> + HIDDEN.AMT
+            QUANTITY = DI.QUANTITY<1,Z> + HIDDEN.QTY
+            DESC = DI.DESC<1,Z>
+            IF AMT = "" OR AMT = 0 THEN
+               AMOUNT = ""
+            END ELSE
+               IF CODE = "SUB" OR CODE = "TOT" OR CODE = "SUBT" THEN
+                  IF CR.KEY = "CM" AND BUFFER = "D" THEN
+                     AMOUNT = OCONV(AMT * (-1),"MD2,$")
+                  END ELSE
+                     AMOUNT = OCONV(AMT,"MD2,$")
+                  END
+               END ELSE
+                  IF CR.KEY = "CM" AND BUFFER = "D" THEN
+                     AMOUNT = OCONV(AMT * (-1),"MD2,")
+                  END ELSE
+                     AMOUNT = OCONV(AMT,"MD2,")
+                  END
+               END
+            END
+            IF CODE="SUB" OR CODE="SUBT" THEN GOTO 12
+            IF CODE # "TOT" THEN
+               IF CR.KEY = "CM" AND BUFFER = "D" THEN
+                  TOTAL = TOTAL + (AMT * (-1))
+               END ELSE
+                  TOTAL = TOTAL + AMT
+               END
+            END
+12 *
+            IF LINE.CNT >= 20 THEN
+               PRINT
+               PRINT SP58:"(CONTINUED)"
+*              LINE.CNT = LINE.CNT + 2
+*              D = 29 - LINE.CNT
+*              FOR L = 1 TO D
+*                 PRINT
+*              NEXT L
+               GOSUB 20
+            END
+            IF CODE # "TOT" THEN
+               GOSUB 30
+            END ELSE
+               PRINTED.TOT = 1
+               GOSUB 40
+            END
+         END
+13 *
+      NEXT Z
+      IF PRINTED.TOT THEN
+         D = 29 - LINE.CNT
+         FOR L = 1 TO D
+            PRINT
+         NEXT L
+      END ELSE
+         GOSUB 40
+      END
+      DI.PRT.DATE = DATE()
+      MATWRITE DI.REC ON DAILY.INVOICE,DI.KEY
+      TOTAL = 0
+      PRINTED.TOT = 0
+      GOTO 10
+15 *
+      GOTO 99999
+*
+*---- PRINT TOP OF FORM
+*
+20 *
+      LINE.CNT = 0
+      PRINT CHAR(12)
+*     FOR P = 1 TO 4
+*        PRINT
+*     NEXT P
+      PRINT SP2:OCONV(DI.DATE,"D2/"); PRINT
+      PRINT SP2:INVOICE.NUM; PRINT
+      PRINT SP2:DI.JOB.NO;PRINT
+      PRINT SP2:DI.PO.NO;PRINT
+      PRINT SP2:JOB.SLSMN:SP2:SALS.NAME;PRINT
+      PRINT SP7:DI.CUST.NAME
+      ADDR.CNT = 4
+      IF DI.ADDR1 # "" THEN
+         PRINT SP7:DI.ADDR1
+         ADDR.CNT = ADDR.CNT - 1
+      END
+      IF DI.ADDR2 # "" THEN
+         PRINT SP7:DI.ADDR2
+         ADDR.CNT = ADDR.CNT - 1
+      END
+      IF DI.ADDR3 # "" THEN
+         PRINT SP7:DI.ADDR3
+         ADDR.CNT = ADDR.CNT - 1
+      END
+      IF DI.ADDR4 # "" THEN
+         PRINT SP7:DI.ADDR4
+         ADDR.CNT = ADDR.CNT - 1
+      END
+      IF ADDR.CNT > 0 THEN
+         FOR PP = 1 TO ADDR.CNT
+            PRINT
+         NEXT PP
+      END
+      PRINT;PRINT;PRINT
+      RETURN
+*
+*---- PRINT INVOICE BODY
+*
+30 *
+      IF QUANTITY = 0 THEN QUANTITY = ""
+      IF CODE = "SUB" OR CODE = "SUBT" THEN
+         PRINT SP71:LINE
+         LINE.CNT = LINE.CNT + 1
+      END
+      PRINT SP:OCONV(QUANTITY,"MD0,")"R#11":SP2:DESC "L#55":SP2:AMOUNT "R#13"
+      LINE.CNT = LINE.CNT + 1
+      IF LINE.CNT >= 20 THEN
+         PRINT
+         PRINT SP58:"(CONTINUED)"
+*        LINE.CNT = LINE.CNT + 2
+*        D = 29 - LINE.CNT
+*        FOR L = 1 TO D
+*           PRINT
+*        NEXT L
+         GOSUB 20
+      END
+      IF CODE="SUB" OR CODE = "SUBT" THEN
+         PRINT
+         LINE.CNT = LINE.CNT + 1
+      END
+39 *
+      RETURN
+*
+*---- PRINT TOTAL
+*
+40 *
+      IF LINE.CNT + 2 >= 20 THEN
+         PRINT
+         PRINT SP58:"(CONTINUED)"
+*        LINE.CNT = LINE.CNT + 2
+*        D = 29 - LINE.CNT
+*        FOR L = 1 TO D
+*           PRINT
+*        NEXT L
+         GOSUB 20
+      END
+      G.TOTAL = OCONV(TOTAL,"MD2,$")
+      PRINT SP71:LINE
+      LINE.CNT=LINE.CNT + 1
+      IF PRINTED.TOT THEN
+         PRINT SP14:DESC "L#55":SP2:G.TOTAL "R#13"
+         PRINT
+         LINE.CNT = LINE.CNT + 2
+      END ELSE
+         PRINT SP58:"     TOTAL:  ":G.TOTAL "R#13"
+         LINE.CNT = LINE.CNT + 1
+         D = 29 - LINE.CNT
+         FOR L = 1 TO D
+            PRINT
+         NEXT L
+      END
+      RETURN
+*
+*---- ALIGNMENT ROUTINE
+*
+100 *
+*
+*---- INITIALIZATION
+*
+      SP7=STR(" ",7);SP71=STR(" ",71)
+      XS=STR("X",55)
+      LINE=STR("-",13)
+      PRINTER ON
+*
+*---- MAIN PROCESSING
+*
+*     PRINT;PRINT;PRINT;PRINT
+      PRINT "  MM/DD/YY";PRINT
+      PRINT "  999999";PRINT
+      PRINT "  99999999";PRINT
+      PRINT "  9999999999";PRINT
+      PRINT "  999  ":XS[1,20];PRINT
+      FOR XX = 1 TO 5
+         PRINT SP7:XS[1,30]
+      NEXT XX
+      PRINT;PRINT;PRINT
+      FOR XX = 1 TO 20
+         PRINT " 999,999,999  ":XS:"   9,999,999.99"
+      NEXT XX
+      PRINT SP71:LINE
+      PRINT SP71:"$9,999,999.99"
+      FOR XX = 1 TO 7
+         PRINT
+      NEXT XX
+      PRINTER OFF
+      PRINTER CLOSE
+      PRINT @(0,15):CL:
+      PRINT @(14,15):"DID ALIGNMENT PRINT CORRECTLY ? (Y/N):":
+      INPUT ANSWER:
+      IF ANSWER = "Y" THEN
+         PRINT @(0,15):CL:
+         PRINTER ON
+         GOTO 199
+      END ELSE
+         PRINT @(14,15):"RE-ALIGN PAPER AND HIT <RETURN> TO CONTINUE":
+         INPUT ANSW:
+         PRINTER ON
+         PRINT CHAR(12)
+         GOTO 100
+      END
+199 *
+      RETURN
+*
+*---- CALLS FOR SYSCOM
+*
+91000 *
+      PRINTER OFF
+      ERR.TYPE = 1
+      CALL SYSCOM(MAT SYSCOM.REC)
+      PRINTER ON
+      RETURN
+92000 *
+      ERR.TYPE = 2
+      CALL SYSCOM(MAT SYSCOM.REC)
+      RETURN
+93000 *
+      PRINTER OFF
+      ERR.TYPE = 3
+      CALL SYSCOM(MAT SYSCOM.REC)
+99999 *
+      PRINTER OFF
+      PRINT @(-1)
+      END

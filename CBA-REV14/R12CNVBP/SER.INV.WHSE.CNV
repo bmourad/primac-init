@@ -1,0 +1,173 @@
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>ICS.CPYLIB>INV_RECEIPTS
+*COPY>ICS.CPYLIB>INV_RECP_WHSE
+*COPY>ICS.CPYLIB>WAREHOUSE
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>CATEGORY.REV11
+*COPY>PMC.CPYLIB>PO
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>CPYLIB>CHAR
+*
+DEFFUN GET.RECP.ID(CONO,CONTROL.FILE,DATE)
+DEFFUN DIVISION.POSITION(CONO,CONTROL.FILE,DIV.CODE)
+DEFFUN CURRENT.PERIOD(CONO,CONTROL.FILE,DIV.POS,FISCAL.FLAG)
+GEN.DIV='00'
+*
+OPEN '','WAREHOUSE' TO WAREHOUSE ELSE STOP 201
+OPEN '','INV.WHSE' TO INV.WHSE ELSE STOP 201
+OPEN '','INV.WHSE.OLD' TO INV.WHSE.OLD ELSE STOP 201
+OPEN '','INV_RECEIPTS' TO INV_RECEIPTS ELSE STOP 201
+OPEN '','CONTROL' TO CONTROL ELSE STOP 201
+OPEN '','INV_RECP_WHSE'TO INV_RECP_WHSE ELSE STOP 201
+OPEN '','INVENTORY' TO INVENTORY ELSE STOP 201
+OPEN '','CATEGORY.OLD' TO CATEGORY.OLD ELSE STOP 201
+OPEN '','PO' TO PO ELSE STOP 201
+OPEN '','COMPANY' TO COMPANY ELSE STOP 201
+*
+CMD="SELECT INV.WHSE.OLD WITH M.LINE#'FNGD' AND WITH TYPE#'REGULAR'"
+UDTEXECUTE CMD
+*
+PRINT @(-1)
+PRINT @(1,5):"CONVERTING INV.WHSE RECORD "
+DONE = 0; CNT=0
+LOOP
+  READNEXT IWH.ID ELSE DONE = 1
+UNTIL (DONE) DO 
+  CNT+=1
+  IF REM(CNT,100)=0 THEN       
+    PRINT @(45,5):CNT:@(-4)    
+  END                          
+  READ CHECK.REC FROM INV.WHSE,IWH.ID ELSE
+    MATREAD IWH.REC FROM INV.WHSE.OLD,IWH.ID THEN
+      CONO = IWH.ID[1,3]
+      PROD = OCONV(IWH.ID,"G!1")[4,99]
+      MATREAD INV.REC FROM INVENTORY,CONO:PROD THEN
+        MATREAD R11.CATG.REC FROM CATEGORY.OLD,CONO:INV.LINE THEN
+          IF R11.CATG.R.S.ID='N' THEN
+            RECP.CNT = DCOUNT(IWH.RECV.FI,VM)
+            MATREAD COMP.REC FROM COMPANY, CONO THEN
+              READ APD.REC FROM CONTROL, CONO:"AUDIT.PERIOD.DATES" THEN
+                X=DCOUNT(APD.REC<1>, @VM)
+                PYR = APD.REC<1,X>[1,4]
+                PNO = APD.REC<1,X>[5,2]
+                PNO = PNO + 1 "R%2"
+                IF PNO > CO.LAST.FISCAL THEN 
+                  PYR = PYR + 1
+                  PNO = "01" 
+                END
+                APD.REC<1,X+1> = PYR:PNO ; * Catch-all period 
+                WHSE = OCONV(IWH.ID,"G1!1")
+                MATREAD WHSE.REC FROM WAREHOUSE,CONO:WHSE THEN
+                  IF WHS.DIV='' THEN WHS.DIV=GEN.DIV
+                  DIV.CODE = WHS.DIV
+                END
+                FOR RPTR = 1 TO RECP.CNT
+                  MAT INVR.REC = ""
+*IF IWH.DATE.FI<1,RPTR>#'' THEN
+*INVR.ENT.DATE=IWH.DATE.FI<1,RPTR>
+*END ELSE
+                  INVR.ENT.DATE=IWH.RECV.FI<1,RPTR>
+*END
+                  EOR=0
+                  LOOP
+                    RECP.ID=GET.RECP.ID(CONO,CONTROL,INVR.ENT.DATE)
+                    READ CHECK.REC FROM INV_RECEIPTS,RECP.ID ELSE  
+                      EOR=1                                        
+                    END                                            
+                  UNTIL EOR DO REPEAT                              
+                  RECP=RECP.ID[4,99]
+                  INVR.PROD = PROD
+                  INVR.VEND = IWH.VDR.FI<1,RPTR>
+                  INVR.PO = IWH.PO.NO.FI<1,RPTR>
+                  GOSUB GET.ACCRUE.FLAG
+                  INVR.PO.LN = IWH.PO.LN.FI<1,RPTR>
+                  INVR.POST.DATE=IWH.RECV.FI<1,RPTR>
+                  ;*
+                  ;* get the period 
+                  ;*
+                  LOCATE INVR.ENT.DATE IN APD.REC<2> BY "AR" SETTING PLOC ELSE
+                    NULL
+                  END 
+                  EPERIOD = APD.REC<1,PLOC> 
+                  ;* check if EPERIOD is greater then                  
+                  ;* current period, if so then EPERIOD=current period 
+                  DIV.POS=DIVISION.POSITION(CONO,CONTROL,DIV.CODE)     
+                  IF DIV.POS<1,1>='' THEN                              
+                    DIV.POS=DIV.POS<1,2>                               
+                  END ELSE                                             
+                    STOP 'PROBLEM WITH DIVISOIN POSITION'              
+                  END                                                  
+                  CURR.PERIOD=CURRENT.PERIOD(CONO,CONTROL,DIV.POS,'IC')
+                  IF CURR.PERIOD<1,1>='' THEN                          
+                    CURR.PERIOD=CURR.PERIOD<1,2>                       
+                  END ELSE                                             
+                    STOP 'PROBLEM WITH FISCAL PERIOD'                  
+                  END                                                  
+                  IF EPERIOD>CURR.PERIOD THEN EPERIOD=CURR.PERIOD      
+                  INVR.PERIOD = EPERIOD
+                  INVR.DIV = DIV.CODE
+                  INVR.UOM = INV.UNIT<1,3>
+                  INVR.ORG.QTY = IWH.ORG.FI<1,RPTR>
+                  INVR.UNIT.COST = IWH.COST.FI<1,RPTR>
+                  INVR.ORG.WHSE = WHSE
+                  INVR.DEPL.QTY = IWH.QTY.FI<1,RPTR>
+                  MATWRITE INVR.REC ON INV_RECEIPTS,RECP.ID
+                  ;* build INV_RECP_WHSE record
+                  MAT IRW.REC=''
+                  IRW.ORG.QTY = IWH.ORG.FI<1,RPTR>
+                  IRW.RSVB.QTY=IWH.RSV.FI<1,RPTR>
+                  IRW.CUR.QTY=IWH.QTY.FI<1,RPTR>
+                  IRW.UNIT.COST=INVR.UNIT.COST
+                  MATWRITE IRW.REC ON INV_RECP_WHSE,CONO:RECP:"!":WHSE
+                  ;* build pointers to the INV_RECEIPT file in INV.WHSE
+                  IWH.RECP.NO<1,RPTR>=RECP
+                  IWH.RECP.ENT.DATE<1,RPTR>=INVR.ENT.DATE
+                  IWH.RECP.PERIOD<1,RPTR> = EPERIOD
+                NEXT RECP.CNT
+                ;*
+                ;* build first part of temp record used later for 
+                ;* verification and processing.
+                ;*
+                ;*
+                GOSUB CLEAR.OLD.ATT
+                MATWRITE IWH.REC ON INV.WHSE,IWH.ID
+              END 
+            END
+          END
+        END
+      END
+    END
+  END
+REPEAT
+GOTO 99999
+*
+**********************
+GET.ACCRUE.FLAG: 
+**********************
+*
+IF INV.M.LINE # "FNGD" THEN
+  PO.ID = CONO:INVR.PO
+  MATREAD PO.REC FROM PO,PO.ID THEN
+    INVR.PO.ACCR = PO.ACCRUE
+  END
+END
+RETURN
+*
+CLEAR.OLD.ATT: 
+**************                                            
+*                                                         
+;* clear attributes that are either not used in conversion
+;* or are not used in rev12                               
+*                                                         
+FOR II=15 TO 36                                           
+  IWH.REC(II)=''                                          
+NEXT II                                                   
+FOR II=44 TO 48                                           
+  IWH.REC(II)=''                                          
+NEXT II                                                   
+IWH.REC(56)=''                                            
+IWH.REC(65)=''                                            
+RETURN                                                    
+*
+99999 
+END

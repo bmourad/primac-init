@@ -1,0 +1,865 @@
+* WIN.SERVER
+* wIntegrate Host Server Program
+* Compile for: GENERIC AP MD ME PI PR SQ UD UL UP UV UC IN GA
+* (C) Copyright IBM Corporation 2003. All rights reserved
+* Copyright (c) 1991-99. Impact Business Systems
+*
+EQU TRUE TO 1
+EQU FALSE TO 0
+EQU STD.PRMPT TO "WS>"
+EQU VERNO TO "4.1.1"
+*
+EQU ERR.SERVEROPEN TO 1
+EQU ERR.SERVERBUSY TO 2
+EQU ERR.ARGS       TO 3
+EQU ERR.FILEOPEN   TO 4
+EQU ERR.READREC    TO 5
+EQU ERR.NODICT     TO 6
+EQU ERR.FIELD      TO 7
+EQU ERR.FIELDNUM   TO 8
+EQU ERR.LOCKED     TO 9
+EQU ERR.ACCESS     TO 10
+*
+DIM SS.ARGS(30)
+MAT SS.ARGS = ""
+EQU SS.PROGS  TO SS.ARGS(1)
+EQU SS.PARAM  TO SS.ARGS(2)
+EQU SS.RESULT TO SS.ARGS(3)
+EQU SS.EXTRA1 TO SS.ARGS(4)
+EQU SS.EXTRA2 TO SS.ARGS(5)
+*
+EQU SSA.INIT    TO 1
+EQU SSA.FILESEL TO 2
+EQU SSA.FILECHK TO 3
+EQU SSA.FIELDSEL TO 4
+EQU SSA.FIELDCHK TO 5
+EQU SSA.EXECCHK  TO 6
+EQU SSA.SLAVEON  TO 8
+EQU SSA.SLAVEOFF TO 9
+EQU SSA.HPRTON   TO 10
+EQU SSA.HPRTOFF  TO 11
+EQU SSA.READCHK  TO 12
+EQU SSA.WRITECHK TO 13
+EQU SSA.DELETECHK TO 14
+*
+AMVM=1; AMVM<1,2>=2; AMVM<2>=3
+AM=AMVM[4,1]
+VM=AMVM[2,1]
+PROMPT ''
+INVERTING.CASE = FALSE
+CASE.IS.INVERTED = FALSE
+*
+WC = "WIN.COMSUB"
+*
+CALL @WC("Global Server_SState = Cursor(6)")
+*
+GOSUB 100; * Initialise
+*
+GOSUB 110; * Open Server text window
+*
+SCRIPT = 'Global Server_Open,Server_Ready'
+SCRIPT<-1> = 'Server_Open = True'
+SCRIPT<-1> = 'Server_Ready = True'
+CALL @WC(SCRIPT)
+*
+LOOP
+  PRINT CMND.PRMPT:
+  INPUT RAW.CMND:
+  IF CMND.PRMPT # "" THEN PRINT
+  GOSUB 200; * Run command
+UNTIL FINISHED DO
+REPEAT
+*
+GOSUB 120;* Close server text window
+*
+IF INVERTING.CASE THEN GOSUB 6000;* rESET cASE iNVERSION
+*
+CALL @WC('Server_Open = False')
+*
+STOP
+*
+* Initialise server and inform wIntegrate it is active
+100 FINISHED = FALSE
+SET = "WIN.SETVAR"
+SETDATA = "WIN.SETDATA"
+GETDATA = "WIN.GETDATA"
+R.STORE = ''
+STORING = FALSE
+LOCALPRINTTO = "Printer"
+CMND.PRMPT = STD.PRMPT
+NOTIFY = ""
+*
+OPEN '','WIN.PARAMS' TO F.BP ELSE
+  OPEN '','WIN.PROGS' TO F.BP ELSE PRINT 'NO WIN.PROGS FILE';STOP
+END
+READV MACHINE.TYPE FROM F.BP,'MACHINE.TYPE',1 ELSE MACHINE.TYPE = ''
+IF MACHINE.TYPE = '' THEN MACHINE.TYPE = 'GENERIC'
+*
+SUB.SUFFIX = ''
+IF MACHINE.TYPE # 'GENERIC' THEN SUB.SUFFIX = '.':MACHINE.TYPE
+EXECSUB = 'WIN.EXEC':SUB.SUFFIX
+ITEMSUB = 'WIN.ITEM':SUB.SUFFIX
+DICTSUB = "WIN.DICT":SUB.SUFFIX
+PARAMSUB = 'WIN.PARAM':SUB.SUFFIX
+MEXECSUB = 'WIN.MEXEC':SUB.SUFFIX
+TERMWSUB = 'WIN.TERMW':SUB.SUFFIX
+F.MD = ''
+R.OPTS = ''
+CALL @PARAMSUB(F.MD, R.OPTS)
+PRIME.FILES = R.OPTS<5>
+DICT.SELEND = R.OPTS<6>
+FILE.SELEND = R.OPTS<11>
+OLD.WIDTH = R.OPTS<10>
+*
+READV SERVSUB FROM F.BP,"SERVICESUB",1 ELSE SERVSUB = ""
+HOOK = ""
+IF SERVSUB # "" THEN
+  SS.ARGS(1) = 1; * Id for WIN.SERVER
+  SS.ARGS(2) = R.OPTS
+  CALL @SERVSUB(1, MAT SS.ARGS, HOOK);* Initialise service routine
+END
+*
+KEYCHECK = 0
+KEYLIST = FALSE
+*
+RETURN
+*
+* Open server text window
+110 WOPEN = TRUE
+CALL WIN.COLOUR("Yellow","Blue")
+CALL WIN.TWOPEN("Server","PC Server",20,5,60,12,2)
+CALL WIN.COMSUB("Display KeyboardLock")
+RETURN
+*
+* Close server text window
+120 IF WOPEN THEN
+  WOPEN = FALSE
+  CALL WIN.TWCLOSE("Server")
+  CALL WIN.COMSUB("dum = Cursor(6,Server_SState)")
+  CALL WIN.COMSUB("Display KeyboardUnlock")
+END
+RETURN
+*
+* Interpret server command
+200 GOSUB 300; * Parse out commands
+*
+BEGIN CASE
+  CASE CMND = "END"; GOSUB 1000; * End server
+  CASE CMND = "READ"; GOSUB 1100; * Read record from file
+  CASE CMND = "READV"; GOSUB 1110; * Read field from file
+  CASE CMND = "READU"; GOSUB 1120; * Read record from file
+  CASE CMND = "READVU"; GOSUB 1130; * Read field from file
+  CASE CMND = "WRITE"; GOSUB 1200; * Write record to file
+  CASE CMND = "WRITEV"; GOSUB 1210; * Write field to file
+  CASE CMND = "WRITEU"; GOSUB 1220; * Write record to file
+  CASE CMND = "WRITEVU"; GOSUB 1230; * Write field to file
+  CASE CMND = "RELEASE"; GOSUB 1300; * Release lock
+  CASE CMND = "FILES"; GOSUB 2100; * Files list
+  CASE CMND = "ITEMS"; GOSUB 2200; * Items list
+  CASE CMND = "FIELDS"; GOSUB 2300; * Files list
+  CASE CMND = "LOCALPRINT"; GOSUB 2400; * Local printing
+  CASE CMND = "HOSTPRINT"; GOSUB 2450; * Host printing
+  CASE CMND = "STORE"; GOSUB 2500; * Store statments
+  CASE CMND = "EXECUTE"; GOSUB 2600; * Execute statements
+  CASE CMND = "MEX"; GOSUB 2650; * Multiple Execute
+  CASE CMND = 'CALL'; GOSUB 2700; * User defined subroutine
+  CASE CMND = 'HOST'; GOSUB 2800; * Set machine type
+  CASE CMND = 'HOSTVER'; GOSUB 2820; * Host Version
+  CASE CMND = "DELETE"; GOSUB 2900; * Delete item
+  CASE CMND = "NOTIFY"; GOSUB 3000; * Set up notification script
+  CASE STORING; R.STORE<-1> = RAW.CMND
+END CASE
+*
+IF NOTIFY # "" AND CMND # "NOTIFY" THEN
+   CALL @WC(NOTIFY)
+   NOTIFY = ""
+END
+*
+RETURN
+*
+* Parse out script commands line into CMND and CMND.ARGS
+300 CMND = ''
+CMND.ARGS = ''
+CMND.LINE = RAW.CMND
+GOSUB 350; * Get Word   
+*
+IF WORD # "" THEN
+  CMND = OCONV(WORD,'MCU')
+  IF WORD[1,1] # CMND[1,1] AND NOT(INVERTING.CASE) THEN
+    GOSUB 6000;* iNVERT cASE
+    GOSUB 6100;* Invert case of line and refetch first word
+    CMND = OCONV(WORD, 'MCU')
+  END
+  NO.ARGS = 0
+  LOOP
+    GOSUB 350; * Get word
+    NO.ARGS = NO.ARGS + 1
+    CMND.ARGS<NO.ARGS> = WORD
+  UNTIL CMND.LINE = "" DO
+  REPEAT
+END
+*
+RETURN
+*
+* Get word taking into account quotes and semi-colons
+350 WORD = ''                                        
+LOOP
+WHILE CMND.LINE[1,1] = ' ' DO
+  CMND.LINE = CMND.LINE[2,9999]
+REPEAT
+*
+QT = CMND.LINE[1,1]
+IF QT = '"' OR QT = "'" OR QT = ';' THEN
+  CMND.LINE = CMND.LINE[2,9999]
+END ELSE QT = ' '
+*
+WORD = FIELD(CMND.LINE, QT, 1)
+C = INDEX(CMND.LINE, QT, 1)
+IF C = 0 THEN
+  CMND.LINE = ""
+END ELSE
+  IF QT = ';' THEN C = C - 1;* Need to keep semi-colons seperators
+  CMND.LINE = CMND.LINE[C+1,9999]
+END
+*
+RETURN
+*
+* Close down server
+1000 FINISHED = TRUE
+SCRIPT = 'Server_Ready = False'
+CALL @WC(SCRIPT)
+RETURN
+*
+* Read a record from a file
+* Syntax: READ <filename>, <itemname>
+1100 VAR = 'Server_Record'
+CHECK.TYPE = SSA.READCHK
+GET.FLDNO = FALSE
+GOSUB 1290; * Get and check arguments
+IF ERR = 0 THEN
+  OPEN DD, FILE TO F.DATA THEN
+    READ R.DATA FROM F.DATA, ITEM THEN
+      CALL @SETDATA(VAR,R.DATA)
+    END ELSE ERR = ERR.READREC
+  END ELSE ERR = ERR.FILEOPEN
+END
+IF ERR THEN CALL @SET("Server_Error",ERR)
+CALL @SET("Server_Ready",TRUE)
+RETURN                                 
+*
+* Read a field from a file
+* Syntax: READV <filename>, <itemname>, <field_num>
+1110 VAR = 'Server_Record'
+CHECK.TYPE = SSA.READCHK
+GET.FLDNO = TRUE
+GOSUB 1290; * Get and check arguments
+*
+IF ERR = 0 THEN
+  OPEN DD, FILE TO F.DATA THEN
+    READV R.DATA FROM F.DATA, ITEM, FLDNO THEN
+      CALL @SETDATA(VAR,R.DATA)
+    END ELSE ERR = ERR.READREC
+  END ELSE ERR = ERR.FILEOPEN
+END
+IF ERR THEN CALL @SET("Server_Error",ERR)
+CALL @SET("Server_Ready",TRUE)
+RETURN                                 
+*
+* Read a record from a file and Lock it
+* Syntax: READU <filename>, <itemname>
+1120 VAR = 'Server_Record'
+CHECK.TYPE = SSA.READCHK
+GET.FLDNO = FALSE
+GOSUB 1290; * Get and check arguments
+IF ERR = 0 THEN
+  OPEN DD, FILE TO F.DATA THEN
+    READU R.DATA FROM F.DATA, ITEM LOCKED
+      CALL @SET("Server_Error", ERR.LOCKED)
+    END THEN
+      CALL @SETDATA(VAR,R.DATA)
+    END ELSE ERR = ERR.READREC
+  END ELSE ERR = ERR.FILEOPEN
+END
+IF ERR THEN CALL @SET("Server_Error",ERR)
+CALL @SET("Server_Ready",TRUE)
+RETURN                                 
+*
+* Read a field from a file and lock it
+* Syntax: READVU <filename>, <itemname>, <field_num>
+1130 VAR = 'Server_Record'
+CHECK.TYPE = SSA.READCHK
+GET.FLDNO = TRUE
+GOSUB 1290; * Get and check arguments
+IF ERR = 0 THEN
+  OPEN DD, FILE TO F.DATA THEN
+    READVU R.DATA FROM F.DATA, ITEM, FLDNO LOCKED
+      ERR = ERR.LOCKED
+    END THEN
+      CALL @SETDATA(VAR,R.DATA)
+    END ELSE ERR = ERR.READREC
+  END ELSE ERR = ERR.FILEOPEN
+END
+IF ERR THEN CALL @SET("Server_Error",ERR)
+CALL @SET("Server_Ready",TRUE)
+RETURN                                 
+*
+* Write a record to a file
+* Syntax: WRITE <filename>, <itemname>
+1200 VAR = 'Server_Record'
+CHECK.TYPE = SSA.WRITECHK
+GET.FLDNO = FALSE
+GOSUB 1290; * Get and check arguments
+IF ERR = 0 THEN
+  OPEN DD, FILE TO F.DATA THEN
+    CALL @GETDATA(VAR, R.DATA)
+    WRITE R.DATA ON F.DATA, ITEM
+  END ELSE ERR = ERR.FILEOPEN
+END
+IF ERR THEN CALL @SET("Server_Error",ERR)
+CALL @SET("Server_Ready",TRUE)
+RETURN
+*
+* Write a field to a file
+* Syntax: WRITEV <filename>, <itemname>, <fieldnumber>
+1210 VAR = 'Server_Record'
+CHECK.TYPE = SSA.WRITECHK
+GET.FLDNO = TRUE
+GOSUB 1290; * Get and check arguments
+IF ERR = 0 THEN
+  OPEN DD, FILE TO F.DATA THEN
+    CALL @GETDATA(VAR, R.DATA)
+    WRITEV R.DATA ON F.DATA, ITEM, FLDNO
+  END ELSE ERR = ERR.FILEOPEN
+END
+IF ERR THEN CALL @SET("Server_Error",ERR)
+CALL @SET("Server_Ready",TRUE)
+RETURN
+*
+* Write a record to a file without unlocking
+* Syntax: WRITEU <filename>, <itemname>
+1220 VAR = 'Server_Record'
+CHECK.TYPE = SSA.WRITECHK
+GET.FLDNO = FALSE
+GOSUB 1290; * Get and check arguments
+IF ERR = 0 THEN
+  OPEN DD, FILE TO F.DATA THEN
+    CALL @GETDATA(VAR, R.DATA)
+    WRITEU R.DATA ON F.DATA, ITEM
+  END ELSE ERR = ERR.FILEOPEN
+END
+IF ERR THEN CALL @SET("Server_Error",ERR)
+CALL @SET("Server_Ready",TRUE)
+RETURN
+*
+* Write a field to a file without unlocking
+* Syntax: WRITEVU <filename>, <itemname>, <fldno>
+1230 VAR = 'Server_Record'
+CHECK.TYPE = SSA.WRITECHK
+GET.FLDNO = TRUE
+GOSUB 1290; * Get and check arguments
+IF ERR = 0 THEN
+  OPEN DD, FILE TO F.DATA THEN
+    CALL @GETDATA(VAR, R.DATA)
+    WRITEVU R.DATA ON F.DATA, ITEM, FLDNO
+  END ELSE ERR = ERR.FILEOPEN
+END
+IF ERR THEN CALL @SET("Server_Error",ERR)
+CALL @SET("Server_Ready",TRUE)
+RETURN
+*
+* Get file/item/field no from command line
+* and check if they are valid
+1290 FILE = CMND.ARGS<1>
+IF FILE = "DICT" OR FILE = "DATA" THEN
+  DD = FILE
+  FILE = CMND.ARGS<2>
+  ITEM = CMND.ARGS<3>
+  ARG.POS = 4
+END ELSE
+  DD = ""
+  ITEM = CMND.ARGS<2>
+  ARG.POS = 3
+END
+*
+ERR = 0
+IF FILE = '' OR ITEM = '' THEN
+  ERR = ERR.ARGS
+END ELSE
+  FLDNO = ""
+  IF GET.FLDNO THEN
+    FLDNO = CMND.ARGS<ARG.POS>
+    IF FLDNO MATCH "1N0N" THEN
+      IF FLDNO < 1 THEN ERR = ERR.FIELDNUM
+    END ELSE ERR = ERR.FIELDNUM
+  END
+END
+*
+IF ERR = 0 AND HOOK<CHECK.TYPE> = "1" THEN
+  SS.EXTRA1 = ITEM
+  SS.EXTRA2 = FLDNO
+  ARG = FILE
+  IF DD = "DICT" THEN ARG = "DICT ":FILE
+  SS.RESULT = 0
+  CALL @SERVSUB(CHECK.TYPE, MAT SS.ARGS, ARG)
+  IF SS.RESULT = 0 THEN ERR = ERR.ACCESS
+END
+*
+RETURN
+*
+* Release a locked record
+* Syntax: RELEASE <filename>, <itemname>
+1300 VAR = 'Server_Record'
+FILE = CMND.ARGS<1>
+IF FILE = "DICT" OR FILE = "DATA" THEN
+  DD = FILE
+  FILE = CMND.ARGS<2>
+  ITEM = CMND.ARGS<3>
+END ELSE
+  DD = ""
+  ITEM = CMND.ARGS<2>
+END
+ERR = 0
+IF FILE = '' THEN
+  RELEASE
+END ELSE
+  OPEN DD, FILE TO F.DATA THEN   
+    IF ITEM = '' THEN
+      RELEASE F.DATA
+    END ELSE
+      RELEASE F.DATA, ITEM
+    END
+  END ELSE ERR = ERR.FILEOPEN
+END
+IF ERR THEN CALL @SET("Server_Error",ERR)
+CALL @SET("Server_Ready",TRUE)
+RETURN
+*
+* Send list of files in current account to a listbox
+* Syntax: FILES <dialog_variable>
+2100 VAR = CMND.ARGS<1>
+KEYLIST = FALSE
+KEYCHECK = 0
+IF PRIME.FILES THEN
+  FNAME = 'VOC'
+  SEL = 'SSELECT VOC ':FILE.SELEND
+END ELSE
+  FNAME = 'MD'
+  SEL = 'SSELECT MD ':FILE.SELEND
+END
+FLDS = ''
+SS.EXTRA1 = ""
+IF HOOK<SSA.FILESEL> = "1" THEN
+  CALL @SERVSUB(SSA.FILESEL, MAT SS.ARGS, SEL)
+  IF SS.RESULT = 2 THEN KEYLIST = TRUE
+END
+IF HOOK<SSA.FILECHK> = "1" THEN KEYCHECK = SSA.FILECHK
+*
+GOSUB 5000; * Key only listing
+RETURN
+*
+* Send list of items to a listbox
+2200 VAR = CMND.ARGS<1>
+FNAME= CMND.ARGS<2>
+IF FNAME= "DICT" OR FNAME= "DATA" THEN
+  DORD = FNAME
+  FNAME= CMND.ARGS<3>
+  ARG.POS = 4
+END ELSE
+  DORD = ""
+  ARG.POS = 3
+END
+SEL = CMND.ARGS<ARG.POS>; * Includes spaces so ; as sep
+FLDS = TRIM(CMND.ARGS<ARG.POS+1>)
+ADDSEP = CMND.ARGS<ARG.POS+2>; * Seperator
+IF ADDSEP = '' THEN ADDSEP = '":tab:"'
+IF SEL = '' THEN SEL = 'SELECT ':DORD:' ':FNAME
+KEYLIST = FALSE
+KEYCHECK = 0
+IF FLDS = '' THEN
+  GOSUB 5000; * Key only listing
+END ELSE GOSUB 5100; * Key + fields listing
+RETURN
+*
+* Send list of fields in current file to a listbox
+* Syntax: FIELDS <filename> <dialog_variable>
+2300 VAR = CMND.ARGS<1>
+FNAME = CMND.ARGS<2>
+DORD = "DICT"
+IF FNAME = "DICT" THEN
+  FNAME = CMND.ARGS<3>
+END ELSE
+  IF FNAME = "DATA" THEN
+    DORD = "DATA"
+    FNAME = CMND.ARGS<3>
+  END
+END
+SEL = 'SSELECT ':DORD:' ':FNAME:' WITH ' : DICT.SELEND
+FLDS = ''
+KEYLIST = FALSE
+KEYCHECK = 0
+SS.EXTRA1 = FNAME
+SS.EXTRA2 = DORD
+IF HOOK<SSA.FIELDSEL> = "1" THEN
+  CALL @SERVSUB(SSA.FIELDSEL, MAT SS.ARGS, SEL)
+  IF SS.RESULT = 2 THEN KEYLIST = TRUE
+END
+IF HOOK<SSA.FIELDCHK> = "1" THEN KEYCHECK = SSA.FIELDCHK
+*
+GOSUB 5000; * Do listing
+RETURN
+*
+* Start/Stop local printing
+2400 IF CMND.ARGS<1> = "1" THEN
+  GOSUB 2410; * Printer On
+END ELSE
+  GOSUB 2420; * Printer Off
+END
+RETURN
+*
+* Local printing on
+2410 SS.RESULT = 1
+LOCPRTTO = LOCALPRINTTO
+IF HOOK<SSA.SLAVEON> = "1" THEN
+  CALL @SERVSUB(SSA.SLAVEON, MAT SS.ARGS, LOCPRTTO)
+END
+IF SS.RESULT = 1 THEN
+  PRINT 'Sending data to the local printer...'
+  CALL @EXECSUB( "TERM 76,60",'',0)
+END
+IF SS.RESULT = 2 OR SS.RESULT = 1 THEN
+  SCRIPT = "Screen Off"
+  SCRIPT<-1> = 'Capture On ServerPrint,"':LOCPRTTO:'",,,CAP_ReadDirect'
+  CALL @WC(SCRIPT)
+END
+ECHO OFF
+CMND.PRMPT = ''
+RETURN
+*
+* Local printing off
+2420 SS.RESULT = 1
+IF HOOK<SSA.SLAVEOFF> = "1" THEN
+  CALL @SERVSUB(SSA.SLAVEOFF, MAT SS.ARGS, "")
+END
+IF SS.RESULT = 1 OR SS.RESULT = 2 THEN
+  SCRIPT = 'Capture Off ServerPrint'
+  SCRIPT<-1> = "Screen On"
+  CALL @WC(SCRIPT)
+END
+IF SS.RESULT = 1 THEN
+  CALL @EXECSUB( "TERM 80,24",'',0)
+  PRINT "Capture to local printer off"
+END
+ECHO ON
+CMND.PRMPT = STD.PRMPT 
+RETURN
+*
+* Host printer setup
+2450 IF CMND.ARGS<1> = "1" THEN
+  GOSUB 2460; * Printer on
+END ELSE
+  GOSUB 2470; * Printer Off
+END
+RETURN
+*
+2460 IF HOOK<SSA.HPRTON> = "1" THEN
+  CALL @SERVSUB(SSA.HPRTON, MAT SS.ARGS, "")
+END
+RETURN
+*
+2470 IF HOOK<SSA.HPRTOFF> = "1" THEN
+  CALL @SERVSUB(SSA.HPRTOFF, MAT SS.ARGS, "")
+END
+RETURN
+*
+* Start storing of access statements
+2500 STORING = TRUE
+RETURN
+*
+* Execute stored access statements
+2600 STORING = FALSE
+N = DCOUNT(R.STORE, AM)
+FOR J = 1 TO N
+  CALL @EXECSUB( R.STORE<J>,'',0)
+NEXT J
+R.STORE = ''
+RETURN
+*
+* Multiple executes
+2650 CALL @SET("Server_Ready",FALSE)
+R.EXEC = ""
+CALL @GETDATA("Server_Record",R.EXEC)
+SS.RESULT = 1
+IF HOOK<SSA.EXECCHK> = "1" THEN
+  SS.EXTRA1 = ''
+  CALL @SERVSUB(SSA.EXECCHK, MAT SS.ARGS, R.EXEC)
+  IF SS.RESULT = 0 THEN
+    IF SS.EXTRA1 # "" THEN
+      DUM = ''
+      CALL WIN.MSGBOX(SS.EXTRA1,"Host Server","MB_ICONHAND", DUM)
+    END
+  END
+END
+FSCREEN = FALSE
+XIT = FALSE
+LOCPRT = FALSE
+HOSTPRT = FALSE
+COL132 = FALSE
+WT = FALSE
+FOR J = 1 TO NO.ARGS
+  BEGIN CASE
+    CASE CMND.ARGS<J> = "F"; FSCREEN = TRUE
+    CASE CMND.ARGS<J> = "Q"; XIT = TRUE
+    CASE CMND.ARGS<J> = "P"; LOCPRT = TRUE
+    CASE CMND.ARGS<J> = "W"; WT = TRUE
+    CASE CMND.ARGS<J> = "H"; HOSTPRT = TRUE
+    CASE CMND.ARGS<J> = "132"; COL132 = TRUE
+  END CASE
+NEXT J
+IF SS.RESULT THEN
+  IF COL132 THEN
+    WDTHERR = 0
+    CALL @TERMWSUB(132,WDTHERR)
+    CALL WIN.PCSCRIPT("wintsys\wit_scr\view132","")
+  END
+  IF FSCREEN THEN GOSUB 120;PRINT @(-1):
+  IF HOSTPRT THEN GOSUB 2460; * Host printer setup
+  IF LOCPRT THEN GOSUB 2410;* Local print on
+  CALL @MEXECSUB(R.EXEC, "")
+  IF LOCPRT THEN GOSUB 2420;* Local print off
+  IF HOSTPRT THEN GOSUB 2470; * Host printer reset
+  IF WT THEN INPUT DUM:
+  IF COL132 THEN
+    IF WDTHERR = 0 THEN CALL @TERMWSUB(OLD.WIDTH, WDTHERR)
+    CALL WIN.PCSCRIPT("wintsys\wit_scr\view80","")
+  END
+  IF FSCREEN AND NOT(XIT) THEN GOSUB 110
+END
+R.EXEC = ''
+CALL @SET("Server_Ready",TRUE)
+IF XIT THEN GOSUB 1000;* Exit server
+RETURN
+*
+* User defined subroutine
+2700 SUBX = CMND.ARGS<1>
+PARAMS = DELETE(CMND.ARGS, 1, 0, 0)
+CALL @SUBX(PARAMS)
+CALL @SET('Server_Ready',TRUE)
+RETURN
+*
+* Set machine type
+2800 CALL @SET("Machine_Type",MACHINE.TYPE)
+CALL @SET("Server_Version", VERNO)
+CALL @SET("Server_Ready",TRUE)
+RETURN
+*
+* Set host version
+2820 READV HOSTVER FROM F.BP,"HOSTVER",1 ELSE HOSTVER = ''
+CALL @SET("HostVer", HOSTVER)
+CALL @SET("Server_Ready",TRUE)
+RETURN
+*
+* Delete a record to a file
+* Syntax: DELETE <filename>, <itemname>
+2900 CHECK.TYPE = SSA.DELETECHK
+GET.FLDNO = FALSE
+GOSUB 1290; * Get and check arguments
+IF ERR = 0 THEN
+  OPEN DD, FILE TO F.DATA THEN
+    DELETE F.DATA, ITEM
+  END ELSE ERR = ERR.FILEOPEN
+END
+IF ERR THEN CALL @SET("Server_Error",ERR)
+CALL @SET("Server_Ready",TRUE)
+RETURN
+*
+* Set up notification for when next command finishes
+3000 NOTIFY = RAW.CMND
+LOOP
+WHILE NOTIFY[1,1] = " " DO
+   NOTIFY = NOTIFY[2,9999]
+REPEAT
+*
+POS = INDEX(NOTIFY," ",1)
+IF POS THEN
+   NOTIFY = NOTIFY[POS+1,9999]
+END ELSE
+   NOTIFY = ""
+END
+RETURN
+*
+* Key only listing
+5000 GOSUB 5500; * Set up and do select
+SS.RESULT = 1
+LOOP
+  IF KEYLIST THEN
+    KEY = SEL<1>
+    SEL = DELETE(SEL,1,0,0)
+    IF KEY = "" THEN EOF = 1
+  END ELSE
+    READNEXT KEY FROM SV.LIST ELSE EOF = 1
+  END
+UNTIL EOF DO
+  IF KEYCHECK THEN
+    CALL @SERVSUB(KEYCHECK, MAT SS.ARGS, KEY)
+  END
+  IF SS.RESULT THEN
+    CNT = CNT + 1
+    IF CHECK # "" AND REM(CNT, 5) = 0 THEN
+      CALL @WC(CHECK)
+      INPUT CHK:
+    END
+    IF CHK = "1" THEN
+      CALL @WC(ADDTOVAR:KEY:ADDEND)
+    END ELSE
+      GOSUB 5600; * Clear Select
+    END
+  END
+REPEAT
+CALL @SET("Server_Ready",TRUE)
+RETURN
+*
+* Key + fields listing
+5100 ERR = 0
+IF DORD = "DICT" THEN
+  IF PRIME.FILES THEN
+    OPEN '', 'VOC' TO F.DICT ELSE ERR = ERR.NODICT
+  END ELSE
+    OPEN '', 'MD' TO F.DICT ELSE ERR = ERR.NODICT
+  END
+  IF ERR = 0 THEN
+    OPEN DORD, FNAME TO F.FILE ELSE ERR = ERR.FILEOPEN
+  END
+END ELSE
+  OPEN 'DICT',FNAME TO F.DICT ELSE ERR = ERR.NODICT
+  IF ERR = 0 THEN
+    OPEN '',FNAME TO F.FILE ELSE ERR = ERR.FILEOPEN
+  END
+END
+IF ERR = 0 THEN
+  NO.FLDS = DCOUNT(FLDS,' ')
+  ATTS = ''
+  CNVS = ''
+  FOR J = 1 TO NO.FLDS UNTIL ERR # 0
+    READ R.DICT FROM F.DICT, FIELD(FLDS,' ',J) ELSE ERR = ERR.FIELD
+    IF ERR = 0 THEN
+      IREC = ''
+      CALL @DICTSUB(FIELD(FLDS,' ',J), R.DICT, IREC, 0, BAD)
+      IF BAD THEN ERR = ERR.FIELD
+    END
+    IF ERR = 0 THEN
+      ATTS<J> = IREC<1,1>
+      CNVS<J> = IREC<1,2>
+    END
+  NEXT J  
+END
+IF ERR = 0 THEN
+  GOSUB 5500; * Set up and select
+  LOOP
+    READNEXT KEY FROM SV.LIST ELSE EOF = 1
+  UNTIL EOF DO                
+    READ R.DATA FROM F.FILE,KEY ELSE R.DATA = ''
+    CNT = CNT + 1
+    IF CHECK # "" AND REM(CNT, 5) = 0 THEN
+      CALL @WC(CHECK)
+      INPUT CHK:
+    END
+    IF CHK = "1" THEN
+      SEND = KEY
+      FOR J = 1 TO NO.FLDS
+        VALUE = R.DATA<ATTS<J>>
+        IF CNVS<J> # "" THEN VALUE = OCONV(VALUE,CNVS<J>)
+        QTPOS = INDEX(VALUE,'"',1)
+        IF QTPOS THEN GOSUB 5150;* Double up quotes
+        SEND = SEND:ADDSEP:VALUE
+      NEXT J
+      CALL @WC(ADDTOVAR:SEND:ADDEND)
+    END ELSE
+      GOSUB 5600; * Clear Select
+    END
+  REPEAT                         
+END
+IF ERR THEN CALL @SET("Server_Error",ERR)
+CALL @SET("Server_Ready",TRUE)
+RETURN
+*
+* Double up quotes in data
+5150 QTVAL = VALUE
+VALUE = ""
+LOOP
+WHILE QTPOS DO
+  VALUE = VALUE : QTVAL[1,QTPOS] : '"'
+  QTVAL = QTVAL[QTPOS+1,99999]
+  QTPOS = INDEX(QTVAL,'"',1)
+REPEAT
+VALUE = VALUE : QTVAL
+RETURN
+*
+* Set up variable and do select
+5500 DLG = FIELD(VAR,'.',1)
+VAR = FIELD(VAR,'.', 2)
+IF VAR # "" THEN
+  CHECK = 'Enter IsShown(':DLG:')'     
+  ADDTOVAR = 'If IsShown(':DLG:') Then DB AddToList ':DLG:' ':VAR:','
+  ADDEND = '"`'
+END ELSE
+  CHECK = ''
+  ADDTOVAR = DLG:':='
+  ADDEND = '":cr`'
+END
+*
+CALL @SET("Server_Cmnd",ADDTOVAR)
+ADDTOVAR = 'Execute Server_Cmnd:`"'
+*      
+SV.LIST = ''
+NOITEMS = 0
+INLIST = ''
+IF KEYLIST = FALSE THEN
+  CALL @ITEMSUB(F.FILE, SEL, 0, NOITEMS, SV.LIST, INLIST)
+END
+CNT = 0
+CHK = 1
+EOF= 0
+RETURN
+*
+* Clear down current selection
+5600 IF KEYLIST THEN
+  SEL = ""
+END ELSE
+  LOOP
+    READNEXT KEY FROM SV.LIST ELSE EOF =1
+  UNTIL EOF DO
+  REPEAT
+END
+RETURN
+*
+* iNVERT cASE
+6000 IF CASE.IS.INVERTED THEN
+  DUM = 'PTERM -CASE INVERT'
+  CASE.IS.INVERTED = FALSE
+END ELSE
+  DUM = 'PTERM -CASE NOINVERT'
+  CASE.IS.INVERTED = TRUE
+END 
+* 
+CALL @EXECSUB(DUM, '', 0)
+INVERTING.CASE = TRUE
+RETURN
+*
+* Reset case of line just received and refetch the first word
+6100 LWRCASE = OCONV(RAW.CMND,"MCL")
+UPRCASE = OCONV(RAW.CMND,"MCU")
+CMNDCOUNT = LEN(RAW.CMND)
+CMND.LINE = ""
+FOR J = 1 TO CMNDCOUNT
+  IF RAW.CMND[J,1] = LWRCASE[J,1] THEN
+    CMND.LINE = CMND.LINE : UPRCASE[J,1]
+  END ELSE
+    CMND.LINE = CMND.LINE : LWRCASE[J,1]
+  END
+NEXT J
+*
+RAW.CMND = CMND.LINE
+GOSUB 350; * Get Word   
+RETURN
+*
+END

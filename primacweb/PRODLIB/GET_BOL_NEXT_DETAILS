@@ -1,0 +1,208 @@
+SUBROUTINE GET_BOL_NEXT_DETAILS
+********************************************************************************
+*   Program name :- GET_BOL_NEXT_DETAILS
+*   Created:- 4/5/2006
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE PMC.CPYLIB COMP.OPS
+$INCLUDE PMC.CPYLIB CUSTOMER
+$INCLUDE ICS.CPYLIB FNGD.BOM
+$INCLUDE PMC.CPYLIB SHIP.TO
+$INCLUDE PMC.CPYLIB TAX
+$INCLUDE PMC.CPYLIB FOB
+$INCLUDE OPS.CPYLIB ORDER
+$INCLUDE OPS.CPYLIB BOL
+$INCLUDE OPS.CPYLIB PICK.TICKET
+$INCLUDE OPS.CPYLIB ORDER.RELEASE
+$INCLUDE OPS.CPYLIB ORDER.DETAIL
+$INCLUDE OPS.CPYLIB ORDER.DETAIL.INQ
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB INV.WHSE
+$INCLUDE ICS.CPYLIB CATEGORY
+$INCLUDE ICS.CPYLIB INV.CNV
+$INCLUDE ICS.CPYLIB INV_SERIAL       
+$INCLUDE ICS.CPYLIB INV_RECEIPTS     
+$INCLUDE ICS.CPYLIB INV_RECP_WHSE    
+$INCLUDE CPYLIB GEN.XREF.SUB
+$INCLUDE CPYLIB EDIT.COM
+$INCLUDE CPYLIB XREF.DATA
+$INCLUDE CPYLIB EDIT.COM.DRIVER
+$INCLUDE CPYLIB FILE.VARS
+$INCLUDE CPYLIB CHAR
+*---- SETUP UNIT MEASURE CONVERSION AND DISPLAY
+   ICR.CNV = "MD0"; ICR.CNV1 = "MD0,"
+   ICR.DV1 = 1; ICR.MT1 = 1; ICR.DV2 = 1000
+   ICR.TYPE = 3; ICR.SCAL = 0
+   TEMP.DESC = "";   TEMP.AVAIL = "";   TEMP.SID = "";   TEMP.LOC.AVAIL = "" ; *used only to pass qty. avail to BOL.LOC.SUB
+   NUM.ON.SCRN = ""; INDX = 1 ; RELNO='';ERRMSG = '';TMPQTY = '';TMPTYPE = '';TMPPROD = '';TMPWHSE = '';TMPLOC = '';TMP_SHP_WT = ''
+TMP_SKD_CNT = '';TMP_CRTN_CNT = '';PRODDESC = '';TMP_BOL_RECP_NO = '';TMP_BOL_KIT = '';TMP_BOL_SEQ = '';CONVBOLQTY = ''
+*
+*---- Open files
+*
+OPEN "","DAILY.BOL" TO DAILY.BOL ELSE ERRMSG = "CANNOT OPEN DAILY.BOL";GOTO 91000
+OPEN "","CONTROL" TO CONTROL ELSE
+      ERRMSG = "Cannot locate the CONTROL file"; GOTO 91000
+   END
+   OPEN "","COMPANY" TO COMPANY ELSE
+      ERRMSG = "Cannot locate the COMPANY file"; GOTO 91000
+   END
+   OPEN "","INVENTORY" TO INVENTORY ELSE
+      ERRMSG = "Cannot locate the COMPANY file"; GOTO 91000
+   END
+   OPEN "","ORDER.DETAIL" TO ORDER.DETAIL ELSE
+      ERRMSG = "Cannot locate the ORDER.DETAIL file"; GOTO 91000
+   END
+   IF FILEINFO(INV_SERIAL_TEMP,0)=0 THEN                     
+      OPEN '','INV_SERIAL_TEMP' TO INV_SERIAL_TEMP ELSE    
+         ERRMSG="INV_SERIAL_TEMP FILE IS MISSING";GOTO 91000   
+      END                                                        
+   END                                                          
+   IF FILEINFO(INV_SERIAL,0)=0 THEN                     
+      OPEN '','INV_SERIAL' TO INV_SERIAL ELSE    
+         ERRMSG="INV_SERIAL FILE IS MISSING";GOTO 91000   
+      END                                                        
+   END
+OPEN "","FOB" TO FOB ELSE
+      ERRMSG = "Cannot locate the FOB file"; GOTO 91000
+   END
+   BOL.SHP.AMT = ''
+STATUS = RBO.getProperty("","ID",BOL.ID)
+CONO= BOL.ID[1,3] ;*PMCProperty<1,4>
+
+MATREAD BOL.REC FROM DAILY.BOL,BOL.ID ELSE ERRMSG = "CANNOT READ DAILY.BOL ON : " : BOL.ID; GOTO 91000
+   IF BOL.FOB = "" THEN
+      MAT FOB.REC = ""
+   END ELSE
+      MATREAD FOB.REC FROM FOB, CONO:BOL.FOB ELSE
+         MAT FOB.REC = ""
+      END
+   END
+LINES = DCOUNT(BOL.PROD,VM)
+   IF LINES > 0 THEN
+	
+      FOR REF = 1 TO LINES
+*		PRINT @(20,0):"LINES NO IS AND BOL.PROD ": LINES:"-AND-":BOL.PROD ; SS='' ;INPUT SS
+         PROD = BOL.PROD<1,REF>
+         WHSE = BOL.WHSE<1,REF>
+         ORDNO = BOL.ORDER<1,REF>
+         RECP = BOL.RECP.NO<1,REF,1>
+         KIT  = BOL.KIT<1,REF>
+         PROD.SEQ = BOL.SEQ<1,REF>
+		
+         TEMP.SID<1,REF> = PROD:"!":WHSE:"!":ORDNO:"!":RECP
+         MATREAD ORD.DET.REC FROM ORDER.DETAIL, CONO:ORDNO:"!":BOL.SHIP.TO ELSE
+            MAT ORD.DET.REC = ""
+         END 
+         PTR = 1
+         LOOP
+            LOCATE PROD IN OSD.PROD<1>,PTR SETTING PLOC THEN
+		   
+               IF (OSD.WHSE<1,PLOC> = WHSE) AND (OSD.KIT<1,PLOC> = KIT) AND (OSD.PROD.SEQ<1,PLOC> = PROD.SEQ) THEN PTR = 0
+               END ELSE
+		 PTR = 0; PLOC = 0
+               END
+         WHILE PTR > 0 DO
+            PTR = PLOC+1
+         REPEAT
+         IF PLOC > 0 THEN
+            LCNT = DCOUNT(BOL.LOC<1,REF>,SM)
+	       
+            PREV.RECP.NO = 0       ;*T24732
+	    FOR LPTR = 1 TO LCNT
+               WLOC = BOL.LOC<1,REF,LPTR>
+               RECP = BOL.RECP.NO<1,REF,LPTR>
+               LOCATE RECP IN OSD.RECP.NO<1,PLOC>,1 SETTING P ELSE NULL
+               AQTY = OSD.FI.QTY<1,PLOC,P>+0
+               IF PREV.RECP.NO = 0 OR PREV.RECP.NO # RECP THEN                  
+                  TEMP.AVAIL<1,REF> = TEMP.AVAIL<1,REF> + AQTY
+               END             
+               RSVBLE.QTY=0;RSVD.QTY=0
+               ISTK.ID=CONO:"R":RECP:"!":WHSE:"!":WLOC             
+               IF RECORDLOCKED(INV_SERIAL_TEMP,ISTK.ID)=0 THEN     
+                  DELETE INV_SERIAL_TEMP,ISTK.ID                    
+               END                                               
+               MATREADU ISTK.REC FROM INV_SERIAL_TEMP,ISTK.ID ELSE 
+                  MATREADU ISTK.REC FROM INV_SERIAL,ISTK.ID THEN    
+                     IF (RELNO='') THEN                              
+                        LOCATE ORDNO IN ISTK.ORDER<1> SETTING OPOS THEN  
+                           RSVD.QTY=ISTK.ORSVD.QTY<1,OPOS>              
+                        END                                           
+                     END ELSE                                        
+                        LOCATE RELNO IN ISTK.RELNO<1> SETTING RELPOS THEN
+                           RSVD.QTY=ISTK.RRSVD.QTY<1,RELPOS>            
+                        END                                           
+                     END                                             
+                     ;* return back quantity that has been reserved  
+                     ;* for this order/release into reservable qty   
+                     RSVBLE.QTY=ISTK.RSVB.QTY+RSVD.QTY                
+                  END                                               
+                  RELEASE INV_SERIAL,ISTK.ID                        
+               END                                                 
+               RELEASE INV_SERIAL_TEMP,ISTK.ID                     
+               TEMP.LOC.AVAIL<1,REF,LPTR>=TEMP.LOC.AVAIL<1,REF,LPTR>+RSVBLE.QTY
+               PREV.RECP.NO = RECP
+            NEXT LPTR
+         END ELSE
+             TEMP.AVAIL<1,REF> = 0
+         END
+      NEXT REF
+      K = 0
+      FOR I = 1 TO LINES
+         IF TEMP.AVAIL<1,I> > 0 THEN
+            K = K + 1
+            NUM.ON.SCRN<1,K> = I
+         END
+            PRINT.AVAIL = TEMP.AVAIL<1,I>
+            PQTY = INT(((PRINT.AVAIL / ICR.DV1 ) * ICR.MT1) / ICR.DV2 + .5 )
+            TMPQTY<1,I> = OCONV(PQTY,ICR.CNV)
+	     PQTY1 = SUM(BOL.QTY<1,I>)            
+            PQTY1 = INT(((PQTY1 / ICR.DV1 ) * ICR.MT1) / ICR.DV2 + .5 )
+	     CONVBOLQTY<1,I> = OCONV(PQTY1,ICR.CNV1)
+		MATREAD INV.REC FROM INVENTORY,CONO:BOL.PROD<1,I> THEN
+			PRODDESC<1,I>=INV.FULL.DESC
+		END
+*         END
+  NEXT I
+STATUS = RBO.setProperty('','BOL_VALID_PROD',NUM.ON.SCRN)
+STATUS = RBO.setProperty('','OSD_FI_QTY',TMPQTY)
+STATUS = RBO.setProperty('', 'CONVBOLQTY',CONVBOLQTY)
+STATUS = RBO.setProperty('','BOL_ORDER',BOL.ORDER)
+STATUS = RBO.setProperty('','BOL_TYPE',BOL.TYPE)
+STATUS = RBO.setProperty('','BOL_PROD',BOL.PROD)
+STATUS = RBO.setProperty('','BOL_WHSE',BOL.WHSE)
+STATUS = RBO.setProperty('','BOL_LOC',BOL.LOC)
+STATUS = RBO.setProperty('','BOL_SHP_WT',BOL.SHP.WT)
+STATUS = RBO.setProperty('','BOL_SKD_CNT',BOL.SKD.CNT)
+STATUS = RBO.setProperty('','BOL_CRTN_CNT',BOL.CRTN.CNT)
+STATUS = RBO.setProperty('','INV_PROD_DSC',PRODDESC)
+STATUS = RBO.setProperty('','BOL_RECP_NO',BOL.RECP.NO)
+STATUS = RBO.setProperty('','BOL_KIT',BOL.KIT)
+STATUS = RBO.setProperty('','BOL_SEQ',BOL.SEQ)
+STATUS = RBO.setProperty('','BOL_SHP_AMT',BOL.SHP.AMT)
+STATUS = RBO.setProperty('','BOL_BOM_NUM',BOL.BOM.NUM)
+STATUS = RBO.setProperty('','BOL_RELEASE',BOL.RELEASE)
+STATUS = RBO.setProperty('','BOL_PKTKT',BOL.PKTKT)
+STATUS = RBO.setProperty('','TEMP_AVAIL',TEMP.AVAIL)
+STATUS = RBO.setProperty('','TEMP_LOC_AVAIL',TEMP.LOC.AVAIL)
+STATUS = RBO.setProperty('','TEMP_SID',TEMP.SID)
+STATUS = RBO.setProperty('','BOL_POST_FLAG',BOL.POST.FLAG)
+
+
+END
+RETURN 
+*** ERROR ROUTINE
+91000 *
+  STATUS = RBO.setProperty('','ServerStatus',1)        
+  STATUS = RBO.setProperty('','ServerMessage',ERRMSG) 
+RETURN
+

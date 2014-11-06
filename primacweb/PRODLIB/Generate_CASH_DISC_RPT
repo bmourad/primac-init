@@ -1,0 +1,393 @@
+SUBROUTINE Generate_CASH_DISC_RPT
+********************************************************************************
+*   Program name :- Generate_CASH_DISC_RPT
+*   Created:- 2/16/2006
+*   Author:-Sk. Zahoor Ahmed
+*   Description:-This program list all vouchers to be paid with in
+*                   due date specified when scheduled.
+*   T011907  :ADDED BY ABDUL GAFOOR FOR CLEARING THE PREVOUS REPORTS DATA ON 01/19/07
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+
+$INCLUDE APS.CPYLIB CKP
+$INCLUDE PMC.CPYLIB VEND
+$INCLUDE PMC.CPYLIB COMPANY
+$INCLUDE PMC.CPYLIB GLTABLE
+$INCLUDE CPYLIB FILE.VARS
+$INCLUDE CPYLIB CHAR
+   SYS.TYPE = 2
+   DIM SVEND.REC(10)
+   EQU SVEND.NO TO SVEND.REC(1)
+   EQU SVEND.DS TO SVEND.REC(2)
+   EQU SVEND.PT TO SVEND.REC(3)
+   STATUS = RBO.getProperty('','DIV_CODE',DIV.OWNER)
+   STATUS = RBO.getProperty('','ID',PPSD_ID)
+*
+   UserID = FIELD(PPSD_ID, "!", 1) ;* User ID
+   PPSID = FIELD(PPSD_ID, "!", 2) ;* PMC_PROCESS ID(ASP file name)
+   SessionID = FIELD(PPSD_ID, "!", 3) ;* IE Session ID
+   PRPT_ID = FIELD(PPSD_ID, "!", 4) ;* PMC_REPORTS ID
+   Cono = FIELD(PPSD_ID, "!", 5)
+   CONO = Cono
+   ERRMSG = ''
+   ERP_TEST=""
+**** INITIALZATION
+   ERRMSG = ""
+   LINE.COUNT = 99 ; PAGE.NO = 0 ; VNO.CNT = 0
+   TOT.GRS = 0 ; TOT.DSC = 0 ; TOT.NET = 0
+   GTOT.GRS = 0 ; GTOT.DSC = 0 ; GTOT.NET = 0
+   SP1 = " "
+   PREV.VEND = '' ; PRT.VEND.FLG = 1
+   C.LINE1 = SPACE(36):STR("*",72)
+   C.LINE2 = SPACE(36):"*  THIS VENDOR HAS A NEGATIVE (OR ZERO) BALANCE AND WILL NOT BE PAID!! *"
+**** OPEN ALL FILES
+   OPEN "","CKP" TO CKP ELSE ERRMSG = "CKP FILE IS MISSING" ; GOTO 99999
+   OPEN "","CONTROL" TO CONTROL ELSE ERRMSG = "CONTROL FILE IS MISSING";GOTO 99999
+   OPEN "","VEND" TO VEND ELSE ERRMSG = "VENDOR FILE IS MISSING" ; GOTO 99999
+
+ERP_TEST<1> = "IN Generate_CASH_DISC_RPT"
+WRITE ERP_TEST ON CONTROL,"09JAN07"
+
+
+**** GET VALUES FROM CONTROL FILES
+* TASK 20269
+*   READ PAYDATE FROM CONTROL , CONO:"PAYDATE" ELSE ERRMSG = "NO REPORT DATE";GOTO 99999
+*   PAID.DATE=ICONV(PAYDATE,"D2")
+*   MATREAD SVEND.REC FROM CONTROL , CONO:"VENDORS" ELSE FLG = 1 ; MAT SVEND.REC = ''
+*T22398   READ PAYDATE FROM CONTROL , CONO:"PAYDATE":DIV.OWNER ELSE ERRMSG = "NO REPORT DATE";GOTO 99999
+   READ PAYDATE FROM CONTROL , CONO:"PAYDATE":DIV.OWNER ELSE ERRMSG = "NO REPORT DATE";GOTO 99999 ; * GOTO 99990 ; * T22398
+   PAID.DATE=ICONV(PAYDATE,"D2")
+   MATREAD SVEND.REC FROM CONTROL , CONO:"VENDORS":DIV.OWNER ELSE FLG = 1 ; MAT SVEND.REC = ''
+* TASK 20269
+*
+**** SETUP HEADING
+*
+*T26493 v
+*  CONO.NAME = INBUFF<2>
+*  REPORT.NAME = "CASH.DISBURSEMENTS.JOURNAL"
+*  REPORT.NUMBER = "XXXX"
+   CONO.NAME = ""
+   REPORT.NAME = ""
+   REPORT.NUMBER = PRPT_ID
+*T26493 ^
+   REPORT.DATE = DATE()
+   HD1 = "" ; HD2 = ""
+   STATUS = RBO.setProperty('','USER_ID',UserID)
+   CALL GET_REPORT_PROG_HEAD(CONO,CONO.NAME,REPORT.NAME,REPORT.NUMBER,REPORT.DATE,HD1,HD2)
+**** OPEN ALL FILES
+* T25759 v
+*  HD3 = "VENDOR #           VENDOR NAME          VOUCH# INVOICE NO INV.DATE DUE DATE   GROSS AMT     DISC AMT     NET AMOUNT  "
+   HD3 = "VENDOR #   VENDOR NAME/REMIT COMMENTS   VOUCH# INVOICE NO INV.DATE DUE DATE   GROSS AMT     DISC AMT     NET AMOUNT  "
+* T25759 ^
+   HD4 = "-------- ------------------------------ ------ ---------- -------- -------- ------------- ------------- -------------"
+   HD5 = "                                                                            ------------- ------------- -------------"
+   HD6 = "                                                                            ============= ============= ============="
+******Build and Execute Select Query 
+*T011907 v
+   TEMP_VOUCHER="";VOUCHER_NO=""
+   STATUS = RBO.getProperty('','BUFF_VAL',INBUFF)
+   TEMP_VOUCHER = FIELD(INBUFF,"!",5)
+   IF TEMP_VOUCHER # "" THEN
+      VOUCHER_NO = CHANGE(TEMP_VOUCHER,SVM,VM)
+   END
+*T011907 ^
+   CMDSTR = "SSELECT CKP BY VEND_ WITH CONO = " : CONO 
+   IF DIV.OWNER # "ALL" THEN
+	CMDSTR = CMDSTR :" AND WITH VCH.DIV.OWNER = " : DIV.OWNER
+   END
+
+   *EXECUTE THE METHOD GET_SELNAME WITH SCD.RPT ASSIGNED TO IT AND USE THAT IN SAVE-LIST
+   STATUS = RBO.setProperty('','LIST_NAME','SCD.RPT')
+   STATUS=RBO.callMethod('','GET_SELNAME')
+   STATUS = RBO.getProperty('','LIST_NAME',LIST.NAME)
+   UDTEXECUTE CMDSTR CAPTURING MESG
+*ERP_TEST<-1> = "MESG ":MESG; WRITE ERP_TEST ON CONTROL,"09JAN07"
+
+   UDTEXECUTE "SAVE-LIST " : LIST.NAME ;* save list to get back the contents in cash.disb
+   UDTEXECUTE "GET-LIST " : LIST.NAME
+   *****
+	PRINTER ON
+*
+**** READ AND PROCESS FIRST REPORD
+*
+100*
+VCHR.FOUND=""
+   READNEXT ID ELSE
+      PRINTER OFF
+* CSF 20116
+*     ERRMSG = "NO ITEMS SELECTED" ; GOSUB 91000 ; GOTO 99999
+      ERRMSG = "NO ITEMS SELECTED" ; GOTO 99999
+* CSF 20116
+   END
+*T011907 v   
+     LOCATE ID[4,99] IN VOUCHER_NO<1>,1 SETTING VCHR.FOUND ELSE GOTO 200
+*T011907 ^
+   MATREAD CKP.REC FROM CKP, ID ELSE GOTO 100
+*CSF 24394 v
+*  PREV.VEND = CKP.VEND<1,1>
+   PREV.VEND = CKP.VEND
+*CSF 24394 ^
+   IF CKP.VEND<1,2> # "" THEN
+      VEND.DESC = CKP.VEND<1,2>
+   END ELSE
+      MATREAD VEND.REC FROM VEND , CONO:CKP.VEND<1,1> ELSE
+         VEND.DESC = "VEND NOT ON FILES"
+      END
+   END
+   GOSUB 1000
+**** PROCESS ALL RECORDS
+200*
+   DATA = 1
+   LOOP
+      READNEXT ID ELSE DATA = 0
+   WHILE DATA = 1 DO
+*T011907 v
+     LOCATE ID[4,99] IN VOUCHER_NO<1>,1 SETTING VCHR.FOUND ELSE GOTO 200
+*T011907 ^
+      MATREAD CKP.REC FROM CKP , ID ELSE GOTO 299
+      GOSUB 900
+      GOSUB 1000
+299 REPEAT
+   IF PRT.VEND.FLG = 1 THEN
+      GOSUB 2000
+   END
+   GOSUB 3000
+*  DELETE CONTROL , CONO:"VENDORS"
+   PRINTER OFF
+
+*T011907 v INSTEAD OF CALLING THE WHOLE APS.CHECK.PRCS.CHK AT THIS POINT ONLY RELATED DATA
+
+*STATUS = RBO.setProperty('','Cono',CONO)
+*STATUS = RBO.setProperty('','TYPE',"F") ;* this is S - at the starting and C at end of program 
+* this TYPE is used to add and delete from CONTROL file the division entry for not giving the chance to others to access that division
+*CALL APS_CHECK_PRCS_CHK
+*STATUS = RBO.setProperty('','DIV_CODE',DIV.OWNER)
+*STATUS = RBO.setProperty('','USER_ID',UserID)
+
+*We need to all the U,F,C options in order for APS.CHECK.PRCS.CHK
+STATUS = RBO.setProperty('','Cono',CONO)
+STATUS = RBO.setProperty('','TYPE',"U") 
+STATUS = RBO.setProperty('','DIV_CODE',DIV.OWNER)
+STATUS = RBO.setProperty('','USER_ID',UserID)
+CALL APS_CHECK_PRCS_CHK
+
+STATUS = RBO.setProperty('','Cono',CONO)
+STATUS = RBO.setProperty('','TYPE',"F") 
+STATUS = RBO.setProperty('','DIV_CODE',DIV.OWNER)
+STATUS = RBO.setProperty('','USER_ID',UserID)
+CALL APS_CHECK_PRCS_CHK
+
+STATUS = RBO.setProperty('','Cono',CONO)
+STATUS = RBO.setProperty('','TYPE',"C") 
+STATUS = RBO.setProperty('','DIV_CODE',DIV.OWNER)
+STATUS = RBO.setProperty('','USER_ID',UserID)
+CALL APS_CHECK_PRCS_CHK
+
+*T011907 ^
+   UDTEXECUTE "DELETE-LIST " : LIST.NAME
+   GOTO 99999
+*
+**** FIND BREAK
+*
+900*
+*CSF 24394 v
+*  IF CKP.VEND<1,1> # PREV.VEND THEN
+   IF CKP.VEND # PREV.VEND THEN
+*CSF 24394 ^
+      IF PRT.VEND.FLG = 1 THEN
+         GOSUB 2000
+      END 
+      PRT.VEND.FLG = 1
+      PRT.FLG = 1
+      TOT.GRS = 0 ; TOT.DSC = 0 ; TOT.NET = 0
+*CSF 24394 v
+*     PREV.VEND = CKP.VEND<1,1>
+      PREV.VEND = CKP.VEND
+*CSF 24394 ^
+      IF CKP.VEND<1,2> # "" THEN
+         VEND.DESC = CKP.VEND<1,2>
+      END ELSE
+         MATREAD VEND.REC FROM VEND , CONO:CKP.VEND<1,1> ELSE
+            VEND.DESC = "VEND NOT ON FILES"
+         END
+      END
+   END
+   RETURN
+*
+**** PRINT VOUCHER LINES AND ADD VENDOR TOTALS
+*
+1000*
+   IF LINE.COUNT > 55 THEN
+      GOSUB 8000
+      PRT.FLG = 1
+   END
+   TOT.DIST = 0
+   FOR AD = 1 TO CKP.CTR
+      TOT.DIST = TOT.DIST + CKP.DIST.AMT<1,AD>
+   NEXT AD
+   P.LINE = ""
+* T25759 v
+*  IF PRT.FLG = 1 THEN
+*     P.LINE = P.LINE: CKP.VEND<1,1> "L#8":SP1
+*     P.LINE = P.LINE: VEND.DESC "L#30":SP1
+*     PRT.FLG = 0
+*  END ELSE
+*     P.LINE = SPACE(40)
+*  END
+   IF PRT.FLG = 1 THEN
+      P.LINE := CKP.VEND<1,1> "L#8":SP1
+      P.LINE := VEND.DESC "L#30":SP1
+      PRT.FLG = 0
+      PRINT P.LINE
+      LINE.COUNT += 1
+   END
+   P.LINE = ""
+   P.LINE = SPACE(9):CKP.REM.COMM "L#30":SP1
+* T25759 ^
+   P.LINE = P.LINE:ID[4,6] "L#6":SP1
+   P.LINE = P.LINE:CKP.INV "L#10":SP1
+   P.LINE = P.LINE:OCONV(CKP.INV.DATE, "D2/") "R#8":SP1
+   P.LINE = P.LINE:OCONV(CKP.DUE.DATE, "D2/") "L#8":SP1
+   P.LINE = P.LINE:OCONV(CKP.GRS.AMT , "MD2,") "R#13":SP1
+   P.LINE = P.LINE:OCONV(CKP.DSC.AMT , "MD2,") "R#13":SP1
+   P.LINE = P.LINE:OCONV(CKP.GRS.AMT - CKP.DSC.AMT, "MD2,") "R#13":SP1
+   IF CKP.GRS.AMT # TOT.DIST THEN
+      P.LINE = P.LINE :"PARTIAL"
+   END
+   PRINT P.LINE
+   LINE.COUNT = LINE.COUNT + 1
+ERP_TEST<-1> = "TOT.GRS TOT.DSC TOT.NET ":TOT.GRS :" ^^ ": TOT.DSC :" ^^ ": TOT.NET
+ERP_TEST<-1> = "CKP.GRS.AMT  CKP.DSC.AMT ":CKP.GRS.AMT :" ^^ ": CKP.DSC.AMT
+WRITE ERP_TEST ON CONTROL,"09JAN07"
+
+   TOT.GRS = TOT.GRS + CKP.GRS.AMT
+   TOT.DSC = TOT.DSC + CKP.DSC.AMT
+   TOT.NET = TOT.NET + (CKP.GRS.AMT - CKP.DSC.AMT)
+1999 RETURN
+*
+**** PRINT VENDOR TOTAL LINE
+*
+2000*
+   IF LINE.COUNT + 3 > 55 THEN
+      GOSUB 8000
+   END
+   IF TOT.NET < 1 THEN
+      PRINT C.LINE1
+      PRINT C.LINE2
+      PRINT C.LINE1
+      IF SVEND.PT = 'S' THEN
+         VNO.CNT = VNO.CNT + 1
+*CSF 24394 v
+*        SVEND.NO<1,VNO.CNT> = PREV.VEND
+         SVEND.NO<1,VNO.CNT> = PREV.VEND<1,1>
+*CSF 24394 ^
+         SVEND.DS<1,VNO.CNT> = VEND.DESC
+      END ELSE
+*CSF 24394 v
+*        LOCATE PREV.VEND IN SVEND.NO<1>,1 SETTING FND ELSE FND = 0
+         LOCATE PREV.VEND<1,1> IN SVEND.NO<1>,1 SETTING FND ELSE FND = 0
+*CSF 24394 ^
+         IF FND THEN
+            VNO.CNT = VNO.CNT - 1
+            SVEND.NO = DELETE(SVEND.NO,1,FND,0)
+            SVEND.DS = DELETE(SVEND.DS,1,FND,0)
+         END
+      END
+   END ELSE
+      IF SVEND.PT = 'S' THEN
+*CSF 24394 v
+*        LOCATE PREV.VEND IN SVEND.NO<1>,1 SETTING FND ELSE FND = 0
+         LOCATE PREV.VEND<1,1> IN SVEND.NO<1>,1 SETTING FND ELSE FND = 0
+*CSF 24394 ^
+         IF FND THEN
+            VNO.CNT = VNO.CNT - 1
+            SVEND.NO = DELETE(SVEND.NO,1,FND,0)
+            SVEND.DS = DELETE(SVEND.DS,1,FND,0)
+         END
+      END ELSE
+*CSF 24394 v
+*        LOCATE PREV.VEND IN SVEND.NO<1>,1 SETTING FND ELSE FND = 0
+         LOCATE PREV.VEND<1,1> IN SVEND.NO<1>,1 SETTING FND ELSE FND = 0
+*CSF 24394 ^
+         IF FND THEN
+            VNO.CNT = VNO.CNT + 1
+*CSF 24394 v
+*           SVEND.NO<1,VNO.CNT> = PREV.VEND
+            SVEND.NO<1,VNO.CNT> = PREV.VEND<1,1>
+*CSF 24394 ^
+            SVEND.DS<1,VNO.CNT> = VEND.DESC
+         END
+      END
+      PRINT HD5
+      T.LINE = ""
+      T.LINE = T.LINE:SPACE(53):"VENDOR "
+*CSF 24394 v
+*     T.LINE = T.LINE:PREV.VEND "L#8"
+      T.LINE = T.LINE:PREV.VEND<1,1> "L#8"
+*CSF 24394 ^
+      T.LINE = T.LINE:"  TOTAL "
+      T.LINE = T.LINE:OCONV(TOT.GRS, "MD2,") "R#13":SP1
+      T.LINE = T.LINE:OCONV(TOT.DSC, "MD2,") "R#13":SP1
+      T.LINE = T.LINE:OCONV(TOT.GRS - TOT.DSC, "MD2,") "R#13"
+      PRINT T.LINE
+      PRINT
+      GTOT.GRS = GTOT.GRS + TOT.GRS
+      GTOT.DSC = GTOT.DSC + TOT.DSC
+      GTOT.NET = GTOT.NET + TOT.NET
+   END
+   LINE.COUNT = LINE.COUNT + 3
+   TOT.GRS = 0 ; TOT.DSC = 0 ; TOT.NET = 0
+   RETURN
+*
+***** PRINT GRAND TOTAL
+*
+3000*
+   IF LINE.COUNT + 2 >  55 THEN
+      GOSUB 8000
+   END
+   PRINT HD6
+   T.LINE = ""
+   T.LINE = T.LINE:SPACE(63):"GRAND  TOTAL "
+   T.LINE = T.LINE:OCONV(GTOT.GRS, "MD2,") "R#13":SP1
+   T.LINE = T.LINE:OCONV(GTOT.DSC, "MD2,") "R#13":SP1
+   T.LINE = T.LINE:OCONV(GTOT.GRS - GTOT.DSC, "MD2,") "R#13"
+   PRINT T.LINE
+   RETURN
+*
+**** PRINT HEADING
+*
+8000*
+   PRINT CHAR(12)
+   PAGE.NO = PAGE.NO + 1
+   PRINT HD1:PAGE.NO
+   PRINT HD2
+   PRINT
+* T20269 v
+*     PRINT SPACE(52):"SCHEDULED THROUGH : ":PAYDATE
+   PRINT "DIVISION : ":DIV.OWNER:SPACE(37):"SCHEDULED THROUGH : ":PAYDATE
+* T20269^
+   PRINT
+   PRINT HD3
+   PRINT HD4
+   LINE.COUNT = 7
+   RETURN
+99999
+   PRINTER OFF
+  IF (TRIM(ERRMSG) # "") THEN
+       STATUS = RBO.setProperty('','ServerStatus','E')
+       STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+  END ELSE
+       STATUS = RBO.setProperty('','ServerStatus','')
+       STATUS = RBO.setProperty('','ServerMessage','')
+  END 
+END

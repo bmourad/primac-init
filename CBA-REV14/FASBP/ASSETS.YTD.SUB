@@ -1,0 +1,279 @@
+  SUBROUTINE ASSETS.YTD.SUB
+*COPY>CPYLIB>COM1
+*COPY>FAS.CPYLIB>COM.ASSETS
+*********************************************************************
+* REVISION    - [08.1]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - FASBP
+* PROGRAM     - ASSETS.YTD.SUB
+* BY          - Ziad Yamout, Vercom Software, Inc.
+* DATE        - 09/25/88
+* DESCRIPTION - Fixed Assets Maintenance Program
+*T22589 stefanie 03/20/1998 * Asset deprec. fields don't update inquiry
+*                             amounts.
+*T21907 stefanie 03/24/1998 * Put in cls changes to change 12 to
+*                             NUM.PERIODS.
+*T25631 alex 02/13/2001 * Add a validation rule to entering installation
+*                         cost to not be below the cumulation
+*                         depreciation amount.
+*********************************************************************
+*
+*COPY>FAS.CPYLIB>ASSETS
+*COPY>FAS.CPYLIB>ASSETS.DEPR
+*COPY>FAS.CPYLIB>DEP.MAST
+*COPY>PMC.CPYLIB>FISCAL
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+  MAT SYSCOM.REC =  ""; SYS.TYPE = 2
+  FIRST = 1  ;* T22589 <
+*
+*--- Initialization
+*
+  IF ONFILE THEN
+    FOR BT = 1 TO 2
+      ADJ = (BT - 1) * 10
+      SCV.REC(7+ADJ)<ECD.SCRN.NO> = AST.YTD.DEPR<1,BT>
+      SCV.REC(8+ADJ)<ECD.SCRN.NO> = AST.CURR.DEPR<1,BT>
+      SCV.REC(9+ADJ)<ECD.SCRN.NO> = OCONV(AST.YTD.UNITS<1,BT>,"MD0,Z")
+      SCV.REC(10+ADJ)<ECD.SCRN.NO> = OCONV(AST.CUM.UNITS<1,BT>,"MD0,Z")
+      SCV.REC(11+ADJ)<ECD.SCRN.NO> = AST.UNIT.COST<1,BT>
+      SCV.REC(12+ADJ)<ECD.SCRN.NO> = AST.SALVAGE<1,BT>
+      SCV.REC(13+ADJ)<ECD.SCRN.NO> = AST.INSTALL.AMT<1,BT>
+      SCV.REC(14+ADJ)<ECD.SCRN.NO> = AST.CUM.DEPR<1,BT>
+      SCV.REC(15+ADJ)<ECD.SCRN.NO> = AST.BONUS.DEPR<1,BT>
+      GOSUB 8000
+    NEXT BT
+    ECD.ACTION = 3; CALL SCRN.EDIT
+  END ELSE
+    ECD.ACTION = 3; CALL SCRN.EDIT
+    FOR BT = 1 TO 2 WHILE ECD.RET.VALUE # "END"
+      ADJ = (BT - 1) * 10
+      FOR OPTION = 1 TO 3 WHILE ECD.RET.VALUE # "END"
+        ON OPTION GOSUB 1100,1200,1300
+      NEXT OPTION
+    NEXT BT
+    IF ECD.RET.VALUE = "END" THEN
+      ONFILE = "END"; GOTO 99999
+    END
+    FOR BT = 1 TO 2
+      CALL ASSETS.DEPR.SUB
+    NEXT BT
+  END
+*
+*--- Prompt line prompt
+  FIRST = 0     ;* T22589 <
+  LOOP
+    IF ONFILE THEN ECD.NUM = 28 ELSE ECD.NUM = 27
+    SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ""
+    ECD.ACTION = 4; CALL SCRN.EDIT
+    OPTION = ECD.RET.VALUE
+    BEGIN CASE
+      CASE OPTION = "END" OR OPTION = "E" OR OPTION = ""
+        OPTION = "END"
+      CASE OPTION = "H" AND ONFILE
+        ECD.SCRN.NO = ECD.SCRN.NO + 1
+        ECD.ACTION = 2; CALL SCRN.EDIT
+        SCV.REC(1)<ECD.SCRN.NO> = SCV.REC(1)<ECD.SCRN.NO-1>
+        SCV.REC(2)<ECD.SCRN.NO> = SCV.REC(2)<ECD.SCRN.NO-1>
+        CALL ASSETS.HIST.SUB
+        ECD.SCRN.NO = ECD.SCRN.NO - 1
+        ECD.ACTION = 2; CALL SCRN.EDIT
+        ECD.ACTION = 3; CALL SCRN.EDIT
+      CASE OPTION = "A" AND ONFILE < 2
+        ERRMSG = "The Asset must be filed before using this option"
+        GOSUB 91000
+      CASE OPTION = "A"
+        IF AST.FISCAL.MON # "" THEN
+          ECD.NUM = 29; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ""
+          ECD.ACTION = 4; CALL SCRN.EDIT
+          IF ECD.RET.VALUE # "Y" THEN GOTO 539
+        END
+        AST.ID = CONO:AST.NUM
+        YR = FR.CURR.PER[1,4]
+        MN = FR.CURR.PER[5,2]
+        B.T = "B"; B.T<2> = "T"
+        P.Y = "X"
+*T21907 v            FOR I = 2 TO 12
+        FOR I = 2 TO NUM.PERIODS
+*T21907 ^
+          P.Y<1,I> = "X"
+        NEXT I
+        AST.CUM.UNITS = ""; AST.YTD.UNITS = ""
+        AST.CUM.DEPR = ""; AST.YTD.DEPR = ""
+        AST.BONUS.DEPR = ""; AST.CURR.DEPR = ""
+        FOR BT = 1 TO 2
+          MATREAD DEPR.REC FROM DEP.MAST, CONO:AST.DEPR.METHOD<1,BT> ELSE
+            MAT DEPR.REC = ""
+            DEPR.ACQ.PER = P.Y
+            DEPR.SVC.PER = P.Y
+            DEPR.DSP.PER = P.Y
+          END
+          BEGIN CASE
+            CASE AST.FST.PER<1,BT>[1,4] = YR
+              V.P = DEPR.ACQ.PER
+            CASE AST.DEPR.METHOD<1,BT>[1,1] = "U"
+              V.P = DEPR.SVC.PER
+            CASE AST.LST.PER<1,BT>[1,4] = YR
+              V.P = DEPR.DSP.PER
+            CASE 1
+              V.P = DEPR.SVC.PER
+          END CASE
+*T21907 v               IF MN = 12 OR V.P<1,MN> # "" THEN
+          IF MN = NUM.PERIODS OR V.P<1,MN> # "" THEN
+*T21907 ^
+            ST.MN = 1
+            LIMIT = MN - 1
+            FOR M = LIMIT TO 1 STEP -1 WHILE ST.MN = 1
+              IF V.P<1,M> # "" THEN ST.MN = M + 1
+            NEXT M
+          END ELSE
+            ST.MN = 0
+          END
+          FYR = AST.FST.PER<1,BT>[1,4]
+          LIMIT = YR - 1
+          FOR Y = FYR TO LIMIT
+            MATREAD ADR.REC FROM ASSETS.DEPR, AST.ID:"U":Y THEN
+*T21907 v                     FOR M = 1 TO 12
+              FOR M = 1 TO NUM.PERIODS
+*T21907 ^
+                AST.CUM.UNITS<1,BT> = AST.CUM.UNITS<1,BT> + ADR.REC(M)
+              NEXT M
+            END
+            MATREAD ADR.REC FROM ASSETS.DEPR, AST.ID:B.T<BT>:Y THEN
+*T21907 v                     FOR M = 1 TO 12
+              FOR M = 1 TO NUM.PERIODS
+*                        AST.BONUS.DEPR<1,BT> = AST.BONUS.DEPR<1,BT> + ADR.REC(M+12)
+                AST.BONUS.DEPR<1,BT> = AST.BONUS.DEPR<1,BT> + ADR.REC(M+NUM.PERIODS)
+                AST.CUM.DEPR<1,BT> = AST.CUM.DEPR<1,BT> + ADR.REC(M)
+*                        AST.CURR.DEPR<1,BT> = AST.CURR.DEPR<1,BT> + ADR.REC(M) + ADR.REC(M+12)
+                AST.CURR.DEPR<1,BT> = AST.CURR.DEPR<1,BT> + ADR.REC(M) + ADR.REC(M+NUM.PERIODS)
+*T21907 ^
+              NEXT M
+            END
+          NEXT Y
+          IF ST.MN > 1 THEN
+            LIMIT = ST.MN - 1
+            MATREAD ADR.REC FROM ASSETS.DEPR, AST.ID:"U":YR THEN
+              FOR M = 1 TO LIMIT
+                AST.CUM.UNITS<1,BT> = AST.CUM.UNITS<1,BT> + ADR.REC(M)
+                AST.YTD.UNITS<1,BT> = AST.YTD.UNITS<1,BT> + ADR.REC(M)
+              NEXT M
+            END
+            MATREAD ADR.REC FROM ASSETS.DEPR, AST.ID:B.T<BT>:YR THEN
+              FOR M = 1 TO LIMIT
+*T21907 >                        AST.BONUS.DEPR<1,BT> = AST.BONUS.DEPR<1,BT> + ADR.REC(M+12)
+                AST.BONUS.DEPR<1,BT> = AST.BONUS.DEPR<1,BT> + ADR.REC(M+NUM.PERIODS)
+                AST.CUM.DEPR<1,BT> = AST.CUM.DEPR<1,BT> + ADR.REC(M)
+*T21907 >                        AST.YTD.DEPR<1,BT> = ADR.REC(M+12) + ADR.REC(M)
+                AST.YTD.DEPR<1,BT> = ADR.REC(M+NUM.PERIODS) + ADR.REC(M)
+              NEXT M
+            END
+          END
+          IF AST.CUM.UNITS<1,BT> > AST.UNITS<1,BT> THEN
+            AST.CUM.UNITS<1,BT> = AST.UNITS<1,BT>
+          END
+          IF AST.YTD.UNITS<1,BT> > AST.UNITS<1,BT> THEN
+            AST.YTD.UNITS<1,BT> = AST.UNITS<1,BT>
+          END
+          ADJ = (BT - 1) * 10
+          SCV.REC(7+ADJ)<ECD.SCRN.NO> = AST.YTD.DEPR<1,BT>
+          SCV.REC(8+ADJ)<ECD.SCRN.NO> = AST.CURR.DEPR<1,BT>
+          SCV.REC(9+ADJ)<ECD.SCRN.NO> = OCONV(AST.YTD.UNITS<1,BT>,"MD0,Z")
+          SCV.REC(10+ADJ)<ECD.SCRN.NO> = OCONV(AST.CUM.UNITS<1,BT>,"MD0,Z")
+          SCV.REC(14+ADJ)<ECD.SCRN.NO> = AST.CUM.DEPR<1,BT>
+          SCV.REC(15+ADJ)<ECD.SCRN.NO> = AST.BONUS.DEPR<1,BT>
+          GOSUB 8000
+        NEXT BT
+        ECD.ACTION = 3; CALL SCRN.EDIT
+539*
+      CASE NOT(NUM(OPTION))
+        ERRMSG = "*** Invalid selection ***"; GOSUB 91000
+      CASE OPTION > 0 AND OPTION < 4
+        BT = 1; ADJ = 0
+        ON OPTION GOSUB 1100,1200,1300
+      CASE OPTION > 3 AND OPTION < 7
+        BT = 2; ADJ = 10
+        OPTION = OPTION - 3
+        ON OPTION GOSUB 1100,1200,1300
+      CASE 1
+        ERRMSG = "*** Out of range ***"; GOSUB 91000
+    END CASE
+  WHILE OPTION # "END" DO REPEAT
+  GOTO 99999
+*
+*--- Cost per unit (TAX)
+1100 IF AST.DEPR.METHOD<1,BT>[1,1] # "U" THEN GOTO 1109
+  ECD.NUM = 11 + ADJ
+  IF AST.UNIT.COST<1,1> # "" AND AST.UNIT.COST<1,BT> = "" THEN
+    ECD.DEFAULT = AST.UNIT.COST<1,1>
+  END
+  ECD.ACTION = 4; CALL SCRN.EDIT
+  IF ECD.RET.VALUE = "END" THEN GOTO 1109
+  AST.UNIT.COST<1,BT> = ECD.RET.VALUE
+1109 RETURN
+*
+*--- Salvage value (TAX)
+1200 ECD.NUM = 12 + ADJ
+  IF AST.SALVAGE<1,1> # "" AND AST.SALVAGE<1,BT> = "" THEN
+    ECD.DEFAULT = AST.SALVAGE<1,1>
+  END
+  ECD.ACTION = 4; CALL SCRN.EDIT
+  IF ECD.RET.VALUE # "END" THEN
+    AST.SALVAGE<1,BT> = ECD.RET.VALUE
+*T22589 v         IF ONFILE THEN
+    IF ONFILE OR NOT(FIRST) THEN
+*T22589 ^
+      CALL ASSETS.DEPR.SUB
+    END
+  END
+  RETURN
+*
+*--- Installation cost (TAX)
+1300 ECD.NUM = 13 + ADJ
+  BEGIN CASE
+    CASE AST.INSTALL.AMT<1,BT> # ""
+    CASE AST.INSTALL.AMT<1,1> # ""
+      ECD.DEFAULT = AST.INSTALL.AMT<1,1>
+    CASE 1
+      ECD.DEFAULT = AST.INSTALL.COST
+  END CASE
+  ECD.ACTION = 4; CALL SCRN.EDIT
+  IF ECD.RET.VALUE = "END" THEN GOTO 1309
+  *T25631 v
+  IF AST.FISCAL.MON LT FR.CURR.PER THEN                                   
+    IF ECD.RET.VALUE GE AST.CUM.DEPR<1,BT> THEN                           
+      AST.INSTALL.AMT<1,BT> = ECD.RET.VALUE                               
+    END ELSE                                                              
+      ERRMSG = 'Can not change Installation Cost below Cumulative amount.'
+      GOSUB 91000                                                         
+      GOTO 1300                                                           
+    END                                                                   
+  END ELSE                                                                
+    AST.INSTALL.AMT<1,BT> = ECD.RET.VALUE                                 
+  END                                                                     
+  *T25631 ^
+  IF ONFILE THEN
+    CALL ASSETS.DEPR.SUB
+  END
+  GOSUB 8000; ECD.ACTION = 5; CALL SCRN.EDIT
+1309 RETURN
+*
+*--- Calculate net value
+8000 NET.VALUE = AST.INSTALL.AMT<1,BT>-AST.CUM.DEPR<1,BT>-AST.BONUS.DEPR<1,BT>
+  ECD.NUM = 16 + ADJ; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = NET.VALUE
+  RETURN
+*
+*--- Error message routine
+*
+91000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+* 91000 PRINT @(0,23) : ERRMSG : CL :
+*       INPUT REPLY :
+*       PRINT @(0,23) : CL :
+*       RETURN
+99999 *
+  ECD.ACTION = 99 ; CALL SCRN.EDIT
+  RETURN
+END

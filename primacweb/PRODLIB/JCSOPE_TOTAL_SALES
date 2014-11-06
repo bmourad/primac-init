@@ -1,0 +1,135 @@
+SUBROUTINE JCSOPE_TOTAL_SALES
+********************************************************************************
+*   Program name :- 
+*   Created:- 11/8/2004
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+
+$INCLUDE JCS.CPYLIB DAILY.OSP
+$INCLUDE JCS.CPYLIB WIP.LEVEL
+$INCLUDE JCS.CPYLIB CATEGORY.OSP
+$INCLUDE JCS.CPYLIB FOH.TABLE
+$INCLUDE JCS.CPYLIB JOB
+
+OPEN '','DAILY.OSP' TO DAILY.OSP ELSE ERRMSG='DAILY.OSP FILE IS MISSING';GOTO 93000
+OPEN '','CONTROL' TO CONTROL ELSE ERRMSG='CONTROL FILE IS MISSING';GOTO 93000
+OPEN '','CATEGORY.OSP' TO CATEGORY.OSP ELSE ERRMSG='CATEGORY.OSP FILE IS MISSING';GOTO 93000
+OPEN '','FOH.TABLE' TO FOH.TABLE ELSE ERRMSG='FOH.TABLE FILE IS MISSING';GOTO 93000
+OPEN '','JOB' TO JOB ELSE ERRMSG='JOB FILE IS MISSING';GOTO 93000
+
+STATUS=RBO.getProperty('','PMCProperty',PMCProperty)
+
+STATUS=RBO.getProperty('','Cono',CONO)
+STATUS=RBO.getProperty('','POTYPE',POTYPE)
+STATUS=RBO.getProperty('','CATEGORY',CATEGORY)
+STATUS=RBO.getProperty('','INVAMT',INVAMT)
+STATUS=RBO.getProperty('','JOBNO',JOBNO)
+
+VM = "ý"
+SALE_AMT=""
+
+* Insert method code here
+
+** FIRST CASE DOS.TYPE IS REQ. QTY (INPUT)
+** SECOND CASE
+* TO KNOW WLR.OS.COST OPEN WIP.LEVEL COPY LIB  THERE WLR.OS.COST VALUE AVAILBLE.
+
+   MATREAD WIP.LEVEL.REC FROM CONTROL, CONO : "WIP.LEVEL" ELSE
+      MAT WIP.LEVEL.REC=0
+      WLR.OS.COST = 2
+   END
+
+*	TO KNOW CAOS.MARKUP VALUE OPEN CATEGORY.OSP 	
+*	DOS.PRD.LINE IS CATEGORY VALUE (INPUT)
+*	DOS.GRS.AMT (INPUT)
+MARKUP = 0
+FOH_PCT = 0
+
+   MATREAD CAOS.REC FROM CATEGORY.OSP, CONO:CATEGORY THEN
+	MARKUP = CAOS.MARKUP 
+	MARKUP = MARKUP : " OK "
+	FOH_PCT = CAOS.FOH.PCT	
+   END ELSE
+      MAT CAOS.REC=''
+      ERRMSG	= "File not opened"
+      GOTO 93000
+   END
+
+** THIRD CASE CAOS.FOH.PCT , CAOS.MARKUP IS FROM CATEGORY.OSP
+*	DOS.GRS.AMT =  INVAMT (INPUT)
+ 
+** FOURTH CASE OPEN --> FOH.TABLE , JOB 
+
+	BEGIN CASE
+		CASE POTYPE="S" OR POTYPE="N"
+			SALE_AMT=0
+*			POTYPE = 1
+	       CASE WLR.OS.COST < 2
+			SALE_AMT=INT((((CAOS.MARKUP/10000)+1) * INVAMT) + .5)
+*			POTYPE = 2
+       	CASE NUM(CAOS.FOH.PCT)
+			INVAMT = INVAMT * 100
+		       SALE_AMT=INT((INVAMT * (1+ CAOS.FOH.PCT/10000)) + .5)
+       		SALE_AMT=INT((((CAOS.MARKUP/10000)+1) * SALE_AMT) + .5)
+			SALE_AMT = SALE_AMT / 100
+*			POTYPE = " INVAMT " : INVAMT : " CAOS.FOH.PCT " : CAOS.FOH.PCT 
+		CASE 1
+			MATREAD JOB.REC FROM JOB, CONO:JOBNO ELSE
+		          MAT JOB.REC=''		
+			END
+		       MATREAD FTR.REC FROM FOH.TABLE, CONO : CAOS.FOH.PCT ELSE
+		           MAT FTR.REC=''
+			END
+		       IF FTR.QTY='' THEN
+		            FOH.PCT=0
+		       END ELSE
+	       		TOT.DCOST=INVAMT
+       	 	       K=1
+
+		            LOOP
+       		        LOCATE CATEGORY IN JOB.OS.PLINE<1>,K SETTING CPTR ELSE CPTR=0
+		            WHILE CPTR DO
+       		        TOT.DCOST=TOT.DCOST + JOB.OS.DCOST<1,CPTR>
+	       	        K=CPTR + 1
+		            REPEAT
+
+	       	     FTR.CNT=COUNT(FTR.QTY,VM) + 1
+		            IF TOT.DCOST >= FTR.QTY<1,FTR.CNT> THEN
+	       	        FOH.PCT=FTR.PCT<1,FTR.CNT>
+		            END ELSE
+       		        FOH.PCT=0
+              		 FOR FPR=1 TO FTR.CNT WHILE FOH.PCT=0
+	              	 	IF TOT.DCOST <= FTR.QTY<1,FPR> THEN
+	       		          FOH.PCT=FTR.PCT<1,FPR>
+		    			END
+  		       	 NEXT FPR
+	       	     END
+		       END
+	           SALE_AMT=INT((INVAMT * (1+ FOH.PCT/10000)) + .5)
+                  SALE_AMT=INT((((CAOS.MARKUP/10000)+1) * SALE_AMT) + .5)
+*			POTYPE = 4
+		END CASE
+
+SALE_AMT = SALE_AMT * 100
+SALE_AMT = OCONV(SALE_AMT,"MD2,")
+
+STATUS = RBO.setProperty('','SALE_AMT',SALE_AMT)
+*STATUS = RBO.setProperty('','POTYPE',POTYPE)
+RETURN
+
+* End of method code
+93000*
+STATUS = RBO.setProperty('','ServerStatus',1)
+STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+RETURN
+

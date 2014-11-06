@@ -1,0 +1,1243 @@
+SUBROUTINE ORDM_REL_ORD_LINE_UPD(CONO,ORDNO,SHPNO,STATUS)
+**$INCLUDE WWINSERT RBO.H
+$INCLUDE CPYLIB COMMON1
+$INCLUDE JCS.CPYLIB COM.JCS.LINK  
+$INCLUDE ICS.CPYLIB COM.INV.MAIN  
+$INCLUDE ICS.CPYLIB COM.INV.SERIAL
+$INCLUDE JCS.CPYLIB COM.INV.STATS 
+$INCLUDE PMC.CPYLIB COM.CUST      
+$INCLUDE OPS.CPYLIB COM.ORDER     
+$INCLUDE ICS.CPYLIB COM.INV.CNV   
+$INCLUDE OPS.CPYLIB COM.OPS.LINK  
+$INCLUDE PMC.CPYLIB FISCAL
+********************************************************************
+* REVISION   -[08.1]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SOURCE       -OPSBP
+* PROGRAM      -ORDER.LINE.UPD
+* BY           -Ziad Yamout, VERCOM Software Inc.
+* DATE         -01/23/90
+* DESCRIPTION   -
+* P.S          -A work file will be required to replace ORD.DET.SUM
+*T21694 doug 03/10/1997 * Update reserves on deleted line items
+*T22165 llh 08/21/1997 * CALCULATE FNGD.STATS FGS.B.QTY CORRECTLY 
+*T24659 alex 12/10/1999 * FIX BUG TO BUILD ORDER.DETAIL RECORDS
+*                         CORRECTLY WHEN INVOLVED IN MULTIPLE SHIP TO.
+*T25338 cm 02/05/2001 * A locking problem arises when an order is called
+*                       up and that same order is then try to be used
+*                       in an AP cash receipt.
+*T25212 edvard 03/14/2001 * Update receipts tied to order whenever there
+*                           is  change in resrved qty.
+*T25684 alex 03/23/2001 * Fix prgm to update the order status from
+*                         'Complete' to 'In-Process' if the user adds
+*                         reserve quantities to the order.
+*T25720 alex 03/26/2001 * Per Lanny, change the validation rule to not
+*                         check for 'SHIPPED', it should be 'SHIP'.   
+*T26927 lross 05/19/2003 * If ORDER has been cancelled donot update the
+*                          CUST.ORD.BAL - it should be zero.
+*T27548 thompson 07/10/2003 * FIX CHANGE OF STATUS PROBLEM IF SHIPPED
+********************************************************************
+$DEFINE CUSTOMER       
+$DEFINE ORDER          
+$DEFINE ORDERDETAILINQ 
+$DEFINE JOBFNGDSTATS   
+$DEFINE INVENTORY      
+$DEFINE CATEGORY       
+$DEFINE INVWHSE        
+$DEFINE INVWHSELOC     
+$DEFINE FNGDSTATS      
+$DEFINE FNGDORDERSTATS 
+$DEFINE INVAUDITHIST 
+$DEFINE INVRECEIPTS   
+$DEFINE INVRECPWHSE  
+$DEFINE FILEVARS       
+$INCLUDE PMC.CPYLIB CUSTOMER
+$INCLUDE OPS.CPYLIB ORDER
+$INCLUDE OPS.CPYLIB ORDER.DETAIL
+$INCLUDE OPS.CPYLIB ORDER.DETAIL.INQ
+$INCLUDE OPS.CPYLIB JOB.FNGD.STATS
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB CATEGORY
+$INCLUDE ICS.CPYLIB INV.WHSE
+$INCLUDE ICS.CPYLIB INV.WHSE.LOC
+$INCLUDE ICS.CPYLIB FNGD.STATS
+$INCLUDE ICS.CPYLIB FNGD.JOB.STATS
+$INCLUDE ICS.CPYLIB FNGD.ORDER.STATS
+$INCLUDE ICS.CPYLIB INV_AUDIT_HIST
+$INCLUDE ICS.CPYLIB INV_RECEIPTS
+$INCLUDE ICS.CPYLIB INV_RECP_WHSE
+$INCLUDE CPYLIB FILE.VARS
+$INCLUDE CPYLIB CHAR
+OPEN "","JOB.FNGD.STATS" TO JOB.FNGD.STATS ELSE
+	ERRMSG = "UNABLE TO OPEN JOB.FNGD.STATS FILE"
+    	GOTO 99999
+END
+*
+   DEFFUN CALC_STK_QTY(COST.QTY,MAT INV.CNV.REC,ROND,LN)
+   OPEN.FLAG=1
+*
+   EPRT=0; GEN.SHPNO="000"
+   LOCATE GEN.SHPNO IN ORD.SHIP.TO<1>,1 SETTING ZPTR ELSE
+      ZPTR=1
+      INS GEN.SHPNO BEFORE ORD.SHIP.TO<1,1>
+   END
+   SCNT=DCOUNT(ORD.SHIP.TO,VM)
+*T26235 vIF SCNT > 20 THEN SCNT=20
+   IF SCNT > 500 THEN SCNT=500
+   BEGIN CASE
+      CASE STATUS="L" AND SHPNO="ALL"
+         GOSUB 1000
+      CASE STATUS="L"
+         GOSUB 1100
+      CASE STATUS="D"
+         GOSUB 1200
+      CASE STATUS="J"
+         GOSUB 6000
+      CASE STATUS="U"
+         GOSUB 7000
+      CASE STATUS="UL"
+         GOSUB 7000
+         GOSUB 1000
+   END CASE
+   GOTO 99999
+*
+*---- Build ORD.DET.INQ & ORD.DET.SUM
+1000 *
+   MAT ORD.DET.SUM=""
+   MAT ORD.DET.INQ=""
+   FOR S=1 TO SCNT
+      SHPNO=ORD.SHIP.TO<1,S>
+      OSD.ID=CONO:ORDNO:"!":SHPNO
+      MATREAD ORD.DET.REC FROM ORDER.DETAIL, OSD.ID ELSE
+         MAT ORD.DET.REC=""
+      END
+      GOSUB 2100
+      OSD.OLD.QTY=OSD.R.QTY
+      FOR P=1 TO PCNT
+         OSD.OLD.QTY<1,P,2>=OSD.A.QTY<1,P>
+      NEXT P
+      FOR P=1 TO ORD.DET.REC.SIZE
+         ORD.DET.SUM(P,S)=ORD.DET.REC(P)
+      NEXT P
+   NEXT S
+   GOSUB 3100
+   RETURN
+*
+*---- Build ORD.DET.INQ & ORD.DET.SUM for one ship to
+1100 *
+   LOCATE SHPNO IN ORD.SHIP.TO<1>,1 SETTING S THEN
+      FOR P=1 TO ORD.DET.REC.SIZE
+         ORD.DET.REC(P)=ORD.DET.SUM(P,S)
+      NEXT P
+      GOSUB 2100
+      IF SHPNO # GEN.SHPNO THEN
+         GOSUB 3100
+      END
+   END
+   RETURN
+*
+*---- Delete ORD.DET.INQ & ORD.DET.SUM for one ship to
+1200 *
+   LOCATE SHPNO IN ORD.SHIP.TO<1>,1 SETTING S THEN
+      FOR P=1 TO ORD.DET.REC.SIZE
+         ORD.DET.REC(P)=ORD.DET.SUM(P,S)
+      NEXT P
+      GOSUB 2200
+      IF SHPNO # GEN.SHPNO THEN
+         GOSUB 3200
+      END
+   END
+   RETURN
+*
+*--- Add a ship to
+2100 *
+   PCNT=DCOUNT(OSD.PROD,VM)
+   FOR P=1 TO PCNT
+      PTR=1
+      LOOP
+	 LOCATE OSD.PROD<1,P> IN ODQ.PROD<1>,PTR SETTING L THEN
+            IF (OSD.WHSE<1,P>=ODQ.WHSE<1,L>) AND (OSD.KIT<1,P>=ODQ.KIT<1,L>) AND (OSD.PROD.SEQ<1,P>=ODQ.PROD.SEQ<1,L>) THEN
+               ODQ.G.QTY<1,L>=ODQ.G.QTY<1,L>+OSD.G.QTY<1,P>
+               ODQ.O.QTY<1,L>=ODQ.O.QTY<1,L>+OSD.O.QTY<1,P>
+               ODQ.R.QTY<1,L>=ODQ.R.QTY<1,L>+OSD.R.QTY<1,P>
+               ODQ.A.QTY<1,L>=ODQ.A.QTY<1,L>+OSD.A.QTY<1,P>
+               ODQ.F.QTY<1,L>=ODQ.F.QTY<1,L>+OSD.F.QTY<1,P>
+               ODQ.S.QTY<1,L>=ODQ.S.QTY<1,L>+OSD.S.QTY<1,P>
+               ODQ.I.QTY<1,L>=ODQ.I.QTY<1,L>+OSD.I.QTY<1,P>
+               ODQ.AMT<1,L>=ODQ.AMT<1,L>+OSD.AMT<1,P>
+               ODQ.KIT.O.QTY<1,L>=ODQ.KIT.O.QTY<1,L>+OSD.KIT.O.QTY<1,P>
+               ODQ.KIT.R.QTY<1,L>=ODQ.KIT.R.QTY<1,L>+OSD.KIT.R.QTY<1,P>
+               ODQ.KIT.A.QTY<1,L>=ODQ.KIT.A.QTY<1,L>+OSD.KIT.A.QTY<1,P>
+               ODQ.KIT.F.QTY<1,L>=ODQ.KIT.F.QTY<1,L>+OSD.KIT.F.QTY<1,P>
+               ODQ.KIT.S.QTY<1,L>=ODQ.KIT.S.QTY<1,L>+OSD.KIT.S.QTY<1,P>
+               ODQ.KIT.I.QTY<1,L>=ODQ.KIT.I.QTY<1,L>+OSD.KIT.I.QTY<1,P>
+               ODQ.KIT.G.QTY<1,L>=ODQ.KIT.G.QTY<1,L>+OSD.KIT.G.QTY<1,P>
+               IF SHPNO # GEN.SHPNO THEN
+                  LOCATE SHPNO IN ODQ.SHIP.TO<1,L> SETTING SLOC ELSE
+                     ODQ.SHIP.TO<1,L,SLOC>=SHPNO
+                  END
+               END
+               VCNT=DCOUNT(OSD.JOB<1,P>,SVM)
+               FOR V=1 TO VCNT
+                  ODQ.JOB<1,L,-1>=OSD.JOB<1,P,V>
+                  ODQ.JOB.QTY<1,L,-1>=OSD.JOB.QTY<1,P,V>
+                  ODQ.JOB.SHPNO<1,L,-1>=SHPNO
+               NEXT V
+               QP=DCOUNT(ODQ.RECP.NO<1,L>,SVM)
+               VCNT=DCOUNT(OSD.RECP.NO<1,P>,SVM)
+               FOR V=1 TO VCNT
+                  QP=QP+1
+                  ODQ.RECP.NO<1,L,QP>=OSD.RECP.NO<1,P,V>
+                  ODQ.FI.QTY<1,L,QP>=OSD.FI.QTY<1,P,V>
+                  ODQ.FI.SHPNO<1,L,QP>=SHPNO
+                  ODQ.REL.NO<1,L,QP>=OSD.REL.NO<1,P,V>
+                  ODQ.REL.QTY<1,L,QP>=OSD.REL.QTY<1,P,V>
+                  ODQ.P.QTY<1,L,QP>=OSD.P.QTY<1,P,V>
+               NEXT V
+               PTR=0
+            END
+         END ELSE
+            ODQ.PROD<1,L>=OSD.PROD<1,P>
+            ODQ.WHSE<1,L>=OSD.WHSE<1,P>
+            ODQ.G.QTY<1,L>=OSD.G.QTY<1,P>
+            ODQ.O.QTY<1,L>=OSD.O.QTY<1,P>
+            ODQ.R.QTY<1,L>=OSD.R.QTY<1,P>
+            ODQ.A.QTY<1,L>=OSD.A.QTY<1,P>
+            ODQ.F.QTY<1,L>=OSD.F.QTY<1,P>
+            ODQ.S.QTY<1,L>=OSD.S.QTY<1,P>
+            ODQ.I.QTY<1,L>=OSD.I.QTY<1,P>
+            ODQ.PRICE<1,L>=OSD.PRICE<1,P>
+            ODQ.AMT<1,L>=OSD.AMT<1,P>
+            ODQ.KIT<1,L>=OSD.KIT<1,P>
+            ODQ.PROD.SEQ<1,L>=OSD.PROD.SEQ<1,P>
+            ODQ.BOM.NUM<1,L>=OSD.BOM.NUM<1,P>
+            IF SHPNO # GEN.SHPNO THEN
+               ODQ.SHIP.TO<1,L>=SHPNO
+            END
+            ODQ.JOB<1,L>=OSD.JOB<1,P>
+            ODQ.JOB.QTY<1,L>=OSD.JOB.QTY<1,P>
+            VCNT=DCOUNT(ODQ.JOB<1,L>,SVM)
+            FOR V=1 TO VCNT
+               ODQ.JOB.SHPNO<1,L,V>=SHPNO
+            NEXT V
+            ODQ.RECP.NO<1,L>=OSD.RECP.NO<1,P>
+            ODQ.FI.QTY<1,L>=OSD.FI.QTY<1,P>
+            ODQ.REL.NO<1,L>=OSD.REL.NO<1,P>
+            ODQ.REL.QTY<1,L>=OSD.REL.QTY<1,P>
+            ODQ.P.QTY<1,L>=OSD.P.QTY<1,P>
+            ODQ.KIT.O.QTY<1,L>=OSD.KIT.O.QTY<1,P>
+            ODQ.KIT.R.QTY<1,L>=OSD.KIT.R.QTY<1,P>
+            ODQ.KIT.A.QTY<1,L>=OSD.KIT.A.QTY<1,P>
+            ODQ.KIT.F.QTY<1,L>=OSD.KIT.F.QTY<1,P>
+            ODQ.KIT.S.QTY<1,L>=OSD.KIT.S.QTY<1,P>
+            ODQ.KIT.I.QTY<1,L>=OSD.KIT.I.QTY<1,P>
+            ODQ.KIT.G.QTY<1,L>=OSD.KIT.G.QTY<1,P>
+            ODQ.KIT.PRICE<1,L>=OSD.KIT.PRICE<1,P>
+            VCNT=DCOUNT(ODQ.RECP.NO<1,L>,SVM)
+            FOR V=1 TO VCNT
+               ODQ.FI.SHPNO<1,L,V>=SHPNO
+            NEXT V
+            PTR=0
+         END
+      WHILE PTR DO
+         PTR=L+1
+      REPEAT
+   NEXT P
+   RETURN
+*
+*--- Delete a ship to
+2200 *
+   PCNT=DCOUNT(OSD.PROD,VM)
+   FOR P=1 TO PCNT
+      PTR=1
+      LOOP
+         LOCATE OSD.PROD<1,P> IN ODQ.PROD<1>,PTR SETTING L THEN
+            IF (OSD.WHSE<1,P>=ODQ.WHSE<1,L>) AND (OSD.KIT<1,P>=ODQ.KIT<1,L>) AND (OSD.PROD.SEQ<1,P>=ODQ.PROD.SEQ<1,L>) THEN
+               ODQ.G.QTY<1,L>=ODQ.G.QTY<1,L>-OSD.G.QTY<1,P>
+               ODQ.O.QTY<1,L>=ODQ.O.QTY<1,L>-OSD.O.QTY<1,P>
+               ODQ.R.QTY<1,L>=ODQ.R.QTY<1,L>-OSD.R.QTY<1,P>
+               ODQ.A.QTY<1,L>=ODQ.A.QTY<1,L>-OSD.A.QTY<1,P>
+               ODQ.F.QTY<1,L>=ODQ.F.QTY<1,L>-OSD.F.QTY<1,P>
+               ODQ.S.QTY<1,L>=ODQ.S.QTY<1,L>-OSD.S.QTY<1,P>
+               ODQ.I.QTY<1,L>=ODQ.I.QTY<1,L>-OSD.I.QTY<1,P>
+               ODQ.AMT<1,L>=ODQ.AMT<1,L>-OSD.AMT<1,P>
+               LOCATE SHPNO IN ODQ.SHIP.TO<1,L> SETTING SLOC THEN
+                  ODQ.SHIP.TO=DELETE(ODQ.SHIP.TO,1,L,SLOC)
+               END
+               LOOP
+                  LOCATE SHPNO IN ODQ.JOB.SHPNO<1,L> SETTING VLOC THEN
+                     ODQ.JOB=DELETE(ODQ.JOB,1,L,VLOC)
+                     ODQ.JOB.QTY=DELETE(ODQ.JOB.QTY,1,L,VLOC)
+                     ODQ.JOB.SHPNO=DELETE(ODQ.JOB.SHPNO,1,L,VLOC)
+                  END ELSE
+                     VLOC=0
+                  END
+               WHILE VLOC DO REPEAT
+               LOOP
+                  LOCATE SHPNO IN ODQ.FI.SHPNO<1,L> SETTING VLOC THEN
+                     ODQ.RECP.NO=DELETE(ODQ.RECP.NO,1,L,VLOC)
+                     ODQ.FI.QTY=DELETE(ODQ.FI.QTY,1,L,VLOC)
+                     ODQ.FI.SHPNO=DELETE(ODQ.FI.SHPNO,1,L,VLOC)
+                     ODQ.REL.NO=DELETE(ODQ.REL.NO,1,L,VLOC)
+                     ODQ.REL.QTY=DELETE(ODQ.REL.QTY,1,L,VLOC)
+                     ODQ.P.QTY=DELETE(ODQ.P.QTY<1,L,VLOC)
+                  END ELSE
+                     VLOC=0
+                  END
+               WHILE VLOC DO REPEAT
+               IF ODQ.JOB<1,L>="" THEN
+                  TOT=ODQ.O.QTY<1,L>+ODQ.R.QTY<1,L>
+                  TOT=TOT+ODQ.A.QTY<1,L>+ODQ.F.QTY<1,L>
+                  TOT=TOT+ODQ.S.QTY<1,L>+ODQ.I.QTY<1,L>
+                  IF TOT < 1 THEN
+                     ODQ.PROD=DELETE(ODQ.PROD,1,L,0)
+                     ODQ.WHSE=DELETE(ODQ.WHSE,1,L,0)
+                     ODQ.G.QTY=DELETE(ODQ.G.QTY,1,L,0)
+                     ODQ.O.QTY=DELETE(ODQ.O.QTY,1,L,0)
+                     ODQ.R.QTY=DELETE(ODQ.R.QTY,1,L,0)
+                     ODQ.A.QTY=DELETE(ODQ.A.QTY,1,L,0)
+                     ODQ.F.QTY=DELETE(ODQ.F.QTY,1,L,0)
+                     ODQ.S.QTY=DELETE(ODQ.S.QTY,1,L,0)
+                     ODQ.I.QTY=DELETE(ODQ.I.QTY,1,L,0)
+                     ODQ.PRICE=DELETE(ODQ.PRICE,1,L,0)
+                     ODQ.AMT=DELETE(ODQ.AMT,1,L,0)
+                     ODQ.SHIP.TO=DELETE(ODQ.SHIP.TO,1,L,0)
+                     ODQ.JOB=DELETE(ODQ.JOB,1,L,0)
+                     ODQ.JOB.QTY=DELETE(ODQ.JOB.QTY,1,L,0)
+                     ODQ.JOB.SHPNO=DELETE(ODQ.JOB.SHPNO,1,L,0)
+                     ODQ.RECP.NO=DELETE(ODQ.RECP.NO,1,L,0)
+                     ODQ.FI.QTY=DELETE(ODQ.FI.QTY,1,L,0)
+                     ODQ.FI.SHPNO=DELETE(ODQ.FI.SHPNO,1,L,0)
+                     ODQ.REL.NO=DELETE(ODQ.REL.NO,1,L,0)
+                     ODQ.P.QTY=DELETE(ODQ.P.QTY,1,L,0)
+                     ODQ.REL.QTY=DELETE(ODQ.REL.QTY,1,L,0)
+                     ODQ.KIT=DELETE(ODQ.KIT,1,L,0)
+                     ODQ.PROD.SEQ=DELETE(ODQ.PROD.SEQ,1,L,0)
+                     ODQ.BOM.NUM=DELETE(ODQ.BOM.NUM,1,L,0)
+                     ODQ.KIT.O.QTY=DELETE(ODQ.KIT.O.QTY,1,L,0)
+                     ODQ.KIT.R.QTY=DELETE(ODQ.KIT.R.QTY,1,L,0)
+                     ODQ.KIT.A.QTY=DELETE(ODQ.KIT.A.QTY,1,L,0)
+                     ODQ.KIT.F.QTY=DELETE(ODQ.KIT.F.QTY,1,L,0)
+                     ODQ.KIT.S.QTY=DELETE(ODQ.KIT.S.QTY,1,L,0)
+                     ODQ.KIT.I.QTY=DELETE(ODQ.KIT.I.QTY,1,L,0)
+                     ODQ.KIT.G.QTY=DELETE(ODQ.KIT.G.QTY,1,L,0)
+                     ODQ.KIT.PRICE=DELETE(ODQ.KIT.PRICE,1,L,0)
+                  END
+               END
+               PTR=0
+            END
+         END ELSE
+            PTR=0
+         END
+      WHILE PTR DO
+         PTR=L+1
+      REPEAT
+   NEXT P
+   RETURN
+*
+*---- Add to ship to 000
+3100 *
+   PCNT=DCOUNT(ODQ.PROD,VM)
+   FOR P=1 TO ORD.DET.REC.SIZE
+      ORD.DET.REC(P)=ORD.DET.SUM(P,ZPTR)
+   NEXT P
+   FOR P=1 TO PCNT
+      PTR=1
+      LOOP
+         LOCATE ODQ.PROD<1,P> IN OSD.PROD<1>,PTR SETTING L THEN
+*      IF ODQ.WHSE<1,P>=OSD.WHSE<1,L> THEN
+            IF (ODQ.WHSE<1,P>=OSD.WHSE<1,L>) AND (ODQ.KIT<1,P>=OSD.KIT<1,L>) AND (ODQ.PROD.SEQ<1,P>=OSD.PROD.SEQ<1,L>) THEN
+               PTR=0
+            END
+         END ELSE
+            OSD.PROD<1,L>=ODQ.PROD<1,P>
+            OSD.WHSE<1,L>=ODQ.WHSE<1,P>
+            OSD.G.QTY<1,L>=0
+            OSD.O.QTY<1,L>=0
+            OSD.R.QTY<1,L>=0
+            OSD.A.QTY<1,L>=0
+            OSD.F.QTY<1,L>=0
+            OSD.S.QTY<1,L>=0
+            OSD.I.QTY<1,L>=0
+            OSD.PRICE<1,L>=ODQ.PRICE<1,P>
+            OSD.COMMENT<1,L>=""
+            OSD.JOB<1,L>=""
+            OSD.JOB.QTY<1,L>=""
+            OSD.RECP.NO<1,L>=""
+            OSD.FI.QTY<1,L>=""
+            OSD.REL.NO<1,L>=""
+            OSD.P.QTY<1,L>=""
+            OSD.REL.QTY<1,L>=""
+            OSD.AMT<1,L>=0
+            OSD.KIT<1,L>=ODQ.KIT<1,P>
+            OSD.KIT.O.QTY<1,L>=0
+            OSD.KIT.R.QTY<1,L>=0
+            OSD.KIT.A.QTY<1,L>=0
+            OSD.KIT.F.QTY<1,L>=0
+            OSD.KIT.S.QTY<1,L>=0
+            OSD.KIT.I.QTY<1,L>=0
+            OSD.KIT.G.QTY<1,L>=0
+            OSD.KIT.PRICE<1,L>=0
+            OSD.PROD.SEQ<1,L>=ODQ.PROD.SEQ<1,P>
+            OSD.BOM.NUM<1,L>=ODQ.BOM.NUM<1,P>
+            PTR=0
+         END
+      WHILE PTR DO
+         PTR=L+1
+      REPEAT
+   NEXT P
+   FOR P=1 TO ORD.DET.REC.SIZE
+      ORD.DET.SUM(P,ZPTR)=ORD.DET.REC(P)
+   NEXT P
+   RETURN
+*
+*---- Delete from ship to 000
+3200 *
+   FOR P=1 TO ORD.DET.REC.SIZE
+      ORD.DET.REC(P)=ORD.DET.SUM(P,ZPTR)
+   NEXT P
+   PCNT=DCOUNT(OSD.PROD,VM)
+   FOR P=PCNT TO 1 STEP -1
+      PTR=1
+      LOOP
+         LOCATE OSD.PROD<1,P> IN ODQ.PROD<1>,PTR SETTING L THEN
+*      IF OSD.WHSE<1,P>=ODQ.WHSE<1,L> THEN
+            IF (OSD.WHSE<1,P>=ODQ.WHSE<1,L>) AND (OSD.KIT<1,P>=ODQ.KIT<1,L>) AND (OSD.PROD.SEQ<1,P>=ODQ.PROD.SEQ<1,L>) THEN
+               PTR=0
+            END
+         END ELSE
+            OSD.PROD=DELETE(OSD.PROD,1,P,0)
+            OSD.WHSE=DELETE(OSD.WHSE,1,P,0)
+            OSD.G.QTY=DELETE(OSD.G.QTY,1,P,0)
+            OSD.O.QTY=DELETE(OSD.O.QTY,1,P,0)
+            OSD.R.QTY=DELETE(OSD.R.QTY,1,P,0)
+            OSD.A.QTY=DELETE(OSD.A.QTY,1,P,0)
+            OSD.F.QTY=DELETE(OSD.F.QTY,1,P,0)
+            OSD.S.QTY=DELETE(OSD.S.QTY,1,P,0)
+            OSD.I.QTY=DELETE(OSD.I.QTY,1,P,0)
+            OSD.PRICE=DELETE(OSD.PRICE,1,P,0)
+            OSD.COMMENT=DELETE(OSD.COMMENT,1,P,0)
+            OSD.JOB=DELETE(OSD.JOB,1,P,0)
+            OSD.JOB.QTY=DELETE(OSD.JOB.QTY,1,P,0)
+            OSD.RECP.NO=DELETE(OSD.RECP.NO,1,P,0)
+            OSD.FI.QTY=DELETE(OSD.FI.QTY,1,P,0)
+            OSD.REL.NO=DELETE(OSD.REL.NO,1,P,0)
+            OSD.REL.QTY=DELETE(OSD.REL.QTY,1,P,0)
+            OSD.P.QTY=DELETE(OSD.P.QTY,1,P,0)
+            OSD.AMT=DELETE(OSD.AMT,1,P,0)
+            OSD.KIT=DELETE(OSD.KIT,1,P,0)
+            OSD.PROD.SEQ=DELETE(OSD.PROD.SEQ,1,P,0)
+            OSD.BOM.NUM=DELETE(OSD.BOM.NUM,1,P,0)
+            OSD.KIT.O.QTY=DELETE(OSD.KIT.O.QTY,1,P,0)
+            OSD.KIT.R.QTY=DELETE(OSD.KIT.R.QTY,1,P,0)
+            OSD.KIT.A.QTY=DELETE(OSD.KIT.A.QTY,1,P,0)
+            OSD.KIT.F.QTY=DELETE(OSD.KIT.F.QTY,1,P,0)
+            OSD.KIT.S.QTY=DELETE(OSD.KIT.S.QTY,1,P,0)
+            OSD.KIT.I.QTY=DELETE(OSD.KIT.I.QTY,1,P,0)
+            OSD.KIT.G.QTY=DELETE(OSD.KIT.S.QTY,1,P,0)
+            OSD.KIT.PRICE=DELETE(OSD.KIT.PRICE,1,P,0)
+            PTR=0
+         END
+      WHILE PTR DO
+         PTR=L+1
+      REPEAT
+   NEXT P
+   FOR P=1 TO ORD.DET.REC.SIZE
+      ORD.DET.SUM(P,ZPTR)=ORD.DET.REC(P)
+   NEXT P
+   RETURN
+*
+*---- Update OSD.JOB
+6000 *
+   FOR S=1 TO SCNT
+      FOR P=1 TO ORD.DET.REC.SIZE
+         ORD.DET.REC(P)=ORD.DET.SUM(P,S)
+      NEXT P
+      PCNT=DCOUNT(OSD.PROD,VM)
+      FOR P=1 TO PCNT
+         PTR=1
+         LOOP
+            LOCATE OSD.PROD<1,P> IN ODQ.PROD<1>,PTR SETTING L THEN
+*        IF OSD.WHSE<1,P>=ODQ.WHSE<1,L> THEN
+               IF (OSD.WHSE<1,P>=ODQ.WHSE<1,L>) AND (OSD.KIT<1,P>=ODQ.KIT<1,L>) AND (OSD.PROD.SEQ<1,P>=ODQ.PROD.SEQ<1,L>) THEN
+                  OSD.JOB<1,P>=ODQ.JOB<1,L>
+                  PTR=0
+               END
+            END ELSE
+               PTR=0
+            END
+         WHILE PTR DO
+            PTR=L+1
+         REPEAT
+      NEXT P
+      FOR P=1 TO ORD.DET.REC.SIZE
+         ORD.DET.SUM(P,S)=ORD.DET.REC(P)
+      NEXT P
+   NEXT S
+   RETURN
+*
+*---- Update the following
+7000 *
+*
+*---- CUSTOMER
+*
+   REC.LOCK=''
+   MATREAD CUST.REC FROM CUSTOMER, CONO:ORD.CUST ELSE
+      ERRMSG = "CANNOT LOCATE CUSTOMER " : ORD.CUST
+      GOTO 99999
+   END  
+   LOCATE ORDNO IN CUST.ORD.NUM<1>,1 SETTING O ELSE
+      CUST.ORD.NUM<1,O>=ORDNO
+   END
+   ORD.TOT.AMT=SUM(ODQ.AMT)
+   ORD.BALANCE=ORD.TOT.AMT-ORD.TOT.INV
+   IF ORD.BALANCE < 0 THEN ORD.BALANCE=0
+*T26927 v
+   IF ORD.STATUS<1,1> # "CANCEL" THEN
+      CUST.ORD.BAL<1,O> = ORD.BALANCE
+   END ELSE CUST.ORD.BAL<1,O> = '0'
+*T26927 ^
+   MATWRITE CUST.REC ON CUSTOMER, CONO:ORD.CUST
+   PCNT=DCOUNT(ODQ.PROD,VM)
+   FOR P=1 TO PCNT
+      PDNO=ODQ.PROD<1,P>; WHNO=ODQ.WHSE<1,P>
+      INAH.PROD=PDNO ; INAH.WHSE=WHNO ;* used only to pass it to OPS_UPDATE
+      PROD.SEQ=ODQ.PROD.SEQ<1,P>
+      MATREAD INV.REC FROM INVENTORY, CONO:PDNO ELSE
+         ODQ.R.QTY<1,P>=0
+         ODQ.A.QTY<1,P>=0
+         ODQ.F.QTY<1,P>=0
+         ODQ.S.QTY<1,P>=0
+         ODQ.I.QTY<1,P>=0
+         ODQ.SHIP.TO<1,P>=""
+         ODQ.JOB<1,P>=""
+         ODQ.JOB.SHPNO<1,P>=""
+         ODQ.JOB.QTY<1,P>=""
+         ODQ.RECP.NO<1,P>=""
+         ODQ.FI.SHPNO<1,P>=""
+         ODQ.FI.QTY<1,P>=""
+         ODQ.REL.NO<1,P>=""
+         ODQ.REL.QTY<1,P>=""
+         ODQ.P.QTY<1,P>=""
+         ODQ.PRICE<1,P>=0
+         ERRMSG="Cannot locate product # ":PDNO
+         GOTO 7029
+      END
+      MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE ELSE
+         ERRMSG="Cannot locate Product line # ":INV.LINE
+         GOTO 7029
+      END
+*
+*---- INV.WHSE
+*
+      IWH.ID=CONO:PDNO:"!":WHNO
+      MATREAD IWH.REC FROM INV.WHSE, IWH.ID THEN
+         ACTION=1 ; PERIOD='' ; SOURCE=''
+         MAT ORG.IWH.REC=MAT IWH.REC ; ERRMSG=''
+         CALL OPS_UPDATE(CONO,ORDNO,SOURCE,PERIOD,ACTION,OPEN.FLAG,ERRMSG)
+      END ELSE
+         RELEASE INV.WHSE, IWH.ID
+         ERRMSG="Cannot locate product & whse # ":IWH.ID[4,99]
+         GOTO 7029
+      END
+*
+*---- FNGD.STATS
+*
+      MATREAD FGS.REC FROM FNGD.STATS, IWH.ID ELSE
+         MAT FGS.REC=""
+      END
+      NUM.FNGD.ORDERS=DCOUNT(FGS.ORDER,VM)
+      FOUND.ORDER=0
+      FOR NFO=1 TO NUM.FNGD.ORDERS
+         IF (ORDNO=FGS.ORDER<1,NFO>) AND (ODQ.PROD.SEQ<1,P>=FGS.SEQ<1,NFO>) AND (ODQ.KIT<1,P>=FGS.KIT<1,NFO>) THEN
+            FOUND.ORDER=1
+            NUM.FNGD.ORDERS=NUM.FNGD.ORDERS+1
+            OLD.FGS.O=FGS.O.QTY<1,NFO>
+            OLD.FGS.B=FGS.B.QTY<1,NFO>
+            OLOC=NFO
+         END
+      NEXT NFO
+      IF FOUND.ORDER=0 THEN
+         OLOC=DCOUNT(FGS.ORDER,VM)+1
+         FGS.ORDER<1,OLOC>=ORDNO
+         FGS.SEQ<1,OLOC>=ODQ.PROD.SEQ<1,P>
+         FGS.KIT<1,OLOC>=ODQ.KIT<1,P>
+         FGS.O.QTY<1,OLOC>=0
+         FGS.B.QTY<1,OLOC>=0
+         OLD.FGS.O=0
+         OLD.FGS.B=0
+      END
+      FOS.ID=IWH.ID:"!":ORDNO:"!":ODQ.PROD.SEQ<1,P>:"!":ODQ.KIT<1,P>
+*
+*---- FNGD.ORDER.STATS
+*
+      MATREAD FOS.REC FROM FNGD.ORDER.STATS, FOS.ID ELSE
+         MAT FOS.REC=""
+      END
+      OLD.RESV=0; OLD.ORD=0; OLD.BACK=0
+      RESV.QTY=SUM(ODQ.FI.QTY<1,P>)-SUM(FOS.FI.QTY)
+      RESV.QTYS=""; FCNT=DCOUNT(ODQ.RECP.NO<1,P>,SVM)
+      FOR F = 1 TO FCNT  
+         LOCATE ODQ.RECP.NO<1,P,F> IN IWH.RECP.NO<1> SETTING RPOS ELSE NULL
+*    RESV.QTYS<ODQ.RECP.NO<1,P,F>+1> = RESV.QTYS<ODQ.RECP.NO<1,P,F>+1> + ODQ.FI.QTY<1,P,F>
+         RESV.QTYS<RPOS+1> +=ODQ.FI.QTY<1,P,F>
+      NEXT F
+$INCLUDE ICSBP FNGD.RESV.SUB
+      IF ERRMSG # "" THEN
+         *GOSUB 91000
+      END
+      FCNT=DCOUNT(FOS.RECP.NO,VM)
+      FOR F=1 TO FCNT
+         FNO=FOS.RECP.NO<1,F>
+         TOT.R.QTY=FOS.FI.QTY<1,F>; FPTR=1
+         LOOP
+            LOCATE FNO IN ODQ.RECP.NO<1,P>,FPTR SETTING FL THEN
+               BEGIN CASE
+                  CASE TOT.R.QTY >=ODQ.FI.QTY<1,P,FL>
+                     TOT.R.QTY=TOT.R.QTY-ODQ.FI.QTY<1,P,FL>
+                     FPTR=FL+1
+                  CASE TOT.R.QTY > 0
+                     ODQ.FI.QTY<1,P,FL>=TOT.R.QTY
+                     TOT.R.QTY=0
+                     FPTR=FL+1
+                  CASE 1
+                     ODQ.RECP.NO=DELETE(ODQ.RECP.NO,1,P,FL)
+                     ODQ.FI.QTY=DELETE(ODQ.FI.QTY,1,P,FL)
+                     ODQ.FI.SHPNO=DELETE(ODQ.FI.SHPNO,1,P,FL)
+                     ODQ.REL.NO=DELETE(ODQ.REL.NO,1,P,FL)
+                     ODQ.P.QTY=DELETE(ODQ.P.QTY,1,P,FL)
+                     ODQ.REL.QTY=DELETE(ODQ.REL.QTY,1,P,FL)
+               END CASE
+            END ELSE
+               FL=0
+            END
+         WHILE FL DO REPEAT
+         IF TOT.R.QTY > 0 THEN
+            FPTR=1
+            LOOP
+               LOCATE FNO IN ODQ.RECP.NO<1,P>,FPTR SETTING FL THEN
+                  IF ODQ.FI.SHPNO<1,P,FL>=GEN.SHPNO THEN
+                     ODQ.FI.QTY<1,P,FL>=ODQ.FI.QTY<1,P,FL>+TOT.R.QTY
+                     FL=0
+                  END
+               END ELSE
+                  INS FNO BEFORE ODQ.RECP.NO<1,P,1>
+                  INS TOT.R.QTY BEFORE ODQ.FI.QTY<1,P,1>
+                  INS GEN.SHPNO BEFORE ODQ.FI.SHPNO<1,P,1>
+                  FL=0
+               END
+            WHILE FL DO
+               FPTR=FL+1
+            REPEAT
+         END
+         ODQ.R.QTY<1,P>=SUM(ODQ.FI.QTY<1,P>)
+      NEXT F
+      IF CATG.TRACK.QOH="Y" THEN
+         ACTION=2 ; SOURCE="O"
+         CALL OPS_UPDATE(CONO,ORDNO,SOURCE,PERIOD,ACTION,OPEN.FLAG,ERRMSG)
+         ACTION=3
+         CALL OPS_UPDATE(CONO,ORDNO,SOURCE,PERIOD,ACTION,OPEN.FLAG,ERRMSG)
+*    MATWRITE IWH.REC ON INV.WHSE, IWH.ID
+      END ELSE
+         RELEASE INV.WHSE, IWH.ID
+      END
+      JOBNOS=""; ALOC.QTYS=""; ALOC.PTRS=""
+      JCNT=DCOUNT(ODQ.JOB<1,P>,SVM)
+      FOR J=1 TO JCNT
+         LOCATE ODQ.JOB<1,P,J> IN JOBNOS,1 SETTING JL THEN
+            ALOC.QTYS<JL>=ALOC.QTYS<JL>+ODQ.JOB.QTY<1,P,J>
+            ALOC.PTRS<JL,-1>=J
+         END ELSE
+            JOBNOS<JL>=ODQ.JOB<1,P,J>
+            ALOC.QTYS<JL>=ODQ.JOB.QTY<1,P,J>
+            ALOC.PTRS<JL>=J
+         END
+      NEXT J
+      JLCNT=DCOUNT(JOBNOS,AM)
+      FOR JL=1 TO JLCNT
+         JOBNO=JOBNOS<JL>
+*
+*---- JOB.FNGD.STATS
+*
+         MATREAD JFS.REC FROM JOB.FNGD.STATS, CONO:JOBNO THEN
+            PTR=1
+            LOOP
+               LOCATE PDNO IN JFS.PROD<1>,PTR SETTING PLOC THEN
+                  IF WHNO=JFS.WHSE<1,PLOC> THEN
+                     PTR=0
+                  END
+               END ELSE
+                  PLOC=0; PTR=0
+               END
+            WHILE PTR DO
+               PTR=PLOC+1
+            REPEAT
+         END ELSE
+            PLOC=0
+         END
+         IF NOT(PLOC) THEN
+            RELEASE JOB.FNGD.STATS, CONO:JOBNO
+            FOR I=1 TO JCNT
+               ODQ.JOB.QTY<1,P,I>=0
+            NEXT I
+            GOTO 7019
+         END
+         LOCATE ORDNO IN JFS.ORDER<1,PLOC>,1 SETTING JOL ELSE
+            JFS.ORDER<1,PLOC,JOL>=ORDNO
+            JFS.ORD.QTY<1,PLOC,JOL>=0
+         END
+*
+*---- FNGD.JOB.STATS
+*
+         FJS.ID=IWH.ID:"!":JOBNO
+         MATREAD FJS.REC FROM FNGD.JOB.STATS, FJS.ID ELSE
+            MAT FJS.REC=""
+            FJS.CUST=ORD.CUST
+            FJS.DATE=ORD.DATE
+         END
+         FJS.M.QTY=JFS.M.QTY<1,PLOC>
+         FJS.F.QTY=JFS.F.QTY<1,PLOC>
+         FJS.S.QTY=JFS.S.QTY<1,PLOC>
+         LOCATE ORDNO IN FJS.ORD<1>,1 SETTING OJL ELSE
+            FJS.ORD<1,OJL>=ORDNO
+            FJS.ORD.QTY<1,OJL>=JFS.ORD.QTY<1,PLOC,JOL>
+         END
+         ALOC.QTY=ALOC.QTYS<JL>-FJS.ORD.QTY<1,OJL>
+         IF ALOC.QTY < 0 THEN
+            FJS.ORD.QTY<1,OJL>=FJS.ORD.QTY<1,OJL>+ALOC.QTY
+            IF FJS.ORD.QTY<1,OJL> < 0 THEN FJS.ORD.QTY<1,OJL>=0
+         END ELSE
+            AVL.A.QTY=JFS.M.QTY<1,PLOC>-JFS.F.QTY<1,PLOC>-JFS.A.QTY<1,PLOC>
+            BEGIN CASE
+               CASE AVL.A.QTY < 1
+                  AVL.A.QTY=0
+               CASE AVL.A.QTY > ALOC.QTY
+                  AVL.A.QTY=ALOC.QTY
+            END CASE
+            FJS.ORD.QTY<1,OJL>=FJS.ORD.QTY<1,OJL>+AVL.A.QTY
+         END
+         JFS.ORD.QTY<1,PLOC,JOL>=FJS.ORD.QTY<1,OJL>
+         IF FJS.ORD.QTY<1,OJL> > 0 THEN
+            LOCATE JOBNO IN ORD.JOB<1>,1 SETTING OJ ELSE
+               ORD.JOB<1,OJ>=JOBNO
+            END
+         END
+         TOT.A.QTY=FJS.ORD.QTY<1,OJL>
+         GSJL=0; JACNT=DCOUNT(ALOC.PTRS<JL>,VM)
+         FOR JA=1 TO JACNT
+            J=ALOC.PTRS<JL,JA>
+            BEGIN CASE
+               CASE GEN.SHPNO=ODQ.JOB.SHPNO<1,P,J>
+                  GSJL=J
+                  ODQ.JOB.QTY<1,P,J>=0
+               CASE TOT.A.QTY >=ODQ.JOB.QTY<1,P,J>
+                  TOT.A.QTY=TOT.A.QTY-ODQ.JOB.QTY<1,P,J>
+               CASE TOT.A.QTY > 0
+                  ODQ.JOB.QTY<1,P,J>=TOT.A.QTY
+                  TOT.A.QTY=0
+               CASE 1
+                  ODQ.JOB.QTY<1,P,J>=0
+            END CASE
+         NEXT JA
+         IF TOT.A.QTY > 0 THEN
+            LIMIT=SCNT
+            FOR SJ=2 TO LIMIT
+               FOR PJ=1 TO ORD.DET.REC.SIZE
+                  ORD.DET.REC(PJ)=ORD.DET.SUM(PJ,SJ)
+               NEXT PJ
+               PTR=1
+               LOOP
+                  LOCATE PDNO IN OSD.PROD<1>,PTR SETTING PL THEN
+* Changed the position of OSD... from 'P' to 'PL'; the Order.Detail rec
+* were not being assigned with the job # on mulitple ship to.
+*
+                     IF (OSD.WHSE<1,PL>=ODQ.WHSE<1,PL>) AND (OSD.KIT<1,PL>=ODQ.KIT<1,PL>) AND (OSD.PROD.SEQ<1,PL>=ODQ.PROD.SEQ<1,PL>) THEN
+                        BO.QTY=OSD.O.QTY<1,PL>-OSD.R.QTY<1,PL>-OSD.A.QTY<1,PL>-OSD.S.QTY<1,PL>
+                        PTR=0
+                     END
+                  END ELSE
+                     BO.QTY=0; PTR=0
+                  END
+               WHILE PTR DO
+                  PTR=PL+1
+               REPEAT
+               SNO=ORD.SHIP.TO<1,SJ>
+               BEGIN CASE
+                  CASE BO.QTY < 1
+                  CASE TOT.A.QTY >=BO.QTY
+                     TOT.A.QTY=TOT.A.QTY-BO.QTY
+                     IF TOT.A.QTY < 1 THEN LIMIT=0
+                     NCNT=DCOUNT(ODQ.JOB<1,P>,SVM)+1
+                     ODQ.JOB<1,P,NCNT>=JOBNO
+                     ODQ.JOB.QTY<1,P,NCNT>=BO.QTY
+                     ODQ.JOB.SHPNO<1,P,NCNT>=SNO
+                  CASE TOT.A.QTY > 0
+                     NCNT=DCOUNT(ODQ.JOB<1,P>,SVM)+1
+                     ODQ.JOB<1,P,NCNT>=JOBNO
+                     ODQ.JOB.QTY<1,P,NCNT>=TOT.A.QTY
+                     ODQ.JOB.SHPNO<1,P,NCNT>=SNO
+                     TOT.A.QTY=0; LIMIT=0
+               END CASE
+            NEXT SJ
+            IF TOT.A.QTY > 0 THEN
+               IF GSJL THEN
+                  ODQ.JOB.QTY<1,P,GSJL>=ODQ.JOB.QTY<1,P,GSJL>+TOT.A.QTY
+               END ELSE
+                  NCNT=DCOUNT(ODQ.JOB<1,P>,SVM)+1
+                  ODQ.JOB<1,P,NCNT>=JOBNO
+                  ODQ.JOB.QTY<1,P,NCNT>=TOT.A.QTY
+                  ODQ.JOB.SHPNO<1,P,NCNT>=GEN.SHPNO
+               END
+            END
+         END
+         ODQ.A.QTY<1,P>=SUM(ODQ.JOB.QTY<1,P>)
+         IF ODQ.A.QTY<1,P> <> FJS.ORD.QTY<1,OJL> THEN
+         END
+         FJS.A.QTY=SUM(FJS.ORD.QTY)
+         IF FJS.ORD.QTY<1,OJL> < 1 THEN
+            FJS.ORD=DELETE(FJS.ORD,1,OJL,0)
+            FJS.ORD.QTY=DELETE(FJS.ORD.QTY,1,OJL,0)
+            JFS.ORDER=DELETE(JFS.ORDER,1,PLOC,JOL)
+            JFS.ORD.QTY=DELETE(JFS.ORD.QTY,1,PLOC,JOL)
+         END
+         JFS.A.QTY<1,PLOC>=FJS.A.QTY
+         MATWRITE JFS.REC ON JOB.FNGD.STATS, CONO:JOBNO
+         IF FJS.M.QTY+FJS.A.QTY+FJS.F.QTY=0 THEN
+            LOCATE JOBNO IN FGS.JOB<1>,1 SETTING JLOC THEN
+               FGS.JOB=DELETE(FGS.JOB,1,JLOC,0)
+               FGS.M.QTY=DELETE(FGS.M.QTY,1,JLOC,0)
+               FGS.A.QTY=DELETE(FGS.A.QTY,1,JLOC,0)
+            END
+            DELETE FNGD.JOB.STATS, FJS.ID
+         END ELSE
+            LOCATE JOBNO IN FGS.JOB<1>,1 SETTING JLOC ELSE
+               FGS.JOB<1,JLOC>=JOBNO
+            END
+            FGS.M.QTY<1,JLOC>=JFS.M.QTY<1,PLOC>-JFS.F.QTY<1,PLOC>
+            IF FGS.M.QTY<1,JLOC> < 0 THEN FGS.M.QTY<1,JLOC>=0
+            FGS.A.QTY<1,JLOC>=JFS.A.QTY<1,PLOC>
+            MATWRITE FJS.REC ON FNGD.JOB.STATS, FJS.ID
+         END
+7019 *
+      NEXT JL
+      FOS.O.QTY=ODQ.G.QTY<1,P>
+      FOS.A.QTY=ODQ.A.QTY<1,P>
+      FOS.F.QTY=ODQ.F.QTY<1,P>
+      FOS.S.QTY=ODQ.S.QTY<1,P>
+      FOS.JOB=""; FOS.JOB.QTY=""
+      JCNT=DCOUNT(ODQ.JOB<1,P>,SVM)
+      FOR J=JCNT TO 1 STEP -1
+         IF ODQ.JOB.QTY<1,P,J> < 1 THEN
+            ODQ.JOB=DELETE(ODQ.JOB,1,P,J)
+            ODQ.JOB.QTY=DELETE(ODQ.JOB.QTY,1,P,J)
+            ODQ.JOB.SHPNO=DELETE(ODQ.JOB.SHPNO,1,P,J)
+         END ELSE
+            LOCATE ODQ.JOB<1,P,J> IN FOS.JOB<1>,1 SETTING JL THEN
+               FOS.JOB.QTY<1,JL>=FOS.JOB.QTY<1,JL>+ODQ.JOB.QTY<1,P,J>
+            END ELSE
+               INS ODQ.JOB<1,P,J> BEFORE FOS.JOB<1,1>
+               INS ODQ.JOB.QTY<1,P,J> BEFORE FOS.JOB.QTY<1,1>
+            END
+         END
+      NEXT J
+*
+*
+      IF FOS.A.QTY+FOS.R.QTY < 1 AND FOS.S.QTY >=FOS.O.QTY THEN
+         DELETE FNGD.ORDER.STATS, FOS.ID
+         FGS.ORDER=DELETE(FGS.ORDER,1,OLOC,0)
+         FGS.O.QTY=DELETE(FGS.O.QTY,1,OLOC,0)
+         FGS.B.QTY=DELETE(FGS.B.QTY,1,OLOC,0)
+         FGS.SEQ=DELETE(FGS.SEQ,1,OLOC,0)
+         FGS.KIT=DELETE(FGS.KIT,1,OLOC,0)
+      END ELSE
+         FGS.O.QTY<1,OLOC>=(ODQ.O.QTY<1,P>-ODQ.S.QTY<1,P>)
+         IF FGS.O.QTY<1,OLOC> < 0 THEN
+            FGS.O.QTY<1,OLOC>=0
+            FGS.B.QTY<1,OLOC>=0
+         END ELSE
+            FGS.B.QTY<1,OLOC>=(ODQ.O.QTY<1,P>-ODQ.R.QTY<1,P>-ODQ.A.QTY<1,P>)
+            IF FGS.B.QTY<1,OLOC> < 0 THEN FGS.B.QTY<1,OLOC>=0
+         END
+         FOS.CUST=ORD.CUST
+         FOS.DATE=ORD.DATE
+         MATWRITE FOS.REC ON FNGD.ORDER.STATS, FOS.ID
+      END
+      IF FGS.ORDER # "" OR FGS.JOB # "" THEN
+         MATWRITE FGS.REC ON FNGD.STATS, IWH.ID
+      END ELSE
+         DELETE FNGD.STATS, IWH.ID
+      END
+7029 *
+   NEXT P
+*
+*---- ORDER.DETAIL
+*
+******************************************************************
+* Process "000" first, then distribute excess Resv & Aloc to the *
+* remaining ship to if they require it.                          *
+******************************************************************
+   ORD.ID=CONO:ORDNO
+   FCNT=DCOUNT(ODQ.RECP.NO<1,P>,SVM)
+   JCNT=DCOUNT(ODQ.JOB<1,P>,SVM)
+   FOR S=SCNT TO 1 STEP -1
+      SNO=ORD.SHIP.TO<1,S>
+      OSD.ID=ORD.ID :"!": SNO
+      MATREAD ORD.DET.REC FROM ORDER.DETAIL, OSD.ID ELSE
+         MAT ORD.DET.REC=""
+      END
+      HOLD.OSD.RECP.NO=OSD.RECP.NO
+      HOLD.OSD.FI.QTY=OSD.FI.QTY
+      OLD.PROD=""; OLD.WHSE=""
+      OLD.SEQ=""; OLD.KIT=""; *T21694
+      OLD.RECP.NO=""; OLD.FI.QTY=""; *T21694
+      PCNT=DCOUNT(OSD.PROD,VM)
+      FOR P=1 TO PCNT
+         LCNT=DCOUNT(OSD.RECP.NO<1,P>,SVM)
+         FOR L=1 TO LCNT
+            OLD.PROD<-1>=OSD.PROD<1,P>
+            OLD.WHSE<-1>=OSD.WHSE<1,P>
+            OLD.SEQ<-1>=OSD.PROD.SEQ<1,P>; *T21694
+            OLD.KIT<-1>=OSD.KIT<1,P>; *T21694
+            OLD.RECP.NO<-1>=OSD.RECP.NO<1,P,L>; *T21694
+            OLD.FI.QTY<-1>=OSD.FI.QTY<1,P,L>; *T21694
+         NEXT L
+      NEXT P
+      FOR P=1 TO ORD.DET.REC.SIZE
+         ORD.DET.REC(P)=ORD.DET.SUM(P,S)
+      NEXT P
+      OSD.OLD.QTY=""
+      PCNT=DCOUNT(OSD.PROD,VM)
+      FOR P=1 TO PCNT
+         OSD.RECP.NO<1,P>=""
+         OSD.FI.QTY<1,P>=""
+         OSD.REL.NO<1,P>=""
+         OSD.REL.QTY<1,P>=""
+         OSD.P.QTY<1,P>=""
+         OSD.JOB<1,P>=""
+         OSD.JOB.QTY<1,P>=""
+         PTR=1
+         LOOP
+            LOCATE OSD.PROD<1,P> IN ODQ.PROD<1>,PTR SETTING L THEN
+               IF (OSD.WHSE<1,P>=ODQ.WHSE<1,L>) AND (OSD.KIT<1,P>=ODQ.KIT<1,L>) AND (OSD.PROD.SEQ<1,P>=ODQ.PROD.SEQ<1,L>) THEN
+                  PTR=0
+               END
+            END ELSE
+               PTR=0
+               L=0
+            END
+         WHILE PTR DO
+            PTR=L+1
+         REPEAT
+         IF L < 1 THEN GOTO 7077
+         PTR=1
+         LOOP
+            LOCATE SNO IN ODQ.FI.SHPNO<1,L>,PTR SETTING F THEN
+               IF ODQ.FI.QTY<1,L,F> > 0 THEN
+                  FNO=ODQ.RECP.NO<1,L,F>; RELNO=ODQ.REL.NO<1,L,F>
+                  IF RELNO='' THEN
+                     LOCATE FNO IN OSD.RECP.NO<1,P>,1 SETTING FL THEN
+                        OSD.FI.QTY<1,P,FL>=OSD.FI.QTY<1,P,FL>+ODQ.FI.QTY<1,L,F>
+                        OSD.P.QTY<1,P,FL>=OSD.P.QTY<1,P,FL>+ODQ.P.QTY<1,L,F>
+                     END ELSE
+                        OSD.RECP.NO<1,P,FL>=FNO
+                        OSD.FI.QTY<1,P,FL>=ODQ.FI.QTY<1,L,F>
+                        OSD.P.QTY<1,P,FL>=ODQ.P.QTY<1,L,F>
+                     END
+                  END ELSE
+                     INS FNO BEFORE OSD.RECP.NO<1,P,1>
+                     INS ODQ.FI.QTY<1,L,F> BEFORE OSD.FI.QTY<1,P,1>
+                     INS ODQ.REL.NO<1,L,F> BEFORE OSD.REL.NO<1,P,1>
+                     INS ODQ.P.QTY<1,L,F> BEFORE OSD.P.QTY<1,P,1>
+                     INS ODQ.REL.QTY<1,L,F> BEFORE OSD.REL.QTY<1,P,1>
+                  END
+               END
+            END ELSE
+               PTR=0
+            END
+         WHILE PTR DO
+            PTR=F+1
+         REPEAT
+         PTR=1
+         LOOP
+            LOCATE SNO IN ODQ.JOB.SHPNO<1,L>,PTR SETTING J THEN
+               IF ODQ.JOB.QTY<1,L,J> > 0 THEN
+                  JOBNO=ODQ.JOB<1,L,J>
+                  LOCATE JOBNO IN OSD.JOB<1,P>,1 SETTING JL THEN
+                     OSD.JOB.QTY<1,P,JL>=OSD.JOB.QTY<1,P,JL>+ODQ.JOB.QTY<1,L,J>
+                  END ELSE
+                     OSD.JOB<1,P,JL>=JOBNO
+                     OSD.JOB.QTY<1,P,JL>=ODQ.JOB.QTY<1,L,J>
+                  END
+               END
+            END ELSE
+               PTR=0
+            END
+         WHILE PTR DO
+            PTR=J+1
+         REPEAT
+7077 *
+         OSD.R.QTY<1,P>=SUM(OSD.FI.QTY<1,P>)
+         OSD.A.QTY<1,P>=SUM(OSD.JOB.QTY<1,P>)
+         LCNT=DCOUNT(OSD.RECP.NO<1,P>,SVM)
+         FOR L=1 TO LCNT
+            OPTR=1
+            LOOP
+               LOCATE OSD.PROD<1,P> IN OLD.PROD,OPTR SETTING RLOC THEN
+                  IF (OSD.WHSE<1,P>=OLD.WHSE<RLOC>) AND (OSD.KIT<1,P>=OLD.KIT<RLOC>) AND (OSD.PROD.SEQ<1,P>=OLD.SEQ<RLOC>) THEN
+                     OLD.PROD=DELETE(OLD.PROD,RLOC,0,0)
+                     OLD.WHSE=DELETE(OLD.WHSE,RLOC,0,0)
+                     OLD.SEQ=DELETE(OLD.SEQ,RLOC,0,0)
+                     OLD.KIT=DELETE(OLD.KIT,RLOC,0,0)
+                     OLD.RECP.NO=DELETE(OLD.RECP.NO,RLOC,0,0)
+                     OLD.FI.QTY=DELETE(OLD.FI.QTY,RLOC,0,0)
+                     OPTR=1
+                  END ELSE
+                     OPTR=RLOC+1
+                  END
+               END ELSE
+                  OPTR=0
+               END
+            WHILE OPTR DO REPEAT
+         NEXT L
+      NEXT P
+*
+*--- REMOVE RESERVES FROM DELETED LINE ITEMS
+*
+      LCNT=DCOUNT(OLD.PROD,AM)
+      FOR L=1 TO LCNT
+         OPTR=1
+         LOOP
+            LOCATE OLD.PROD<L> IN ODQ.PROD<1>,OPTR SETTING FND THEN
+               IF (ODQ.WHSE<1,FND>=OLD.WHSE<L>) AND (ODQ.KIT<1,FND>=OLD.KIT<L>) AND (ODQ.PROD.SEQ<1,FND>=OLD.SEQ<L>) THEN
+                  OPTR=0
+               END ELSE
+                  OPTR=FND+1
+               END
+            END ELSE
+               OPTR=0; FND=0
+            END
+         WHILE OPTR DO REPEAT
+         IF NOT(FND) THEN
+            MATREAD INV.REC FROM INVENTORY, CONO:OLD.PROD<L> ELSE MAT INV.REC=""
+            FGS.ID=CONO:OLD.PROD<L>:"!":OLD.WHSE<L>
+            MATREAD IWH.REC FROM INV.WHSE, FGS.ID THEN
+               INAH.PROD=OLD.PROD<L> ; INAH.WHSE=OLD.WHSE<L>
+               ACTION=1 ; SOURCE='' ; PERIOD='' ; ERRMSG=''
+               MAT ORG.IWH.REC=MAT IWH.REC                         
+               CALL OPS_UPDATE(CONO,ORDNO,SOURCE,PERIOD,ACTION,OPEN.FLAG,ERRMSG)
+            END ELSE
+               RELEASE INV.WHSE, FGS.ID
+               ERRMSG="Cannot locate product & whse # ":FGS.ID[4,99]
+               GOTO 7089
+            END
+            FOS.ID=FGS.ID:"!":ORDNO:"!":OLD.SEQ<L>:"!":OLD.KIT<L>
+            MATREAD FOS.REC FROM FNGD.ORDER.STATS, FOS.ID THEN
+               MATREAD FGS.REC FROM FNGD.STATS, FGS.ID ELSE MAT FGS.REC=""
+               RESV.QTYS=""
+               FCNT=DCOUNT(FOS.RECP.NO,VM)
+               FOR F=1 TO FCNT
+                  ;* why is fifo position increased by 1 ????
+                  LOCATE FOS.RECP.NO<1,F> IN IWH.RECP.NO<1> SETTING RPOS ELSE NULL 
+                  IF OLD.RECP.NO<L>=FOS.RECP.NO<1,F> THEN
+*              RESV.QTYS<FOS.RECP.NO<1,F>+1>=FOS.FI.QTY<1,F>-OLD.FI.QTY<L>
+                     RESV.QTYS<RPOS+1>=FOS.FI.QTY<1,F>-OLD.FI.QTY<L>
+                  END ELSE
+*              RESV.QTYS<FOS.RECP.NO<1,F>+1>=FOS.FI.QTY<1,F>
+                     RESV.QTYS<RPOS+1>=FOS.FI.QTY<1,F>
+                  END
+               NEXT F
+$INCLUDE ICSBP FNGD.RESV.SUB
+               IF ERRMSG # "" THEN
+                  *GOSUB 91000
+               END
+               IF FOS.A.QTY+FOS.R.QTY < 1 AND FOS.S.QTY >=FOS.O.QTY THEN
+                  DELETE FNGD.ORDER.STATS, FOS.ID
+                  FGS.ORDER=DELETE(FGS.ORDER,1,OLOC,0)
+                  FGS.O.QTY=DELETE(FGS.O.QTY,1,OLOC,0)
+                  FGS.B.QTY=DELETE(FGS.B.QTY,1,OLOC,0)
+                  FGS.SEQ=DELETE(FGS.SEQ,1,OLOC,0)
+                  FGS.KIT=DELETE(FGS.KIT,1,OLOC,0)
+               END
+               IF FGS.ORDER # "" OR FGS.JOB # "" THEN
+                  MATWRITE FGS.REC ON FNGD.STATS, FGS.ID
+               END ELSE
+                  DELETE FNGD.STATS, FGS.ID
+               END
+            END ELSE
+               RELEASE FNGD.ORDER.STATS, FOS.ID
+            END
+            ACTION=2; SOURCE="O"
+            CALL OPS_UPDATE(CONO,ORDNO,SOURCE,PERIOD,ACTION,OPEN.FLAG,ERRMSG)
+            ACTION=3
+            CALL OPS_UPDATE(CONO,ORDNO,SOURCE,PERIOD,ACTION,OPEN.FLAG,ERRMSG)
+*      MATWRITE IWH.REC ON INV.WHSE, FGS.ID
+         END
+7089 *
+      NEXT L
+      IF PCNT < 1 THEN
+         DELETE ORDER.DETAIL, OSD.ID
+         ORD.SHIP.TO=DELETE(ORD.SHIP.TO,1,S,0)
+      END ELSE
+         MATWRITE ORD.DET.REC ON ORDER.DETAIL, OSD.ID
+      END
+*
+*** CHECK RECEIPTS
+*
+      LINE.CNT=DCOUNT(HOLD.OSD.RECP.NO<1>,VM)
+      FOR L=1 TO LINE.CNT
+         RCNT=DCOUNT(HOLD.OSD.RECP.NO<1,L>,SVM)
+         FOR R=1 TO RCNT
+            OLD.RECP.NO=HOLD.OSD.RECP.NO<1,L,R>
+            ;*locate all original fifo buckets to see
+            ;*if quantities were reduced or completely 
+            ;* released.
+            LOCATE OLD.RECP.NO IN OSD.RECP.NO<1,L> SETTING FIPOS THEN
+               OLD.FI.QTY=HOLD.OSD.FI.QTY<1,L,R>
+               ;* if old qty  is different then new qty
+               ;* then difference needs to be moved to
+               ;* stock (*FNGD*)
+               IF OLD.FI.QTY # OSD.FI.QTY<1,L,R> THEN
+                  DIFF=OLD.FI.QTY-OSD.FI.QTY<1,L,R>
+                  INVR.ID=CONO:OLD.RECP.NO
+                  MATREAD INVR.REC FROM INV_RECEIPTS,INVR.ID THEN
+                     BEG.POS=0
+                     DONE=0
+                     LOOP
+                        BEG.POS+=1
+                     UNTIL DONE DO
+                        LOCATE ORDNO IN INVR.ORDER<1>,BEG.POS SETTING OPOS THEN
+                           IF SNO=INVR.SHIP.TO<1,OPOS> THEN
+                              INVR.ORD.QTY<1,OPOS>-=DIFF
+                              INVR.ORD.SQTY<1,OPOS>=CALC_STK_QTY(INVR.ORD.QTY<1,OPOS>,MAT INV.CNV.REC,'.5','')
+                              LOCATE "*FNGD*" IN INVR.ORDER<1> SETTING FNGDPOS THEN
+                                 INVR.ORD.QTY<1,FNGDPOS> +=DIFF
+                                 INVR.ORD.SQTY<1,FNGDPOS>=CALC_STK_QTY(INVR.ORD.QTY<1,FNGDPOS>,MAT INV.CNV.REC,'.5','')
+                                 MATWRITE INVR.REC ON INV_RECEIPTS,INVR.ID
+                              END
+                              DONE=1
+                           END
+                        END
+                     REPEAT
+                  END
+               END
+            END ELSE
+               INVR.ID=CONO:OLD.RECP.NO
+               MATREAD INVR.REC FROM INV_RECEIPTS,INVR.ID THEN
+                  BEG.POS=0
+                  DONE=0
+                  LOOP
+                     BEG.POS +=1
+                  UNTIL DONE DO
+                     LOCATE SNO IN INVR.SHIP.TO<1>,BEG.POS SETTING SHPPOS THEN
+                        IF ORDNO=INVR.ORDER<1,SHPPOS> THEN
+                           DONE=1
+                           INVR.ORDER<1,SHPPOS>="*FNGD*"
+                           INVR.SHIP.TO<1,SHPPOS>=""
+                           INVR.PICK.FLG<1,SHPPOS>=""
+                           MATWRITE INVR.REC ON INV_RECEIPTS,INVR.ID
+                        END
+                     END
+                  REPEAT
+               END
+            END
+         NEXT R
+      NEXT L
+      LINE.CNT=DCOUNT(OSD.RECP.NO,VM)
+      FOR L=1 TO LINE.CNT
+         RCNT=DCOUNT(OSD.RECP.NO<1,L>,SVM)
+         FOR R=1 TO RCNT
+            LOCATE OSD.RECP.NO<1,L,R> IN HOLD.OSD.RECP.NO<1,L> SETTING HPOS ELSE
+               DIFF=-(OSD.FI.QTY<1,L,R>)
+               INVR.ID=CONO:OSD.RECP.NO<1,L,R>
+               MATREAD INVR.REC FROM INV_RECEIPTS,INVR.ID THEN
+                  BEG.POS=0
+                  DONE=0
+                  LOOP
+                     BEG.POS+=1
+                  UNTIL DONE DO
+                     LOCATE ORDNO IN INVR.ORDER<1>,BEG.POS SETTING OPOS THEN
+                        IF SNO=INVR.SHIP.TO<1,OPOS> THEN
+                           DONE=1
+                        END ELSE
+                           INVR.ORDER<1,OPOS>=ORDNO
+                           INVR.ORD.QTY<1,OPOS>-=DIFF
+                           INVR.ORD.SQTY<1,OPOS>=CALC_STK_QTY(INVR.ORD.QTY<1,OPOS>,MAT INV.CNV.REC,'.5','')
+                           INVR.SHIP.TO<1,OPOS>=SNO
+                           INVR.PICK.FLG<1,OPOS>=''
+                           INVR.UN.SALE<1,OPOS>=OSD.PRICE<1,L,R>
+                           DONE=1
+                        END
+                     END ELSE
+                        INVR.ORDER<1,OPOS>=ORDNO
+                        INVR.ORD.QTY<1,OPOS>-=DIFF
+                        INVR.ORD.SQTY<1,OPOS>=CALC_STK_QTY(INVR.ORD.QTY<1,OPOS>,MAT INV.CNV.REC,'.5','')
+                        INVR.SHIP.TO<1,OPOS>=SNO
+                        INVR.PICK.FLG<1,OPOS>=''
+                        INVR.UN.SALE<1,OPOS>=OSD.PRICE<1,L,R>
+                        LOCATE "*FNGD*" IN INVR.ORDER<1> SETTING FNGDPOS THEN
+                           INVR.ORD.QTY<1,FNGDPOS> +=DIFF
+                           INVR.ORD.SQTY<1,FNGDPOS>=CALC_STK_QTY(INVR.ORD.QTY<1,FNGDPOS>,MAT INV.CNV.REC,'.5','')
+                           MATWRITE INVR.REC ON INV_RECEIPTS,INVR.ID
+                        END
+                        DONE=1
+                     END
+                  REPEAT
+               END
+            END
+         NEXT R
+      NEXT L
+   NEXT S
+   SCNT=DCOUNT(ORD.SHIP.TO,VM)
+*T26235 vIF SCNT > 20 THEN SCNT=20
+   IF SCNT > 500 THEN SCNT=500
+*
+*---- ORDER
+*
+   IF ORD.STATUS="NEW" THEN
+      ORD.STATUS=""; ORD.STAT.DATE=""
+   END
+   BEGIN CASE
+      CASE ORD.STATUS<1,1>="CLOSED"
+      CASE ORD.STATUS<1,1>="CANCEL"
+      CASE SUM(ODQ.G.QTY)-SUM(ODQ.R.QTY)-SUM(ODQ.A.QTY)-SUM(ODQ.S.QTY) > 0
+         IF ORD.STATUS<1,1> # "ON-HOLD" THEN
+            INS "ON-HOLD" BEFORE ORD.STATUS<1,1>
+            INS DATE() BEFORE ORD.STAT.DATE<1,1>
+         END
+      CASE ORD.STATUS<1,1>="COMPLETE"
+         ;*T25684 v Since we allow user to maintenance an order after it has 
+         ;*         been complete; the order should not remained completed if
+         ;*         reserve quantity exist.                                  
+         IF SUM(ODQ.R.QTY) > 0 THEN                                         
+            INS "IN-PROCESS" BEFORE ORD.STATUS<1,1>                          
+            INS DATE() BEFORE ORD.STAT.DATE<1,1>                             
+         END                                                                
+      CASE ORD.STATUS<1,1>="INVOICED"
+      CASE ORD.STATUS<1,1>="SHIP"
+      CASE SUM(ODQ.R.QTY)+SUM(ODQ.S.QTY)+SUM(ODQ.F.QTY)+SUM(ODQ.I.QTY) < 1
+         IF ORD.STATUS<1,1> # "OPEN" THEN
+            INS "OPEN" BEFORE ORD.STATUS<1,1>
+            INS DATE() BEFORE ORD.STAT.DATE<1,1>
+         END
+      CASE ORD.STATUS<1,1> # "IN-PROCESS"
+*T27548
+         LOCATE "SHIP" IN ORD.STATUS<1>,1 SETTING FND ELSE FND = 0
+         IF FND = 0 THEN
+            INS "IN-PROCESS" BEFORE ORD.STATUS<1,1>
+         END ELSE
+            INS "SHIP" BEFORE ORD.STATUS<1,1>
+         END
+*T27548
+         INS DATE() BEFORE ORD.STAT.DATE<1,1>
+   END CASE
+   IF STATUS="UL" THEN
+      MATWRITE ORD.REC ON ORDER, ORD.ID
+   END ELSE
+      MATWRITE ORD.REC ON ORDER, ORD.ID
+   END
+7099 *
+   RETURN
+*
+99999 *
+   RETURN
+END

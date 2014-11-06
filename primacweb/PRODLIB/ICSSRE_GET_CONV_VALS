@@ -1,0 +1,154 @@
+SUBROUTINE ICSSRE_GET_CONV_VALS
+********************************************************************************
+*   Program name :- ICSSRE_GET_CONV_VALS
+*   Created:- 7/11/2006
+*   Programmer :- Suhail Hussain S
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB CATEGORY
+$INCLUDE ICS.CPYLIB INV.CNV
+$INCLUDE ICS.CPYLIB INV.WHSE
+
+* Insert method code here
+PRODS = ''
+WHSE = ''
+
+OPEN '','CATEGORY' TO CATEGORY ELSE ERRMSG = 'CATEGORY FILE IS MISSING'; GOTO 93000
+OPEN '','INVENTORY' TO INVENTORY ELSE ERRMSG = 'INVENTORY FILE IS MISSING'; GOTO 93000
+OPEN '','INV.WHSE' TO INV.WHSE ELSE ERRMSG = 'INV.WHSE FILE IS MISSING'; GOTO 93000
+
+DEFFUN UOM.CONVERSION.CALC(QTY,FROM.UOM,TO.UOM,WGT,WIDTH,ROND,LN)
+
+STATUS = RBO.getProperty('','PMCProperty',PMCPROPERTY)
+STATUS = RBO.getProperty('','ProdNum',PRODS)
+STATUS = RBO.getProperty('','Whse',WHSE)
+STATUS = RBO.getProperty("","TEMPVAL",MODE)
+
+  STATUS = RBO.getProperty('','TotOnOrd',TotOnOrd)
+  STATUS = RBO.getProperty('','TotCancel',TotCancel)
+  STATUS = RBO.getProperty('','QtyOpen',QtyOpen)
+  STATUS = RBO.getProperty('','TotReceived',TotReceived)
+  STATUS = RBO.getProperty('','QtyOnHand',ONHANDLIST)
+
+IF MODE = "W" THEN
+  STATUS = RBO.getProperty('','PrevReceved',PrevReceved)
+  STATUS = RBO.getProperty('','GrosPrice',GrosPrice)
+  STATUS = RBO.getProperty('','UnitFlg',PO_UNIT_FLG)
+*  STATUS = RBO.getProperty('','PDT_QtyOnHand',BALANCE)
+END
+
+CONO = PMCPROPERTY<1,4>
+IP = ''
+  FOR X = 1 TO DCOUNT(PRODS,@VM)
+    MATREAD INV.REC FROM INVENTORY, CONO : PRODS<1,X> THEN    
+      $INCLUDE ICSBP INV.UM.CNV
+      MATREAD CATG.REC FROM CATEGORY,CONO:INV.LINE THEN
+        IF CATG.TRK.LVL # 'S' THEN
+          IF MODE = "R" THEN
+            TotOnOrd<1,X>    = OCONV(INT(((TotOnOrd<1,X>/ICR.DV1<1>) *ICR.MT1<1>)/ICR.DV2<1> + .5),ICR.CNV)
+            TotCancel<1,X>   = OCONV(INT(((TotCancel<1,X>/ICR.DV1<1>) *ICR.MT1<1>)/ICR.DV2<1> + .5),ICR.CNV)
+            QtyOpen<1,X>     = OCONV(INT(((QtyOpen<1,X>/ICR.DV1<1>) *ICR.MT1<1>)/ICR.DV2<1> + .5),ICR.CNV)
+            TotReceived<1,X> = OCONV(INT(((TotReceived<1,X>/ICR.DV1<1>) *ICR.MT1<1>)/ICR.DV2<1> + .5),ICR.CNV)
+            ONHANDLIST<1,X> = OCONV(INT(((ONHANDLIST<1,X>/ICR.DV1<1>) *ICR.MT1<1>)/ICR.DV2<1> + .5),ICR.CNV)
+          END
+          IF MODE = "W" THEN
+            GOSUB DETERMINE.QTY.TYPE
+            IP = TotOnOrd<1,X>
+            GOSUB CALC_VAL
+            TotOnOrd<1,X> = VALUE
+            IP = TotCancel<1,X>
+            GOSUB CALC_VAL
+            TotCancel<1,X> = VALUE
+            IP = QtyOpen<1,X>
+            GOSUB CALC_VAL
+            QtyOpen<1,X> = VALUE
+            IP = TotReceived<1,X>
+            GOSUB CALC_VAL
+            TotReceived<1,X> = VALUE
+            IP = PrevReceved<1,X>
+            GOSUB CALC_VAL
+            PrevReceved<1,X> = VALUE
+
+            *TotReceived<1,X> = TotReceived<1,X> + PrevReceved<1,X>
+
+            GrosPrice<1,X>   = ICONV(GrosPrice<1,X>,"MD4")
+*          TotOnOrd<1,X>    = ICONV((TotOnOrd<1,X> * 10),ICR.CNV)
+*          TotCancel<1,X>   = ICONV((TotCancel<1,X> * 10),ICR.CNV)
+*          QtyOpen<1,X>     = ICONV((QtyOpen<1,X> * 10),ICR.CNV)
+*          TotReceived<1,X> = ICONV((TotReceived<1,X> * 10),ICR.CNV)
+*          PrevReceved<1,X> = ICONV((PrevReceved<1,X> * 10),ICR.CNV)
+          END
+        END
+      END  
+    END
+  NEXT
+
+  STATUS = RBO.setProperty('','TotOnOrd',TotOnOrd)
+  STATUS = RBO.setProperty('','TotCancel',TotCancel)
+  STATUS = RBO.setProperty('','QtyOpen',QtyOpen)
+  STATUS = RBO.setProperty('','TotReceived',TotReceived)
+  STATUS = RBO.setProperty('','QtyOnHand',ONHANDLIST)
+IF MODE = "W" THEN
+  STATUS = RBO.setProperty('','PrevReceved',PrevReceved)
+  STATUS = RBO.setProperty('','GrosPrice',GrosPrice)
+END
+RETURN
+
+
+DETERMINE.QTY.TYPE:
+   BEGIN CASE
+      CASE INV.UNIT<1,2>='SHT' AND INV.UNIT<1,3>='LBS'
+         ICR.DV1=INV.M.WT; ICR.MT1=1; ICR.DV2=1; ICR.CNV="MD0"
+      CASE INV.UNIT<1,2>='PC' AND INV.UNIT<1,3>='MSI'
+         ICR.DV1=INV.PAP.WIDTH/100; ICR.MT1=10; ICR.DV2=1; ICR.CNV="MD0"         
+         IF PO_UNIT_FLG<1,X>='FT' THEN
+            ICR.DV1<2>=INV.PAP.WIDTH/100; ICR.MT1<2>=100; ICR.DV2<2>=12
+         END
+      CASE INV.UNIT<1,2>='FT' AND INV.UNIT<1,3>='MSI'
+         ICR.DV1=INV.PAP.WIDTH/100; ICR.MT1=100; ICR.DV2=12; ICR.CNV="MD0"
+         IF PO_UNIT_FLG<1,X>='PC' THEN
+            ICR.DV1<2>=INV.PAP.WIDTH/100; ICR.MT1<2>=10; ICR.DV2<2>=1
+         END
+      CASE 1
+         ICR.DV1=10; ICR.MT1=1; ICR.DV2=1; ICR.CNV="MD2"
+   END CASE
+RETURN
+
+* convert the required value into its internal format
+CALC_VAL:
+   VALUE = ''
+   IF ICR.CNV = "MD0" THEN
+      VALUE = ICONV(IP,"MD0")
+   END ELSE
+      VALUE = ICONV(IP,"MD2")
+   END
+   IF PO_UNIT_FLG<1,X> # INV.UNIT THEN 
+      FROM.UOM = PO_UNIT_FLG<1,X>
+      TO.UOM = INV.UNIT   
+      STK.QTY = UOM.CONVERSION.CALC(VALUE,FROM.UOM,TO.UOM,INV.M.WT,INV.PAP.WIDTH,'','')
+      VALUE = UOM.CONVERSION.CALC(STK.QTY,TO.UOM,FROM.UOM,INV.M.WT,INV.PAP.WIDTH,'','')
+      IF ICR.CNV = "MD0" THEN
+         VALUE = ICONV(((VALUE/ICR.MT1)*ICR.DV1)*ICR.DV2,'MD0')
+      END
+      IF ICR.CNV = "MD0" THEN
+         IF ICR.CNV # "MD0" THEN
+            VALUE = VALUE * 10
+         END
+      END ELSE
+         VALUE = VALUE * ICR.MT1 * 10
+      END
+   END ELSE
+      IF ICR.CNV<1,1> = "MD0" THEN
+         VALUE = ICONV(((VALUE/ICR.MT1)*ICR.DV1)*ICR.DV2,'MD0')
+      END ELSE
+         VALUE = VALUE * 10
+      END
+   END
+RETURN
+
+93000 
+  STATUS = RBO.setProperty('','ServerStatus',1)        
+  STATUS = RBO.setProperty('','ServerMessage',ERRMSG) 
+RETURN
+

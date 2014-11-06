@@ -1,0 +1,171 @@
+SUBROUTINE JCSREVM_TRANSREVCOST
+********************************************************************************
+*   Program name :- JCSREVM_TRANSREVCOST
+*   Created:- 7/4/2007
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE JCS.CPYLIB JOB	
+$INCLUDE CPYLIB CHAR
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB INV.CNV
+ERRMSG = ''
+STATUS = RBO.getProperty('','PMCProperty',PMCProperty)
+STATUS = RBO.getProperty('', 'DRV_JOB',JOB.ID)
+STATUS = RBO.getProperty('', 'DRV_TYPE',DRV.TYPE)
+
+* Insert method code here
+OPEN "","JOB" TO JOB ELSE
+   ERRMSG = "CANNOT OPEN JOB.REC FILE"
+	GOTO 93000
+  END
+OPEN "","INVENTORY" TO INVENTORY ELSE
+   ERRMSG = "CANNOT OPEN INVENTORY FILE"
+	GOTO 93000
+  END
+OPEN "","CONTROL" TO CONTROL ELSE
+   ERRMSG = "CANNOT OPEN CONTROL FILE"
+	GOTO 93000
+  END
+
+CONO = PMCProperty<1,4>
+WRITE "CONO  ":CONO:"~":JOB.ID:"~":DRV.TYPE ON CONTROL,'01ICR'
+DLINES = ""
+ICR.CNV = ""
+ICR.MT1 = ""
+ICR.DV1 = ""
+ICR.DV2 = ""
+ MATREAD JOB.REC FROM JOB, CONO : JOB.ID ELSE
+            ERRMSG = "CANNOT LOCATE JOB - " : JOB.ID
+            GOTO 93000
+ END
+* LB.ID = CONO:DRV.JOB:"!":DEPT.NO<DLN>:"!":CCTR.NO<DLN>:"!"
+BEGIN CASE
+     CASE DRV.TYPE = "LB"
+         CNT = COUNT(JOB.LB.DEPT,VM) + (JOB.LB.DEPT # "")
+         FOR I = 1 TO CNT
+            IF JOB.LB.COST<1,I> > 0 THEN
+               DLINES = DLINES + 1
+               DEPT.NO<DLINES> = JOB.LB.DEPT<1,I>
+               CCTR.NO<DLINES> = JOB.LB.CCTR<1,I>
+               DEPT.ORIG<DLINES> = JOB.LB.COST<1,I>
+               ICR.CNV<1,DLINES> = "MD2"
+               DPTR<DLINES> = I
+            END
+         NEXT I
+     * CASE DRV.TYPE = "MT" AND DRV.TTYPE = "C"
+*         CNT = COUNT(JOB.MT.DEPT,VM) + (JOB.MT.DEPT # "")
+*         FOR I = 1 TO CNT
+*            IF JOB.MT.COST<1,I> > 0 THEN
+*               DLINES = DLINES + 1
+*               DEPT.NO<DLINES> = JOB.MT.DEPT<1,I>
+*               CCTR.NO<DLINES> = JOB.MT.CCTR<1,I>
+*               PROD.NO<DLINES> = JOB.MT.PROD<1,I>
+*               WHSE.NO<DLINES> = JOB.MT.WHSE<1,I>
+*               DEPT.ORIG<DLINES> = JOB.MT.COST<1,I>
+*               ICR.CNV<DLINES> = "MD2"
+*               DPTR<DLINES> = I
+*            END
+*         NEXT I
+        CASE DRV.TYPE = "MT"
+         CNT = COUNT(JOB.MT.DEPT,VM) + (JOB.MT.DEPT # "")
+WRITE "CNT ":CNT ON CONTROL,'01CNT'
+         FOR I = 1 TO CNT
+            IF JOB.MT.QTY<1,I> > 0 THEN
+               DLINES = DLINES + 1
+               DEPT.NO<DLINES> = JOB.MT.DEPT<1,I>
+               CCTR.NO<DLINES> = JOB.MT.CCTR<1,I>
+               PROD.NO<DLINES> = JOB.MT.PROD<1,I>
+               WHSE.NO<DLINES> = JOB.MT.WHSE<1,I>
+               MATREAD INV.REC FROM INVENTORY, CONO : PROD.NO<DLINES> ELSE
+                  INV.UNIT = ""; INV.M.WT = 1; INV.PAP.WIDTH = 0
+               END
+               BEGIN CASE
+                  CASE INV.UNIT<1,2> = "SHT" AND INV.UNIT<1,3> = "LBS"
+                     ICR.CNV<1,DLINES> = "MD0"; ICR.MT1<1,DLINES> = 1
+                     ICR.DV1<1,DLINES> = INV.M.WT; ICR.DV2<1,DLINES> = 1
+                  CASE INV.UNIT<1,2> = "PC" AND INV.UNIT<1,3> = "MSI"
+                     ICR.CNV<1,DLINES> = "MD0"; ICR.MT1<1,DLINES> = 10
+                     ICR.DV1<1,DLINES> = INV.PAP.WIDTH/100; ICR.DV2<1,DLINES> = 1
+                  CASE INV.UNIT<1,2> = "FT" AND INV.UNIT<1,3> = "MSI"
+                     ICR.CNV<1,DLINES> = "MD0"; ICR.MT1<1,DLINES> = 100
+                     ICR.DV1<1,DLINES> = INV.PAP.WIDTH/100; ICR.DV2<1,DLINES> = 12
+                  CASE 1
+                     ICR.CNV<1,DLINES> = "MD2"; ICR.MT1<1,DLINES> = 1
+                     ICR.DV1<1,DLINES> = 10; ICR.DV2<1,DLINES> = 1
+               END CASE
+               ICR.TYPE<1,DLINES> = INV.UNIT<1,2>
+
+               DEPT.ORIG<1,DLINES> = INT(((JOB.MT.QTY<1,I>/ICR.DV1<1,DLINES>)*ICR.MT1<1,DLINES>)/ICR.DV2<1,DLINES> + .5)
+                 IF ICR.CNV<1,DLINES> = "MD2" THEN
+                    DEPT.ORIG<1,DLINES> = OCONV(DEPT.ORIG<1,DLINES>,ICR.CNV<1,DLINES>)
+                 END
+			
+               DPTR<1,DLINES> = I
+            END
+         NEXT I
+ CASE DRV.TYPE = "OS"
+         CNT = COUNT(JOB.OS.DEPT,VM) + (JOB.OS.DEPT # "")
+         FOR I = 1 TO CNT
+            IF JOB.OS.COST<1,I> > 0 THEN
+               DLINES = DLINES + 1
+               DEPT.NO<DLINES> = JOB.OS.DEPT<1,I>
+               CCTR.NO<DLINES> = JOB.OS.CCTR<1,I>
+               PROD.NO<DLINES> = JOB.OS.PLINE<1,I>
+               DEPT.ORIG<DLINES> = JOB.OS.COST<1,I>
+               ICR.CNV<1,DLINES> = "MD2"
+               DPTR<DLINES> = I
+            END
+         NEXT I
+      CASE DRV.TYPE = "SP"
+         CNT = COUNT(JOB.SP.DEPT,VM) + (JOB.SP.DEPT # "")
+         FOR I = 1 TO CNT
+            IF JOB.SP.COST<1,I> > 0 THEN
+               DLINES = DLINES + 1
+               DEPT.NO<DLINES> = JOB.SP.DEPT<1,I>
+               CCTR.NO<DLINES> = JOB.SP.CCTR<1,I>
+               DEPT.ORIG<DLINES> = JOB.SP.COST<1,I>
+               ICR.CNV<1,DLINES> = "MD2"
+               DPTR<DLINES> = I
+            END
+         NEXT I
+      CASE DRV.TYPE = "MS"
+         CNT = COUNT(JOB.MS.DEPT,VM) + (JOB.MS.DEPT # "")
+         FOR I = 1 TO CNT
+            IF JOB.MS.COST<1,I> > 0 THEN
+               DLINES = DLINES + 1
+               DEPT.NO<DLINES> = JOB.MS.DEPT<1,I>
+               CCTR.NO<DLINES> = JOB.MS.CCTR<1,I>
+               DEPT.ORIG<DLINES> = JOB.MS.COST<1,I>
+               ICR.CNV<1,DLINES> = "MD2"
+               DPTR<DLINES> = I
+            END
+         NEXT I
+END CASE
+ICR_LIST = ICR.CNV:"~":ICR.MT1:"~":ICR.DV1:"~":ICR.DV2
+WRITE "ICR_LIST ":ICR_LIST:"!!!  ":DEPT.ORIG ON CONTROL,'01ICRLIST'
+STATUS=RBO.setProperty('','TransGridICRList',ICR_LIST)
+STATUS=RBO.setProperty('','TransGCurrQty',DEPT.ORIG)
+
+*STATUS=RBO.setProperty('','TransGridICRList',ICR.CNV:"~":ICR.MT1:"~":ICR.DV1:"~":ICR.DV2)
+
+
+
+* End of method code
+RETURN
+93000*
+  IF ERRMSG # '' THEN
+      STATUS = RBO.setProperty('', 'ServerStatus', 1)
+      STATUS = RBO.setProperty('', 'ServerMessage', ERRMSG)
+  END	
+* End of method code
+RETURN

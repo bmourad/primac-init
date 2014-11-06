@@ -1,0 +1,301 @@
+   SUBROUTINE PRINT.LASER.DOC(HOLD.FILE,DOC.IDS,PM.LIST,MAT COMP.REC,DOC.TYPE)
+********************************************************************
+* REVISION - [12.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM   - PRIMAC
+* SOURCE   - PMCBP
+* PROGRAM  - DOC.PRINT.MAIL
+* BY       - Abdullah Jibaly, COMPUTER BUSINESS ASSOCIATES
+* DATE     - 06/27/02
+*
+* DESCRIPTION
+*
+* Prints and/or mails multiple documents.
+*
+* ARGUMENTS
+*
+* HOLD.FILE  : File handle for file that contains the captured docs
+* DOC.IDS    : IDs of the docs that are contained in HOLD.FILE
+* PM.LIST    : Print/Mail info for each DOC.IDS item
+*              Format: PRINT.FLAG @SVM MAIL.FLAG
+*                  @VM BACKGROUND.IMAGE
+*                  @VM EMAIL.TO
+*                  @VM DUPLEX PAGE ; *T28253
+* COMP.REC   : Company record
+* DOC.TYPE   : Type of document:
+*              PO, OPO, MPO, JCSIVC, OPSIVC, ARSIVC, or STMT
+*
+* T28256 cmykleb 10/05/2004 * Print APS automated clearing house advice
+*                             forms on a laser printer.
+*C44159 thompson 12/14/2004 * Adjust alignment on form for ACH print.
+*T28252 thompson 12/23/2004 * Change alignment for print of invoice on
+*                             postscript.
+*********************************************************************
+*
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+*
+   OPEN 'CONTROL' TO CONTROL ELSE STOP
+   OPEN 'VOC' TO VOC ELSE STOP
+   ;*
+   ;* Initialization
+   ;*
+   DEFFUN GET_FILE_NAME(FILE_HANDLE)
+   LINEFEED = CHAR(10)
+   PAGEFEED = CHAR(12)
+   DUP.FLAG = "false"
+   ;*
+   ;* Setup system error messages
+   ;*
+   SYS.TYPE = 1
+   CALL SYSCOM(MAT SYSCOM.REC)
+   ;*
+   ;* Retreive HOLD file name
+   ;*
+   HOLD.FILE.NAME = GET_FILE_NAME(HOLD.FILE)
+   ;*
+   ;* Get USERNO: Unique id for current user
+   ;*
+   USERNO = "USERNO"
+   CALL SYSVARS.SUB(USERNO)
+   ;*
+   ;* Determine DOC.TYPE specific values
+   ;*
+   BEGIN CASE
+      CASE DOC.TYPE = 'PO' OR DOC.TYPE = 'OPO' OR DOC.TYPE = 'MPO'
+         DOC.PREFIX  = 'PO'
+         DOC.DESC    = 'Purchase Order'
+*T28253         TOP.MARGIN  = 1.9    ;* inches, top of page to address line
+*       TOP.MARGIN  = 1.5    ;* inches, top of page to address line
+         TOP.MARGIN  = 1.0    ;* inches, top of page to address line
+*C45168         BOT.MARGIN  = 1.35
+         BOT.MARGIN  = 1.40
+         BEGIN CASE
+            CASE DOC.TYPE = "OPO" 
+*         TOP.MARGIN  = 1.03    ;* inches, top of page to address line
+               TOP.MARGIN  = 3.17    ;* inches, top of page to address line
+               BOT.MARGIN  = 1.40
+               LEFT.MARGIN = 0.25
+            CASE 1
+               LEFT.MARGIN = 0.5
+         END CASE
+*T28256 v
+*T28417
+      CASE DOC.TYPE = 'BOL'
+         DOC.PREFIX  = 'BOL'
+         DOC.DESC    = 'Bill of Lading'
+         TOP.MARGIN  = .65    ;* inches, top of page to address line
+         BOT.MARGIN  = .30
+         LEFT.MARGIN = 0.25
+*T28417
+      CASE DOC.TYPE = 'ADV'
+         DOC.PREFIX = 'ADV'
+         DOC.DESC = 'Advice'
+*        TOP.MARGIN = 4.2
+*C44159         TOP.MARGIN = 4.1
+         TOP.MARGIN = 3.925 ;*C44159
+         BOT.MARGIN = 0.4
+         LEFT.MARGIN = 0.2
+*T28256 ^
+      CASE DOC.TYPE[4,3] = 'IVC'
+         DOC.PREFIX  = 'IVC'
+         DOC.DESC    = 'Invoice'
+*T28252         TOP.MARGIN  = 2.4
+         BOT.MARGIN  = 0.5
+         DUP.FLAG = "true"
+         BEGIN CASE
+            CASE DOC.TYPE = 'JCSIVC'
+*               TOP.MARGIN  = 2.275
+               TOP.MARGIN  = 3.47
+               LEFT.MARGIN = 0.30
+               BOT.MARGIN = .40
+            CASE DOC.TYPE = 'ARSIVC'
+*               TOP.MARGIN  = 2.275
+               TOP.MARGIN  = .15
+*               LEFT.MARGIN = 0.50
+               LEFT.MARGIN = 0.30
+            CASE 1
+               TOP.MARGIN  = 2.270
+               LEFT.MARGIN = 0.3
+               BOT.MARGIN = .40
+         END CASE
+   END CASE
+   ;*
+   ;* Get the script printer name
+   ;*
+   PTR = GETPTR(0)
+   AA = INDEX(PTR,'DEST',1)
+   PTR = TRIM(PTR[AA+5,99])
+   DEST = FIELD(PTR,',',1)
+   ;*
+   ;* Process all documents saved in the HOLD file
+   ;*
+   MAIL.TXT = ''
+   DOC.CNT = DCOUNT(DOC.IDS,AM)
+   FOR DOC.IDX = 1 TO DOC.CNT
+      DOC.ID = DOC.IDS<DOC.IDX>
+      DOC.HOLD.ID = DOC.PREFIX : "-" : USERNO : "-" : DOC.ID
+      ;*
+      ;* Print all docs marked for printing
+      ;*
+      DOC.BACKGROUND.IMG = PM.LIST<DOC.IDX,2>
+      ;*
+      ;* Read record and organize pagefeeds/whitespace
+      ;*
+      READ REC FROM HOLD.FILE, DOC.HOLD.ID ELSE CONTINUE
+      LINES.PER.PAGE = ''
+      GOSUB REMOVE.WHITESPACE
+      ;*
+      ;* Calculate format params based on address location
+      ;* (POs and Invoices)
+      ;*
+      ADDR.LN = 0
+      REC.CNT = DCOUNT(REC,AM)
+      FOR REC.IDX = 1 TO REC.CNT
+         REC.LINE = CHANGE(REC<REC.IDX>[1,10],PAGEFEED,'')
+         IF TRIM(REC.LINE) # '' THEN
+            ADDR.LN = REC.IDX
+            EXIT
+         END
+      NEXT REC.IDX
+      BOT.MARGIN.IDX = 1
+      IF DCOUNT(BOT.MARGIN,VM) = 2 THEN
+         ;* If there is only one page then the first page
+         ;* uses the same bottom margin as the last page
+         FIND PAGEFEED IN REC SETTING F ELSE BOT.MARGIN.IDX = 2
+      END
+      THIS.TOP.MARGIN  = TOP.MARGIN * 72  ;* Convert to points
+      THIS.BOT.MARGIN  = BOT.MARGIN<1,BOT.MARGIN.IDX> * 72
+      PAGE.HEIGHT = 11.0 * 72
+      LINE.HEIGHT = PAGE.HEIGHT - THIS.TOP.MARGIN - THIS.BOT.MARGIN
+      LINE.HEIGHT = LINE.HEIGHT / ( LINES.PER.PAGE - ADDR.LN + 1 )
+      THIS.TOP.MARGIN  = THIS.TOP.MARGIN - ((ADDR.LN-1)*LINE.HEIGHT)
+      THIS.TOP.MARGIN  = THIS.TOP.MARGIN / 72  ;* Convert back to inches
+      ;*
+      ;* Setup formatting string
+      ;*
+      FORMATSTR = ''
+      FORMATSTR<1,-1> = "TOP-MARGIN"
+      FORMATSTR<2,-1> = THIS.TOP.MARGIN
+      FORMATSTR<1,-1> = "LINE-HEIGHT"
+      FORMATSTR<2,-1> = LINE.HEIGHT
+      FORMATSTR<1,-1> = "LEFT-MARGIN"
+      FORMATSTR<2,-1> = LEFT.MARGIN
+      FORMATSTR<1,-1> = "REMOVE-EMPTY-PAGES"
+      FORMATSTR<2,-1> = "YES"
+      FORMATSTR<1,-1> = "IMAGE-FILE-PATH"
+      FORMATSTR<2,-1> = DOC.BACKGROUND.IMG
+      FORMATSTR<1,-1> = "PAGE-FORMAT"
+      FORMATSTR<2,-1> = "PORTRAIT"
+      FORMATSTR<1,-1> = "FONT-SIZE"
+      FORMATSTR<2,-1> = 11
+      FORMATSTR<1,-1> = "DUPLEX"
+      FORMATSTR<2,-1> = DUP.FLAG
+      ;*
+      ;* Convert to postscript
+      ;*
+      WRITE REC ON HOLD.FILE, DOC.HOLD.ID
+      CALL CONVERT.TO.PS(HOLD.FILE.NAME,DOC.HOLD.ID,FORMATSTR)
+      PS.PATH = HOLD.FILE.NAME:"/":DOC.HOLD.ID:".ps"
+      READ REC FROM HOLD.FILE, DOC.HOLD.ID:".ps" THEN
+         IF DOC.PREFIX = "IVC" THEN
+            PMC_GRAPHIC = FIELD(DOC.BACKGROUND.IMG,"/",1)
+            READ VOC.REC FROM VOC, PMC_GRAPHIC THEN
+               IMG.FILE.PATH = VOC.REC<2>
+               TERMS = IMG.FILE.PATH:"/termsandconditions.ps"
+            END
+            WRITE REC ON HOLD.FILE, DOC.HOLD.ID:".psx" 
+            MERGE.PS = "!gs -dNOPAUSE "
+            MERGE.PS = MERGE.PS:"-sDEVICE=pswrite "
+            MERGE.PS = MERGE.PS:"-dBATCH "
+            MERGE.PS = MERGE.PS:"-sOutputFile=":PS.PATH
+            MERGE.PS = MERGE.PS:" ":HOLD.FILE.NAME:"/":DOC.HOLD.ID:".psx"
+            MERGE.PS = MERGE.PS:" ":TERMS
+            UDTEXECUTE MERGE.PS CAPTURING JUNK
+         END
+         IF DOC.PREFIX = "BOL" THEN 
+            FOR X = 1 TO 2
+               STATEMENT = "!lp -d":DEST:" ":PS.PATH
+               UDTEXECUTE STATEMENT
+            NEXT X
+         END ELSE
+            STATEMENT = "!lp -d":DEST:" ":PS.PATH
+            UDTEXECUTE STATEMENT
+         END
+      END
+   NEXT DOC.IDX
+   SLEEP 10
+   ;*
+   ;* Delete the hold records here
+   ;*
+   FOR DOC.IDX = 1 TO DOC.CNT
+      DOC.ID = DOC.IDS<DOC.IDX>
+      DOC.HOLD.ID = DOC.PREFIX : "-" : USERNO : "-" : DOC.ID
+*     DELETE HOLD.FILE, DOC.HOLD.ID
+*     DELETE HOLD.FILE, DOC.HOLD.ID:".ps"
+*     DELETE HOLD.FILE, DOC.HOLD.ID."psx"
+   NEXT DOC.IDX
+   RETURN
+*
+REMOVE.WHITESPACE: 
+   ;*
+   ;* Remove any extra lines and pagefeeds before or after text
+   ;*
+   LOOP
+      IF TRIM(REC<1>) = '' THEN
+         DEL REC<1>
+      END ELSE IF TRIM(REC<1>) = PAGEFEED THEN
+         DEL REC<1>
+      END ELSE
+         EXIT
+      END
+   REPEAT
+   REC = INSERT(REC,1,0,0,"")
+   LOOP
+      REC.IDX = DCOUNT(REC,AM)
+      IF TRIM(REC<REC.IDX>) = '' THEN
+         DEL REC<REC.IDX>
+      END ELSE IF TRIM(REC<REC.IDX>) = PAGEFEED THEN
+         DEL REC<REC.IDX>
+      END ELSE
+         REC<REC.IDX> = CHANGE(REC<REC.IDX>,PAGEFEED,'')
+         EXIT
+      END
+   REPEAT
+   ;*
+   ;* Find the number of lines per page
+   ;* Find the extra whitespace
+   ;*
+   KEEP.BLANK.LINES = 1
+   DEL.LINES = ''
+   REC.CNT = DCOUNT(REC,AM)
+   FOR REC.IDX = 1 TO REC.CNT
+      BEGIN CASE
+         CASE TRIM(REC<REC.IDX>) = PAGEFEED
+            KEEP.BLANK.LINES = 0
+            IF LINES.PER.PAGE = '' THEN LINES.PER.PAGE = REC.IDX - 1
+         CASE TRIM(REC<REC.IDX>) # ''
+            KEEP.BLANK.LINES = 1
+      END CASE
+      IF KEEP.BLANK.LINES THEN CONTINUE
+      IF TRIM(REC<REC.IDX>) = '' THEN DEL.LINES<-1> = REC.IDX
+   NEXT REC.IDX
+   ;*
+   ;* Delete the extra whitespace
+   ;*
+   DEL.CNT = DCOUNT(DEL.LINES,AM)
+   FOR DEL.IDX = DEL.CNT TO 1 STEP -1
+      DEL REC<DEL.LINES<DEL.IDX>>
+   NEXT DEL.IDX
+   IF LINES.PER.PAGE = '' THEN LINES.PER.PAGE = DCOUNT(REC,AM)
+   RETURN
+*
+* Call error routine
+*
+91000 
+   ERR.TYPE = 1
+   CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+*
+END

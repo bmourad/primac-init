@@ -1,0 +1,233 @@
+  SUBROUTINE INVINQ_R_READ
+*********************************************************************
+*
+* REVISION - [12.0]
+*
+* PROGRAM  - INVINQ_R_READ
+*
+* AUTHOR   - ALEJANDRO DELGADO
+*
+* DATE     - 09/30/2002
+*
+* DESCRIPTION
+*
+* This program builds the data from INVENTORY file to load into 
+* Inventory Receipts Inquiry screen.
+
+*T28087 -- Receipts should display in newest to oldest
+*                          order per task 22124.
+*Added by Lakshmi Prasanna(REV12 Changes) on 24/02/2005
+
+*********************************************************************
+*
+*---- FILE COPY STATEMENTS
+*
+  $INCLUDE WWINSERT RBO.H
+  $INCLUDE ICS.CPYLIB INVENTORY
+  $INCLUDE ICS.CPYLIB INV.WHSE
+  $INCLUDE ICS.CPYLIB WAREHOUSE
+  $INCLUDE ICS.CPYLIB INV_RECEIPTS
+  $INCLUDE ICS.CPYLIB INV_RECP_WHSE
+  $INCLUDE ICS.CPYLIB INV.CNV
+  $INCLUDE CPYLIB>FILE.VARS
+  $INCLUDE CPYLIB CHAR
+*
+*---- INITIALIZATION
+*
+  ERRMSG = RBO.getProperty('','ID',PROD.NO)
+  ERRMSG = RBO.getProperty('','WHSE_ID',WHSE.ID)
+  ERRMSG = RBO.getProperty('','OPTION',OPTION)
+  CONO = PROD.NO[1,3]
+  PROD.NO = PROD.NO[4,99]
+
+  ERRMSG = "" ; IN_PARAM = "" ; OUT_PARAM = ""
+  IN_PARAM<1,1> = 'CONTROL'
+  IN_PARAM<1,2> = 'INVENTORY'
+  IN_PARAM<1,3> = 'WAREHOUSE'
+  IN_PARAM<1,4> = 'INV.WHSE'
+  IN_PARAM<1,5> = 'INV_RECEIPTS'
+  IN_PARAM<1,6> = 'INV_RECP_WHSE'
+  CALL GetInvOpenFiles(ERRMSG,IN_PARAM,OUT_PARAM,MAT FILE.VARS)
+  IF ERRMSG # '' THEN GOTO SET.ERROR
+
+  *
+  MATREAD INV.REC FROM INVENTORY, CONO:PROD.NO ELSE
+    ERRMSG = 'Inventory is not on file.  Try again'
+    GOTO SET.ERROR
+  END
+  MATREAD WHSE.REC FROM WAREHOUSE, CONO:WHSE.ID ELSE
+    ERRMSG = 'Warehouse is not on file.  Try again'
+    GOTO SET.ERROR
+  END
+
+  $INCLUDE ICSBP INV.UM.CNV
+
+  ERRMSG = "" ; IN_PARAM = "" ; OUT_PARAM = "" ; MAT INV.CNV.REC = ""
+  CALL GetInvUMCnv(ERRMSG,IN_PARAM,OUT_PARAM,MAT INV.CNV.REC,MAT INV.REC)
+  IWH.ID = CONO:PROD.NO:'!':WHSE.ID
+  MATREAD IWH.REC FROM INV.WHSE, IWH.ID ELSE MAT IWH.REC = ''
+*
+*---- PROCESSING
+*
+  RECP.DATE = '' ; RECP.NO = '' ; RECP.PO = ''
+  RECP.PER = '' ; RECP.COST = '' ; RECP.ORG = ''
+  RECP.VEND = '' ; RECP.RSVD = '' ; RECP.USED = ''
+  RECP.CURR = '' ; TEXT.DISPLAY = '' ; TEXT.DISPLAY2 = ''
+
+SORT.DATA='' ;*T28087
+
+  *
+  RCP.CNT = DCOUNT(IWH.RECP.NO,VM)
+  FOR R = 1 TO RCP.CNT
+    RECP = IWH.RECP.NO<1,R>
+    RECP.ID = CONO:RECP
+    MATREAD INVR.REC FROM INV_RECEIPTS,RECP.ID THEN
+    
+*T28087 v
+        * IF OPTION='RS' THEN
+        *  IF INVR.ORG.WHSE = WHSE.ID THEN
+        *    LOCATE RECP IN RECP.NO<1>,1 BY "DR" SETTING TX ELSE
+
+         TMP=INVR.PERIOD'R%6':INVR.ENT.DATE'R%5':RECP'R%9'
+         IF OPTION='RS' THEN
+
+            IF INVR.ORG.WHSE=WHSE.ID THEN
+               LOCATE TMP IN SORT.DATA<1> BY 'DL' SETTING TX ELSE
+*T28087 ^
+            RECP.NO = INSERT(RECP.NO,1,TX,0,RECP)
+            TMP.DATE = OCONV(INVR.ENT.DATE,'D2/')
+            RECP.DATE = INSERT(RECP.DATE,1,TX,0,TMP.DATE)
+            RECP.PO = INSERT(RECP.PO,1,TX,0,INVR.PO)          
+            RECP.VEND = INSERT(RECP.VEND,1,TX,0,INVR.VEND)    
+            RECP.PER = INSERT(RECP.PER,1,TX,0,INVR.PERIOD)    
+            COST = OCONV(INVR.UNIT.COST,"MD4")               
+            RECP.COST = INSERT(RECP.COST,1,TX,0,COST)         
+            ;*
+            ;* get quantities
+            ;*
+            CURR = 0
+            RSVBALE = 0
+            W.CNT = DCOUNT(INV.WHSE.CODE,VM)
+            FOR W = 1 TO W.CNT
+              IRW.ID=CONO:RECP:"!":INV.WHSE.CODE<1,W>
+              MATREAD IRW.REC FROM INV_RECP_WHSE,IRW.ID THEN
+                CURR+= IRW.CUR.QTY
+                RSVBALE += IRW.RSVB.QTY ; *resevable qty
+              END
+            NEXT W
+            ;* reserved
+            RSVD.QTY = CURR - RSVBALE
+            RSVD.QTY=INT(((RSVD.QTY/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+            RSVD.QTY = OCONV(RSVD.QTY,ICR.CNV1)
+            RECP.RSVD = INSERT(RECP.RSVD,1,TX,0,RSVD.QTY)
+            ;*used
+            USED = INVR.ORG.QTY - CURR
+            ;*adjustment of the original receipt on the same day
+            ;*and a same unit price is dislayed as negative used
+            ;*quantity.
+            IF USED < 0 THEN
+              USED = INT(((USED/ICR.DV1)*ICR.MT1)/ICR.DV2-.5)
+            END ELSE
+              USED = INT(((USED/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+            END
+            USED = OCONV(USED,ICR.CNV1)
+            IF USED < "0" THEN
+               USED=0
+            END
+
+            RECP.USED = INSERT(RECP.USED,1,TX,0,USED)
+
+            
+            ;*original
+            ORG.QTY=INT(((INVR.ORG.QTY/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+            ORG.QTY = OCONV(ORG.QTY,ICR.CNV1)
+            RECP.ORG = INSERT(RECP.ORG,1,TX,0,ORG.QTY)
+            ;*on-hand
+            CURR = INT(((RSVBALE/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+            CURR = OCONV(CURR,ICR.CNV1)
+            RECP.CURR = INSERT(RECP.CURR,1,TX,0,CURR)
+          END
+        END
+      END
+      IF OPTION="R" THEN
+   
+
+*T28087 v
+*           LOCATE RECP IN RECP.NO<1>,1 BY "DR" SETTING TX ELSE
+            LOCATE TMP IN SORT.DATA<1> BY 'DL' SETTING TX ELSE
+*T28087 ^
+          RECP.NO = INSERT(RECP.NO,1,TX,0,RECP)
+          TMP.DATE = OCONV(INVR.ENT.DATE,'D2/')
+          RECP.DATE = INSERT(RECP.DATE,1,TX,0,TMP.DATE)
+          RECP.PO = INSERT(RECP.PO,1,TX,0,INVR.PO)          
+          RECP.VEND = INSERT(RECP.VEND,1,TX,0,INVR.VEND)    
+          RECP.PER = INSERT(RECP.PER,1,TX,0,INVR.PERIOD)    
+          COST = OCONV(INVR.UNIT.COST,"MD4")               
+          RECP.COST = INSERT(RECP.COST,1,TX,0,COST)         
+          CURR = 0   
+          RSVBALE = 0
+          IRW.ID=CONO:RECP:"!":WHSE.ID
+          MATREAD IRW.REC FROM INV_RECP_WHSE,IRW.ID THEN 
+            CURR+= IRW.CUR.QTY                           
+            RSVBALE += IRW.RSVB.QTY ; *resevable qty     
+          END                                            
+          ;* reserved                                          
+          RSVD.QTY = CURR - RSVBALE                            
+          RSVD.QTY=INT(((RSVD.QTY/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+          RSVD.QTY = OCONV(RSVD.QTY,ICR.CNV1)                  
+          RECP.RSVD = INSERT(RECP.RSVD,1,TX,0,RSVD.QTY)
+WRITE "TMP " : TMP : " RECP.RSVD " : RECP.RSVD : " TX " : TX : " RSVD.QTY " : RSVD.QTY : " SORT.DATA " : SORT.DATA ON CONTROL,"0713"     
+          ;*used                                                  
+          USED = IRW.ORG.QTY - CURR                              
+          IF USED < 0 THEN                                        
+            USED = INT(((USED/ICR.DV1)*ICR.MT1)/ICR.DV2-.5)       
+          END ELSE                                                
+            USED = INT(((USED/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)       
+          END                                                     
+          USED = OCONV(USED,ICR.CNV1)                             
+          RECP.USED = INSERT(RECP.USED,1,TX,0,USED)               
+          ;*original                                              
+          ORG.QTY=INT(((IRW.ORG.QTY/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+          ORG.QTY = OCONV(ORG.QTY,ICR.CNV1)                       
+          RECP.ORG = INSERT(RECP.ORG,1,TX,0,ORG.QTY)              
+          ;*on-hand                                               
+          CURR = INT(((RSVBALE/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)         
+          CURR = OCONV(CURR,ICR.CNV1)                             
+          RECP.CURR = INSERT(RECP.CURR,1,TX,0,CURR)               
+        END
+      END
+    END
+  NEXT R
+  IF OPTION="RS" THEN
+    TEXT.DISPLAY = "Original Warehouse :"
+  END ELSE
+    TEXT.DISPLAY = "Warehouse :"
+  END
+  IF INV.M.LINE='FNGD' THEN
+    TEXT.DISPLAY2 = "Shpd. Qty."
+  END ELSE
+    TEXT.DISPLAY2 = "Used Qty."
+  END
+*
+*---- BUILD RBO RECORD
+*
+  STATUS = RBO.setProperty('','RECP_DATE',RECP.DATE)
+  STATUS = RBO.setProperty('','RECP_NO',RECP.NO)
+  STATUS = RBO.setProperty('','RECP_PO',RECP.PO)
+  STATUS = RBO.setProperty('','RECP_PER',RECP.PER)
+  STATUS = RBO.setProperty('','RECP_COST',RECP.COST)
+  STATUS = RBO.setProperty('','RECP_ORG',RECP.ORG)
+  STATUS = RBO.setProperty('','RECP_VEND',RECP.VEND)
+  STATUS = RBO.setProperty('','RECP_RSVD',RECP.RSVD)
+  STATUS = RBO.setProperty('','RECP_USED',RECP.USED)
+  STATUS = RBO.setProperty('','RECP_CURR',RECP.CURR)
+  STATUS = RBO.setProperty('','RECP_TEXT_DISPLAY',TEXT.DISPLAY)
+  STATUS = RBO.setProperty('','RECP_TEXT_DISPLAY2',TEXT.DISPLAY2)
+  RETURN
+*
+SET.ERROR: 
+*
+  STATUS = RBO.setProperty('','ServerStatus',1)
+  STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+  RETURN
+END

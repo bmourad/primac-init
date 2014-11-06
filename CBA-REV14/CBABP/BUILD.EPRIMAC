@@ -1,0 +1,299 @@
+*COPY>CPYLIB>COM1
+**************************************************************************
+*
+* REVISION    - [12.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+*
+* PROGRAM - BUILD.EPRIMAC
+*
+* BY      - ALEJANDRO DELGADO
+*
+* DATE    - 06/05/02
+*
+* DESCRIPTION
+*
+*T26630 adelgado 06/03/2002 * Original Code.
+**************************************************************************
+*COPY>PMC.CPYLIB>PMC_PROCESS
+*COPY>PMC.CPYLIB>PMC_PROCESS_XREF
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+*
+*--- SETUP SYSTEM ERROR MESSAGES
+*
+  SYS.TYPE = 1
+  CALL SYSCOM(MAT SYSCOM.REC)
+*
+  OPEN '', 'PRIMAC.eMENUS' TO PRIMAC.eMENUS ELSE
+    ERRMSG = 'UNABLE TO OPEN PRIMAC.eMENUS FILE.' ; GOSUB 91000
+    STOP
+  END
+  OPEN '', 'ePRIMAC.MENUS' TO ePRIMAC.MENUS ELSE
+    ERRMSG = 'UNABLE TO OPEN ePRIMAC.MENUS FILE.' ; GOSUB 91000
+    STOP
+  END
+  OPEN '', 'PMC_PROCESS' TO PMC_PROCESS ELSE
+    ERRMSG = 'UNABLE TO OPEN PMC_PROCESS FILE.' ; GOSUB 91000
+    STOP
+  END
+  OPEN '', 'PMC_PROCESS_XREF' TO PMC_PROCESS_XREF ELSE
+    ERRMSG = 'UNABLE TO OPEN PMC_PROCESS_XREF FILE.' ; GOSUB 91000
+    STOP
+  END
+  *
+  GOSUB INIT.VAR
+  PRINT @(-1):
+  PRINT @(0,0):"C.B.A.":
+  PRINT @(30,0):"REBUILD SPECIFIED eMENUS":
+  PRINT @(72,0):OCONV(DATE(),"D2/"):
+  PRINT @(0,1):STR("-",80):
+  PRINT @(0,22):STR("-",80):
+  PRINT @(20,8):CL:'Enter Starting Menu ID : ':
+  INPUT MASTER.ID
+  IF MASTER.ID[1,2] # "M." THEN MASTER.ID = "M.":MASTER.ID
+  MATREAD MENU.REC FROM PRIMAC.eMENUS, MASTER.ID ELSE
+    ERRMSG = 'UNABLE TO LOCATE STARTING MENU ID'
+    GOSUB 91000 ; STOP
+  END
+  HEADER = MENU.REC(1)<1,3>
+*
+  MENU.NAMES = ''
+  CALL GET.MENU.NAMES (MASTER.ID, PRIMAC.eMENUS, MENU.NAMES)
+  MENU.CNT = DCOUNT(MENU.NAMES,AM)
+  FOR POS = 1 TO MENU.CNT
+    MENU.ID = MENU.NAMES<POS>
+    IF MENU.ID[1,2] # 'M.' THEN CONTINUE
+    MATREAD MENU.REC FROM PRIMAC.eMENUS, MENU.ID ELSE
+      ERRMSG = 'UNABLE TO LOCATE MENU ':MENU.ID
+      GOSUB 91000 ; ERRMSG = '' ; CONTINUE
+    END
+    PROC.POS = 0
+    FOR XOS = 2 TO 33
+      PMCID = MENU.REC(XOS)<1,1> ; DESC = MENU.REC(XOS)<1,3>
+      DOC = MENU.REC(XOS)<1,2> ; eMENU.ID = MENU.REC(XOS)<1,5>
+      BEGIN CASE
+        CASE PMCID = 'C' OR PMCID = ''
+        CASE PMCID[1,2] = 'M.' ; PROC.POS += 1
+        CASE PMCID[1,3] = '*M.' ; PROC.POS += 1
+        CASE eMENU.ID = ''
+          ERRMSG = 'UNABLE TO LOCATE CORRESPONDING MENU FOR MENU ':MENU.ID:' > ':PMCID
+          GOSUB 91000 ; ERRMSG = ''
+        CASE 1
+          PROC.POS += 1
+          TABLE.POS = eMENU.ID[7,1]
+          IF PMCID[1,1] = '*' THEN
+            PMCID = PMCID[2,99]
+          END ELSE
+            PMCID = PMCID
+          END
+          TMP.MENU.ID = eMENU.ID ; ERRMSG = ''
+          GOSUB CHK.EMENUS
+          IF ERRMSG # '' THEN
+            GOSUB 91000
+            ERRMSG = '' ; CONTINUE
+          END
+          MATREAD NEW.MENU.REC FROM ePRIMAC.MENUS, eMENU.ID ELSE
+            MENU.BUILD = 1 ; MENU.NAME = eMENU.ID
+            GOSUB CREATE.NEW.MENU
+          END
+          GET.OUT = 0 ; ePROC.POS = 0
+          FOR TOS = 2 TO 33 UNTIL (GET.OUT)
+            NEW.PMCID = NEW.MENU.REC(TOS)<1,1>
+            BEGIN CASE
+              CASE NEW.PMCID = 'C'
+              CASE NEW.PMCID[1,2] = 'M.' ; ePROC.POS += 1
+              CASE NEW.PMCID[1,3] = '*M.' ; ePROC.POS += 1
+              CASE NEW.PMCID = PMCID ; ePROC.POS += 1
+                NEW.MENU.REC(TOS)<1,2> = DOC
+                NEW.DESC = NEW.MENU.REC(TOS)<1,3>
+                GOSUB GET.DESC
+                NEW.MENU.REC(TOS)<1,3> = DESC
+                GET.OUT = TOS
+              CASE NEW.PMCID = '' ; ePROC.POS += 1
+                NEW.MENU.REC(TOS)<1,1> = PMCID
+                NEW.MENU.REC(TOS)<1,2> = DOC
+                NEW.DESC = NEW.MENU.REC(TOS)<1,3>
+                GOSUB GET.DESC
+                NEW.MENU.REC(TOS)<1,3> = DESC
+                GET.OUT = TOS
+              CASE 1 ; ePROC.POS += 1
+            END CASE
+          NEXT TOS
+          IF GET.OUT = 0 THEN
+            ERRMSG = 'UNABLE TO ADD PROCESS ':MENU.NAMES(POS):' > ':PMCID
+            GOSUB 91000 ; CONTINUE
+          END
+          PRIOR.MENU = NEW.MENU.REC(1)<1,1> ; PRIOR.DESC = NEW.MENU.REC(1)<1,3>
+          MATWRITE NEW.MENU.REC ON ePRIMAC.MENUS, eMENU.ID
+          MENU.NAME = eMENU.ID
+          GOSUB WRITE.TO.MENUFORMS
+          *
+          TMP.MENU.ID = PRIOR.MENU ; ERRMSG = ''
+          GOSUB CHK.EMENUS
+          IF ERRMSG = '' THEN
+            MATREAD NEW.MENU.REC FROM ePRIMAC.MENUS, PRIOR.MENU ELSE
+              MENU.BUILD = 0 ; MENU.NAME = PRIOR.MENU
+              GOSUB CREATE.NEW.MENU
+            END
+            FOR TOS = 2 TO 33
+              IF NEW.MENU.REC(TOS)<1,1> = eMENU.ID THEN
+                TOS = 99
+              END ELSE
+                IF NEW.MENU.REC(TOS)<1,1> = '' THEN
+                  NEW.MENU.REC(TOS)<1,1> = eMENU.ID
+                  NEW.MENU.REC(TOS)<1,3> = PRIOR.DESC
+                  TOS = 99
+                END
+              END
+            NEXT TOS
+            MATWRITE NEW.MENU.REC ON ePRIMAC.MENUS, PRIOR.MENU
+            MENU.NAME = PRIOR.MENU
+            GOSUB WRITE.TO.MENUFORMS
+          END
+          *
+      END CASE
+    NEXT XOS
+  NEXT POS
+  STOP
+*
+INIT.VAR: 
+*
+  MASTER.ID = ''
+  DIM MENU.REC(33) ; DIM NEW.MENU.REC(33)
+  MAT MENU.REC = '' ; MAT NEW.MENU.REC = ''
+  M.TABLE = ''
+  M.TABLE<1> = 'M':VM:'L':VM:'F':VM:'I':VM:'R':VM:'E':VM:'P':VM:'C'
+  M.TABLE<2,1> = 'Table Maintenance'
+  M.TABLE<2,2> = 'Table Listings'
+  M.TABLE<2,3> = 'System Functions'
+  M.TABLE<2,4> = 'Inquiry'
+  M.TABLE<2,5> = 'Reports'
+  M.TABLE<2,6> = 'End of Day/Period'
+  M.TABLE<2,7> = 'Tables Purge'
+  M.TABLE<2,8> = 'Custom'
+  *
+  RETURN
+*
+WRITE.TO.MENUFORMS: 
+*
+  FORM.FILE = 'REV12.E.MENUFORMS'
+  BYPASS = 1
+  CALL MENU.MAINT.TUF(MENU.NAME,FORM.FILE,'ePRIMAC.MENUS',BYPASS)
+  *
+  RETURN
+*
+CHK.EMENUS: 
+*
+  FIXED.MENU = 0
+  BEGIN CASE
+    CASE TMP.MENU.ID = 'M.MASTER'; FIXED.MENU = 1
+    CASE TMP.MENU.ID = 'M.FINANCE'; FIXED.MENU = 1
+    CASE TMP.MENU.ID = 'M.PRODUCTION'; FIXED.MENU = 1
+    CASE TMP.MENU.ID = 'M.INVENTORY'; FIXED.MENU = 1
+    CASE TMP.MENU.ID = 'M.ADMIN'; FIXED.MENU = 1
+    CASE TMP.MENU.ID = 'M.ARS'; FIXED.MENU = 1
+    CASE TMP.MENU.ID = 'M.APS'; FIXED.MENU = 1
+    CASE TMP.MENU.ID = 'M.FAS'; FIXED.MENU = 1
+    CASE TMP.MENU.ID = 'M.PRS'; FIXED.MENU = 1
+    CASE TMP.MENU.ID = 'M.EP4'; FIXED.MENU = 1
+    CASE TMP.MENU.ID = 'M.GLS'; FIXED.MENU = 1
+    CASE TMP.MENU.ID = 'M.SAS'; FIXED.MENU = 1
+    CASE TMP.MENU.ID = 'M.JES'; FIXED.MENU = 1
+    CASE TMP.MENU.ID = 'M.JCS'; FIXED.MENU = 1
+    CASE TMP.MENU.ID = 'M.PSS'; FIXED.MENU = 1
+    CASE TMP.MENU.ID = 'M.OPS'; FIXED.MENU = 1
+    CASE TMP.MENU.ID = 'M.ICS'; FIXED.MENU = 1
+    CASE TMP.MENU.ID = 'M.POS'; FIXED.MENU = 1
+    CASE TMP.MENU.ID = 'M.POR'; FIXED.MENU = 1
+    CASE TMP.MENU.ID = 'M.SYS'; FIXED.MENU = 1
+    CASE TMP.MENU.ID = 'M.CSR'; FIXED.MENU = 1
+    CASE TMP.MENU.ID = 'M.ONP'; FIXED.MENU = 1
+  END CASE
+  IF (FIXED.MENU) THEN
+    ERRMSG = 'PROCESS ID (':PMCID:') HAS A INVALID CORRESPONDING MENU.'
+  END
+  *
+  RETURN
+*
+CREATE.NEW.MENU: 
+*
+  MAT NEW.MENU.REC = ''
+  IF LEN(MENU.NAME) = 7 THEN
+    NEW.MENU.REC(1)<1,1> = MENU.NAME[1,5]
+    LOCATE TABLE.POS IN M.TABLE<1>,1 SETTING PPP THEN
+      IF TABLE.POS = 'F' THEN
+        NEW.MENU.REC(1)<1,3> = HEADER:' ':M.TABLE<2,PPP>
+      END ELSE
+        NEW.MENU.REC(1)<1,3> = M.TABLE<2,PPP>
+      END
+    END ELSE
+      PRINT 'CANNOT BUILD HEADER FOR ':MENU.NAME
+      NEW.MENU.REC(1)<1,3> = HEADER:' UNKNOWN'
+    END
+  END ELSE
+    IF (MENU.BUILD) THEN
+      NEW.MENU.REC(1)<1,1> = MENU.REC(1)<1,1>[1,5]:'.':TABLE.POS:MENU.REC(1)<1,1>[6,99]
+      NEW.MENU.REC(1)<1,3> = MENU.REC(1)<1,3>
+    END ELSE
+      NEW.MENU.REC(1)<1,1> = PRIOR.MENU[1,7]
+      NEW.MENU.REC(1)<1,3> = PRIOR.DESC
+    END
+  END
+  *
+  RETURN
+*
+GET.DESC: 
+*
+IF @LOGNAME = 'adelgado' THEN DEBUG
+  ERRMSG = '' ; NAMES = '' ; SEQS =  '' ; ACTIONS = ''
+  ACTIONS<1> = 'B' ; ACTIONS<2> = 'A'
+  NAMES<1> = MENU.ID ; NAMES<2> = eMENU.ID
+  SEQS<1> = PROC.POS ; SEQS<2> = ePROC.POS
+  CALL MENU.PROCESS.UPD(PMCID,ACTIONS,NAMES,SEQS,ERRMSG)
+  IF ERRMSG # '' THEN RETURN
+  *
+  MATREAD PPSX.REC FROM PMC_PROCESS_XREF, PMCID THEN
+    MATREADU PPS.REC FROM PMC_PROCESS, PPSX.PROCESS.ID THEN
+      IF NEW.DESC = '' THEN NEW.DESC = DESC
+      DESC.DIFFER = 0
+      BEGIN CASE
+        CASE PPS.DESC # NEW.DESC ; DESC.DIFFER = 1
+        CASE PPS.DESC # DESC ; DESC.DIFFER = 1
+        CASE DESC # NEW.DESC ; DESC.DIFFER = 1
+      END CASE
+      IF (DESC.DIFFER) THEN
+        PRINT @(7,10):CL:'MENU : ':eMENU.ID:@(40,10):'MENU DESC : ':NEW.MENU.REC(1)<1,3>'L#38'
+        PRINT @(1,11):'PROCESS ID : ':CL:PPSX.PROCESS.ID
+        PRINT @(1,13):'PMC_PROCESS     >>> ':CL:PPS.DESC
+        PRINT @(1,14):'MENU DESC       >>> ':CL:DESC
+        PRINT @(1,15):'CONV MENU DESC  >>> ':CL:NEW.DESC
+        PRINT @(0,21):'CHANGE DESC TO (P)ROCESS,(M)ENU,(C)ONV MENU OR (N)O CHANGE : ':; INPUT ANS
+        PRINT @(0,21):CL
+        BEGIN CASE
+          CASE ANS = 'P'
+            DESC = PPS.DESC
+          CASE ANS = 'M'
+            PPS.DESC = DESC
+            MATWRITE PPS.REC ON PMC_PROCESS, PPSX.PROCESS.ID
+          CASE ANS = 'C'
+            PPS.DESC = NEW.DESC
+            DESC = NEW.DESC
+            MATWRITE PPS.REC ON PMC_PROCESS, PPSX.PROCESS.ID
+          CASE 1
+            DESC = NEW.DESC
+        END CASE
+        RELEASE PMC_PROCESS, PPSX.PROCESS.ID
+      END
+    END
+  END
+  *
+  RETURN
+*
+91000 *
+  ERR.TYPE = 1;CALL SYSCOM(MAT SYSCOM.REC); RETURN
+92000 *
+  ERR.TYPE = 2;CALL SYSCOM(MAT SYSCOM.REC); RETURN
+93000 *
+  ERR.TYPE = 3;CALL SYSCOM(MAT SYSCOM.REC)
+END

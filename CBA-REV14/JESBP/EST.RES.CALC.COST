@@ -1,0 +1,208 @@
+      SUBROUTINE EST.RES.CALC.COST (CONO,EQTY,DPTR)
+***************************************************************************
+*
+* REVISION - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+*
+* PROGRAM  - EST.RES.CALC.COST
+*
+* AUTHOR   - NICK AMENDOLA, COMPUTER BUSINESS ASSOCIATES
+*
+* DATE     - 03/02/87
+*
+* DESCRIPTION
+*
+* This subroutine calculates the cost and sale amount for the specified
+* line of the estimate detail.
+* MODIFIED  - Graham Jarvis, Pacrim Software Pty Ltd
+*           - Markups applied for each cost center for materials (Mctr)
+*             labor ('L'ctr) when found in profit tables. The quantity
+*             breaks are interperated as RUN LINEAL METRES for each quote
+*             quantity (ie the smaller the run, the larger the Markup).
+*             If profit items are not found the the relevant cost center,
+*             the standard Markups per estimate are used.
+*
+*           - Apply Stock Holding markup if available
+*T26228 lanny 10/16/2001 * Setup & Teardown hours incorrect.
+*C39519 cmykleb 02/01/2002 * Field EST.MARKUP<1,7> is not used in base
+*                            anymore.
+*T26447 cmykleb 02/19/2002 * When matl is pulled from the PD1 screen and
+*                            that material has an indirect cost % the
+*                            extended amt is not correct based on that
+*                            % used.
+***************************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>JES.CPYLIB>SCOMMON.ESTIMATE
+*COPY>JES.CPYLIB>ESTIMATE
+*COPY>JES.CPYLIB>ESTIMATE.TEMP
+*COPY>JES.CPYLIB>ESTIMATE.RES
+*COPY>JES.CPYLIB>ESTIMATE.MARKUP
+*COPY>JCS.CPYLIB>FOH.TABLE
+*COPY>CPYLIB>FILE.VARS
+*COPY>JES.CPYLIB>JES.FILE.VARS
+*COPY>CPYLIB>CHAR
+*
+*---- INITIALIZATION
+*
+READ EST.RL.PP FROM CONTROL,CONO:'EST.RES.PRE.PRESS' ELSE EST.RL.PP = ''
+*
+*---- MAIN PROCESSING
+*
+100*
+         BEGIN CASE
+         CASE TEMP.TYPE[1,1] = "L"
+            IF TEMP.OPV.TYPE = "F" THEN
+*T26228 v
+              IF TEMP.GRP.QPARAM = '866' OR TEMP.GRP.QPARAM = '870' THEN
+                TEMP.HRS = TEMP.QTY*TEMP.FCTR/10
+              END ELSE
+                TEMP.HRS = INT(TEMP.QTY*TEMP.FCTR*TEMP.STD/10+0.5)
+              END
+*T26228 ^
+            END ELSE
+               BEGIN CASE
+               CASE 1
+                  TEMP.HRS = INT(TEMP.QTY/(TEMP.FCTR/1000*TEMP.STD)*100+0.5)
+               END CASE
+            END
+            TEMP.DCOST = INT(TEMP.HRS*TEMP.RATE/100+0.5)
+            BASE.COST = TEMP.RATE
+         CASE TEMP.TYPE = "PT"
+            IF TEMP.UM+0 = 0 THEN TEMP.UM = 1
+            TEMP.DCOST = INT((TEMP.FCTR/1000)*(TEMP.STD*100)+0.5)
+            BASE.COST = TEMP.DCOST
+          CASE TEMP.TYPE='MR'
+            IF TEMP.UM+0=0 THEN TEMP.UM=1
+            TEMP.DCOST=INT((TEMP.QTY/TEMP.UM)*(TEMP.FCTR/1000)*(TEMP.STD*100)+0.5)
+*T26447 v
+*           BASE.COST=TEMP.COST
+            BASE.COST=TEMP.DCOST
+*T26447 ^
+         CASE 1
+            IF TEMP.UM+0 = 0 THEN TEMP.UM = 1
+            TEMP.DCOST = INT((TEMP.QTY/TEMP.UM)*(TEMP.FCTR/1000)*(TEMP.STD*100)+0.5)
+            BASE.COST = TEMP.DCOST
+         END CASE
+         IND.COST = 0
+         FOR TI = 1 TO 4
+            BEGIN CASE
+            CASE TI = 1
+               TEMP.IND = TEMP.IND.1
+            CASE TI = 2
+               TEMP.IND = TEMP.IND.2
+            CASE TI = 3
+               TEMP.IND = TEMP.IND.3
+            CASE TI = 4
+               TEMP.IND = TEMP.IND.4
+            END CASE
+            BEGIN CASE
+            CASE TEMP.IND = ""
+            CASE TEMP.IND[1,1] = "$"
+               IND.AMT = TEMP.IND[2,99]
+               IND.COST = IND.COST+IND.AMT
+            CASE TEMP.IND[1,1] = "%" OR NUM(TEMP.IND)
+               IF TEMP.IND[1,1] = "%" THEN IND.PCT = TEMP.IND[2,99] ELSE IND.PCT = TEMP.IND
+               IND.COST = IND.COST+INT(BASE.COST*(IND.PCT/10000)+0.5)
+            CASE 1
+               MATREAD FTR.REC FROM FOH.TABLE, CONO:TEMP.IND ELSE
+                  MAT FTR.REC = ""
+               END
+               LOCATE BASE.COST IN FTR.QTY<1>,1 BY "AR" SETTING FP ELSE NULL
+               IF FP > COUNT(FTR.QTY,VM) + 1 THEN FP = COUNT(FTR.QTY,VM) + 1
+               IF FTR.TYPE = "$" THEN
+                  IND.COST = IND.COST+FTR.PCT<1,FP>
+               END ELSE
+                  IND.COST = IND.COST+INT(BASE.COST*(FTR.PCT<1,FP>/10000)+0.5)
+               END
+            END CASE
+         NEXT TI
+         BEGIN CASE
+         CASE TEMP.TYPE[1,1] = "L"
+            TEMP.COST = INT(TEMP.HRS*(TEMP.RATE+IND.COST)/100+0.5)
+         CASE 1
+            TEMP.COST = TEMP.DCOST+IND.COST
+         END CASE
+      IF EST.RL.PP.INCLUDE#'Y' THEN
+         LOCATE EST.DEPT<1,DPTR> IN EST.RL.PP<1>,1 SETTING DPOS THEN
+            TEMP.SALE = 0
+            TEMP.TSALE = 0
+            GOTO 99999
+         END
+      END
+         TEMP.SALE = TEMP.COST
+*
+*--- Apply Stock Holding Markups
+*
+*C39519 v
+*       IF EST.MARKUP<1,7> # '' THEN
+*           TEMP.SALE = INT(TEMP.SALE * (1+EST.MARKUP<1,7>/10000) + 0.5)
+*       END
+*C39519 ^
+*
+*--- Calculate Markups to Apply
+*
+         BEGIN CASE
+         CASE NUM(TEMP.MARKUP)
+            TEMP.SALE = TEMP.SALE+INT(TEMP.COST*(TEMP.MARKUP/10000)+0.5)
+         CASE 1
+            MATREAD MKU.REC FROM ESTIMATE.MARKUP, CONO:TEMP.MARKUP ELSE
+               MAT MKU.REC = ""
+            END
+            LOCATE TEMP.COST IN MKU.QTY<1>,1 BY "AR" SETTING FP ELSE NULL
+            IF FP > COUNT(MKU.QTY,VM) + 1 THEN FP = COUNT(MKU.QTY,VM) + 1
+            TEMP.SALE = TEMP.SALE+INT(TEMP.COST*(MKU.PCT<1,FP>/10000)+0.5)
+         END CASE
+*
+* Use RUN Lineal Metres to Find Markup%
+*
+      IF EST.RL.DIE.REPEAT<1,1,1>+0 > 0 THEN
+         LINEAL.RUN=EQTY/1000*(EST.RL.DIE.REPEAT<1,1,1>/10000)
+         LINEAL.RUN=LINEAL.RUN/EST.RL.DIE.NO.ACR<1,1,1>
+         LINEAL.RUN=INT(LINEAL.RUN*100)
+      END ELSE
+         LINEAL.RUN = 0
+      END
+         BEGIN CASE
+         CASE TEMP.TYPE[1,1] = "L"
+            MATREAD MKU.REC FROM ESTIMATE.MARKUP,CONO:'L':TEMP.CCTR ELSE
+              MAT MKU.REC = ''
+            END
+            FP=1
+            LOCATE LINEAL.RUN IN MKU.QTY<1>,1 BY "AR" SETTING FP ELSE NULL
+            IF FP > COUNT(MKU.QTY,VM) + 1 THEN FP = COUNT(MKU.QTY,VM) + 1
+            LAB.MARKUP=''
+            LAB.MARKUP=MKU.PCT<1,FP>+0
+            IF LAB.MARKUP = 0 THEN
+               LAB.MARKUP = EST.MARKUP<1,1>
+            END
+            TEMP.TSALE = INT(TEMP.SALE * (1+LAB.MARKUP/10000)+0.5)
+         CASE TEMP.TYPE = "MS" OR TEMP.TYPE = "MR" OR TEMP.TYPE = "MI"
+            MATREAD MKU.REC FROM ESTIMATE.MARKUP,CONO:'M':TEMP.CCTR ELSE
+              MAT MKU.REC = ''
+            END
+            FP=1
+            LOCATE LINEAL.RUN IN MKU.QTY<1>,1 BY "AR" SETTING FP ELSE NULL
+            IF FP > COUNT(MKU.QTY,VM) + 1 THEN FP = COUNT(MKU.QTY,VM) + 1
+            MAT.MARKUP=''
+            MAT.MARKUP=MKU.PCT<1,FP>+0
+            IF MAT.MARKUP = 0 THEN
+               MAT.MARKUP = EST.MARKUP<1,2>
+            END
+            TEMP.TSALE = INT(TEMP.SALE * (1+MAT.MARKUP/10000) + 0.5)
+         CASE TEMP.TYPE[1,1] = "M"
+            TEMP.TSALE = INT(TEMP.SALE * (1+EST.MARKUP<1,3>/10000) + 0.5)
+         CASE TEMP.TYPE[1,1] = "P"
+            TEMP.TSALE = INT(TEMP.SALE * (1+EST.MARKUP<1,4>/10000) + 0.5)
+         CASE TEMP.TYPE[1,1] = "S"
+            TEMP.TSALE = INT(TEMP.SALE * (1+EST.MARKUP<1,5>/10000) + 0.5)
+         CASE TEMP.TYPE[1,1] = "O"
+            TEMP.TSALE = INT(TEMP.SALE * (1+EST.MARKUP<1,6>/10000) + 0.5)
+         END CASE
+*
+*---- END OF PROGRAM
+*
+99999*
+      RETURN
+   END

@@ -1,0 +1,124 @@
+SUBROUTINE EST_CALC_STK_PRICE(CONO, ACTION)
+********************************************************************************
+*   Program name :- EST_CALC_STK_PRICE
+*   Created:- 9/15/2003
+* DESCRIPTION
+*
+* This program is used to determine stock pricing by combining like
+* stock for different components and/or webs. The total stock
+* requirements are then used to determine the price break to be used
+* if specified on the material file. When pricing is done from
+* inventory no change is made.
+*
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE JES.CPYLIB SCOMMON.ESTIMATE
+$DEFINE ESTIMATE
+$INCLUDE JES.CPYLIB ESTIMATE
+$DEFINE ESTIMATEMATL
+$INCLUDE JES.CPYLIB ESTIMATE.MATL
+$DEFINE ESTIMATEPAPERGROUP
+$INCLUDE JES.CPYLIB ESTIMATE.PAPER.GROUP
+$DEFINE JESFILEVARS
+$INCLUDE JES.CPYLIB JES.FILE.VARS
+$DEFINE COMPANY
+$INCLUDE PMC.CPYLIB COMPANY
+$INCLUDE CPYLIB CHAR
+
+*
+*---- INITIALIZATION
+*
+      PRODS = ""
+      PQTYS = ""
+      PFLGS = ""
+      QCNT = COUNT(EST.QTY,VM) + (EST.QTY # "")
+      CCNT = COUNT(EST.PROD.OS.TYPE,VM) + (EST.PROD.OS.TYPE # "")
+      PRICE.FLAG = CO.JES.PARAM<1,11>
+      IF PRICE.FLAG = "" THEN PRICE.FLAG = "X"
+*
+*---- MAIN PROCESSING
+*
+      
+      FOR COMP = 1 TO CCNT
+         WEB.CNT = EST.PROD.WEB.CNT<1,COMP>+0
+         IF WEB.CNT = 0 THEN WEB.CNT = 1
+         FOR MPTR = 1 TO WEB.CNT
+            IF PRICE.FLAG # "X" AND EST.PROD.INV.ID<1,COMP,MPTR> # "" THEN GOTO 190
+            PROD = EST.PROD.OS.PROD<1,COMP,MPTR>:"!":EST.PROD.OS.TYPE<1,COMP>:"!":EST.PROD.OS.USAGE<1,COMP,MPTR>
+            LOCATE PROD IN PRODS<1>,1 SETTING PPTR ELSE
+               PRODS<1,PPTR> = PROD
+            END
+            PFLGS<1,PPTR> = PFLGS<1,PPTR> + 1
+            PLC = COUNT(EST.PROD.PQTY<1,COMP,MPTR>,"!") + (EST.PROD.PQTY<1,COMP,MPTR> # "")
+            
+	    FOR X = PLC TO QCNT+1 STEP -1
+*              EST.PROD.PQTY = DELETE(EST.PROD.PQTY,1,COMP,X)
+               *MACRO DELVAL;EST.PROD.PQTY<1,COMP,MPTR>;"!";X
+               CALL ESTCEM_MACRO_DELVAL(EST.PROD.PQTY<1,COMP,MPTR>,"!",X)
+               *MACRO DELVAL;EST.PROD.PCST<1,COMP,MPTR>;"!";X
+               CALL ESTCEM_MACRO_DELVAL(EST.PROD.PCST<1,COMP,MPTR>,"!",X)
+            NEXT X
+            FOR QPTR = 1 TO QCNT
+               PQTY = FIELD(EST.PROD.PQTY<1,COMP,MPTR>,"!",QPTR)
+               PQTYS<1,PPTR,QPTR> = PQTYS<1,PPTR,QPTR> + PQTY
+            NEXT QPTR
+190      NEXT MPTR
+      NEXT COMP
+*
+*---- CALCULATE STOCK PRICING
+*
+
+      PCNT = COUNT(PRODS,VM) + (PRODS # "")
+      FOR PPTR = 1 TO PCNT
+         IF PFLGS<1,PPTR> = 1 THEN GOTO 290
+         PROD = PRODS<1,PPTR>
+         PROD = FIELD(PRODS<1,PPTR>,"!",1)
+         TYPE = FIELD(PRODS<1,PPTR>,"!",2)
+         USAGE = FIELD(PRODS<1,PPTR>,"!",3)
+         MATREAD ESTM.REC FROM ESTIMATE.MATL, CONO:TYPE:USAGE ELSE
+            GOTO 290
+         END
+         LOCATE PROD IN ESTM.PROD<1>,1 SETTING MP ELSE GOTO 290
+	 FOR QPTR = 1 TO QCNT
+            PQTY = PQTYS<1,PPTR,QPTR>
+            LOCATE PQTY IN ESTM.END.QTY<1,MP>,1 BY "AR" SETTING PP ELSE NULL
+            IF PP > COUNT(ESTM.END.QTY<1,MP>,SM) + 1 THEN PP = PP - 1
+*           COST = INT(ORD.LBS / 100 * ESTM.QCOST<1,MP,PP> + 0.5)
+            COST = ESTM.QCOST<1,MP,PP>
+	    IF COST = "" THEN GOTO 280
+            FOR COMP = 1 TO CCNT
+               WEB.CNT = EST.PROD.WEB.CNT<1,COMP>+0
+               IF WEB.CNT = 0 THEN WEB.CNT = 1
+               FOR MPTR = 1 TO WEB.CNT
+                  BEGIN CASE
+                  CASE EST.PROD.OS.PROD<1,COMP,MPTR> # PROD
+                  CASE EST.PROD.OS.TYPE<1,COMP,MPTR> # TYPE
+                  CASE EST.PROD.OS.USAGE<1,COMP,MPTR> # USAGE
+                  CASE 1
+                      CALL ESTCEM_MACRO_REPVAL(EST.PROD.PCST<1,COMP,MPTR>,"!",QPTR,COST)
+                     *MACRO REPVAL;EST.PROD.PCST<1,COMP,MPTR>;"!";QPTR;COST
+                  END CASE
+               NEXT MPTR
+            NEXT COMP
+280      NEXT QPTR
+290   NEXT PPTR
+
+      *GOTO 99999
+*
+*---- ERROR ROUTINE
+*
+*90000 ERR.TYPE=1;CALL SI_SYSCOM(MAT SYSCOM.REC);RETURN
+* 90000*
+*       PRINT @(0,23):CL:ERRMSG:
+*       INPUT REPLY:
+*       PRINT @(0,23):CL:
+*       RETURN
+*
+*---- END OF PROGRAM
+*
+*99999*
+      RETURN
+   END
+
+

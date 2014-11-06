@@ -1,0 +1,343 @@
+*COPY>CPYLIB>SCOMMON1
+* T20713
+*COPY>PSS.CPYLIB>COM.PSS.FILE.VARS
+*COPY>PSS.CPYLIB>COM.CCTR.SCHED
+*COPY>PSS.CPYLIB>COM.JOB.SCHED
+*COPY>PMC.CPYLIB>COM.COMPANY
+*COPY>PMC.CPYLIB>COM.DIVISION
+*COPY>JES.CPYLIB>COM.ESTIMATE
+*COPY>JCS.CPYLIB>COM.JOB
+* T20713
+*********************************************************************
+*
+* PROGRAM  - JOB.SCHED.PURGE
+*
+* AUTHOR   - NICK AMENDOLA, COMPUTER BUSINESS ASSOCIATES
+*
+* DATE     - 01/31/90
+* MODIFIED - 11/02/95 TERRY NORTHCUTT TASK 19407 DIVISIONALIZATION
+*
+* DESCRIPTION
+*
+* This program will purge all JOB.SCHED data for jobs completed on or
+* prior to the date specified at time of execution.
+* TASK 20285 DO NOT ALLOW TEMP JOBS TO BE PURGED
+* TASK 20683 JR UPDATE PSS.JOB.XREF WHEN JOB.SCHED RECORDS ARE DELETED
+* TASK 20713 JR ONLY PURGE RECORDS THAT HAVE STATUS OF PENDING OR COMPLETE
+* AND DELETE JOB FROM PEND.CCTR.SCHED.
+*
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+*T20713*COPY>CPYLIB>SCOMMON1
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PSS.CPYLIB>JOB.SCHED
+*COPY>JCS.CPYLIB>JOB
+*COPY>CPYLIB>SCREEN.COM
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+MAT SYSCOM.REC =  ""; SYS.TYPE = 2
+*
+*---- OPEN ALL FILES
+*
+      OPEN "","COMPANY" TO COMPANY ELSE
+         ERRMSG = "CANNOT OPEN COMPANY FILE"
+         GOSUB 90000
+         GOTO 99999
+      END
+      OPEN "","CONTROL" TO CONTROL ELSE
+         ERRMSG = "CANNOT OPEN CONTROL FILE"
+         GOSUB 90000
+         GOTO 99999
+      END
+      OPEN "","PSS.CONTROL" TO PSS.CONTROL ELSE
+         ERRMSG = "CANNOT OPEN PSS.CONTROL FILE"
+         GOSUB 90000
+         GOTO 99999
+      END
+      OPEN "","JOB.SCHED" TO JOB.SCHED ELSE
+         ERRMSG = "CANNOT OPEN JOB.SCHED FILE"
+         GOSUB 90000
+         GOTO 99999
+      END
+      OPEN "","PEND.JOB.SCHED" TO PEND.JOB.SCHED ELSE
+         ERRMSG = "CANNOT OPEN PEND.JOB.SCHED FILE"
+         GOSUB 90000
+         GOTO 99999
+      END
+      OPEN "","JOB" TO JOB ELSE
+         ERRMSG = "CANNOT OPEN JOB FILE"
+         GOSUB 90000
+         GOTO 99999
+      END
+      OPEN "","PSS.SCREENS" TO M.SCREENS ELSE
+         ERRMSG = "CANNOT OPEN PSS.SCREENS FILE"
+         GOSUB 90000
+         GOTO 99999
+      END
+      OPEN "","PSS.JOURNAL" TO PSS.JOURNAL ELSE
+         ERRMSG = "CANNOT OPEN PSS.JOURNAL FILE"
+         GOSUB 90000
+         GOTO 99999
+      END
+      OPEN "","PSS.LOCK" TO PSS.LOCK ELSE
+         ERRMSG = "CANNOT OPEN PSS.LOCK FILE"
+         GOSUB 90000
+         GOTO 99999
+      END
+* C30093 v Need this file opened
+      OPEN "","PREFIX" TO PREFIX ELSE
+         ERRMSG = "CANNOT OPEN PREFIX FILE"
+         GOSUB 90000
+         GOTO 99999
+      END
+      OPEN "","PSS.JOB.XREF" TO PSS.JOB.XREF ELSE
+         ERRMSG = "CANNOT OPEN PSS.JOB.XREF FILE"
+         GOSUB 90000
+         GOTO 99999
+      END
+* C30093 ^
+*
+*---- INITIALIZATION
+*
+      CONO = ""
+      CALL GET.CONO1 (CONO, MAT COMP.REC, COMPANY, CONTROL)
+      IF CONO = "END" THEN GOTO 99999
+      READ DEMODATE FROM CONTROL,"DEMODATE" THEN TODAY=ICONV(DEMODATE,"D") ELSE TODAY=DATE()
+*---- TASK 19407
+*
+* PERFORM PROCREAD
+*
+      PROCREAD BUFFER ELSE
+         ERRMSG = "MUST RUN FROM PROC"
+         GOSUB 90000
+         GOTO 99999
+      END
+      DIV.OWNER = BUFFER<3>
+*---- TASK 19407
+      SCREEN INIT;#
+      S$SCR = 1
+      SCREEN DEFINE;JOB.SCHED.PURGE
+      SCREEN FORMAT
+      GOSUB 89900;* CHECK FOR ACTIVE TRANSACTION
+      IF ERRMSG # "" THEN
+         GOSUB 90000
+         GOTO 99990
+      END
+      S$DATA(1)<S$SCR> = TODAY
+      SCREEN DISPLAY;;1
+      SCREEN FIELD;;2
+      S$MINV = 0; S$MAXV = TODAY-1
+      SCREEN INPUT;;2;GOTO 99990
+      PDATE = S$VALUE
+      SCREEN FIELD;;21
+      SCREEN INPUT;;21;GOTO 99990
+      IF S$VALUE = "N" THEN GOTO 99990
+      RCNT = 0
+      DCNT = 0
+      READU PSL.REC FROM PSS.CONTROL, CONO:DIV.OWNER:"PEND.SCHED.LIST" ELSE ; *---- TASK 19407
+         PSL.REC = ""
+      END
+      READU ALL.JOBS FROM PSS.CONTROL, CONO:DIV.OWNER:"JOB.SCHED.LIST" ELSE ; *---- TASK 19407
+         ALL.JOBS = ""
+      END
+*
+*---- MAIN PROCESSING
+*
+      SELECT JOB.SCHED
+100 *
+      READNEXT ID ELSE
+         IF PSL.REC = "" THEN
+***         DELETE PSS.CONTROL, CONO:DIV.OWNER:"PEND.SCHED.LIST" ; *---- TASK 19407
+            TPFID = CONO:DIV.OWNER:"PEND.SCHED.LIST"
+            CALL TRANSACTION.DELETE(CONO,TP.DIV,"PSS.CONTROL",TPFID,PSS.CONTROL,PSS.JOURNAL,ERRMSG)
+**********************************************************************
+         END ELSE
+***         WRITE PSL.REC ON PSS.CONTROL, CONO:DIV.OWNER:"PEND.SCHED.LIST" ; *---- TASK 19407
+            TPFID = CONO:DIV.OWNER:"PEND.SCHED.LIST"
+            TPREC = PSL.REC
+            CALL TRANSACTION.WRITE("WRITE",CONO,TP.DIV,"PSS.CONTROL",TPFID,TPREC,PSS.CONTROL,PSS.JOURNAL,ERRMSG)
+**********************************************************************
+         END
+         IF ALL.JOBS = "" THEN
+***         DELETE PSS.CONTROL, CONO:DIV.OWNER:"JOB.SCHED.LIST" ; *---- TASK 19407
+            TPFID = CONO:DIV.OWNER:"JOB.SCHED.LIST"
+            CALL TRANSACTION.DELETE(CONO,TP.DIV,"PSS.CONTROL",TPFID,PSS.CONTROL,PSS.JOURNAL,ERRMSG)
+**********************************************************************
+         END ELSE
+***         WRITE ALL.JOBS ON PSS.CONTROL, CONO:DIV.OWNER:"JOB.SCHED.LIST" ; *---- TASK 19407
+            TPFID = CONO:DIV.OWNER:"JOB.SCHED.LIST"
+            TPREC = ALL.JOBS
+            CALL TRANSACTION.WRITE("WRITE",CONO,TP.DIV,"PSS.CONTROL",TPFID,TPREC,PSS.CONTROL,PSS.JOURNAL,ERRMSG)
+**********************************************************************
+         END
+         LOOP
+            SCREEN FIELD;;22
+            SCREEN INPUT;;22
+         UNTIL S$VALUE = "Y" DO
+         REPEAT
+         GOTO 99990
+      END
+      IF ID[1,3] # CONO THEN GOTO 100
+      RCNT = RCNT + 1
+      S$DATA(3)<S$SCR> = RCNT
+      SCREEN DISPLAY;;3
+*---- TASK 19407
+      MATREAD JOB.REC FROM JOB, ID THEN
+         IF JOB.DIV # DIV.OWNER THEN
+            ERRMSG = "Job  not owned by selected division ":DIV.OWNER
+            GOTO 100
+         END
+      END
+*---- TASK 19407
+      MATREAD JOB.REC FROM JOB, ID ELSE
+* T20285
+*         MATREAD JBS.REC FROM JOB.SCHED, ID ELSE GOTO 100
+*         GOSUB 1000
+* T20285
+         GOTO 100
+      END
+      JSTAT = JOB.STATUS<1,1>
+      JDATE = JOB.STAT.DATE<1,1>
+      LOCATE "4" IN JOB.STATUS<1>,1 SETTING PTR ELSE PTR = 0
+      IF PTR > 0 THEN JDATE = JOB.STAT.DATE<1,PTR>
+      BEGIN CASE
+      CASE JSTAT = ""
+         NULL
+      CASE JSTAT = "4" AND JDATE <= PDATE
+         GOSUB 1000
+      CASE JSTAT > "6" AND JDATE <= PDATE
+         GOSUB 1000
+      CASE JSTAT > "6" AND JDATE = 99990
+         GOSUB 1000
+      END CASE
+      GOTO 100
+*
+*---- PURGE JOB.SCHED RECORD
+*
+1000 *
+* T20683
+      JOBNO = ID[4,99]
+      MATREAD JBS.REC FROM JOB.SCHED, ID ELSE MAT JBS.REC = ""
+      CALL GEN.XREF.MAINT(CONO,JOBNO,JBS.CUST.NAME,"",PSS.JOB.XREF,PREFIX)
+* T20683      
+* T20713
+      MATREAD JBS.REC FROM JOB.SCHED, ID ELSE MAT JBS.REC = ""
+      JCNT = DCOUNT(JBS.SCH.DATE,VM)
+      INP = 0
+      FOR JJJ = 1 TO JCNT UNTIL INP
+         BEGIN CASE
+            CASE JBS.DEPT.STATUS<1,JJJ> = "C"
+            CASE JBS.DEPT.STATUS<1,JJJ> = "I"
+               INP = 1
+            CASE JBS.CMP.DATE<1,JJJ> = "" AND JBS.SCH.DATE<1,JJJ> # ""
+               INP = 1
+         END CASE
+      NEXT JJJ
+      IF INP THEN GOTO 1999
+      MATREADU PJBS.REC FROM PEND.JOB.SCHED, ID ELSE MAT PJBS.REC = ""
+      ST.PTR = 0 ; EN.PTR = 0
+      IF PJBS.DEPT # "" THEN
+         DCNT = DCOUNT(PJBS.SCH.DATE,VM)
+         FOR X = DCNT TO 1 STEP -1
+            IF PJBS.SCH.DATE<1,X> # "" THEN
+               IF EN.PTR = 0 THEN EN.PTR = DCNT
+               ST.PTR = X
+            END
+         NEXT X
+         SDATE = ""; ALL.FLG = 1; ACTION = ""
+         JOB.NUM = ID[4,99]
+         CALL PUNSCHED.JOB.SUB(CONO,ACTION,JOB.NUM,TODAY,ST.PTR,EN.PTR,SDATE,ALL.FLG)
+         DEPT.CNT = DCOUNT(PJBS.DEPT,VM)
+         FOR DC = DEPT.CNT TO 1 STEP -1
+            AC = DCOUNT(JBS.A1,",")
+            FOR AP = 1 TO AC
+               AA = FIELD(JBS.A1,",",AP)
+               AA1 = FIELD(AA,"-",1)
+               AA2 = FIELD(AA,"-",2)
+               IF AA2 = "" THEN AA2 = AA1
+               FOR AAP = AA1 TO AA2
+                  PJBS.REC(AAP) = DELETE(PJBS.REC(AAP),1,DC,0)
+               NEXT AAP
+            NEXT AP
+         NEXT DC
+      END
+* T20713
+***   DELETE JOB.SCHED, ID
+      TPFID = ID
+      CALL TRANSACTION.DELETE(CONO,TP.DIV,"JOB.SCHED",TPFID,JOB.SCHED,PSS.JOURNAL,ERRMSG)
+**********************************************************************
+***   DELETE PEND.JOB.SCHED, ID
+      TPFID = ID
+      CALL TRANSACTION.DELETE(CONO,TP.DIV,"PEND.JOB.SCHED",TPFID,PEND.JOB.SCHED,PSS.JOURNAL,ERRMSG)
+**********************************************************************
+*
+      JOBNO = ID[4,99]
+      LOCATE JOBNO IN PSL.REC<1>,1 SETTING P THEN
+         PSL.REC = DELETE(PSL.REC,1,P,0)
+         PSL.REC = DELETE(PSL.REC,2,P,0)
+         PSL.REC = DELETE(PSL.REC,3,P,0)
+***      WRITEU PSL.REC ON PSS.CONTROL, CONO:DIV.OWNER:"PEND.SCHED.LIST" ; *---- TASK 19407
+         TPFID = CONO:DIV.OWNER:"PEND.SCHED.LIST"
+         TPREC = PSL.REC
+         CALL TRANSACTION.WRITE("WRITEU",CONO,TP.DIV,"PSS.CONTROL",TPFID,TPREC,PSS.CONTROL,PSS.JOURNAL,ERRMSG)
+**********************************************************************
+      END
+      JCNT = DCOUNT(ALL.JOBS,AM)
+      FOR JPTR = JCNT TO 1 STEP - 1
+         IF ALL.JOBS<JPTR,1> = JOBNO THEN
+            ALL.JOBS = DELETE(ALL.JOBS,JPTR,0,0)
+***         WRITEU ALL.JOBS ON PSS.CONTROL, CONO:DIV.OWNER:"JOB.SCHED.LIST" ; *---- TASK 19407
+            TPFID = CONO:DIV.OWNER:"JOB.SCHED.LIST"
+            TPREC = ALL.JOBS
+            CALL TRANSACTION.WRITE("WRITEU",CONO,TP.DIV,"PSS.CONTROL",TPFID,TPREC,PSS.CONTROL,PSS.JOURNAL,ERRMSG)
+**********************************************************************
+         END
+      NEXT JPTR
+      DCNT = DCNT + 1
+      S$DATA(4)<S$SCR> = DCNT
+      SCREEN DISPLAY;;4
+1999 *
+      RETURN
+*
+***(TPCHECKBEG3)***************************************************
+*
+*---- CHECK FOR ACTIVE TRANSACTION
+*
+89900 *
+      READU LREC FROM PSS.LOCK, CONO:"TP" ELSE NULL
+      REQDIV = DIV.OWNER
+      CALL TRANSACTION.LOCK(CONO, REQDIV, TP.DIV, ERRMSG)
+      BEGIN CASE
+      CASE TP.DIV = "X"
+      CASE TP.DIV = ""
+         DCNT = DCOUNT(REQDIV,VM)
+         FOR DPTR = 1 TO DCNT
+            CDIV = REQDIV<1,DPTR>
+            LOCK.ID = "[":CONO:",":CDIV:",":@LOGNAME:" @ ":@TTY:"]"
+            READU LREC FROM PSS.LOCK, LOCK.ID ELSE NULL
+         NEXT DPTR
+      END CASE
+      RELEASE PSS.LOCK, CONO:"TP"
+      RETURN
+***(TPCHECKEND)***************************************************
+*
+*---- ERROR ROUTINE
+*
+90000 ERR.TYPE=1;CALL SI_SYSCOM(MAT SYSCOM.REC);RETURN
+* 90000 *
+*       PRINT @(0,23):@(-4):ERRMSG:
+*       INPUT REPLY:
+*       PRINT @(0,23):@(-4):
+*       RETURN
+*
+*---- END OF PROGRAM
+*
+99990 *
+SCREEN CLOSE
+*
+99999 *
+*       PRINT @(-1):
+      STOP
+      END

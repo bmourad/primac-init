@@ -1,0 +1,310 @@
+SUBROUTINE ICSRSRE_GETPO
+********************************************************************************
+*   Program name :- ICSRSRE_GETPO
+*   Created:- 11/14/2006
+ *Programmer :- Lakshmi Prasanna.E
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE ICS.CPYLIB DAILY_STOCK
+$INCLUDE PMC.CPYLIB PO
+$INCLUDE CPYLIB CHAR
+$INCLUDE ICS.CPYLIB INV.CNV
+$INCLUDE ICS.CPYLIB INVENTORY
+
+ERRMSG=''
+OPEN '','DAILY_STOCK' TO DAILY_STOCK ELSE
+   ERRMSG = 'DAILY_STOCK FILE IS MISSING'
+   GOTO 93000
+END
+OPEN '','INVENTORY' TO INVENTORY ELSE
+   ERRMSG = 'INVENTORY FILE IS MISSING'
+   GOTO 93000
+END
+
+OPEN '','PO' TO PO ELSE
+   ERRMSG = 'PO FILE IS MISSING'
+   GOTO 93000
+END
+
+OPEN '','CONTROL' TO CONTROL ELSE
+   ERRMSG = 'CONTROL FILE IS MISSING'
+   GOTO 93000
+END
+
+
+OPEN '','PO' TO PO ELSE
+   ERRMSG = 'PO FILE IS MISSING'
+   GOTO 93000
+END
+DSRPROD=""
+DSRPOLINE=""
+ERRMSG=""
+POLINES=""
+PROD=""
+CAN.ON.ORDER=""
+PO.RECV.QTY=""
+PO.OPEN.QTY=""
+COMPLETE=""
+CAN.OPEN=""
+CAN.RCVD=""
+STATUS=RBO.getProperty('','ID',ID)
+*STATUS=RBO.getProperty('','PONUM',PO_NO)
+POS = INDEX(ID,"!",1)
+PO_NO = ID[1,POS-1]
+CONO=ID[1,3]
+DSRQTY=""
+QTYLEN=""
+TEMP.ROLL.WEIGHT=""
+ SV.CNT=""
+DIFF.UM=""
+
+MATREAD DSR.REC FROM DAILY_STOCK,ID THEN
+
+   POLINES=DSR.PO.LINE
+   PROD=DSR.PROD
+   *COMPLETE=DSR.COMPLETE
+   CNT=DCOUNT(DSR.PROD,VM)
+   FOR SS=1 TO CNT
+   MATREAD INV.REC FROM INVENTORY,CONO:DSR.PROD<1,SS> THEN
+     UNIT=DSR.UOM<1,SS>
+     FOR I = 1 TO 4                          
+        INV.UNIT<1,SS,-1>=INV.UNIT<1,2>
+      NEXT I  
+      QTYLEN=LEN(DSR.QTY<1,SS>)-2
+      *IF DSR.QTY<1,SS>[QTYLEN,1]="." THEN
+       *   DSR.QTY<1,SS>=DSR.QTY<1,SS>*100
+      *END
+      S$VALUE = DSR.QTY<1,SS>        
+      
+   END
+   NEXT SS
+
+   GOSUB DSRREC
+
+ MATREAD PO.REC FROM PO,PO_NO THEN
+ *CNT=DCOUNT(PO.PROD.NUM,VM)
+  CNT=DCOUNT(DSR.PO.LINE,VM)
+  FOR I= 1 TO CNT
+     MATREAD INV.REC FROM INVENTORY,CONO:DSR.PROD<1,I> THEN
+       PO.LN=DSR.PO.LINE<1,I>
+       $INCLUDE ICSBP INV.UM.CNV
+       GOSUB 10000
+       
+       IF DSR.UOM<1,PO.LN> # INV.UNIT<1,2> THEN
+         DIFF.UM = "Y"
+       END ELSE
+         DIFF.UM = "N"
+       END
+     END
+
+     IF DIFF.UM # 'Y' THEN
+       CAN.ON.ORDER<1,I> = OCONV(INT(PO.TOT.ONORD<1,PO.LN>/ICR.DV1<1,1> * ICR.MT1<1,1> / ICR.DV2<1,1> + .5),ICR.CNV<1,1>)
+      
+       FOR M = 1 TO DCOUNT(DSR.QTY<1,I>,SVM)
+          CAN.RCVD<1,I> += OCONV(INT(DSR.QTY<1,I,M>/ICR.DV1<1,1> * ICR.MT1<1,1> / ICR.DV2<1,1> + .5),ICR.CNV<1,1>)
+       NEXT M
+       IF PO.QTY.OPEN<1,I>=0 THEN
+        CAN.RCVD<1,I>=0
+       END
+       CAN.OPEN<1,I> = CAN.ON.ORDER<1,I> - CAN.RCVD<1,I>
+       SCLR = ICR.CNV<1,1>[LEN(ICR.CNV<1,1>),1]
+       IF SCLR > 0 THEN
+           MPLR = '1' : STR('0',SCLR)
+           CAN.RCVD<1,I> *= MPLR
+           CAN.RCVD<1,I> = OCONV(CAN.RCVD<1,I>,ICR.CNV<1,1>)
+           CAN.OPEN<1,I> *= MPLR
+           CAN.OPEN<1,I> = OCONV(CAN.OPEN<1,I>,ICR.CNV<1,1>)
+       END
+      
+
+     END ELSE
+       CAN.ON.ORDER<1,I> = OCONV(INT(PO.TOT.ONORD<1,PO.LN>/ICR.DV1<1,2> * ICR.MT1<1,2> / ICR.DV2<1,2> + .5),ICR.CNV<1,2>)
+       FOR M= 1 TO DCOUNT(DSR.QTY<1,I>,SVM)
+         CAN.RCVD<1,I> += OCONV(INT(DSR.QTY<1,I,M>/ICR.DV1<1,2> * ICR.MT1<1,2> / ICR.DV2<1,2> + .5),ICR.CNV<1,2>)
+       NEXT M
+       IF PO.QTY.OPEN<1,I>=0 THEN
+        CAN.RCVD<1,I>=0
+       END
+       CAN.OPEN<1,I> = CAN.ON.ORDER<1,I> - CAN.RCVD<1,I>
+       SCLR = ICR.CNV<1,2>[LEN(ICR.CNV<1,2>),1]
+       IF SCLR > 0 THEN
+           MPLR = '1' : STR('0',SCLR)
+           CAN.RCVD<1,I> *= MPLR
+           CAN.RCVD<1,I> = OCONV(CAN.RCVD<1,I>,ICR.CNV<1,2>)
+           CAN.OPEN<1,I> *= MPLR
+           CAN.OPEN<1,I> = OCONV(CAN.OPEN<1,I>,ICR.CNV<1,2>)
+       END
+     END
+     IF CAN.OPEN<1,I>="0" OR CAN.OPEN<1,I>="0.00" THEN
+        COMPLETE<1,I>="N"
+     END
+  NEXT I   
+ END
+END
+
+
+
+
+  *STATUS=RBO.setProperty('','POLINES',DSRPOLINE)
+ * STATUS=RBO.setProperty('','PO_PROD_NO',DSRPROD)
+ STATUS=RBO.setProperty('','PO_ON_ORD',CAN.ON.ORDER)
+  *STATUS=RBO.setProperty('','PO_RECV_QTY',PO.RECV.QTY)
+  *STATUS=RBO.setProperty('','PO_OPEN_QTY',PO.OPEN.QTY)
+ 
+  STATUS=RBO.setProperty('','PO_RECV_QTY',CAN.RCVD)
+  STATUS=RBO.setProperty('','PO_OPEN_QTY',CAN.OPEN)
+
+  STATUS=RBO.setProperty('','Complete',COMPLETE)
+
+RETURN
+
+5000:
+   BEGIN CASE
+  CASE INV.UNIT<1,SS,2> = "SHT" AND INV.UNIT<1,SS,3> = "LBS"
+    ICR.CNV<SS,1> = "MD0"; ICR.DV2<SS,1> = 1
+    ICR.DV1<SS,1> = INV.M.WT<1,SS>; ICR.MT1<SS,1> = 1
+  CASE INV.UNIT<1,SS,2> = "PC" AND INV.UNIT<1,SS,3> = "MSI"
+    ICR.CNV<SS,1> = "MD0"; ICR.DV2<SS,1> = 1
+    ICR.DV1<SS,1>=INV.PAP.WIDTH/100;ICR.MT1<SS,1>=10
+  CASE INV.UNIT<1,SS,2> = "FT" AND INV.UNIT<1,SS,3> = "MSI"
+    ICR.CNV<SS,1> = "MD0"; ICR.DV2<SS,1> = 12
+    ICR.DV1<SS,1>=INV.PAP.WIDTH<1,SS>/100;ICR.MT1<SS,1>=100
+  CASE 1
+    ICR.CNV<SS,1> = "MD2"; ICR.DV2<SS,1> = 1
+    ICR.DV1<SS,1> = 10; ICR.MT1<SS,1> = INV.SBR
+END CASE
+BEGIN CASE
+  CASE UNIT<1,SS>="SHT" AND INV.UNIT<1,SS,3>="LBS"
+    ICR.CNV<SS,2> = "MD0"; ICR.DV2<SS,2> = 1
+    ICR.DV1<SS,2> = INV.M.WT; ICR.MT1<SS,2> = 1
+  CASE UNIT<1,SS>="PC" AND INV.UNIT<1,SS,3>="MSI"
+    ICR.CNV<SS,2> = "MD0"; ICR.DV2<SS,2> = 1
+    ICR.DV1<SS,2>=INV.PAP.WIDTH/100;ICR.MT1<SS,2>=10
+  CASE UNIT<1,SS>="FT" AND INV.UNIT<1,SS,3>="MSI"
+    ICR.CNV<SS,2> = "MD0"; ICR.DV2<SS,2> = 12
+    ICR.DV1<SS,2>=INV.PAP.WIDTH/100;ICR.MT1<SS,2>=100
+  CASE 1
+    ICR.CNV<SS,2> = "MD2"; ICR.DV2<SS,2> = 1
+    ICR.DV1<SS,2> = 10; ICR.MT1<SS,2> = 1
+END CASE
+
+IF UNIT<1,SS> # INV.UNIT<1,SS,2> THEN 
+  DIFF.UM<SS> = "Y" 
+END ELSE
+  DIFF.UM<SS> = "N"
+END
+
+RETURN      
+
+10000:
+ BEGIN CASE                                             
+        * CASE INV.UNIT<1,1> = "SHT" AND INV.UNIT<1,3> = "LBS"       
+          CASE DSR.UOM<1,PO.LN> = "SHT" AND INV.UNIT<1,3> = "LBS"      
+            ICR.CNV<1,1> = "MD0";             ICR.DV2<1,1> = 1  
+            ICR.DV1<1,1> = INV.M.WT;          ICR.MT1<1,1> = 1  
+         *CASE INV.UNIT<1,1> = "PC" AND INV.UNIT<1,3> = "MSI"        
+          CASE DSR.UOM<1,PO.LN> = "PC" AND INV.UNIT<1,3> = "MSI" 
+            ICR.CNV<1,1> = "MD0";             ICR.DV2<1,1> = 1  
+            ICR.DV1<1,1> = INV.PAP.WIDTH/100; ICR.MT1<1,1> = 10 
+         *CASE INV.UNIT<1,1> = "FT" AND INV.UNIT<1,3> = "MSI"        
+          CASE DSR.UOM<1,PO.LN> = "FT" AND INV.UNIT<1,3> = "MSI" 
+            ICR.CNV<1,1> = "MD0";             ICR.DV2<1,1> = 12 
+            ICR.DV1<1,1> = INV.PAP.WIDTH/100; ICR.MT1<1,1> = 100
+          CASE 1                                                 
+            ICR.CNV<1,1> = "MD2";             ICR.DV2<1,1> = 1  
+            ICR.DV1<1,1> = 10;                ICR.MT1<1,1> = 1  
+ END CASE
+ BEGIN CASE                                             
+         *CASE INV.UNIT<1,1> = "SHT" AND INV.UNIT<1,3> = "LBS"       
+          CASE DSR.UOM<1,PO.LN> = "SHT" AND INV.UNIT<1,3> = "LBS" 
+            ICR.CNV<1,2> = "MD0";             ICR.DV2<1,2> = 1  
+            ICR.DV1<1,2> = INV.M.WT;          ICR.MT1<1,2> = 1  
+         *CASE INV.UNIT<1,1> = "PC" AND INV.UNIT<1,3> = "MSI"   
+          CASE DSR.UOM<1,PO.LN> = "PC" AND INV.UNIT<1,3> = "MSI"      
+            ICR.CNV<1,2> = "MD0";             ICR.DV2<1,2> = 1  
+            ICR.DV1<1,2> = INV.PAP.WIDTH/100; ICR.MT1<1,2> = 10 
+         *CASE INV.UNIT<1,1> = "FT" AND INV.UNIT<1,3> = "MSI"
+          CASE DSR.UOM<1,PO.LN> = "FT" AND INV.UNIT<1,3> = "MSI" 
+            ICR.CNV<1,2> = "MD0";             ICR.DV2<1,2> = 12 
+            ICR.DV1<1,2> = INV.PAP.WIDTH/100; ICR.MT1<1,2> = 100
+          CASE 1                                                 
+            ICR.CNV<1,2> = "MD2";             ICR.DV2<1,2> = 1  
+            ICR.DV1<1,2> = 10;                ICR.MT1<1,2> = 1  
+ END CASE 
+RETURN   
+
+
+
+DSRREC:
+S.CNT=DCOUNT(DSR.SERIAL,VM)
+
+   DIM S.REC(6)
+   S.PO.LINE.NO=DSR.PO.LINE
+   S.SERIAL=DSR.SERIAL
+   S.QTY=DSR.QTY
+   S.UOM=DSR.UOM
+   S.COMPLETE=DSR.COMPLETE
+
+   S.PROD=DSR.PROD
+   DSR.SERIAL=""
+   DSR.PO.LINE=""
+   DSR.QTY=""
+   DSR.PROD=""
+   DSR.UOM=""
+   DSR.COMPLETE=""
+
+   FOR SS= 1 TO S.CNT
+   *MAT DSR.REC=""
+ LOCATE S.PO.LINE.NO<1,SS> IN DSR.PO.LINE<1>,1 BY 'AR' SETTING LN THEN
+*T27902 ^
+    SV.CNT=DCOUNT(DSR.SERIAL<1,LN>,SVM)
+  END ELSE
+    SV.CNT=0
+  END
+
+*     T27902 v
+  IF NOT(SV.CNT) THEN
+    INS '' BEFORE DSR.PO.LINE<1,LN>
+    INS '' BEFORE DSR.SERIAL<1,LN>
+    INS '' BEFORE DSR.QTY<1,LN>
+    INS '' BEFORE DSR.PROD<1,LN>
+    INS '' BEFORE DSR.UOM<1,LN>
+    INS '' BEFORE DSR.COMPLETE<1,LN>
+    
+  END
+*     T27902 ^
+   SV.CNT+=1
+   DSR.PO.LINE<1,LN> = S.PO.LINE.NO<1,SS>
+   DSR.SERIAL<1,LN,SV.CNT>=S.SERIAL<1,SS>
+   DSR.QTY<1,LN,SV.CNT>=S.QTY<1,SS>
+   DSR.PROD<1,LN>=S.PROD<1,SS>
+   DSR.UOM<1,LN>=S.UOM<1,SS>
+   DSR.COMPLETE<1,LN>=S.COMPLETE<1,SS>
+  
+NEXT SS
+ DSRUOM=DSR.UOM
+ STATUS=RBO.setProperty('','POLINES',DSR.PO.LINE)
+  STATUS=RBO.setProperty('','PO_PROD_NO',DSR.PROD)
+
+
+RETURN
+93000
+IF ERRMSG # "" THEN
+	STATUS = RBO.setProperty('','ServerStatus',1)
+	STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+END
+
+
+RETURN
+
+

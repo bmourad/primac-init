@@ -1,0 +1,503 @@
+SUBROUTINE JOBM_RS_RD_DATA_FOR_NEW_JOB
+********************************************************************************
+*   Program name :- JOBM_RS_RD_DATA_FOR_NEW_JOB
+*   Created:- 7/26/2006
+*   Programmer :- Suhail Hussain S
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE PMC.CPYLIB COMPANY
+$INCLUDE JCS.CPYLIB JOB
+$INCLUDE JES.CPYLIB ESTIMATE
+$INCLUDE JES.CPYLIB ESTIMATE.RES
+$INCLUDE JES.CPYLIB ESTIMATE.DEPT
+$INCLUDE JES.CPYLIB ESTIMATE.MATL
+$INCLUDE JES.CPYLIB ESTIMATE.JOB
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB WAREHOUSE
+$INCLUDE ICS.CPYLIB INV.WHSE
+$INCLUDE ICS.CPYLIB INV.JOB.STATS
+$INCLUDE ICS.CPYLIB CATEGORY
+$INCLUDE ICS.CPYLIB INV.CNV
+$INCLUDE CPYLIB FILE.VARS
+$INCLUDE CPYLIB CHAR
+
+
+*---- OPEN ALL FILES
+   OPEN "","COMPANY" TO COMPANY ELSE ERRMSG = "CANNOT OPEN COMPANY FILE";GOTO 93000
+   OPEN "","JOB" TO JOB ELSE ERRMSG = "CANNOT OPEN JOB FILE";GOTO 93000
+   OPEN "","INVENTORY" TO INVENTORY ELSE ERRMSG = "CANNOT OPEN INVENTORY FILE";GOTO 93000
+   OPEN "","INV.WHSE" TO INV.WHSE ELSE ERRMSG = "CANNOT OPEN INV.WHSE FILE";GOTO 93000
+   OPEN "","INV.JOB.STATS" TO INV.JOB.STATS ELSE ERRMSG = "CANNOT OPEN INV.JOB.STATS FILE";GOTO 93000
+   OPEN "","ESTIMATE" TO ESTIMATE ELSE ERRMSG = "CANNOT OPEN ESTIMATE FILE";GOTO 93000
+   OPEN "","ESTIMATE.JOB" TO ESTIMATE.JOB ELSE ERRMSG = "CANNOT OPEN ESTIMATE.JOB FILE";GOTO 93000
+   OPEN "","ESTIMATE.DEPT" TO ESTIMATE.DEPT ELSE ERRMSG = "CANNOT OPEN ESTIMATE.DEPT FILE";GOTO 93000
+   OPEN "","ESTIMATE.MATL" TO ESTIMATE.MATL ELSE ERRMSG = "CANNOT OPEN ESTIMATE.MATL FILE";GOTO 93000
+   OPEN "","CATEGORY" TO CATEGORY ELSE ERRMSG = "CANNOT OPEN CATEGORY FILE";GOTO 93000
+   OPEN "","ESTIMATE.RES" TO ESTIMATE.RES ELSE ERRMSG = "CANNOT OPEN ESTIMATE.RES FILE";GOTO 93000
+   OPEN "","WAREHOUSE" TO WAREHOUSE ELSE ERRMSG = "CANNOT OPEN WAREHOUSE FILE";GOTO 93000
+   EST.ACT.FLG = 0
+   OPEN "","EST.JOB.ACT" TO EST.JOB.ACT THEN EST.ACT.FLG = 1
+
+   DEFFUN CALC_STK_QTY (COST.QTY,MAT INV.CNV.REC,ROND,LN)
+*---- GET PARAMETERS
+   STATUS = RBO.getProperty('','JOB_EST',EST.NO)
+   STATUS = RBO.getProperty('','JOB_NO',JOB.NO)
+   STATUS = RBO.getProperty('','REQD_DATE',EST_QTY)
+   STATUS = RBO.getProperty('','REQD_PRICE',EST_COMP)
+   STATUS = RBO.getProperty('','REQD_QTY',WHSE_IP)
+   STATUS = RBO.getProperty('','Cono',CONO)
+
+*---- INITIALIZATION
+   MATREAD COMP.REC FROM COMPANY, CONO ELSE ERRMSG = 'Cannot read company ':CONO:' record.';GOTO 93000
+
+   DIM EST.PAR(10)
+   EQU EST.PAR.QTY    TO EST.PAR(1)
+   EQU EST.PAR.COMP   TO EST.PAR(2)
+   EQU EST.PAR.DEPT   TO EST.PAR(3)
+   EQU EST.PAR.UPDM   TO EST.PAR(4)
+   EQU EST.PAR.MATL   TO EST.PAR(5)
+   DIM OLD.EST.PAR(10)
+   MAT OLD.EST.PAR = ''
+   DIM NEW.EST.PAR(10)
+   MAT NEW.EST.PAR = ''
+   SAVE.INV.JS.REC = ""
+   
+   MAT JOB.REC = ""
+   MATREAD EST.REC FROM ESTIMATE, CONO : EST.NO ELSE MAT EST.REC = ""
+   JOB.DIV = EST.DIV
+   VALUE = ''
+   ERRMSG = ''
+   DEPT = ''
+   DPTR = 0
+   EST.MATL = 1
+   ERRFLG = '0'
+   RS_GRID = ""
+   RD_GRID = ""
+
+*---- MAIN PROCESSING
+210 **---- GET ESTIMATE QUANTITY
+   ECNT = COUNT(EST.QTY,VM) + (EST.QTY # "")
+   BEGIN CASE
+      CASE ECNT = 0
+         ERRMSG = "No quantities present for specified estimate."
+         ERRFLG = 3;GOTO EXIT_PROG
+      CASE ECNT = 1
+         EST.PAR.QTY = EST.QTY
+         QP = 1
+      CASE 1
+         VALUE = EST_QTY;* THIS IS A USER INPUT
+         LOCATE VALUE IN EST.QTY<1>,1 SETTING QP ELSE
+            ERRMSG = "Invalid quantity. Try again! "
+            ERRFLG=2;GOTO EXIT_PROG
+         END
+         ERRMSG = ""
+         IF VALUE # EST.BOOK.QTY THEN
+            JCNT = DCOUNT(EST.BOOK.JOB,VM)
+            FOR JP = 1 TO JCNT
+               IF EST.BOOK.JOB<1,JP> # JOB.NO THEN
+                  ERRMSG<1,-1>="Estimate has been booked to Job# ":EST.BOOK.JOB<1,JP>:" for Qty ":EST.BOOK.QTY
+               END
+            NEXT JP
+         END
+         IF ERRMSG # "" THEN ERRFLG = 2;GOTO EXIT_PROG
+         EST.PAR.QTY = VALUE
+   END CASE
+
+220 **---- GET COMPONENT NUMBER
+   BEGIN CASE
+      CASE EST.COMPONENT.CNT+0 = 0
+         EST.PAR.COMP = ""
+         SAVE.COMP.CNT = 0
+      CASE 1
+         IF EST.PDEF.TYPE # "RL" THEN
+            VALUE = EST_COMP
+         END ELSE
+            VALUE = "ALL"
+         END
+         NUM.JOBS=DCOUNT(EST.BOOK.JOB,VM)
+         IF VALUE = "ALL" THEN
+            JFND=0
+            FOR NJ = 1 TO NUM.JOBS WHILE JFND = 0
+               IF EST.BOOK.JOB<1,NJ> # JOB.NO THEN JFND = NJ
+            NEXT NJ
+            IF JFND > 0 THEN
+               ERRMSG<1,-1>="One or more components have been booked to Job# ":EST.BOOK.JOB<1,JFND>
+               IF EST.PDEF.TYPE = "RL" THEN
+                  VALUE = "END"
+                  ERRFLG = 4
+                  GOTO EXIT_PROG
+               END
+               ERRFLG = 2
+               GOTO EXIT_PROG
+            END
+            IF EST.COMPONENT.CNT = 1 THEN
+               EST.PAR.COMP = 1
+               SAVE.COMP.CNT = 1
+            END ELSE
+               EST.PAR.COMP = "ALL"
+            END
+         END ELSE
+            COMPS = ""
+            C2 = COUNT(VALUE,",") + 1
+            FOR C = 1 TO C2
+               CX = FIELD(VALUE,",",C)
+               JFND=0
+               FOR NJ = 1 TO NUM.JOBS WHILE JFND = 0
+                  IF EST.BOOK.JOB<1,NJ> # JOB.NO THEN
+                     LOCATE CX IN EST.BOOK.COMP<1,NJ>,1 SETTING JFND ELSE JFND = 0
+                  END
+               NEXT NJ
+               IF JFND THEN
+                  ERRMSG<1,-1>="Component ":CX:" has been booked to Job# ":EST.BOOK.JOB<1,JFND>                  
+               END
+               COMPS<1,1,C> = CX
+            NEXT C
+            IF ERRMSG # "" THEN ERRFLG = 2;GOTO EXIT_PROG
+            IF EST.COMPONENT.CNT = 1 THEN
+               EST.PAR.COMP = 1
+               SAVE.COMP.CNT = 1
+            END ELSE
+               EST.PAR.COMP = COMPS
+               SAVE.COMP.CNT = C2
+            END
+         END
+   END CASE
+
+2000 *
+   JOB.TRACK.DATE<1,1> = EST.DATE.ENTERED
+   JOB.EST = EST.NO
+   JOB.EST.TYPE = EST.TYPE
+   JOB.QTY<1,1> = EST.PAR.QTY
+   IF JOB.MASTER = "" THEN JOB.MASTER = EST.JOB
+   LOCATE EST.PAR.QTY IN EST.QTY<1>,1 SETTING QP ELSE QP = 0
+   IF QP > 0 THEN
+      JOB.PRICE.PER.THOU = EST.PRICE.THOU<1,QP>
+   END
+   JOB.EST.COST = ""
+   JOB.EST.SALE = ""
+   DC.CNT = COUNT(EST.DEPT.COMP,VM) + (EST.DEPT.COMP # "")
+   TOTAL.VSALE=0;*T21961
+   FOR LN = 1 TO DC.CNT
+      COMP = FIELD(EST.DEPT.COMP<1,LN>,"!",2)
+      LOCATE COMP IN EST.PAR.COMP<1,1>,1 SETTING CMATCH ELSE CMATCH = 0
+      IF EST.PAR.COMP = "ALL" OR CMATCH > 0 THEN
+         IF EST.PAR.QTY = FIELD(EST.DEPT.COMP<1,LN>,"!",3) THEN
+            JOB.EST.COST = JOB.EST.COST + EST.DEPT.COMP.COST<1,LN>
+            JOB.EST.SALE = JOB.EST.SALE + EST.DEPT.COMP.TSALE<1,LN>
+            TOTAL.VSALE=TOTAL.VSALE+EST.DEPT.COMP.VSALE<1,LN>;*T21961
+         END
+      END
+   NEXT LN
+   JOB.EST.SALE = JOB.EST.SALE + (INT(OCONV(JOB.EST.SALE,'MD2') * OCONV(EST.OM.PCT<1,QP>,'MD4') + .005 / 100))
+   CPT = 0
+   TOTAL.VSALE = TOTAL.VSALE + (INT(OCONV(TOTAL.VSALE,'MD2') * OCONV(EST.OM.PCT<1,QP>,'MD4') + .005 / 100))
+   IF EST.PAR.COMP # 'ALL' THEN
+      JOB.PRICE.PER.THOU = INT(TOTAL.VSALE / (EST.PAR.QTY/1000) + .5)
+   END
+   DPT = 0
+   CPT = 0
+   CCNT1 = COUNT(EST.COMMENT.TYPE,VM) + 1
+   CCNT2 = COUNT(EST.COMMENTS,VM) + 1
+   IF CCNT2 > CCNT1 THEN CCNT = CCNT2 ELSE CCNT = CCNT1
+   FOR CP = 1 TO CCNT
+      IF EST.COMMENT.TYPE<1,CP> = "I" THEN
+         CPT = CPT + 1
+         IF JOB.COMMENTS<1,CPT> = '' THEN
+            JOB.COMMENTS<1,CPT> = EST.COMMENTS<1,CP>
+         END
+      END
+   NEXT CP
+   FOR CP = 1 TO CCNT
+      IF EST.COMMENT.TYPE<1,CP> # "I" THEN
+         IF EST.COMMENT.TYPE<1,CP> = "" OR EST.PAR.COMP = "ALL" THEN
+            DPT = DPT + 1
+            JOB.DESC<1,DPT> = EST.COMMENTS<1,CP>
+         END ELSE
+            LOCATE EST.COMMENT.TYPE<1,CP> IN EST.PAR.COMP<1,1>,1 SETTING FND2 ELSE FND2 = 0
+            IF FND2 THEN
+               DPT = DPT + 1
+               JOB.DESC<1,DPT> = EST.COMMENTS<1,CP>
+            END
+         END
+      END
+   NEXT CP
+   JOB.CONF.AMT = JOB.EST.SALE
+
+*---- GET RESERVE PRODUCTS FROM ESTIMATE
+
+   IF EST.MATL THEN
+      MATREAD EST.RL.REC FROM ESTIMATE.RES, CONO:EST.NO THEN
+         ROLL.LABEL = 'Y'
+      END ELSE
+         ROLL.LABEL = ''
+      END
+      JRM.CNT = COUNT(JOB.RESV.MATL,VM) + (JOB.RESV.MATL # "")
+      FOR JM = 1 TO JRM.CNT
+         IF SAVE.INV.JS.REC<JM> = '' THEN
+            MATREAD WHSE.REC FROM WAREHOUSE,CONO:JOB.RESV.WHSE<1,JM> ELSE MAT WHSE.REC = ''
+            IF WHS.DIV = JOB.DIV OR WHS.DIV = "00" THEN
+               JSTAT.ID = JOB.RESV.MATL<1,JM>:"!":JOB.RESV.WHSE<1,JM>:"!":JOB.NO
+               MATREAD INV.JS.REC FROM INV.JOB.STATS,CONO:JSTAT.ID ELSE
+                  MAT INV.JS.REC = ''
+               END
+               SAVE.INV.JS.REC<JM,1> = IJS.REQ.DATE
+               SAVE.INV.JS.REC<JM,2> = IJS.REQ.AMT
+               SAVE.INV.JS.REC<JM,3> = IJS.REQ.QTY
+            END
+         END
+      NEXT JM
+      EST.PRODS = ""
+      EST.QTYS = ""
+      IF EST.PAR.COMP = "ALL" THEN
+         COMP.CNT =EST.COMPONENT.CNT
+      END ELSE
+         COMP.CNT = SAVE.COMP.CNT
+      END
+      FOR CP = 1 TO COMP.CNT
+         IF EST.PAR.COMP = "ALL" THEN COMP = CP ELSE COMP = EST.PAR.COMP<1,1,CP>
+         WEB.CNT = COUNT(EST.PROD.OS.PROD<1,COMP>,SM) + 1
+         FOR WB = 1 TO WEB.CNT
+            IF EST.PROD.INV.ID<1,COMP,WB> # "" THEN
+               PROD = EST.PROD.INV.ID<1,COMP,WB>
+               IF ROLL.LABEL THEN
+                  QTY = FIELD(EST.RL.PAP.MSI<1,COMP,WB>,"!",QP)
+                  WIDTH = EST.PROD.OS.WIDTH<1,COMP,WB>
+                  GOSUB 70000
+               END ELSE
+                  QTY = FIELD(EST.PROD.PQTY<1,COMP,WB>,"!",QP)
+               END
+               LOCATE PROD IN EST.PRODS<1>,1 SETTING X ELSE NULL
+               EST.PRODS<1,X> = PROD
+               EST.QTYS<1,X> = EST.QTYS<1,X> + QTY
+            END
+         NEXT WB
+      NEXT CP
+      PROD.CNT = COUNT(EST.PRODS,VM) + (EST.PRODS # "")
+      FOR I = 1 TO PROD.CNT
+         MATREAD INV.REC FROM INVENTORY,CONO:EST.PRODS<1,I> ELSE MAT INV.REC = ''
+         GOSUB 80000
+         IF CASE1.FLAG THEN EST.QTYS<1,I> = EST.QTYS<1,I> * 100
+         MATREAD CATG.REC FROM CATEGORY,CONO:INV.LINE ELSE MAT CATG.REC = ''
+         WCNT = DCOUNT(INV.WHSE.CODE,VM)
+         DVCNT=0;WPTR=0
+         GNCNT=0;GPTR=0
+         GMSG=''
+         VALDAT = ''
+         FOR W = 1 TO WCNT
+            MATREAD WHSE.REC FROM WAREHOUSE,CONO:INV.WHSE.CODE<1,W> THEN
+               IF WHS.DIV = JOB.DIV THEN
+                  DVCNT += 1
+                  IF WPTR = 0 THEN WPTR = W
+                  VALDAT<1,1,-1> = INV.WHSE.CODE<1,W>
+               END
+               IF WHS.DIV = '00' THEN
+                  GNCNT += 1
+                  IF GPTR = 0 THEN GPTR = W
+                  VALDAT<1,1,-1> = INV.WHSE.CODE<1,W>
+               END
+            END
+         NEXT W
+         BEGIN CASE
+            CASE DVCNT = 1
+               WHSE = INV.WHSE.CODE<1,WPTR>
+            CASE GNCNT = 1 AND DVCNT = 0
+               WHSE = INV.WHSE.CODE<1,GPTR>
+            CASE 1
+               DISP.PROD = EST.PRODS<1,I>
+               GOTO 85000
+         END CASE
+25000*
+         IF WHSE # "" AND CATG.REQ.BOOK = "Y" THEN
+            IWH.ID=CONO:EST.PRODS<1,I>:"!":WHSE
+            GOSUB GET.UNIT.PR
+            JRM.CNT = COUNT(JOB.RESV.MATL,VM) + (JOB.RESV.MATL # "")
+            FND = 0
+            FOR JM = 1 TO JRM.CNT UNTIL FND
+               IF JOB.RESV.MATL<1,JM> = EST.PRODS<1,I> AND JOB.RESV.WHSE<1,JM> = WHSE THEN
+                  SAVE.INV.JS.REC<JM,2> = UNIT.PR
+                  YEOW.QTY = INT(((EST.QTYS<1,I>/ICR.MT1)*ICR.DV1)*ICR.DV2 + .5)
+                  SAVE.INV.JS.REC<JM,3> = SAVE.INV.JS.REC<JM,3> + YEOW.QTY
+                  FND = 1
+               END
+            NEXT JM
+            IF NOT(FND) THEN
+               JRM.CNT = JRM.CNT + 1
+               JOB.RESV.MATL<1,JRM.CNT> = EST.PRODS<1,I>
+               JOB.RESV.WHSE<1,JRM.CNT> = WHSE
+               JOB.ALOC.QTY<1,JRM.CNT> = 0
+               JOB.RESV.QTY<1,JRM.CNT> = 0
+               JOB.USED.QTY<1,JRM.CNT> = 0
+               JOB.ALOC.AMT<1,JRM.CNT> = 0
+               JOB.RESV.AMT<1,JRM.CNT> = 0
+               JOB.USED.AMT<1,JRM.CNT> = 0
+               SAVE.INV.JS.REC<JRM.CNT,2> = UNIT.PR
+               SAVE.INV.JS.REC<JRM.CNT,3> = INT(((EST.QTYS<1,I>/ICR.MT1)*ICR.DV1)*ICR.DV2 + .5)
+            END
+         END
+      NEXT I
+   END
+   GOSUB PROCESS_RS_RD_TABS
+   GOTO EXIT_PROG
+RETURN
+
+70000 *
+   MATREAD INV.REC FROM INVENTORY,CONO:PROD ELSE MAT INV.REC = ''
+   GOSUB 80000
+   NQTY = QTY
+   BEGIN CASE
+      CASE INV.UNIT<1,2> = "MSI"
+      CASE INV.UNIT<1,2> = "FT"
+         IF WIDTH + 0 # 0 THEN
+            NQTY = (NQTY * 1000) / (12 * OCONV(WIDTH,"MD4"))
+         END ELSE
+            NQTY = 0
+         END
+      CASE INV.UNIT<1,2> = "PC"
+         IF WIDTH + 0 # 0 THEN
+            NQTY = (NQTY * 1000) / (10 * OCONV(WIDTH,"MD4"))
+         END ELSE
+            NQTY = 0
+         END
+   END CASE
+   QTY = NQTY
+RETURN
+*
+80000 *
+   CASE1.FLAG = ""
+   BEGIN CASE
+      CASE INV.UNIT<1,2> = 'SHT' AND INV.UNIT<1,3> = 'LBS'
+         ICR.DV1 = INV.M.WT
+         ICR.MT1 = 1
+         ICR.DV2 = 1
+         ICR.CNV = "MD0"
+      CASE INV.UNIT<1,2> = 'PC' AND INV.UNIT<1,3> = 'MSI'
+         ICR.DV1 = INV.PAP.WIDTH/100
+         ICR.MT1 = 10
+         ICR.DV2 = 1
+         ICR.CNV = "MD0"
+      CASE INV.UNIT<1,2> = 'FT' AND INV.UNIT<1,3> = 'MSI'
+         ICR.DV1 = INV.PAP.WIDTH/100
+         ICR.MT1 = 100
+         ICR.DV2 = 12
+         ICR.CNV = "MD0"
+      CASE 1
+         ICR.DV1 = 10
+         ICR.MT1 = 1
+         ICR.DV2 = 1
+         ICR.CNV = "MD2"
+         CASE1.FLAG = "Y"
+   END CASE
+RETURN
+
+GET.UNIT.PR: 
+   MATREAD IWH.REC FROM INV.WHSE,IWH.ID ELSE  MAT IWH.REC=''
+   BEGIN CASE
+      CASE CO.JES.PARAM<1,11> = 'R'
+         DIV.POS='';FISCAL.FLAG='JC';TRAN.PERIOD=''
+         ERR.FLG='';ERRMSG=''
+         CALL GET.LAST.COST (IWH.ID,MAT IWH.REC,WAREHOUSE,CONTROL,ERR.FLG,ERRMSG,DIV.POS,FISCAL.FLAG,TRAN.PERIOD,LAST.PRICE)
+         IF ERR.FLG='' THEN
+            UNIT.PR=LAST.PRICE
+         END ELSE
+            UNIT.PR = 0
+         END
+      CASE CO.JES.PARAM<1,11> = 'S'
+         UNIT.PR = IWH.STD.COST
+      CASE CO.JES.PARAM<1,11> = 'A'
+         UNIT.PR = IWH.AVG.COST
+      CASE CO.JES.PARAM<1,11> = 'L'
+         UNIT.PR = IWH.LIST.COST
+      CASE 1
+         UNIT.PR = 0
+   END CASE
+RETURN
+
+PROCESS_RS_RD_TABS:
+   FOR N = 1 TO DCOUNT(JOB.RESV.MATL,VM)
+      MATREAD INV.REC FROM INVENTORY, CONO:JOB.RESV.MATL<1,N> ELSE
+         MAT INV.REC = ''
+         INV.FULL.DESC = "UNKNOWN"
+      END
+      MATREAD CATG.REC FROM CATEGORY, CONO : INV.LINE ELSE
+         MAT CATG.REC = ""
+      END
+      MAT INV.CNV.REC = ""
+      GOSUB 80000
+      RS_GRID<1,N,1> = JOB.RESV.MATL<1,N>
+      RS_GRID<1,N,2> = JOB.RESV.WHSE<1,N>
+      RS_GRID<1,N,3> = INV.PAP.TYPE
+      RS_GRID<1,N,4> = OCONV(JOB.RESV.DATE<1,N>,"D2/")
+      RS_GRID<1,N,5> = INV.UNIT<1,2>
+      RS_GRID<1,N,6> = OCONV(CALC_STK_QTY(JOB.ALOC.QTY<1,N>,MAT INV.CNV.REC,'.5',N),ICR.CNV)
+      RS_GRID<1,N,7> = OCONV(CALC_STK_QTY(JOB.RESV.QTY<1,N>,MAT INV.CNV.REC,'.5',N),ICR.CNV)
+      RS_GRID<1,N,8> = OCONV(CALC_STK_QTY(JOB.USED.QTY<1,N>,MAT INV.CNV.REC,'.5',N),ICR.CNV)
+      RS_GRID<1,N,9> = INV.FULL.DESC
+
+      RD_GRID<1,N,1> = JOB.RESV.MATL<1,N>
+      RD_GRID<1,N,2> = INV.UNIT<1,2>
+      RD_GRID<1,N,3> = OCONV(INT(((JOB.ALOC.QTY<1,N>/ICR.DV1) * ICR.MT1) / ICR.DV2 + .5),ICR.CNV)
+      RD_GRID<1,N,4> = OCONV(INT(((JOB.RESV.QTY<1,N>/ICR.DV1) * ICR.MT1) / ICR.DV2 + .5),ICR.CNV)
+      RD_GRID<1,N,5> = OCONV(SAVE.INV.JS.REC<N,1>,"D2/")
+      RD_GRID<1,N,6> = OCONV(SAVE.INV.JS.REC<N,2>,"MD4")
+      RD_GRID<1,N,7> = OCONV(INT(((SAVE.INV.JS.REC<N,3>/ICR.DV1)*ICR.MT1)/ICR.DV2 + .5),ICR.CNV)
+      RD_GRID<1,N,8> = JOB.RESV.WHSE<1,N>
+      RD_GRID<1,N,9> = OCONV(INT(((JOB.USED.QTY<1,N>/ICR.DV1) * ICR.MT1) / ICR.DV2 + .5), ICR.CNV)
+      BALANCE = SAVE.INV.JS.REC<N,3> - JOB.ALOC.QTY<1,N>-JOB.RESV.QTY<1,N>-JOB.USED.QTY<1,N>
+      IF BALANCE >= 0 THEN
+         BALANCE = OCONV(INT(((BALANCE/ICR.DV1)*ICR.MT1)/ICR.DV2 + .5),ICR.CNV)
+      END ELSE
+         BALANCE = OCONV(0,ICR.CNV)
+      END
+      RD_GRID<1,N,10> = BALANCE
+      RD_GRID<1,N,11> = INV.FULL.DESC
+   NEXT N
+RETURN
+
+EXIT_PROG:
+   STATUS = RBO.setProperty("","SUB_FLAG",ERRFLG : "ð" : ERRMSG)
+   STATUS = RBO.setProperty("","REQD_QTY",RS_GRID)
+   STATUS = RBO.setProperty("","REQ_INPUT",RD_GRID)
+   STATUS = RBO.setProperty("","SAVE_INV_JS_REC",SAVE.INV.JS.REC)
+RETURN
+
+85000 *
+   IF NOT(WPTR) AND NOT(GPTR) THEN
+      ERRMSG = 'There are no warehouses for product ':DISP.PROD:' with Division ':JOB.DIV:' or 00 <RTN> '
+      ERRFLG = 3;GOTO EXIT_PROG
+   END
+   IF WPTR THEN DEFAULT = INV.WHSE.CODE<1,WPTR> ELSE IF GPTR THEN DEFAULT = INV.WHSE.CODE<1,GPTR>
+   PMSG = "Enter Whse Code for Product ":DISP.PROD
+   IF DEFAULT # "" THEN
+      PMSG=PMSG:" (Default=":DEFAULT:") - "
+   END ELSE
+      PMSG=PMSG:" - "
+   END
+   IF WHSE_IP = "" THEN
+      ERRMSG = 'P|' : PMSG : VM : 'V|' : VALDAT : VM : "D|" : DEFAULT
+      ERRFLG = 1
+      GOTO EXIT_PROG
+   END
+   VALUE = WHSE_IP
+   
+   MATREAD WHSE.REC FROM WAREHOUSE,CONO:VALUE ELSE
+      ERRMSG = 'E|' : VALUE : ' Is an invalid Warehouse'
+      ERRMSG = ERRMSG : 'P|' : PMSG : VM : 'V|' : VALDAT: VM : "D|" : DEFAULT
+      ERRFLG = 1
+      GOTO EXIT_PROG
+   END
+   IF WHS.DIV # '00' AND WHS.DIV # JOB.DIV THEN
+      ERRMSG = 'E|Whse/Job division mismatch'
+      ERRMSG = ERRMSG : 'P|' : PMSG : VM : 'V|' : VALDAT: VM : "D|" : DEFAULT
+      ERRFLG = 1
+      GOTO EXIT_PROG
+   END
+   WHSE = VALUE
+   GOTO 25000
+RETURN
+
+
+93000 *
+   STATUS = RBO.setProperty("","ServerStatus",1)
+   STATUS = RBO.setProperty("","ServerMessage",ERRMSG)
+END
+

@@ -1,0 +1,171 @@
+SUBROUTINE OPSCME_PREWRITE
+********************************************************************************
+*   Program name :- OPSCME_PREWRITE
+*   Created:- 9/23/2003
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE OPS.CPYLIB DAILY.ORDER.INVOICE
+$INCLUDE OPS.CPYLIB ORDER.INVOICE
+$INCLUDE PMC.CPYLIB VOID.INVOICES
+$INCLUDE OPS.CPYLIB ORDER.DETAIL
+$INCLUDE OPS.CPYLIB ORDER
+
+OPEN "","CONTROL" TO CONTROL ELSE ERRMSG = "Cannot locate the CONTROL file"; GOTO 99999
+OPEN "","OPEN.RECV" TO OPEN.RECV ELSE ERRMSG="OPEN.RECV FILE IS MISSING"; GOTO 99999
+OPEN "","DAILY.ORDER.INVOICE" TO DAILY.ORDER.INVOICE ELSE ERRMSG = "Cannot locate the DAILY.ORDER.INVOICE file" ; GOTO 99999
+OPEN "","VOID.INVOICES" TO VOID.INVOICES ELSE ERRMSG = "Cannot locate the VOID.INVOICES file"; GOTO 99999
+OPEN "","ORDER.DETAIL" TO ORDER.DETAIL ELSE ERRMSG = "Cannot locate the ORDER.DETAIL file"; GOTO 99999
+OPEN "","ORDER.INVOICE" TO ORDER.INVOICE ELSE ERRMSG = "Cannot locate the ORDER.INVOICE file"; GOTO 99999
+OPEN "","ORDER" TO ORDER ELSE ERRMSG = "Cannot locate the ORDER file"; GOTO 99999
+
+* Insert method code here
+
+*CASE OPTION="F" AND INVOICE.TOTAL < 0
+*	 ERRMSG="Invalid Total Amount - Must be positive"
+*         GOSUB 90000
+*CASE OPTION="F" AND IVC.PROC.DATE=""
+
+STATUS = RBO.getProperty('','PMCProperty',PMCProperty)
+CONO = PMCProperty<1,4>
+STATUS = RBO.getProperty('','MENU',MTYPE) ; * SEND THE TYPE (CREDIT OR DEBIT)
+STATUS = RBO.getProperty('','IVC_NO',IVC_NO) ; * get the value in the ID field (N is also possible value)
+STATUS = RBO.getProperty('','CO_ARS',ARSFLAG) ; * get from CO_ARS (hidden fld in ASP page)
+*for getting the type "N" - for new entry
+*                     "D" - for duplicate entry
+*                     "NEW" - not existing in daily.order.invoice
+*                     "OLD" - existing record in daily.order.invoice
+STATUS = RBO.getProperty('','IVC_CONTROL_NO',IVC_NEW_NO)
+STATUS = RBO.getProperty('','IVC_ORDER_NO',IVC_ORDER_NO)
+
+MAT IVC.REC = ''
+HOLD.DETAIL = ""
+ O.NOS="";O.JURS="";O.SHIP=""
+
+BEGIN CASE
+	CASE IVC_NEW_NO  = "N"
+       	IVC.PROC.DATE = ""
+*       CASE IVC_NEW_NO  = "D" 
+*		MATREAD IVC.REC FROM ORDER.INVOICE, CONO:DUP.INVOICE ELSE MAT IVC.REC = ''; * DUP.INVOICE IS FROM VALUE ENTERED IN LISTIDS
+	CASE IVC_NEW_NO  = "NEW" 
+	      	IVC.PROC.DATE = ""
+	CASE IVC_NEW_NO  = "OLD"
+		IF MTYPE = "CREDIT" THEN
+			MATREAD IVC.REC FROM DAILY.ORDER.INVOICE, CONO:IVC_NO:"CM" ELSE MAT IVC.REC = ''
+		END ELSE
+			MATREAD IVC.REC FROM DAILY.ORDER.INVOICE, CONO:IVC_NO:"DM" ELSE MAT IVC.REC = ''
+		END
+END CASE
+
+
+IF IVC.PROC.DATE="" THEN
+	REF.CNT=DCOUNT(IVC.CHG.CODE,@VM)
+	BLK=0
+	FOR I=1 TO REF.CNT UNTIL BLK
+		IF IVC.CHG.CAT<1,I> # "CMT" THEN BLK=1
+	NEXT I
+	*IF BLK=0 THEN
+       *	ERRMSG="At least one line item is required before filing"
+       *     	GOTO 99999
+	*END
+	
+* in case of N - New no auto generation
+
+	IF IVC_NO="N" THEN
+550         READU IVC.NO FROM CONTROL, CONO:"NEXT.INVOICE.NO" ELSE IVC.NO=1
+            N.IVC.NO=IVC.NO + 1	
+            IVC.NO=STR("0",6-LEN(IVC.NO)):IVC.NO
+            WRITE N.IVC.NO ON CONTROL, CONO:"NEXT.INVOICE.NO"
+	*STATUS = RBO.setProperty('','ServerMessage','N IVC NO - ' :N.IVC.NO)
+	*RETURN
+            BEGIN CASE
+               CASE MTYPE="CREDIT"
+                  IVC.NO=IVC.NO:"CM"
+               CASE MTYPE="DEBIT"
+                  IVC.NO=IVC.NO:"DM"
+               CASE MTYPE="PREBILL"
+                  IVC.NO=IVC.NO:"PB"
+            END CASE
+            READ REC FROM DAILY.ORDER.INVOICE,CONO:IVC.NO ELSE GOTO 560
+            GOTO 550
+560         READ REC FROM ORDER.INVOICE,CONO:IVC.NO ELSE GOTO 565
+            GOTO 550
+565         READ REC FROM VOID.INVOICES,CONO:IVC.NO ELSE GOTO 570
+            GOTO 550
+570         IF ARSFLAG="Y" THEN
+               READ REC FROM OPEN.RECV,CONO:IVC.NO ELSE GOTO 580
+               GOTO 550
+580         END
+            *ECD.NUM=7;SCV.REC(7)<ESN>=IVC.NO
+            *ECD.ACTION=5;CALL SCRN.EDIT
+            *ERRMSG="Please note the new number";GOSUB 90000
+
+            IF HOLD.DETAIL # "" THEN
+               MATREAD ORD.DET.REC FROM ORDER.DETAIL, CONO:IVC.ORDER.NO:"!":IVC.SHIP.TO THEN
+                  HCNT = DCOUNT(HOLD.DETAIL<1>,@VM)
+			STATUS = RBO.setProperty('','ServerMessage','hcnt -- ': HCNT)
+			RETURN
+                  FOR H = 1 TO HCNT
+                     PROD = HOLD.DETAIL<1,H>
+                     PRICE = HOLD.DETAIL<2,H>
+                     AMT = HOLD.DETAIL<3,H>
+                     LOCATE PROD IN OSD.PROD<1>,1 SETTING HVAR THEN
+                        OSD.PRICE<1,HVAR> = PRICE
+                        OSD.AMT<1,HVAR> = AMT
+                     END
+                  NEXT H
+                  MATWRITE ORD.DET.REC ON ORDER.DETAIL, CONO:IVC.ORDER.NO:"!":IVC.SHIP.TO
+			
+               END
+            END
+       END
+
+
+*****ADDED BY ZUBAIR TO WRITE IN INVOICE NO IN ORDER FILE , WHICH IN TURN RELFECTS IN ORDER REVIEW
+**      ORD=IVC.CHG.ORDER<1,OPTR>
+**      IF ORD # "" THEN
+**         LOCATE ORD IN O.NOS,1 SETTING P ELSE O.NOS<P>=ORD
+**      END
+*****COMMENTED BY RK (BECAUSE IT IS NOT NEEDED SEE THE ABOVE (**) 4 LINES IN OPS.INVOICE.SUB)
+*	MATREAD ORD.REC FROM ORDER, CONO:IVC_ORDER_NO THEN
+*		LOCATE IVC.NO IN ORD.INV.NO<1>,1 SETTING PTR ELSE
+*			PTR=DCOUNT(ORD.INV.NO,@VM) + 1
+*			ORD.INV.NO<1,PTR>=IVC.NO
+*		END
+*	END	
+*      MATWRITE ORD.REC ON ORDER, CONO:IVC_ORDER_NO
+******** END
+
+*	JCNT=DCOUNT(O.NOS,@AM)
+*         FOR J=1 TO JCNT
+*            MATREADU ORD.REC FROM ORDER, CONO:O.NOS<J> ELSE
+*               RELEASE ORDER, O.NOS<J>
+*               ERRMSG="CANNOT LOCATE ORDER RECORD - ":O.NOS<J>
+*               GOTO 99999
+*            END
+
+*          LOCATE IVC.NO IN ORD.INV.NO<1>,1 SETTING PTR ELSE
+*               PTR=DCOUNT(ORD.INV.NO,@VM) + 1
+*               ORD.INV.NO<1,PTR>=IVC.NO
+*            END
+*		
+*            MATWRITE ORD.REC ON ORDER, CONO:IVC.CHG.ORDER<1,J>
+*590      NEXT J
+         *MATWRITE IVC.REC ON DAILY.ORDER.INVOICE, CONO:IVC.NO       
+END
+RETURN
+
+* End of method code
+99999*
+STATUS = RBO.setProperty('','ServerStatus',1)
+STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+RETURN

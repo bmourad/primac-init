@@ -1,0 +1,1459 @@
+   SUBROUTINE MISC.PO.IN.MAINT(CONO,MPO.CODE,SECURITY.REC)
+*COPY>CPYLIB>COM1
+*COPY>POS.CPYLIB>COM.MPO
+*COPY>POS.CPYLIB>COM.PO.INTRF
+**************************************************************
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - POSBP
+* PROGRAM     - MISC.PO.IN.MAINT
+* BY          - JIHAD YAMOUT ,C.B.A
+* DATE        - 08/20/84
+* MOD         - 2.23.90 GG  ENLARGE UNIT COST FIELD.
+* DESCRIPTION - THIS PROGRAM INPUT LINE ITEM FOR MISCELLANEOUS ORDER.
+* 10/09/91 DLG FIX CAFTERIA DETAIL COMMENTS OPTION
+* 01/25/95 RKB TASK 18746 fix O.R flag on Product
+* 09/14/95 GAT TASK 19631 Allow change to MISC CATG only if not accrued
+*                         and no receipts made to line item.
+* 11/02/95 CT6 TASK 19404 POS Divisionalization, validate divisional
+*                             fields against Owning Division.
+*T20894 julie 09/05/1996 * CHECK APS FLAG BEFORE OPENING VEND.PO.STATS
+*T21177 diane 11/06/1996 * REV11 UPG
+*
+*T23185 cindy 08/18/1998 * gui printing '*' instead of alpha, ascii
+*                          blanks
+*T24231 edvard 08/27/1999 * Added logic for requisitions
+*T24562 gil 12/13/1999 * Correction were made to not allow Misc PO's to
+*                        change unit price when accured & receipt has
+*                        taken place. 
+*T24834 aron 02/16/2000 * CHANGE MPO.TOT.RECEVED VALIDATION TO
+*                         MULTIVALUE
+*T25421 aron 09/12/2000 * Do not prompt user to enter Division, pull the
+*                         division from the first entry screen.
+*T25852 edwin 07/10/2001 * Add ability to insert line in comments.
+*T25944 ajibaly 07/11/2001 * One product/screen, expand comments
+*T25855 edwin 08/10/2001 * Add PO inquiry functions for all type of
+*                          PO's.
+*T26233 gat 10/24/2001 * DEFAULT "EA" AS UNIT OF MEASURE
+*T26213 cmykleb 02/04/2002 * Remove prompt for line # to change for
+*                            (C)hange, (D)elete and (CO)mments since
+*                            there is only 1 line item per screen.
+*T25978 adelgado 02/07/2002 * Add the use of prompts (S,SR,SB,ST).
+*T26685 cmykleb 08/15/2002 * Check for divisional security when entering
+*                            a division.
+*T27010 cmykleb 02/14/2003 * Disallow gen div on lies if div owner is
+*                            not gen div.
+*T28687 lross 10/11/2005 * Extension of cost incorrect for per "M"
+*                          price.
+*T28840 wvaughan 03/10/2006 * Display the top toolbar buttons on this
+*                             page on new entry.
+*T29081 lross 04/13/2007 * Check for Cost Center Frozen.
+**************************************************************
+*COPY>POS.CPYLIB>MISC.PO
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>PMC.CPYLIB>VEND
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>FILE.VARS
+*COPY>PMC.CPYLIB>COA
+*COPY>ICS.CPYLIB>CATEGORY.MISC
+*COPY>PMC.CPYLIB>DIVISION
+*COPY>PMC.CPYLIB>DEPARTMENT
+*COPY>APS.CPYLIB>VEND.PO.STATS
+*COPY>PMC.CPYLIB>COST.CNTR
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>CPYLIB>GEN.XREF.SUB
+*COPY>CPYLIB>CHAR
+*24231 v                          
+*COPY>POS.CPYLIB>APP.REQ          
+   PROCREAD BUFFER ELSE              
+      ERRMSG = "MUST BE RUN FROM PROC"
+      GOSUB 91000                     
+   END                               
+   IF BUFFER<5> = 'I' THEN POS.INQ = 1 ELSE POS.INQ = 0 ; * 25855
+*24231 ^                          
+***** SETUP ERRMSG ROUTINE
+   SYS.TYPE = 1
+   CALL SYSCOM(MAT SYSCOM.REC)
+***** INT
+* T20894
+   MATREAD COMP.REC FROM COMPANY, CONO ELSE
+      MAT COMP.REC = ""
+   END
+   IF CO.APS.M.INTRF > 1 THEN
+      OPEN "VEND.PO.STATS" TO VEND.PO.STATS ELSE 
+         ERRMSG = "Unable to open VEND.PO.STATS"
+         GOSUB 91000
+         RETURN
+      END
+   END
+* T20894
+ *24231 v                         
+   OPEN 'APP.REQ' TO APP.REQ ELSE   
+      ERRMSG = "Cannot open APP.REQ" 
+      GOSUB 91000                    
+      GOSUB 99999                    
+   END                              
+ * 24231^                         
+   EXT.FLAG = 0
+* TASK 17919
+   MISC.CAT.DESC = ''
+   MISC.DIV.DESC = ''
+   MISC.DEPT.DESC = ''
+   MISC.CCTR.DESC = ''
+   MISC.COA.LEVEL = ''
+   GEN.DIV = '00'
+   GEN.DEPT = '00'
+   GEN.CCTR = '000'
+   GENERAL = 'GENERAL'
+*T23185 v
+*MAT EDIT.COM = ''
+*T23185 ^
+   BEGIN.PAGE.1 = 7
+*T25944 PAGE.SIZE.1 = 2
+   PAGE.SIZE.1 = 1
+*T25944 LINE.SPACE.1 = 6
+   LINE.SPACE.1 = 1
+*TYP = 0
+*
+   MAT GEN.XREF.REC = ''
+   GXR.CO = CONO
+   BEGIN.PAGE.3 = ""
+*T25944 PAGE.SIZE.3 = 3
+   PAGE.SIZE.3 = 10
+   LINE.SPACE.3 = 1
+   OLD.START.LINE.3 = 0
+   LINES.3=0;S.LINES.3=0
+   LN3=0
+   OPTION1 = "" ; * T25852
+*  GET CO INFO
+*
+***** GET COMPANY NAME
+   MAT COMP.REC = ''
+   PW = ''
+   CONO = ''
+   CALL GET.CONO(CONO,MAT COMP.REC)
+   IF CONO = 'END' THEN GOTO 99999
+*
+*24231 v
+   IF BUFFER<1> = "R" THEN
+      USER.ID = UPCASE(@LOGNAME)
+      MATREAD APP.REQ.REC FROM APP.REQ, CONO:USER.ID:"!ALL" THEN
+         IF APP.STATUS = "Y" THEN
+            NULL
+         END ELSE
+            MATREAD APP.REQ.REC FROM APP.REQ,CONO:USER.ID:"!":MPO.DIV.OWNER ELSE
+               MAT APP.REQ.REC = ""
+            END
+         END
+      END ELSE
+         MATREAD APP.REQ.REC FROM APP.REQ,CONO:USER.ID:"!":MPO.DIV.OWNER ELSE
+            MAT APP.REQ.REC = ""
+         END
+      END
+      MENU.FLAG = "R"
+   END ELSE
+      MENU.FLAG = "P"
+   END
+*T24231 ^
+   ECD.SCRN.NO = 2; ECD.ACTION=2 ; CALL SCRN.EDIT
+*25855 v
+   IF POS.INQ THEN
+      SCV.REC(38)<ECD.SCRN.NO,1> = 'DETAIL MISCELLANEOUS PURCHASE ORDER INQUIRY'
+   END ELSE
+      SCV.REC(38)<ECD.SCRN.NO,1> = 'DETAIL MISCELLANEOUS PURCHASE ORDER ENTRY'
+   END
+* 25855 ^
+   *ECD.SCRN.NO = 2; ECD.ACTION=2;CALL SCRN.EDIT
+   LINES.1 = 0 ; S.LINES.1 = 0
+   OLD.START.LINE.1 = 0
+*
+**** MAIN PROCESSING
+*
+*24231 v
+   CAPTION36=''; CAPTION40=''
+   IF BUFFER<1> = 'R' THEN
+      HEADING = "MISCELLANEOUS DETAIL PURCHASE REQUISITION ENTRY"
+      CAPTION40 = "Req #"
+      IF GUIFORM THEN
+         CALL VSI_SETATTR("_pmc40","border_style","raised",ERROR)
+*    CALL VSI_SETATTR("_pmc40","font","Fixedsys*10*normal*normal*charset_ansi*pitch_fixed",ERROR)
+      END
+   END ELSE
+      HEADING = "MISCELLANEOUS DETAIL PURCHASE ORDER ENTRY"
+      CAPTION36 = "Po #"
+      IF GUIFORM THEN
+         CALL VSI_SETATTR("_pmc40","border_style","raised",ERROR)
+*    CALL VSI_SETATTR("_pmc40","font","Fixedsys*10*normal*normal*charset_ansi*pitch_fixed",ERROR)
+      END
+   END
+* 25855 v
+   IF POS.INQ THEN HEADING = "MISCELLANEOUS DETAIL PURCHASE ORDER INQUIRY"
+* 25855 ^
+   SCV.REC(38)<ECD.SCRN.NO> = HEADING
+   SCV.REC(40)<ECD.SCRN.NO> = CAPTION40
+*24231 ^
+   SCV.REC(5)<ECD.SCRN.NO,1> = MPO.VEND.NO
+   SCV.REC(6)<ECD.SCRN.NO,1> = VEND.DESC
+   SCV.REC(7)<ECD.SCRN.NO,1> = MPO.CODE
+*24231 v
+   ECD.ACTION = 3 ; CALL SCRN.EDIT
+   IF GUIFORM THEN
+      CALL VSI_PTITLE (HEADING, ERROR)
+   END
+*24231 ^
+   IF MPO.PROD.DESC = '' AND NOT(POS.INQ) THEN          ; * 25855
+      LOOP
+         OPTION = 'A'
+         LN1 = LINES.1 + 1
+         OLD.LINES.1 = LINES.1
+         GOSUB 1000
+      WHILE LINES.1 > OLD.LINES.1 DO REPEAT
+      LN1 = LINES.1
+      S.LINES.1 = LINES.1
+   END ELSE
+      LINES.1 = COUNT(MPO.PROD.DESC,VM) + (MPO.PROD.DESC # "")
+      S.LINES.1 = MPO.SEQ.NO<1,LINES.1>
+      LN1 = 1
+      FOR AD = 1 TO LINES.1
+         MATREAD CAMISC.REC FROM CATEGORY.MISC,CONO:MPO.MISC.CAT<1,AD> ELSE
+            CAMISC.DESC = "UNKNOWN"
+            CAMISC.EXP.ACCT = ''
+         END
+         MISC.CAT.DESC<1,AD> = CAMISC.DESC
+         MATREAD COA.REC FROM COA, CONO:CAMISC.EXP.ACCT ELSE
+            COA.LEVEL = 0
+         END
+         MISC.COA.LEVEL<1,AD> = COA.LEVEL
+         IF MPO.MISC.DIV<1,AD> = "00" THEN
+            DIV.DESC = GENERAL
+         END ELSE
+            MATREAD DIV.REC FROM DIVISION,CONO:MPO.MISC.DIV<1,AD> ELSE
+               DIV.DESC = "UNKNOWN"
+            END
+         END
+         MISC.DIV.DESC<1,AD> = DIV.DESC
+         IF MPO.MISC.DEPT<1,AD> = "00" THEN
+            DEPT.DESC = GENERAL
+         END ELSE
+            MATREAD DEPT.REC FROM DEPARTMENT,CONO:MPO.MISC.DEPT<1,AD> ELSE
+               DEPT.DESC = "UNKNOWN"
+            END
+         END
+         MISC.DEPT.DESC<1,AD> = DEPT.DESC
+         IF MPO.MISC.CCTR<1,AD> = "000" THEN
+            CCTR.DESC = GENERAL
+         END ELSE
+            MATREAD CCTR.REC FROM COST.CNTR,CONO:MPO.MISC.CCTR<1,AD> ELSE
+               CCTR.DESC = "UNKNOWN"
+            END
+         END
+         MISC.CCTR.DESC<1,AD> = CCTR.DESC
+      NEXT AD
+   END
+   GOSUB 10000
+   GOSUB 1021
+   GOSUB 9000
+   GOTO 99999
+****** ENTER PRODUCT INFORMATION
+1000 GOSUB 10000
+   SLN = BEGIN.PAGE.1 + LINE.SPACE.1 * MOD(LN1 - 1,PAGE.SIZE.1)
+   P_X  = 0 ; P_Y = SLN ; P_VALUE = LN1 "R#3" ; P_OPT = "CL"
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+**** ENTER PRODUCT
+*T28840 v
+1001 *X = 4 ; Y = SLN ; TYP = 1 ; MAXL = 15 ;  VALDAT = '' ; HMSG = ''
+   IF MPO.TOT.RECEVED<1,LN1> > 0 THEN GO 1002
+   IF MPO.PROD.NUM<1,LN1> # "" THEN
+      O.R = 'O' ; ECD.DEFAULT = MPO.PROD.NUM<1,LN1>
+   END ELSE
+      O.R = 'R'
+   END
+   *CALL EDIT.SUB
+*ECD.DEFAULT=MPO.PROD.NUM<1,LN1> 
+ECD.NUM=12 ; ECD.ACTION=4; CALL SCRN.EDIT
+ VALUE=ECD.RET.VALUE
+*T28840 ^
+   IF VALUE = 'END' AND OPTION = 'A' THEN
+      MPO.PROD.NUM = DELETE(MPO.PROD.NUM,1,LN1,0)
+      MPO.SEQ.NO = DELETE(MPO.SEQ.NO,1,LN1,0)
+      MPO.PROD.DESC = DELETE(MPO.PROD.DESC,1,LN1,0)
+      MPO.DEL.DATE = DELETE(MPO.DEL.DATE,1,LN1,0)
+      MPO.GROS.PRICE = DELETE(MPO.GROS.PRICE,1,LN1,0)
+      MPO.TOT.ONORD = DELETE(MPO.TOT.ONORD,1,LN1,0)
+      MPO.TOT.OPEN = DELETE(MPO.TOT.OPEN,1,LN1,0)
+      MPO.PREV.RECEVED = DELETE(MPO.PREV.RECEVED,1,LN1,0)
+      MPO.TOT.RECEVED = DELETE(MPO.TOT.RECEVED,1,LN1,0)
+      MPO.TOT.CANCEL = DELETE(MPO.TOT.CANCEL,1,LN1,0)
+      MPO.UNIT.MAG = DELETE(MPO.UNIT.MAG,1,LN1,0)
+      MPO.DISCOUNT = DELETE(MPO.DISCOUNT,1,LN1,0)
+      MPO.ITEM.COMM = DELETE(MPO.ITEM.COMM,1,LN1,0)
+      MPO.LAST.RECV = DELETE(MPO.LAST.RECV,1,LN1,0)
+      MPO.MISC.CAT = DELETE(MPO.MISC.CAT,1,LN1,0)
+      MPO.MISC.DIV = DELETE(MPO.MISC.DIV,1,LN1,0)
+      MPO.MISC.DEPT = DELETE(MPO.MISC.DEPT,1,LN1,0)
+      MPO.MISC.CCTR = DELETE(MPO.MISC.CCTR,1,LN1,0)
+      MISC.CAT.DESC = DELETE(MISC.CAT.DESC,1,LN1,0)
+      MISC.DIV.DESC = DELETE(MISC.DIV.DESC,1,LN1,0)
+      MISC.DEPT.DESC = DELETE(MISC.DEPT.DESC,1,LN1,0)
+      MISC.CCTR.DESC = DELETE(MISC.CCTR.DESC,1,LN1,0)
+      MISC.COA.LEVEL = DELETE(MISC.COA.LEVEL,1,LN1,0)
+      P_X  = 0 ; P_Y = SLN ; P_VALUE = "" ; P_OPT = "CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      P_X  = 3 ; P_Y = SLN+1 ; P_VALUE = "" ; P_OPT = "CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      FOR I = 1 TO 4
+*            P_X  = 0 ; P_Y = SLN+I+1 ; P_VALUE = "" ; P_OPT = "CL"
+*            P_X  = 0 ; P_Y = SLN+I+1 ; P_VALUE = SPACE(43) ; P_OPT = ""
+*            P_X  := AM:53 ; P_Y := AM:SLN+I+1 ; P_VALUE := AM:SPACE(27)
+         BEGIN CASE
+            CASE I = 1
+               P_X  = 3 ; P_Y = SLN+I+1 ; P_VALUE = SPACE(3) ; P_OPT = ""
+               P_X  := AM:7 ; P_Y := AM:SLN+I+1 ; P_VALUE := AM:SPACE(40)
+               P_X  := AM:54 ; P_Y := AM:SLN+I+1 ; P_VALUE := AM:SPACE(6)
+               P_X  := AM:60 ; P_Y := AM:SLN+I+1 ; P_VALUE := AM:SPACE(20)
+               CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            CASE I = 2 OR I = 3
+               P_X  = 3 ; P_Y = SLN+I+1 ; P_VALUE = SPACE(3) ; P_OPT = ""
+               P_X  := AM:7 ; P_Y := AM:SLN+I+1 ; P_VALUE := AM:SPACE(40)
+               P_X  := AM:54 ; P_Y := AM:SLN+I+1 ; P_VALUE := AM:SPACE(2)
+               P_X  := AM:60 ; P_Y := AM:SLN+I+1 ; P_VALUE := AM:SPACE(20)
+               CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            CASE I = 4
+               P_X  = 3 ; P_Y = SLN+I+1 ; P_VALUE = SPACE(3) ; P_OPT = ""
+               P_X  := AM:7 ; P_Y := AM:SLN+I+1 ; P_VALUE := AM:SPACE(40)
+               P_X  := AM:54 ; P_Y := AM:SLN+I+1 ; P_VALUE := AM:SPACE(3)
+               P_X  := AM:60 ; P_Y := AM:SLN+I+1 ; P_VALUE := AM:SPACE(20)
+               CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         END CASE
+      NEXT I
+      GOTO 1999
+   END
+   IF VALUE = 'END' AND OPTION = 'C' THEN
+      P_X  = 4 ; P_Y = SLN ; P_VALUE = MPO.PROD.NUM<1,LN1> "L#14" ; P_OPT = ""
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      GOTO 1999
+   END
+   NUM.PRODCNT=DCOUNT(MPO.PROD.NUM,VM)
+   FOR II = 1 TO NUM.PRODCNT
+      IF LN1 # II THEN
+         IF MPO.PROD.NUM<1,II> = VALUE THEN
+            * none should be duplicated
+            ERRMSG = "Please do not duplicate Product Codes on a single PO"
+            GOSUB 91000
+            GOTO 1000
+         END
+      END
+   NEXT II
+   MPO.PROD.NUM<1,LN1> = VALUE
+*** INPUT PRODUCT DESC
+1002 X = 4 ; Y = SLN+1 ;  TYP = 1 ; MAXL = 30 ; VALDAT = '' ; HMSG = ''
+   IF MPO.PROD.DESC<1,LN1> = '' THEN
+      O.R = 'R' ; DEFAULT = ''
+   END ELSE
+      O.R = 'O' ; DEFAULT = MPO.PROD.DESC<1,LN1>
+   END
+   CALL EDIT.SUB
+   IF VALUE = 'END' AND OPTION = 'A' THEN GOTO 1001
+   IF VALUE = 'END' AND OPTION = 'C' THEN GOTO 1999
+   MPO.PROD.DESC<1,LN1> = VALUE
+**** INPUT DEL DATE
+1003 X = 20 ; Y = SLN ; TYP = 6 ; MAXL = 8 ; O.R = 'O'
+   BEGIN CASE
+      CASE MPO.DEL.DATE<1,LN1> = "" 
+         DEFAULT = OCONV(MPO.DUE.DATE, "D2/")
+      CASE 1
+         DEFAULT = OCONV(MPO.DEL.DATE<1,LN1>, "D2/")
+   END CASE
+   CALL EDIT.SUB
+   IF VALUE = 'END' AND OPTION = 'A' THEN GOTO 1001
+   IF VALUE = 'END' AND OPTION = 'C' THEN GOTO 1999
+IF VALUE = '' THEN GOTO 1003
+   MPO.DEL.DATE<1,LN1> = VALUE
+**** INPUT GROSS PRICE
+1004 X = 29 ; Y = SLN ; TYP = 4 ; SCALER = 4 ; VALDAT = '' ; HMSG = '' ; MAXL = 12
+   IF MPO.GROS.PRICE<1,LN1> = '' THEN
+      O.R = 'R'
+   END ELSE
+      O.R = 'O'
+      DEFAULT = OCONV(MPO.GROS.PRICE<1,LN1> , "MD4")
+   END
+   CALL EDIT.SUB
+*T24562v
+   GOSUB 1022
+   IF VALUE = "" THEN GOTO 1004
+*T24562^
+   IF VALUE = 'END' AND OPTION = 'A' THEN GOTO 1001
+   IF VALUE = 'END' AND OPTION = 'C' THEN GOTO 1999
+   MPO.GROS.PRICE<1,LN1> = VALUE
+**** INPUT DISC
+1005 X = 39 ; Y = SLN+1 ; TYP = 4 ;SCALER = 2;VALDAT = '' ;HMSG = '';MAXL = 5
+   DEFAULT = OCONV(MPO.DISCOUNT<1,LN1> , "MD2")
+   O.R = 'O'
+   CALL EDIT.SUB
+   IF VALUE = 'END' AND OPTION = 'A' THEN GOTO 1001
+   IF VALUE = 'END' AND OPTION = 'C' THEN GOTO 1999
+   MPO.DISCOUNT<1,LN1> = VALUE
+**** INPUT UNIT MAG
+1006 X = 45 ; Y = SLN ; TYP = 1 ; MAXL = 3 ; O.R = 'O'
+   DEFAULT = "EA"; * T26233
+   IF MPO.UNIT.MAG<1,LN1> # "" THEN DEFAULT = MPO.UNIT.MAG<1,LN1>
+   CALL EDIT.SUB
+   IF VALUE = 'END' AND OPTION = 'A' THEN GOTO 1001
+   IF VALUE = 'END' AND OPTION = 'C' THEN GOTO 1999
+   MPO.UNIT.MAG<1,LN1> = VALUE
+**** INPUT QTY ORDERD
+1007 X = 49 ; Y = SLN ; TYP = 4 ; SCALER = 2 ; MAXL = 7 ; MINV = 0 ;MAXV = 999999
+   IF MPO.TOT.ONORD<1,LN1> = '' THEN
+      O.R = 'O' ; DEFAULT = 1
+   END ELSE
+      O.R = 'O' ; DEFAULT = OCONV(MPO.TOT.ONORD<1,LN1> , "MD2")
+   END
+   CALL EDIT.SUB
+   IF VALUE = 'END' AND OPTION = 'A' THEN GOTO 1001
+   IF VALUE = 'END' AND OPTION = 'C' THEN GOTO 1999
+   MPO.TOT.ONORD<1,LN1> = VALUE
+   AA = LN1
+   GOSUB 1019
+   IF EXT.FLAG = 1 THEN
+      EXT.FLAG = 0
+      GOTO 1004
+   END
+**** INPUT QTY RECEVED
+*1008  X = 57 ; Y = SLN ; TYP = 4 ; SCALER = 2 ; MAXL = 7 ; O.R = 'O' ; MINV = 0 ;MAXV = 999999
+*      IF MPO.TOT.RECEVED<1,LN1> = '' THEN
+*         DEFAULT = 0
+*      END ELSE
+*         DEFAULT = OCONV(MPO.TOT.RECEVED<1,LN1> , "MD2")
+*      END
+*      CALL EDIT.SUB
+*      IF VALUE = 'END' AND OPTION = 'A' THEN GOTO 1001
+*      IF VALUE = 'END' AND OPTION = 'C' THEN GOTO 1999
+*      MPO.LAST.RECV<1,LN1> = VALUE - (MPO.TOT.RECEVED<1,LN1> - MPO.LAST.RECV<1,LN1>)
+   IF MPO.TOT.RECEVED<1,LN1> = '' THEN
+      MPO.TOT.RECEVED<1,LN1> = 0
+   END
+   P_X  = 57 ; P_Y = SLN ; P_VALUE = OCONV(MPO.TOT.RECEVED<1,LN1>, "MD2") "R#7" ; P_OPT = ""
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+**** INPUT QTY CANCEL
+1009 *
+   X = 65 ; Y = SLN ; TYP = 4 ; SCALER = 2 ; MAXL = 7 ; O.R = 'O'; MINV = 0 
+   MAXV = 999999
+   IF MPO.TOT.CANCEL<1,LN1> = '' THEN
+      DEFAULT = 0
+   END ELSE
+      DEFAULT = OCONV(MPO.TOT.CANCEL<1,LN1>, "MD2")
+   END
+   CALL EDIT.SUB
+   IF VALUE = 'END' AND OPTION = 'A' THEN GOTO 1001
+   IF VALUE = 'END' AND OPTION = 'C' THEN GOTO 1999
+   IF MPO.TOT.RECEVED<1,LN1> > 0 THEN
+      AVAIL.TO.CANCEL = MPO.TOT.ONORD<1,LN1> - MPO.TOT.RECEVED<1,LN1>
+      IF AVAIL.TO.CANCEL < 0 THEN AVAIL.TO.CANCEL = 0
+   END ELSE
+      AVAIL.TO.CANCEL = MPO.TOT.ONORD<1,LN1>
+   END
+   IF VALUE > AVAIL.TO.CANCEL THEN
+      ERRMSG = 'Cancelled quantity is greater than the remaining quantity'
+      GOSUB 91000
+      GOTO 1009
+   END
+   MPO.TOT.CANCEL<1,LN1> = VALUE
+   GOSUB 1020
+**** INPUT OPEN QTYS
+1010 *
+*    IF MPO.PREV.RECEVED<1,LN1> = '' THEN
+*       X = 73 ; Y = SLN ; TYP = 4 ; SCALER = 2 ;O.R ='O' ; MAXL = 7
+*       DEFAULT = OCONV(MPO.TOT.OPEN<1,LN1> , "MD2")
+*       CALL EDIT.SUB
+*       IF VALUE = 'END' AND OPTION = 'A' THEN GOTO 1001
+*       IF VALUE = 'END' AND OPTION = 'C' THEN GOTO 1999
+*       MPO.PREV.RECEVED<1,LN1> = MPO.TOT.OPEN<1,LN1> - VALUE
+*       MPO.TOT.RECEVED<1,LN1> = MPO.TOT.RECEVED<1,LN1> + MPO.PREV.RECEVED<1,LN1>
+*       PRINT @(57,SLN) :OCONV(MPO.TOT.RECEVED<1,LN1>, "MD2") "R#7"
+*       MPO.TOT.OPEN<1,LN1> = VALUE
+*       IF MPO.PREV.RECEVED<1,LN1> * 1 = 0 THEN GOSUB 1020
+*    END
+   IF MPO.SEQ.NO<1,LN1> = "" THEN
+      S.LINES.1 = S.LINES.1 + 1
+      MPO.SEQ.NO<1,LN1> = S.LINES.1
+   END
+*     LINES.1 = COUNT(MPO.PROD.DESC,VM) + (MPO.PROD.DESC # '')
+* 1999 *
+*** INPUT PRODUCT COMMENTS
+1011 BEGIN.PAGE.3 = SLN+2
+   IF MPO.ITEM.COMM<1,LN1> = "" THEN
+      LINES.3 = 0
+      LOOP
+         OPTION1 = "A"
+         LN3 = LINES.3 + 1
+         OLD.LINES.3 = LINES.3
+         GOSUB 3000
+      WHILE LINES.3 > OLD.LINES.3 DO REPEAT
+      LN3 = LINES.3
+   END ELSE
+      LINES.3 = COUNT(MPO.ITEM.COMM<1,LN1>, SVM) + (MPO.ITEM.COMM<1,LN1> # "")
+   END
+   LN3 = 1
+   GOSUB 30000
+**** INPUT MISC CATEGORY
+1012 X = 53 ; Y = SLN+2 ; TYP = 1 ;  VALDAT = '' ; HMSG = '' ; MAXL  = 6
+*T24834 v Wait until entry is made (LMR)
+* TASK 19631 v
+*IF OPTION = 'C' AND MPO.TOT.RECEVED<1,LN1>+0 # 0 AND MPO.ACCRUE = 'Y' THEN 
+*  ERRMSG = "Change not Allowed to Cat/Div/Dept/Cctr Po Accrued and Receipts Processed"
+*  GOSUB 91000
+*  GOTO 1018
+*END
+* TASK 19631 ^
+   IF MPO.MISC.CAT<1,LN1> = '' THEN
+      O.R = 'R'
+   END ELSE
+      O.R = 'O'
+      DEFAULT = MPO.MISC.CAT<1,LN1>
+   END
+   CALL EDIT.SUB
+   BEGIN CASE
+      CASE VALUE = 'END' AND OPTION = 'A'
+         GOTO 1001
+      CASE VALUE = 'END' AND OPTION = 'C'
+         P_X  = 53 ; P_Y = SLN+2 ; P_VALUE = MPO.MISC.CAT<1,LN1> "L#6" ; P_OPT = ""
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         GOTO 1999
+*T24834v
+      CASE VALUE # "???" AND VALUE # MPO.MISC.CAT<1,LN1> AND OPTION = 'C' AND MPO.ACCRUE = 'Y' AND MPO.TOT.RECEVED<1,LN1> > 0
+         GOSUB 1023
+         P_X  = 53 ; P_Y = SLN+2 ; P_VALUE = MPO.MISC.CAT<1,LN1> "L#6" ; P_OPT = ""
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         GOTO 1999
+*T24834^
+      CASE VALUE = "???"
+         GXR.FILE = CATEGORY.MISC
+         GXR.NAME = 'CATEGORY.MISC'
+         GXR.ID = ''
+         CALL GEN.XREF.SUB(MAT GEN.XREF.REC,PREFIX,XREF.DATA)
+         ECD.ACTION = 2;CALL SCRN.EDIT
+         ECD.ACTION = 3;CALL SCRN.EDIT
+         SAVE.SLN = SLN
+         OLD.START.LINE.1 = 0
+         SAVE.LN1 = LN1
+         LINES.1 = COUNT(MPO.PROD.DESC,VM) + (MPO.PROD.DESC # "")
+         GOSUB 10000
+         LN1 = SAVE.LN1
+         SLN = SAVE.SLN
+         IF GXR.ID = '' THEN
+            P_X  = 53 ; P_Y = SLN+2 ; P_VALUE = SPACE(6) ; P_OPT = ""
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            GOTO 1012
+         END ELSE 
+*T24834v
+            IF OPTION='C' AND GXR.ID#MPO.MISC.CAT<1,LN1> AND MPO.ACCRUE='Y' AND MPO.TOT.RECEVED<1,LN1> > 0 THEN
+               GOSUB 1023
+               P_X  = 53 ; P_Y = SLN+2 ; P_VALUE = MPO.MISC.CAT<1,LN1> "L#6" ; P_OPT = ""
+               CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+               GOTO 1999
+            END ELSE
+*T24834^
+               MATREAD CAMISC.REC FROM CATEGORY.MISC,CONO:GXR.ID ELSE
+                  ERRMSG = 'Invalid Miscellaneous Code'
+                  GOSUB 91000
+                  P_X  = 53 ; P_Y = SLN+2 ; P_VALUE = SPACE(6) ; P_OPT = ""
+                  CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+                  GOTO 1012
+               END
+               P_X  = 53 ; P_Y = SLN+2 ; P_VALUE = GXR.ID ; P_OPT = ""
+               CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+               MATREAD COA.REC FROM COA, CONO:CAMISC.EXP.ACCT ELSE
+                  ERRMSG = 'Misc Category Code has no valid EXPENSE ACCOUNT'
+                  GOSUB 91000
+                  GOTO 1012
+               END
+*T27010 v
+               IF MPO.DIV.OWNER # '00' AND COA.LEVEL < 1 THEN
+                  ERRMSG = 'Div Owner is ':MPO.DIV.OWNER:' and COA level is ':COA.LEVEL
+                  GOSUB 91000
+                  GOTO 1012
+               END
+*T27010 ^
+               MISC.CAT.DESC<1,LN1> = CAMISC.DESC
+               P_X  = 60 ; P_Y = SLN+2 ; P_VALUE = MISC.CAT.DESC<1,LN1> "L#20" ; P_OPT = ""
+               CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+               MPO.MISC.CAT<1,LN1> = GXR.ID
+            END
+         END
+*T24834^
+      CASE 1
+         MATREAD CAMISC.REC FROM CATEGORY.MISC,CONO:VALUE ELSE
+            ERRMSG = 'Invalid Miscellaneous Code'
+            GOSUB 91000
+            P_X  = 53 ; P_Y = SLN+2 ; P_VALUE = SPACE(6) ; P_OPT = ""
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            GOTO 1012
+         END
+         MATREAD COA.REC FROM COA, CONO:CAMISC.EXP.ACCT ELSE
+            ERRMSG = 'Misc Category Code has no valid EXPENSE ACCOUNT'
+            GOSUB 91000
+            GOTO 1012
+         END
+*T27010 v
+         IF MPO.DIV.OWNER # '00' AND COA.LEVEL < 1 THEN
+            ERRMSG = 'Div owner is ':MPO.DIV.OWNER:' and COA Level is ':COA.LEVEL
+            GOSUB 91000
+            GOTO 1012
+         END
+*T27010 ^
+         MISC.CAT.DESC<1,LN1> = CAMISC.DESC
+         P_X  = 60 ; P_Y = SLN+2 ; P_VALUE = MISC.CAT.DESC<1,LN1> "L#20" ; P_OPT = ""
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         MPO.MISC.CAT<1,LN1> = VALUE
+   END CASE
+   MISC.COA.LEVEL<1,LN1> = COA.LEVEL
+*** Now enter Division, Department, Cost Center Details
+   IF MISC.COA.LEVEL<1,LN1> = 0 THEN
+      MPO.MISC.DIV<1,LN1> = GEN.DIV
+      MISC.DIV.DESC<1,LN1> = GENERAL
+      MISC.DEPT.DESC<1,LN1> = GENERAL
+      MPO.MISC.DEPT<1,LN1> = GEN.DEPT
+      MISC.CCTR.DESC<1,LN1> = GENERAL
+      MPO.MISC.CCTR<1,LN1> = GEN.CCTR
+      P_X  = 54 ; P_Y = SLN+3 ; P_VALUE = MPO.MISC.DIV<1,LN1> "L#2" ; P_OPT = ""
+      P_X  := AM:60 ; P_Y := AM:SLN+3 ; P_VALUE := AM:GENERAL "L#20"
+      P_X  := AM:54 ; P_Y := AM:SLN+4 ; P_VALUE := AM:MPO.MISC.DEPT<1,LN1> "L#2"
+      P_X  := AM:60 ; P_Y := AM:SLN+4 ; P_VALUE := AM:GENERAL "L#20"
+      P_X  := AM:54 ; P_Y := AM:SLN+5 ; P_VALUE := AM:MPO.MISC.CCTR<1,LN1> "L#3"
+      P_X  := AM:60 ; P_Y := AM:SLN+5 ; P_VALUE := AM:GENERAL "L#20"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      GOTO 1018
+   END
+1013 X = 54 ; Y = SLN+3 ; TYP = 1 ;  VALDAT = '' ; HMSG = '' ; MAXL  = 2 ; MINL = 2
+*T26685 v
+   IF MPO.MISC.DIV<1,LN1> = "" THEN
+      IF SECURITY.REC<1> = "Y" AND SECURITY.REC<2> = "Y" THEN
+         MPO.MISC.DIV<1,LN1> = MPO.DIV.OWNER
+      END
+   END
+*T26685 ^
+   IF MPO.MISC.DIV<1,LN1> = '' THEN
+      O.R = 'R'
+      DEFAULT = MPO.DIV.OWNER; * T19404
+   END ELSE
+      O.R = 'O'
+      DEFAULT = MPO.MISC.DIV<1,LN1>
+   END
+   CALL EDIT.SUB
+   BEGIN CASE
+      CASE VALUE = 'END' AND OPTION = 'A'
+         GOTO 1001
+      CASE VALUE = 'END' AND OPTION = 'C'
+         P_X  = 54 ; P_Y = SLN+3 ; P_VALUE = MPO.MISC.DIV<1,LN1> "L#2" ; P_OPT = ""
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         GOTO 1999
+*T26685 v
+      CASE VALUE = GEN.DIV AND SECURITY.REC<1> = "Y" AND SECURITY.REC<2> = "Y"
+         ERRMSG = "00 INVALID WHEN DIVISION-LEVEL POSTING & CLOSING IS SELECTED"
+         GOSUB 91000
+         GOTO 1013
+*T26685 ^
+*T27010 v
+*     CASE VALUE = GEN.DIV
+      CASE VALUE = GEN.DIV AND MPO.DIV.OWNER = GEN.DIV
+*T27010 ^
+         MPO.MISC.DIV<1,LN1> = GEN.DIV
+         MISC.DIV.DESC<1,LN1> = GENERAL
+         MISC.DEPT.DESC<1,LN1> = GENERAL
+         MPO.MISC.DEPT<1,LN1> = GEN.DEPT
+         MISC.CCTR.DESC<1,LN1> = GENERAL
+         MPO.MISC.CCTR<1,LN1> = GEN.CCTR
+         P_X  = 54 ; P_Y = SLN+3 ; P_VALUE = MPO.MISC.DIV<1,LN1> "L#2" ; P_OPT = ""
+         P_X  := AM:60 ; P_Y := AM:SLN+3 ; P_VALUE := AM:GENERAL "L#20"
+         P_X  := AM:54 ; P_Y := AM:SLN+4 ; P_VALUE := AM:MPO.MISC.DEPT<1,LN1> "L#2"
+         P_X  := AM:60 ; P_Y := AM:SLN+4 ; P_VALUE := AM:GENERAL "L#20"
+         P_X  := AM:54 ; P_Y := AM:SLN+5 ; P_VALUE := AM:MPO.MISC.CCTR<1,LN1> "L#3"
+         P_X  := AM:60 ; P_Y := AM:SLN+5 ; P_VALUE := AM:GENERAL "L#20"
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         GOTO 1018
+*T27010 v XREF only if Gen Div Owner
+*     CASE VALUE = "??"
+      CASE VALUE = "??" AND MPO.DIV.OWNER = GEN.DIV
+*T27010 ^
+         GXR.FILE = DIVISION
+         GXR.NAME = 'DIVISION'
+         GXR.XREF = CONTROL
+         GXR.SRCH.ID = 'DIVISIONS'
+         GXR.ID = ''
+         CALL GEN.XREF.SUB(MAT GEN.XREF.REC,PREFIX,XREF.DATA)
+         ECD.ACTION = 2;CALL SCRN.EDIT
+         ECD.ACTION = 3;CALL SCRN.EDIT
+         SAVE.SLN = SLN
+         OLD.START.LINE.1 = 0
+         SAVE.LN1 = LN1
+         LINES.1 = COUNT(MPO.PROD.DESC,VM) + (MPO.PROD.DESC # "")
+         GOSUB 10000
+         LN1 = SAVE.LN1
+         SLN = SAVE.SLN
+         IF GXR.ID = '' THEN
+            P_X  = 54 ; P_Y = SLN+3 ; P_VALUE = SPACE(2) ; P_OPT = ""
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            GOTO 1013
+         END ELSE 
+            MATREAD DIV.REC FROM DIVISION,CONO:GXR.ID ELSE
+               ERRMSG = 'Invalid Division'
+               GOSUB 91000
+               P_X  = 54 ; P_Y = SLN+3 ; P_VALUE = SPACE(2) ; P_OPT = ""
+               CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+               GOTO 1013
+            END
+            P_X  = 54 ; P_Y = SLN+3 ; P_VALUE = GXR.ID ; P_OPT = ""
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            MISC.DIV.DESC<1,LN1> = DIV.DESC
+            P_X  = 60 ; P_Y = SLN+3 ; P_VALUE = MISC.DIV.DESC<1,LN1> "L#20" ; P_OPT = ""
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            MPO.MISC.DIV<1,LN1> = GXR.ID
+         END
+*T27010 v
+      CASE VALUE # MPO.DIV.OWNER AND MPO.DIV.OWNER # "00"
+         ERRMSG = "Division must be Owning Division ":MPO.DIV.OWNER
+         GOSUB 91000
+         GOTO 1013
+*T27010 ^
+      CASE 1
+         MATREAD DIV.REC FROM DIVISION, CONO:VALUE ELSE
+            ERRMSG = 'CANNOT LOCATE DIVISION : ' : VALUE
+            GOSUB 91000
+            GOTO 1013
+         END
+*T27010 v Moved into above case statement
+*        IF VALUE # MPO.DIV.OWNER AND MPO.DIV.OWNER # "00" THEN
+*           ERRMSG = "Division must be General or Owning Division"
+*           GOSUB 91000
+*           GOTO 1013
+*        END
+*T27010 ^
+         MPO.MISC.DIV<1,LN1> = VALUE
+         MISC.DIV.DESC<1,LN1> = DIV.DESC
+         P_X  = 60 ; P_Y = SLN+3 ; P_VALUE = MISC.DIV.DESC<1,LN1> "L#20" ; P_OPT = ""
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   END CASE
+1014*
+   IF MISC.COA.LEVEL<1,LN1> = 1 THEN
+      MPO.MISC.DEPT<1,LN1> = GEN.DEPT
+      MPO.MISC.CCTR<1,LN1> = GEN.CCTR
+      MISC.DEPT.DESC<1,LN1> = GENERAL
+      MISC.CCTR.DESC<1,LN1> = GENERAL
+      P_X  = 54 ; P_Y = SLN+4 ; P_VALUE = MPO.MISC.DEPT<1,LN1> "L#2" ; P_OPT = ""
+      P_X  := AM:60 ; P_Y := AM:SLN+4 ; P_VALUE := AM:GENERAL "L#20"
+      P_X  := AM:54 ; P_Y := AM:SLN+5 ; P_VALUE := AM:MPO.MISC.CCTR<1,LN1> "L#3"
+      P_X  := AM:60 ; P_Y := AM:SLN+5 ; P_VALUE := AM:GENERAL "L#20"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      GOTO 1018
+   END
+   X = 54 ; Y = SLN+4 ; TYP = 1 ;  VALDAT = '' ; HMSG = '' ; MAXL  = 2 ; MINL = 2
+   IF MPO.MISC.DEPT<1,LN1> = '' THEN
+      O.R = 'R'
+   END ELSE
+      O.R = 'O'
+      DEFAULT = MPO.MISC.DEPT<1,LN1>
+   END
+   CALL EDIT.SUB
+   BEGIN CASE
+      CASE VALUE = 'END' AND OPTION = 'A'
+         GOTO 1001
+      CASE VALUE = 'END' AND OPTION = 'C'
+         P_X  = 54 ; P_Y = SLN+4 ; P_VALUE = MPO.MISC.DEPT<1,LN1> "L#2" ; P_OPT = ""
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         GOTO 1999
+      CASE VALUE = GEN.DEPT
+         MPO.MISC.DEPT<1,LN1> = GEN.DEPT
+         MISC.DEPT.DESC<1,LN1> = GENERAL
+         MISC.CCTR.DESC<1,LN1> = GENERAL
+         MPO.MISC.CCTR<1,LN1> = GEN.CCTR
+         P_X  = 60 ; P_Y = SLN+4 ; P_VALUE = GENERAL "L#20" ; P_OPT = ""
+         P_X  := AM:54 ; P_Y := AM:SLN+5 ; P_VALUE := AM:MPO.MISC.CCTR<1,LN1> "L#3"
+         P_X  := AM:60 ; P_Y := AM:SLN+5 ; P_VALUE := AM:GENERAL "L#20"
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         GOTO 1018
+      CASE VALUE = "??"
+         GXR.NAME = 'DEPARTMENT'
+         GXR.FILE = DEPARTMENT
+         GXR.SRCH.ID = MPO.MISC.DIV<1,LN1>
+         GXR.ID = ''
+         CALL GEN.XREF.SUB(MAT GEN.XREF.REC,PREFIX,XREF.DATA)
+         ECD.ACTION = 2;CALL SCRN.EDIT
+         ECD.ACTION = 3;CALL SCRN.EDIT
+         SAVE.SLN = SLN
+         OLD.START.LINE.1 = 0
+         SAVE.LN1 = LN1
+         LINES.1 = COUNT(MPO.PROD.DESC,VM) + (MPO.PROD.DESC # "")
+         GOSUB 10000
+         LN1 = SAVE.LN1
+         SLN = SAVE.SLN
+         IF GXR.ID = '' THEN
+            P_X  = 54 ; P_Y = SLN+4 ; P_VALUE = SPACE(2) ; P_OPT = ""
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            GOTO 1014
+         END ELSE 
+            MATREAD DEPT.REC FROM DEPARTMENT,CONO:GXR.ID ELSE
+               ERRMSG = 'Invalid Department'
+               GOSUB 91000
+               P_X  = 54 ; P_Y = SLN+4 ; P_VALUE = SPACE(2) ; P_OPT = ""
+               CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+               GOTO 1014
+            END
+*T27010 v
+            LOCATE GXR.ID IN DIV.DEPT<1>,1 SETTING FND ELSE
+               ERRMSG = 'CANNOT LOCATE DEPARTMENT ':GXR.ID:', UNDER DIVISION: ':MPO.MISC.DIV<1,LN1>
+               GOSUB 91000
+               GOTO 1014
+            END
+*T27010 ^
+            P_X  = 54 ; P_Y = SLN+4 ; P_VALUE = GXR.ID ; P_OPT = ""
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            MISC.DEPT.DESC<1,LN1> = DEPT.DESC
+            P_X  = 60 ; P_Y = SLN+4 ; P_VALUE = MISC.DEPT.DESC<1,LN1> "L#20" ; P_OPT = ""
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            MPO.MISC.DEPT<1,LN1> = GXR.ID
+         END
+      CASE 1
+         LOCATE VALUE IN DIV.DEPT<1>,1 SETTING FND ELSE
+            ERRMSG = 'CANNOT LOCATE DEPARTMENT : ':VALUE:', UNDER DIVISION : ':MPO.MISC.DIV<1,LN1>
+            GOSUB 91000
+            GOTO 1014
+         END
+         MATREAD DEPT.REC FROM DEPARTMENT, CONO:VALUE ELSE
+            ERRMSG = 'CANNOT LOCATE DEPARTMENT : ' : VALUE
+            GOSUB 91000
+            GOTO 1014
+         END
+         MPO.MISC.DEPT<1,LN1> = VALUE
+         MISC.DEPT.DESC<1,LN1> = DEPT.DESC
+         P_X  = 60 ; P_Y = SLN+4 ; P_VALUE = MISC.DEPT.DESC<1,LN1> "L#20" ; P_OPT = ""
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   END CASE
+1015*
+   IF MISC.COA.LEVEL<1,LN1> = 2 THEN
+      MPO.MISC.CCTR<1,LN1> = GEN.CCTR
+      MISC.CCTR.DESC<1,LN1> = GENERAL
+      P_X  = 54 ; P_Y = SLN+5 ; P_VALUE = MPO.MISC.CCTR<1,LN1> "L#3"
+      P_X  := AM:60 ; P_Y := AM:SLN+5 ; P_VALUE := AM:GENERAL "L#20"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      GOTO 1018
+   END
+   X = 54 ; Y = SLN+5 ; TYP = 1 ;  VALDAT = '' ; HMSG = '' ; MAXL  = 3 ; MINL = 3
+   IF MPO.MISC.CCTR<1,LN1> = '' THEN
+      O.R = 'R'
+   END ELSE
+      O.R = 'O'
+      DEFAULT = MPO.MISC.CCTR<1,LN1>
+   END
+   CALL EDIT.SUB
+   BEGIN CASE
+      CASE VALUE = 'END' AND OPTION = 'A'
+         GOTO 1001
+      CASE VALUE = 'END' AND OPTION = 'C' 
+         P_X  = 54 ; P_Y = SLN+5 ; P_VALUE = MPO.MISC.CCTR<1,LN1> "L#3" ; P_OPT = ""
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         GOTO 1999
+      CASE VALUE = GEN.CCTR
+         MPO.MISC.CCTR<1,LN1> = GEN.CCTR
+         MISC.CCTR.DESC<1,LN1> = GENERAL
+         P_X  = 60 ; P_Y = SLN+5 ; P_VALUE = GENERAL "L#20" ; P_OPT = ""
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         GOTO 1018
+      CASE VALUE = "???"
+         GXR.FILE = COST.CNTR
+         GXR.NAME = 'DEPT.CNTR'
+         GXR.SRCH.ID = ''
+         GXR.ID = ''
+         GXR.VALUE1 = MPO.MISC.DEPT<1,LN1>
+         CALL GEN.XREF.SUB(MAT GEN.XREF.REC,PREFIX,XREF.DATA)
+         ECD.ACTION = 2;CALL SCRN.EDIT
+         ECD.ACTION = 3;CALL SCRN.EDIT
+         SAVE.SLN = SLN
+         OLD.START.LINE.1 = 0
+         SAVE.LN1 = LN1
+         LINES.1 = COUNT(MPO.PROD.DESC,VM) + (MPO.PROD.DESC # "")
+         GOSUB 10000
+         LN1 = SAVE.LN1
+         SLN = SAVE.SLN
+         IF GXR.ID = '' THEN
+            P_X  = 54 ; P_Y = SLN+5 ; P_VALUE = SPACE(3) ; P_OPT = ""
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            GOTO 1015
+         END ELSE 
+            MATREAD CCTR.REC FROM COST.CNTR,CONO:GXR.ID ELSE
+               ERRMSG = 'Invalid Cost Center'
+               GOSUB 91000
+               P_X  = 54 ; P_Y = SLN+5 ; P_VALUE = SPACE(3) ; P_OPT = ""
+               CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+               GOTO 1015
+            END
+*T29081 v
+            IF CCTR.TYPE = 'F' THEN
+               ERRMSG = 'Cost Center is Frozen!'
+               GOSUB 91000
+               P_X  = 54 ; P_Y = SLN+5 ; P_VALUE = SPACE(3) ; P_OPT = ""
+               CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+               GOTO 1015
+            END
+*T29081 ^
+            P_X  = 54 ; P_Y = SLN+5 ; P_VALUE = GXR.ID ; P_OPT = ""
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            MISC.CCTR.DESC<1,LN1> = CCTR.DESC
+            P_X  = 60 ; P_Y = SLN+5 ; P_VALUE = MISC.CCTR.DESC<1,LN1> "L#20" ; P_OPT = ""
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            MPO.MISC.CCTR<1,LN1> = GXR.ID
+         END
+      CASE 1
+         LOCATE VALUE IN DEPT.CCTRS<1>,1 SETTING FND ELSE
+            ERRMSG = 'CANNOT LOCATE COST CENTER : ':VALUE:', UNDER DEPARTMENT : ':MPO.MISC.DEPT<1,LN1>
+            GOSUB 91000
+            GOTO 1015
+         END
+         MATREAD CCTR.REC FROM COST.CNTR, CONO:VALUE ELSE
+            ERRMSG = 'CANNOT LOCATE COST CENTER : ' : VALUE
+            GOSUB 91000
+            GOTO 1015
+         END
+*T29081 v
+         IF CCTR.TYPE = 'F' THEN
+            ERRMSG = 'Cost Center is Frozen!'
+            GOSUB 91000
+            P_X  = 54 ; P_Y = SLN+5 ; P_VALUE = SPACE(3) ; P_OPT = ""
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            GOTO 1015
+         END
+*T29081 ^
+         MPO.MISC.CCTR<1,LN1> = VALUE
+         MISC.CCTR.DESC<1,LN1> = CCTR.DESC
+         P_X  = 60 ; P_Y = SLN+5 ; P_VALUE = MISC.CCTR.DESC<1,LN1> "L#20" ; P_OPT = ""
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   END CASE
+1018*
+   IF OPTION # "A" THEN
+      GOSUB 9000
+   END
+1999 *
+*JTP     LINES.1 = COUNT(MPO.ITEM.COMM,VM) + (MPO.ITEM.COMM # '')
+   LINES.1 = COUNT(MPO.PROD.DESC,VM) + (MPO.PROD.DESC # "")
+   RETURN
+**** CALCULATE ORDERD VALUE
+1019 *
+*     DESC.PRICE = INT(MPO.GROS.PRICE<1,AA>*(1-(MPO.DISCOUNT<1,AA>/10000)))
+*     ONORD.AMT = INT((DESC.PRICE) * (MPO.TOT.ONORD<1,AA>/100)+.5)
+   IF MPO.UNIT.MAG<1,AA> = 'M' THEN
+*T28687 MFACTOR = 1
+      MFACTOR = 1000
+   END ELSE
+      MFACTOR = 1
+   END
+   IF MPO.DISCOUNT<1,AA>+0#0 THEN
+      DESC.PRICE=OCONV(MPO.GROS.PRICE<1,AA>,"MD4")*OCONV(MPO.DISCOUNT<1,AA>,"MD4")
+      ONORD.AMT=(OCONV(MPO.GROS.PRICE<1,AA>,"MD4")-DESC.PRICE) * OCONV(INT(MPO.TOT.ONORD<1,AA>/MFACTOR + .5),"MD2")
+*        ONORD.AMT = INT(ONORD.AMT * (MPO.TOT.ONORD<1,AA>/1000)+.5)
+   END ELSE
+      ONORD.AMT=OCONV(MPO.GROS.PRICE<1,AA>,"MD4") * OCONV(INT(MPO.TOT.ONORD<1,AA>/MFACTOR + .5),"MD2")
+   END
+   ONORD.AMT = ICONV(ONORD.AMT,"MD4")
+   TTAMT=ICONV(OCONV(ONORD.AMT,"MD4"),"MD2")
+   P_X  = 43 ; P_Y = SLN+1 ; P_VALUE = OCONV(TTAMT, "MD2") "R#13" ; P_OPT = ""
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   GOSUB 1021
+   RETURN
+**** CALCULATE OPEN QTY
+1020 *
+   MPO.TOT.OPEN<1,LN1> = MPO.TOT.ONORD<1,LN1> - (MPO.TOT.RECEVED<1,LN1> + MPO.TOT.CANCEL<1,LN1> )
+   IF MPO.TOT.OPEN<1,LN1> < 0 THEN MPO.TOT.OPEN<1,LN1> = 0
+   P_X= 73 ; P_Y = SLN ; P_VALUE = OCONV(MPO.TOT.OPEN<1,LN1> , "MD2") "R#7" ; P_OPT = ""
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   RETURN
+*** CALCULATE TotalS
+*
+1021 *
+   P.CNT = COUNT(MPO.PROD.DESC,VM) + (MPO.PROD.DESC # "")
+   TOT.QTY = 0 ; TOT.AMT = 0
+   FOR A = 1 TO P.CNT
+*T28687 v
+      IF MPO.UNIT.MAG<1,A> = 'M' THEN
+         MFACTOR = 1000
+      END ELSE
+         MFACTOR = 1
+      END
+*T28687 ^
+      TOT.QTY = TOT.QTY + MPO.TOT.ONORD<1,A>
+      DESC.PRICE = INT(MPO.GROS.PRICE<1,A>*(1-(MPO.DISCOUNT<1,A>/10000)))
+*T28687 ONORD.AMT.TOT = INT((DESC.PRICE) * (MPO.TOT.ONORD<1,A>/100)+.5)
+      ONORD.AMT.TOT = INT((DESC.PRICE) * (MPO.TOT.ONORD<1,A>/100/MFACTOR)+.5)
+      TOT.AMT = TOT.AMT + ONORD.AMT.TOT
+   NEXT A
+   IF OCONV(TOT.AMT, "MD4") GT "9999999.9999" THEN
+* P_X= 10 ; P_Y = 19 ; P_VALUE = " " ; P_OPT = "CL"
+* CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+* PRINT @(20,19):"Total extended amount cannot exceed 9,999,999.9999"
+*INPUT ZZ
+* TYP=11;X=20;Y=19
+* PMSG="Total extended amount cannot exceed 9,999,999.9999"
+* CALL EDIT.SUB
+* P_X= 10 ; P_Y = 19 ; P_VALUE = " " ; P_OPT = "CL"
+* CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      ERRMSG="Total extended amount cannot exceed 9,999,999.9999"
+      GOSUB 91000
+      EXT.FLAG = 1
+      RETURN
+   END
+   P_X= 10 ; P_Y = 19 ; P_VALUE = 'Total Quantity Ordered:':OCONV(TOT.QTY, "MD2") "L#10" ; P_OPT = ""
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   TT.TOT = ICONV(OCONV(TOT.AMT,"MD4"),"MD2")
+   P_X= 46 ; P_Y = 19 ; P_VALUE = 'Total Dollar Amount:':OCONV(TT.TOT, "MD2") "L#13" ; P_OPT = ""
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   RETURN
+*T24562v
+1022 *
+*T24834 v
+   IF OPTION = 'C' AND MPO.ACCRUE = 'Y' AND MPO.TOT.RECEVED<1,LN1> > 0 THEN
+*T24834 ^
+      IF MPO.GROS.PRICE<1,LN1># VALUE THEN
+         ERRMSG = "Change not Allowed to Unit Price -  Po Accrued and Receipts Processed"
+         GOSUB 91000
+         VALUE = ""
+      END
+   END
+   RETURN
+*
+1023 *
+   X = 53 ; Y = SLN+2 ; TYP = 1 ;  VALDAT = '' ; HMSG = '' ; MAXL  = 6
+   ERRMSG = "Change not Allowed to Cat/Div/Dept/Cctr Po Accrued and Receipts Processed"
+   GOSUB 91000
+   RETURN
+*T24562^
+3000 GOSUB 30000
+   SLN3 = BEGIN.PAGE.3 + LINE.SPACE.3 * MOD(LN3 - 1, PAGE.SIZE.3)
+   P_X= 3 ; P_Y = SLN3 ; P_VALUE = LN3 "R#3" ; P_OPT = ""
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+3001 X = 7 ; Y = SLN3 ;TYP = 1 ; MAXL = 36 ; VALDAT = '' ; HMSG = ''
+   IF MPO.ITEM.COMM<1,LN1,LN3> = '' THEN
+      O.R = 'R' ; DEFAULT = ''
+   END ELSE
+      O.R = 'O' ; DEFAULT = MPO.ITEM.COMM<1,LN1,LN3>
+   END
+   CALL EDIT.SUB
+   BEGIN CASE
+      CASE VALUE = "END" AND OPTION1 = "A"
+         P_X= 3 ; P_Y = SLN3 ; P_VALUE = SPACE(44) ; P_OPT = ""
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      CASE VALUE = "END" AND OPTION1 = "C"
+         P_X= 7 ; P_Y = SLN3 ; P_VALUE = MPO.ITEM.COMM<1,LN1,LN3> "L#40" ; P_OPT = ""
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      CASE VALUE = "END" AND OPTION1 = "I"     ; *25852
+         MPO.ITEM.COMM = DELETE(MPO.ITEM.COMM,1,LN1,LN3)
+         LN3 -= 1
+      CASE 1
+         MPO.ITEM.COMM<1,LN1,LN3> = VALUE
+   END CASE
+   LINES.3 = COUNT(MPO.ITEM.COMM<1,LN1>, SVM) + (MPO.ITEM.COMM<1,LN1> # "")
+   RETURN
+**** ENTER COMMENT OPTION
+8500 *
+   MORE1 = 1
+   LOOP
+*X = 0 ; Y = 21; TYP = 1; MAXL = 1
+*PMSG = 'Enter Comment Options (A)dd, (C)hange, (D)elete, (S)croll, (E)xit '
+*VALDAT = 'A':VM:'D':VM:'S':VM:'E':VM:'C'
+*DEFAULT = "E"
+*CALL EDIT.SUB
+*OPTION1 = VALUE
+*ECD.NUM = 33 ; 24231 
+**ECD.NUM = CO.PROMPT.NUM    ; * 25855
+      IF POS.INQ THEN ECD.NUM = 41 ELSE ECD.NUM = CO.PROMPT.NUM ; * 25855
+      SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ""
+      ECD.ACTION = 4
+      CALL SCRN.EDIT
+      OPTION1 = ECD.RET.VALUE
+      BEGIN CASE
+         CASE OPTION1 = 'E' OR OPTION1 = 'END'
+            MORE1 = 0
+         CASE OPTION1 = 'A'
+            LINES.3 = COUNT(MPO.ITEM.COMM<1,LN1>, SVM) + (MPO.ITEM.COMM<1,LN1> # "")
+            GOSUB 30000
+            LOOP
+               LN3 = LINES.3 + 1
+               OLD.LINES.3 = LINES.3
+               GOSUB 3000
+            WHILE LINES.3 > OLD.LINES.3 DO REPEAT
+            LN3 = LINES.3
+            GOSUB 30000
+         CASE OPTION1 = 'C'
+            LINES.3 = COUNT(MPO.ITEM.COMM<1,LN1>, SVM) + (MPO.ITEM.COMM<1,LN1> # "")
+            GOSUB 80000
+            IF LNO THEN
+               LN3 = LNO
+            END ELSE 
+               GOTO 8500
+            END
+            SLN3 = BEGIN.PAGE.3 + LINE.SPACE.3 * MOD(LN3 - 1,PAGE.SIZE.3)
+            GOSUB 3001
+         CASE OPTION1 = 'D'
+            GOSUB 80000
+            IF LNO THEN
+               LN3 = LNO
+               MPO.ITEM.COMM = DELETE(MPO.ITEM.COMM,1,LN1,LN3)
+               LINES.3 = COUNT(MPO.ITEM.COMM<1,LN1>,SVM) + (MPO.ITEM.COMM<1,LN1> # "")
+               IF LN3 > 1 AND LN3 > LINES.3 THEN LN3 = LN3 - 1
+               IF LN3 < 1 THEN LN3 = 1
+               OLD.START.LINE.3 = 0
+            END ELSE
+               GOTO 8500
+            END
+            GOSUB 30000
+         CASE OPTION1 = 'I'          ; *25852
+            GOSUB 80000
+            IF LNO THEN
+               LN3 = LNO
+               MPO.ITEM.COMM = INSERT(MPO.ITEM.COMM,1,LN1,LN3,'')
+               GOSUB 3000
+            END ELSE
+               GOSUB 8500
+            END
+            GOSUB 30000
+         CASE OPTION1 = 'S'
+            LINES.3 = COUNT(MPO.ITEM.COMM<1,LN1>, SVM) + (MPO.ITEM.COMM<1,LN1> # "")
+            LN3 = 1 + INT((LN3-1)/PAGE.SIZE.3) * PAGE.SIZE.3 + PAGE.SIZE.3
+            IF LN3 > LINES.3 THEN LN3 = 1
+            GOSUB 30000
+      * T25978 v
+         CASE OPTION1 = 'SR'
+            LN3 = 1 + INT((LN3-1)/PAGE.SIZE.3) * PAGE.SIZE.3 - PAGE.SIZE.3
+            IF LN3 < 1 THEN LN3 = 1
+            GOSUB 30000
+         CASE OPTION1 = 'ST'
+            LN3 = 1
+            GOSUB 30000
+         CASE OPTION1 = 'SB'
+            LN3 = COUNT(MPO.ITEM.COMM<1,LN1>, SVM) + (MPO.ITEM.COMM<1,LN1> # "")
+            GOSUB 30000
+      * T25978 ^
+      END CASE
+   WHILE MORE1 = 1 DO REPEAT
+   RETURN
+*
+**** ENTER OPTION
+*
+9000 *
+*24231 v
+   IF BUFFER<1> = "R" THEN
+*USER.ID = UPCASE(@LOGNAME)
+*MATREAD APP.REQ.REC FROM APP.REQ,CONO:USER.ID:"!":MPO.DIV.OWNER ELSE
+*MAT APP.REQ.REC = ""
+*END
+      BEGIN CASE
+         CASE MPO.APP.LEVEL = "C"
+            M.PROMPT.NUM = 37
+            CO.PROMPT.NUM = 34
+         CASE MPO.APP.LEVEL < APP.PO.LEVEL AND MPO.APP.LEVEL # ""
+            M.PROMPT.NUM = 37
+            CO.PROMPT.NUM = 34
+         CASE 1
+            M.PROMPT.NUM = 32
+            CO.PROMPT.NUM = 33
+      END CASE
+   END ELSE
+      M.PROMPT.NUM = 32
+      CO.PROMPT.NUM = 33
+   END
+*24231 ^
+   MORE = 1
+   LOOP
+*ECD.NUM = 32 ; * 24231
+**ECD.NUM = M.PROMPT.NUM    ; * 25855
+      IF POS.INQ THEN ECD.NUM = 40 ELSE ECD.NUM = M.PROMPT.NUM
+      SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ""
+      ECD.ACTION = 4
+      CALL SCRN.EDIT
+      OPTION = ECD.RET.VALUE
+      BEGIN CASE
+         CASE OPTION = 'E' OR OPTION = 'END'
+            MORE = 0
+         CASE OPTION = 'A'
+            LOOP
+               LN1 = LINES.1 + 1
+               OLD.LINES.1 = LINES.1
+               GOSUB 1000
+            WHILE LINES.1 > OLD.LINES.1 DO REPEAT
+            LN1 = LINES.1
+            GOSUB 10000
+         CASE OPTION = 'C'
+            GOSUB 60000
+            IF LNO THEN
+               LN1 = LNO
+               SLN = BEGIN.PAGE.1 + LINE.SPACE.1 * MOD(LN1 - 1,PAGE.SIZE.1)
+               GOSUB 1001
+            END
+         CASE OPTION = 'CO'
+            GOSUB 60000
+            IF LNO THEN
+               LN1=LNO
+               SLN = BEGIN.PAGE.1 + LINE.SPACE.1 * MOD(LN1 - 1,PAGE.SIZE.1)
+               GOSUB 8500
+            END
+         CASE OPTION = 'D'
+            GOSUB 60000
+            IF LNO THEN           
+               OK.TO.DELETE=1
+               BEGIN CASE
+                  CASE MPO.TOT.RECEVED<1,LNO>#"" AND MPO.TOT.RECEVED<1,LNO>#0
+                     OK.TO.DELETE=0
+                     ERRMSG = "Product has already been received for this line.  Unable to delete."
+                  CASE CO.APS.M.INTRF > 1
+*T26555 v            VPS.ID = CONO:MPO.VEND.NO:"!":MPO.CODE 
+                     VPS.ID = CONO:MPO.VEND.NO:"!M!":MPO.CODE 
+                     MATREAD VPS.REC FROM VEND.PO.STATS, VPS.ID THEN
+                        LOCATE MPO.PROD.NUM<1,LNO> IN VPS.PROD<1>,1 SETTING POFF THEN
+                           IF VPS.VOU.AMT<1,POFF> > 0 THEN
+                              OK.TO.DELETE=0
+                              ERRMSG="This line has already been vouchered.  Unable to delete."
+                           END
+                        END
+                     END
+               END CASE
+               IF OK.TO.DELETE THEN
+                  LN1 = LNO
+                  MPO.PROD.NUM = DELETE(MPO.PROD.NUM,1,LN1,0)
+                  MPO.SEQ.NO = DELETE(MPO.SEQ.NO,1,LN1,0)
+                  MPO.PROD.DESC = DELETE(MPO.PROD.DESC,1,LN1,0)
+                  MPO.DEL.DATE = DELETE(MPO.DEL.DATE,1,LN1,0)
+                  MPO.GROS.PRICE = DELETE(MPO.GROS.PRICE,1,LN1,0)
+                  MPO.DISCOUNT = DELETE(MPO.DISCOUNT,1,LN1,0)
+                  MPO.UNIT.MAG = DELETE(MPO.UNIT.MAG,1,LN1,0)
+                  MPO.TOT.ONORD = DELETE(MPO.TOT.ONORD,1,LN1,0)
+                  MPO.TOT.OPEN = DELETE(MPO.TOT.OPEN,1,LN1,0)
+                  MPO.TOT.RECEVED = DELETE(MPO.TOT.RECEVED,1,LN1,0)
+                  MPO.PREV.RECEVED = DELETE(MPO.PREV.RECEVED,1,LN1,0)
+                  MPO.TOT.CANCEL = DELETE(MPO.TOT.CANCEL,1,LN1,0)
+                  MPO.LAST.RECV = DELETE(MPO.LAST.RECV,1,LN1,0)
+                  MPO.ITEM.COMM = DELETE(MPO.ITEM.COMM,1,LN1,0)
+                  MPO.MISC.CAT = DELETE(MPO.MISC.CAT,1,LN1,0)
+                  MPO.MISC.DIV = DELETE(MPO.MISC.DIV,1,LN1,0)
+                  MPO.MISC.DEPT = DELETE(MPO.MISC.DEPT,1,LN1,0)
+                  MPO.MISC.CCTR = DELETE(MPO.MISC.CCTR,1,LN1,0)
+                  MISC.CAT.DESC = DELETE(MISC.CAT.DESC,1,LN1,0)
+                  MISC.DIV.DESC = DELETE(MISC.DIV.DESC,1,LN1,0)
+                  MISC.DEPT.DESC = DELETE(MISC.DEPT.DESC,1,LN1,0)
+                  MISC.CCTR.DESC = DELETE(MISC.CCTR.DESC,1,LN1,0)
+                  MISC.COA.LEVEL = DELETE(MISC.COA.LEVEL,1,LN1,0)
+                  LINES.1 = COUNT(MPO.PROD.DESC,VM) + (MPO.PROD.DESC # '')
+                  IF LN1 > 1 AND LN1 > LINES.1 THEN LN1 = LN1 - 1
+                  IF LN1 < 1 THEN LN1 = 1
+                  OLD.START.LINE.1 = 0
+               END ELSE
+                  IF ERRMSG = '' THEN
+                     ERRMSG = 'Unable to delete this line'
+                  END
+                  GOSUB 91000
+               END
+            END
+            GOSUB 10000
+            GOSUB 1021
+         CASE OPTION = 'S'
+            REM         LN1 = LN1 + PAGE.SIZE.1
+            REM         IF LN1 > LINES.1 THEN LN1 = 1
+            LN1=LN1+PAGE.SIZE.1-1
+            LN1=(PAGE.SIZE.1 * INT(LN1/PAGE.SIZE.1)) + 1
+            IF MPO.PROD.DESC<1,LN1>='' THEN LN1=1
+            GOSUB 10000
+      * T25978 v
+         CASE OPTION = 'SR'
+            LN1=LN1-PAGE.SIZE.1-1
+            LN1=(PAGE.SIZE.1 * INT(LN1/PAGE.SIZE.1)) + 1
+            IF LN1 < 1 THEN LN1 = 1
+            GOSUB 10000
+         CASE OPTION = 'ST'
+            LN1 = 1
+            GOSUB 10000
+         CASE OPTION = 'SB'
+            LN1 = DCOUNT(MPO.PROD.DESC<1>,@VM)
+            GOSUB 10000
+      * T25978 ^
+      END CASE
+   WHILE MORE = 1 DO REPEAT
+   RETURN
+**** SCROLL ROUTINE FOR PROD
+10000 *
+   START.LINE.1 = 1 + INT((LN1-1)/PAGE.SIZE.1) * PAGE.SIZE.1
+   IF START.LINE.1 = OLD.START.LINE.1 THEN GOTO 10001
+   OLD.START.LINE.1 = START.LINE.1
+   LAST.LINE.1 = START.LINE.1 + PAGE.SIZE.1 - 1
+   CNT = 1
+*T25944 FOR N = START.LINE.1 TO LAST.LINE.1 UNTIL N > LINES.1
+   FOR N = START.LINE.1 TO LAST.LINE.1
+      SLN = BEGIN.PAGE.1 + LINE.SPACE.1 * MOD(N-1,PAGE.SIZE.1)
+      P_X  = 0 ; P_Y = SLN ; P_VALUE = N "R#3" ; P_OPT = ""
+      P_X  := AM:4 ; P_Y := AM:SLN ; P_VALUE := AM:MPO.PROD.NUM<1,N> "L#15"
+      P_X  := AM:4 ; P_Y := AM:SLN+1 ; P_VALUE := AM:MPO.PROD.DESC<1,N> "L#30"
+      P_X  := AM:20 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(MPO.DEL.DATE<1,N>, "D2/") "R#8"
+      P_X  := AM:29 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(MPO.GROS.PRICE<1,N> , "MD4") "R#12"
+      P_X  := AM:39 ; P_Y := AM:SLN+1 ; P_VALUE := AM:OCONV(MPO.DISCOUNT<1,N> , "MD2") "R#5"
+      P_X  := AM:45 ; P_Y := AM:SLN ; P_VALUE := AM:MPO.UNIT.MAG<1,N> "L#3"
+      P_X  := AM:49 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(MPO.TOT.ONORD<1,N> , "MD2") "R#7"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      AA = N
+      GOSUB 1019
+      MPO.TOT.RECEVED<1,N> = SUM(MPO.REC.QTY<1,N>)
+      P_X  = 57 ; P_Y = SLN ; P_VALUE = OCONV(MPO.TOT.RECEVED<1,N>, "MD2") "R#7" ; P_OPT = ""
+      P_X  := AM:65 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(MPO.TOT.CANCEL<1,N>, "MD2") "R#7"
+      P_X  := AM:73 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(MPO.TOT.OPEN<1,N> , "MD2") "R#7"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      CNT = CNT + 1
+      LN3=1
+*T25944   FOR I = 1 TO 4
+      FOR I = 1 TO PAGE.SIZE.3
+*T25944    IF MPO.ITEM.COMM<1,N,I> # "" AND I # 4 THEN
+         IF MPO.ITEM.COMM<1,N,I> # "" THEN
+            LINES.3=I
+            P_X  = 3 ; P_Y = SLN+I+1 ; P_VALUE = I "R#3" ; P_OPT = ""
+            P_X  := AM:7 ; P_Y := AM:SLN+I+1 ; P_VALUE := AM:MPO.ITEM.COMM<1,N,I>"L#40"
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         END ELSE
+            P_X  = 3 ; P_Y = SLN+I+1 ; P_VALUE = SPACE(3) ; P_OPT = ""
+            P_X  := AM:7 ; P_Y := AM:SLN+I+1 ; P_VALUE := AM:SPACE(40)
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         END
+         BEGIN CASE
+            CASE I = 1
+               P_X  = 53 ; P_Y = SLN+I+1 ; P_VALUE = MPO.MISC.CAT<1,N> "L#6" ; P_OPT = ""
+               P_X  := AM:60 ; P_Y := AM:SLN+I+1 ; P_VALUE := AM:MISC.CAT.DESC<1,N> "L#20"
+               CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            CASE I = 2
+               P_X  = 54 ; P_Y = SLN+I+1 ; P_VALUE = MPO.MISC.DIV<1,N> "L#6" ; P_OPT = ""
+               P_X  := AM:60 ; P_Y := AM:SLN+I+1 ; P_VALUE := AM:MISC.DIV.DESC<1,N> "L#20"
+               CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            CASE I = 3
+               P_X  = 54 ; P_Y = SLN+I+1 ; P_VALUE = MPO.MISC.DEPT<1,N> "L#6" ; P_OPT = ""
+               P_X  := AM:60 ; P_Y := AM:SLN+I+1 ; P_VALUE := AM:MISC.DEPT.DESC<1,N> "L#20"
+               CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            CASE I = 4
+               P_X  = 54 ; P_Y = SLN+I+1 ; P_VALUE = MPO.MISC.CCTR<1,N> "L#6" ; P_OPT = ""
+               P_X  := AM:60 ; P_Y := AM:SLN+I+1 ; P_VALUE := AM:MISC.CCTR.DESC<1,N> "L#20"
+               CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         END CASE
+      NEXT I
+   NEXT N
+   FOR M = CNT TO PAGE.SIZE.1
+      SLN = BEGIN.PAGE.1 + LINE.SPACE.1 * MOD(M-1,PAGE.SIZE.1)
+      P_X  = 0 ; P_Y = SLN ; P_VALUE = "" ; P_OPT = "CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      P_X  = 0 ; P_Y = SLN+1 ; P_VALUE = "" ; P_OPT = "CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      P_X  = 3 ; P_Y = SLN+2 ; P_VALUE = SPACE(3) ; P_OPT = ""
+      P_X  := AM:7 ; P_Y := AM:SLN+2 ; P_VALUE := AM:SPACE(40)
+      P_X  := AM:53 ; P_Y := AM:SLN+2 ; P_VALUE := AM:SPACE(6)
+      P_X  := AM:60 ; P_Y := AM:SLN+2 ; P_VALUE := AM:SPACE(20)
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      P_X  = 3 ; P_Y = SLN+3 ; P_VALUE = SPACE(3) ; P_OPT = ""
+      P_X  := AM:7 ; P_Y := AM:SLN+3 ; P_VALUE := AM:SPACE(40)
+      P_X  := AM:54 ; P_Y := AM:SLN+3 ; P_VALUE := AM:SPACE(2)
+      P_X  := AM:60 ; P_Y := AM:SLN+3 ; P_VALUE := AM:SPACE(20)
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      P_X  = 3 ; P_Y = SLN+4 ; P_VALUE = SPACE(3) ; P_OPT = ""
+      P_X  := AM:7 ; P_Y := AM:SLN+4 ; P_VALUE := AM:SPACE(40)
+      P_X  := AM:54 ; P_Y := AM:SLN+4 ; P_VALUE := AM:SPACE(2)
+      P_X  := AM:60 ; P_Y := AM:SLN+4 ; P_VALUE := AM:SPACE(20)
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      P_X  = 3 ; P_Y = SLN+5 ; P_VALUE = SPACE(3) ; P_OPT = ""
+      P_X  := AM:7 ; P_Y := AM:SLN+5 ; P_VALUE := AM:SPACE(40)
+      P_X  := AM:54 ; P_Y := AM:SLN+5 ; P_VALUE := AM:SPACE(3)
+      P_X  := AM:60 ; P_Y := AM:SLN+5 ; P_VALUE := AM:SPACE(20)
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   NEXT M
+   RETURN
+***** SCROLL ROUTINE FOR PROD COMMENTS
+30000 *
+   BEGIN.PAGE.3 = SLN+2
+   START.LINE.3 = 1 + INT((LN3-1)/PAGE.SIZE.3) * PAGE.SIZE.3
+   LAST.LINE.3 = START.LINE.3 + PAGE.SIZE.3 - 1
+* 25852 v
+   IF (OPTION1 # 'I') AND (START.LINE.3 = OLD.START.LINE.3) THEN
+* 25852 ^
+      GOTO 30002
+      OLD.START.LINE.3 = START.LINE.3
+   END
+   LINES.3 = COUNT(MPO.ITEM.COMM<1,LN1>, SVM) + (MPO.ITEM.COMM<1,LN1> # "")
+   CNT = 1
+*
+   FOR N = START.LINE.3 TO LAST.LINE.3 UNTIL N > LINES.3
+      SLN3 = BEGIN.PAGE.3 + LINE.SPACE.3 * MOD(N-1,PAGE.SIZE.3)
+      P_X  = 3 ; P_Y = SLN3 ; P_VALUE = N "R#3" ; P_OPT = ""
+      P_X  := AM:7 ; P_Y := AM:SLN3 ; P_VALUE := AM:MPO.ITEM.COMM<1,LN1,N> "L#40"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      CNT = CNT + 1
+   NEXT N
+   FOR N = CNT TO PAGE.SIZE.3
+      SLN3 = BEGIN.PAGE.3 + LINE.SPACE.3 * MOD(N-1,PAGE.SIZE.3)
+      P_X  = 3 ; P_Y = SLN3 ; P_VALUE = SPACE(3) ; P_OPT = ""
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      P_X  = 7 ; P_Y = SLN3 ; P_VALUE = SPACE(40) ; P_OPT = ""
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   NEXT N
+30002 *
+   RETURN
+10001 *
+   RETURN
+**** ENTER LINE NUMBER
+60000 *
+*T26213 v
+*  GOSUB 10000
+*  ECD.NUM = 35
+*  SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ""
+*  ECD.MINV = OLD.START.LINE.1
+*  IF LAST.LINE.1 < LINES.1 THEN
+*     ECD.MAXV = LAST.LINE.1
+*  END ELSE
+*     ECD.MAXV = LINES.1
+*  END
+*  ECD.ACTION = 4
+*  CALL SCRN.EDIT
+*  LNO = ECD.RET.VALUE
+*  IF LNO = '' OR LNO = 'END' THEN LNO = 0
+   LNO = START.LINE.1
+*T26213 ^
+   RETURN
+80000 *
+*GOSUB 30000 ; X = 0 ; Y = 21 ; TYP = 3
+*IF LINES.3 < 1 THEN LNO = 0; RETURN
+*PMSG = 'ENTER LINE NUMBER : '
+*REM   MINV = OLD.START.LINE.3
+*MINV = START.LINE.3
+*IF LAST.LINE.3 < LINES.3 THEN
+*   MAXV = LAST.LINE.3
+*END ELSE
+*   MAXV = LINES.3
+*END
+*O.R = 'O'; MAXL = 3
+*CALL EDIT.SUB
+*P_X  = 0 ; P_Y = 23 ; P_VALUE = "" ; P_OPT = "CL"
+*CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+*LNO = VALUE
+   GOSUB 30000
+   IF LINES.3 < 1 THEN LNO = 0; RETURN
+   ECD.NUM = 35
+   SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ""
+   ECD.MINV = START.LINE.3
+   IF LAST.LINE.3 < LINES.3 THEN
+      ECD.MAXV = LAST.LINE.3
+   END ELSE
+      ECD.MAXV = LINES.3
+   END
+   ECD.ACTION = 4
+   CALL SCRN.EDIT
+   LNO = ECD.RET.VALUE
+   IF LNO = '' OR LNO = 'END' THEN LNO = 0
+   RETURN
+**** CALLS FOR SYSCOM
+91000 ERR.TYPE = 1; CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+92000 ERR.TYPE = 2; CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+93000 ERR.TYPE = 3; CALL SYSCOM(MAT SYSCOM.REC)
+99999 * PRINT * @(-1) * :
+   ECD.ACTION=99;CALL SCRN.EDIT
+   RETURN
+END

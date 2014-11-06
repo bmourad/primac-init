@@ -1,0 +1,425 @@
+*COPY>CPYLIB>COM1
+*COPY>JCS.CPYLIB>COM.JCS.LINK  
+*COPY>ICS.CPYLIB>COM.INV.MAIN  
+*COPY>ICS.CPYLIB>COM.INV.SERIAL
+*COPY>JCS.CPYLIB>COM.INV.STATS 
+*COPY>PMC.CPYLIB>COM.CUST
+*COPY>OPS.CPYLIB>COM.ORDER
+**************************************************************************
+* REVISION    - [00.0]
+* COPYRIGHT   - 1993 Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - OPS
+* PROGRAM     - STATUS.BACK.ORDER.RPT
+* AUTHOR      - S.L.Fritz
+* DATE        - 04/27/93
+* DESCRIPTION - Print the status report for the open order file with a
+*               BACKORDER condition.
+*
+*               A backorder status condition is determained by asking the
+*               user for a date, and checking to see of any product lines
+*               have not been shipped as of that date.
+*T26493 cmykleb 03/22/2002 * Change report to use rpt # from proc.
+**************************************************************************
+*
+*---- DATA Structure Libraries
+*
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>OPS.CPYLIB>ORDER
+*COPY>OPS.CPYLIB>ORDER.DETAIL
+*COPY>OPS.CPYLIB>ORDER.DETAIL.INQ
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*
+*---- File open
+*
+   OPEN '','CUSTOMER' TO CUSTOMER ELSE ERRMSG = 'CUSTOMER';GOTO 999000
+   OPEN '','ORDER' TO ORDER ELSE ERRMSG = 'ORDER';GOTO 999000
+   OPEN '','ORDER.DETAIL' TO ORDER.DETAIL ELSE ERRMSG = 'ORDER.DETAIL';GOTO 999000
+   OPEN '','INVENTORY' TO INVENTORY ELSE ERRMSG = 'INVENTORY';GOTO 999000
+   OPEN '','INV.WHSE' TO INV.WHSE ELSE ERRMSG = 'INV.WHSE';GOTO 999000
+*
+*---- Initialize variables
+*
+   TRUE = 1
+   OTHERS = 1
+   VOID = ''
+   NULL = ''
+   FALSE = 0
+   PAGE.NO = 0
+   TOP.OF.NEW.PAGE = CHAR(12)
+   PAGE.NO = 0
+   LINES.THIS.PAGE = 0
+   PAGE.HEADING.SIZE = 5
+   PAGE.SIZE = 55
+   PRIOR.CUSTOMER = ''
+   CUSTOMER.BLOCK.CNTR = 0
+*
+   EQU CONO         TO BUFFER<1>
+   EQU COMPANY.NAME TO BUFFER<2>
+   EQU WAREHOUSE.NO TO BUFFER<3>
+   EQU REPORT.DATE  TO BUFFER<4>
+   EQU CUSTOMER.NUM TO BUFFER<5>
+   EQU ORDER.START  TO BUFFER<6>
+   EQU ORDER.END    TO BUFFER<7>
+*
+   SHD1 = 'ORDER   '
+   SHD1 = SHD1:'ORD-DATE '
+   SHD1 = SHD1:'DUE-DATE '
+   SHD1 = SHD1:'PRODUCT         '
+   SHD1 = SHD1:'DESCRIPTION                    '
+   SHD1 = SHD1:'WHSE '
+   SHD1 = SHD1:'   ORDERED '
+   SHD1 = SHD1:'  RESERVED '
+   SHD1 = SHD1:' ALLOCATED '
+   SHD1 = SHD1:'   SHIPPED '
+   SHD1 = SHD1:' BACKORDER'
+   SHD2 = STR('-',7):SPACE(1)
+   SHD2 = SHD2:STR('-',8):SPACE(1)
+   SHD2 = SHD2:STR('-',8):SPACE(1)
+   SHD2 = SHD2:STR('-',15):SPACE(1)
+   SHD2 = SHD2:STR('-',30):SPACE(1)
+   SHD2 = SHD2:STR('-',4):SPACE(1)
+   SHD2 = SHD2:STR('-',10):SPACE(1)
+   SHD2 = SHD2:STR('-',10):SPACE(1)
+   SHD2 = SHD2:STR('-',10):SPACE(1)
+   SHD2 = SHD2:STR('-',10):SPACE(1)
+   SHD2 = SHD2:STR('-',10)
+*
+   ODQ.G.QTY = 0
+   ODQ.R.QTY = 0
+   ODQ.A.QTY = 0
+   ODQ.S.QTY = 0
+*
+   PRINTER ON
+*
+   PROCREAD BUFFER ELSE
+      ERRMSG = 'Must run this program from a REPORT.SCRN PROC.'
+      GOTO 999000
+   END
+*
+*T26493 v
+*  RPT.NAME = 'BACK ORDER STATUS REPORT AS OF ':OCONV(REPORT.DATE,'D2/')
+*  RPT.NUM = 'XXXX'
+   RPT.NAME = ""
+   RPT.NUM = BUFFER<2>
+*T26493 ^
+   RPT.DATE = DATE()
+   HD1 = ''
+   HD2 = ''
+   CALL GET.PROG.HEAD(CONO,VOID,RPT.NAME,RPT.NUM,RPT.DATE,HD1,HD2)
+*
+   GOSUB 60000
+*
+*---- MAIN Function ------------------------------------------------------
+*
+*          This function prepares the report headings and gets ready to
+*          read thru the list of qualified records from the order file.
+*
+*          This function reads the list passed to it from the PROC.
+*
+*          The KEY from the list is used to read the order file.  The
+*          support files are read, and data is prepared for printing.
+*
+10000 *-------------------------------------------------------------------
+*
+   READNEXT ORDER.KEY ELSE
+      GOTO 999999;* Exit the program
+   END
+*
+   ORDER.NUMBER = ORDER.KEY[4,8]
+*
+   MATREAD ORD.REC FROM ORDER, ORDER.KEY ELSE
+      MAT ORD.REC = ''
+      ERRMSG = 'Can not read the ':ORDER.KEY:' record from the ORDER file.'
+      GOTO 10000;* Record disappeared, get next record key from list.
+   END
+*
+   MATREAD CUST.REC FROM CUSTOMER, CONO:ORD.CUST ELSE
+      MAT CUST.REC = ''
+      ERRMSG = 'Can not read ':ORD.CUST:' from the CUSTOMER file.'
+      GOTO 10000;* Record disappeared, get next record key from list.
+   END
+*
+* Print the customers name/address block
+*
+   IF PRIOR.CUSTOMER # ORD.CUST THEN
+      GOSUB 20000
+      PRIOR.CUSTOMER = ORD.CUST
+   END
+*
+* Consolidate the SHIP.TO records for the product
+*
+   GOSUB 30000
+*
+* Go up and get the next record
+*
+   GOTO 10000
+*
+*---- CUSTOMER BLOCK Function --------------------------------------------
+*
+*             This function builds the customers name/address block
+*
+20000 *-------------------------------------------------------------------
+*
+*
+* Build the customers address block variables
+*
+   CUST.PRINT.1 = ''
+   CUST.PRINT.2 = 'CUSTOMER NO :':ORD.CUST'L#10'
+   CUST.PRINT.3 = '       NAME :':CUST.NAME'L#34'
+   CUST.PRINT.4 = '    ADDRESS :':CUST.ADDR1'L#30'
+   CUSTOMER.BLOCK.CNTR = 4
+   IF CUST.ADDR2 # '' THEN
+      CUST.PRINT.5 = '            :':CUST.ADDR2'L#30'
+      CUSTOMER.BLOCK.CNTR = CUSTOMER.BLOCK.CNTR + 1
+   END ELSE
+      CUST.PRINT.5 = ''
+   END
+   IF CUST.ADDR3 # '' THEN
+      CUST.PRINT.6 = '            :':CUST.ADDR3'L#30'
+      CUSTOMER.BLOCK.CNTR = CUSTOMER.BLOCK.CNTR + 1
+   END ELSE
+      CUST.PRINT.6 = ''
+   END
+   IF CUST.ADDR4 # '' THEN
+      CUST.PRINT.7 = '            :':CUST.ADDR4:' ':CUST.ZIP
+      CUSTOMER.BLOCK.CNTR = CUSTOMER.BLOCK.CNTR + 1
+   END ELSE
+      CUST.PRINT.7 = ''
+   END
+*
+   RETURN
+*
+*
+*---- CONSOLIDATION Function ---------------------------------------------
+*
+*             This function consolidates all the ship.to data for the
+*             order lines.
+*
+30000 *-------------------------------------------------------------------
+*
+* Call the routine that consolidates all the ship.to's for this product.
+*
+   STATUS = 'L'
+   SHPNO = 'ALL'
+   CALL ORDER.LINE.UPD(CONO,ORDER.NUMBER,SHPNO,STATUS)
+*
+* Define how many product lines there are to print.
+*
+   DETAIL.CNTR = DCOUNT(ODQ.PROD,VM)
+   FOR DETAIL.LOOP = 1 TO DETAIL.CNTR
+   *
+   * If the record just read is not for the warehouse desired, skip it.
+   * If the warehouse indicated is ALL, proceed.
+   *
+      IF WAREHOUSE.NO # 'ALL' AND ODQ.WHSE<1,DETAIL.LOOP> # WAREHOUSE.NO THEN
+         GOTO 30100
+      END
+   *
+      INV.KEY = CONO:ODQ.PROD<1,DETAIL.LOOP>
+      MATREAD INV.REC FROM INVENTORY, INV.KEY ELSE
+         INV.FULL.DESC = 'Inventory record description missing'
+      END
+      IF INV.BASE.SKU # '' THEN
+         READV DESCRIPTION.ONE FROM INVENTORY, CONO:INV.BASE.SKU, 2 ELSE
+            DESCRIPTION.ONE = "Inventory description miissing from file!"
+         END
+         DESCRIPTION.TWO = INV.FULL.DESC
+      END ELSE
+         DESCRIPTION.ONE = INV.FULL.DESC
+         DESCRIPTION.TWO = ''
+      END
+*
+   * Force all the print quantities to be at least a zero.
+   *
+      IF ODQ.KIT<1,DETAIL.LOOP> = "N" THEN
+         ODQ.P = ODQ.PROD<1,DETAIL.LOOP>
+         ODQ.O = ODQ.G.QTY<1,DETAIL.LOOP>/1000 + 0
+   *   ODQ.O = ODQ.O.QTY<1,DETAIL.LOOP>/1000 + 0
+         ODQ.R = ODQ.R.QTY<1,DETAIL.LOOP>/1000 + 0
+         ODQ.A = ODQ.A.QTY<1,DETAIL.LOOP>/1000 + 0
+         ODQ.S = ODQ.S.QTY<1,DETAIL.LOOP>/1000 + 0
+      END ELSE
+         ODQ.P = ODQ.PROD<1,DETAIL.LOOP>
+         ODQ.O = ODQ.KIT.G.QTY<1,DETAIL.LOOP>/1000 + 0
+   *   ODQ.O = ODQ.KIT.O.QTY<1,DETAIL.LOOP>/1000 + 0
+         ODQ.R = ODQ.KIT.R.QTY<1,DETAIL.LOOP>/1000 + 0
+         ODQ.A = ODQ.KIT.A.QTY<1,DETAIL.LOOP>/1000 + 0
+         ODQ.S = ODQ.KIT.S.QTY<1,DETAIL.LOOP>/1000 + 0
+      END
+   *
+   * Calculate the back order quantity
+   *
+      BACK.ORDERED = ODQ.O - ODQ.R - ODQ.A - ODQ.S
+   *
+   * If the order line is not backordered, do not print it.
+   *
+      IF BACK.ORDERED > 0 AND ODQ.KIT<1,DETAIL.LOOP> # "M" THEN
+      *
+      * Check to see if Customer NAME/ADDRESS needs printing
+      *
+      * At the start of each group of orders for a given customer, the
+      * name and address is printed.  To prevent the name and address from
+      * printing before each and every line, once this information is
+      * printed, it is nulled out.  This null field is the second
+      * name line.  ie: CUST.PRINT.2 = ''
+      *
+         IF CUST.PRINT.2 # '' THEN
+            LINES.THIS.PAGE = LINES.THIS.PAGE + CUSTOMER.BLOCK.CNTR
+            IF LINES.THIS.PAGE > PAGE.SIZE THEN
+               GOSUB 60000
+               LINES.THIS.PAGE = LINES.THIS.PAGE + CUSTOMER.BLOCK.CNTR
+            END
+            PRINT CUST.PRINT.1
+            PRINT CUST.PRINT.2
+            PRINT CUST.PRINT.3
+            PRINT CUST.PRINT.4
+            IF CUST.PRINT.5 # '' THEN PRINT CUST.PRINT.5
+            IF CUST.PRINT.6 # '' THEN PRINT CUST.PRINT.6
+            IF CUST.PRINT.7 # '' THEN PRINT CUST.PRINT.7
+         *
+         * Once the customer address prints, flag it to not print again.
+         *
+            CUST.PRINT.2 = ''
+         END
+      *
+      * Check to see if the product line will fit BEFORE printing it.
+      *
+         LINES.THIS.PAGE = LINES.THIS.PAGE + 1
+         IF LINES.THIS.PAGE > PAGE.SIZE THEN
+            GOSUB 60000
+            LINES.THIS.PAGE = LINES.THIS.PAGE + 1
+         END
+      *
+         PROD.LINE = ORDER.NUMBER'L#7':SPACE(1)
+         PROD.LINE = PROD.LINE:OCONV(ORD.DATE,'D2/')'L#8':SPACE(1)
+         PROD.LINE = PROD.LINE:OCONV(ORD.DUE,'D2/')'L#8':SPACE(1)
+         PROD.LINE = PROD.LINE:ODQ.P'L#15':SPACE(1)
+         PROD.LINE = PROD.LINE:DESCRIPTION.ONE'L#30':SPACE(1)
+         PROD.LINE = PROD.LINE:ODQ.WHSE<1,DETAIL.LOOP>'L#4':SPACE(1)
+         PROD.LINE = PROD.LINE:OCONV(ODQ.O,'MD0,')'R#10':SPACE(1)
+         PROD.LINE = PROD.LINE:OCONV(ODQ.R,'MD0,')'R#10':SPACE(1)
+         PROD.LINE = PROD.LINE:OCONV(ODQ.A,'MD0,')'R#10':SPACE(1)
+         PROD.LINE = PROD.LINE:OCONV(ODQ.S,'MD0,')'R#10':SPACE(1)
+         PROD.LINE = PROD.LINE:OCONV(BACK.ORDERED,'MD0,')'R#10'
+      *
+      * Print the variable which is the product print line.
+      *
+         PRINT PROD.LINE
+      *
+         IF DESCRIPTION.TWO # '' THEN
+            LINES.THIS.PAGE = LINES.THIS.PAGE + 1
+            IF LINES.THIS.PAGE > PAGE.SIZE THEN
+               GOSUB 60000
+               LINES.THIS.PAGE = LINES.THIS.PAGE + 1
+            END
+            PRINT SPACE(41):DESCRIPTION.TWO'L#30'
+         END
+         IF ODQ.KIT<1,DETAIL.LOOP> = "K" THEN
+            FOR I = DETAIL.LOOP TO DETAIL.CNTR
+               IF I > DETAIL.LOOP THEN
+                  IF ODQ.KIT<1,I> = "K" OR ODQ.KIT<1,I> = "N" THEN
+                     I = DETAIL.CNTR + 10 
+                     GOTO 30150
+                  END
+                  IF ODQ.KIT<1,I> = "N" THEN I = DETAIL.CNTR + 10
+               END
+               ODQ.P = ODQ.PROD<1,I>
+               INV.KEY = CONO:ODQ.P
+               MATREAD INV.REC FROM INVENTORY, INV.KEY ELSE
+                  INV.FULL.DESC = 'Inventory record description missing'
+               END
+               IF INV.BASE.SKU # '' THEN
+                  READV DESCRIPTION.ONE FROM INVENTORY, CONO:INV.BASE.SKU, 2 ELSE
+                     DESCRIPTION.ONE = "Inventory description miissing from file!"
+                  END
+                  DESCRIPTION.TWO = INV.FULL.DESC
+               END ELSE
+                  DESCRIPTION.ONE = INV.FULL.DESC
+                  DESCRIPTION.TWO = ''
+               END
+               ODQ.O = ODQ.G.QTY<1,I>/1000 + 0
+               ODQ.R = ODQ.R.QTY<1,I>/1000 + 0
+               ODQ.A = ODQ.A.QTY<1,I>/1000 + 0
+               ODQ.S = ODQ.S.QTY<1,I>/1000 + 0
+               BACK.ORDERED = ODQ.O - ODQ.R - ODQ.A - ODQ.S
+               IF BACK.ORDERED > 0 THEN
+                  LINES.THIS.PAGE = LINES.THIS.PAGE + 1
+                  IF LINES.THIS.PAGE > PAGE.SIZE THEN
+                     GOSUB 60000
+                     LINES.THIS.PAGE = LINES.THIS.PAGE + 1
+                  END
+                  PROD.LINE = SPACE(26):ODQ.P'L#15':SPACE(1)
+                  PROD.LINE = PROD.LINE:DESCRIPTION.ONE'L#30':SPACE(1)
+                  PROD.LINE = PROD.LINE:ODQ.WHSE<1,DETAIL.LOOP>'L#4':SPACE(1)
+                  PROD.LINE = PROD.LINE:OCONV(ODQ.O,'MD0,')'R#10':SPACE(1)
+                  PROD.LINE = PROD.LINE:OCONV(ODQ.R,'MD0,')'R#10':SPACE(1)
+                  PROD.LINE = PROD.LINE:OCONV(ODQ.A,'MD0,')'R#10':SPACE(1)
+                  PROD.LINE = PROD.LINE:OCONV(ODQ.S,'MD0,')'R#10':SPACE(1)
+                  PROD.LINE = PROD.LINE:OCONV(BACK.ORDERED,'MD0,')'R#10'
+                  PRINT PROD.LINE
+               END
+*
+               IF DESCRIPTION.TWO # '' THEN
+                  LINES.THIS.PAGE = LINES.THIS.PAGE + 1
+                  IF LINES.THIS.PAGE > PAGE.SIZE THEN
+                     GOSUB 60000
+                     LINES.THIS.PAGE = LINES.THIS.PAGE + 1
+                  END
+                  PRINT SPACE(41):DESCRIPTION.TWO'L#30'
+               END
+*
+30150 *
+*
+            NEXT I
+         END
+      END
+*
+30100 *
+*
+   NEXT DETAIL.LOOP
+*
+   RETURN
+*
+*
+*---- HEADING Function ---------------------------------------------------
+*
+*             This function assembles and prints the report heading
+*             information.  A variable tracks the page number.
+*
+60000 *-------------------------------------------------------------------
+*
+   PRINT TOP.OF.NEW.PAGE
+   PAGE.NO = PAGE.NO + 1
+   PRINT HD1:PAGE.NO
+   PRINT HD2
+   PRINT
+   PRINT SHD1
+   PRINT SHD2
+   LINES.THIS.PAGE = PAGE.HEADING.SIZE
+*
+   RETURN
+*
+*
+*---- ERROR Function -----------------------------------------------------
+*
+*           This function manages the display of any program
+*           processing errors.
+*
+999000 *------------------------------------------------------------------
+*
+   CRT ERRMSG
+   INPUT ANS
+*
+*---- EXIT Function ------------------------------------------------------
+*
+*          This function manages the wrap-up and exit from the program.
+*
+999999 *------------------------------------------------------------------
+*
+   PRINTER OFF
+*
+END

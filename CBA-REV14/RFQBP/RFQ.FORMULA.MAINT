@@ -1,0 +1,584 @@
+*COPY>CPYLIB>COM1
+***************************************************************************
+*
+* REVISION - [12.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+*
+* PROGRAM - RFQ.FORMULA.MAINT
+*
+* AUTHOR  - CHRIS MYKLEBUST, VERCOM SOFTWARE
+*
+* DATE     - 02/04/2003
+*
+* DESCRIPTION
+*
+* This program is used to set up certain criteria that can be checked
+* to see what if any operations should be loaded into the estimate
+* detail when creating an estimate from the RFQ screen.
+*
+*T26934 cmykleb 02/04/2003 * Inital programming.
+***************************************************************************
+*
+*---- FILE COPY STATEMENTS
+*
+**COPY>JES.CPYLIB>SCOMMON.ESTIMATE
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>DEPARTMENT
+*COPY>PMC.CPYLIB>COST.CNTR
+*COPY>JCS.CPYLIB>OPERATION
+*COPY>JES.CPYLIB>ESTIMATE.GRP
+*COPY>JES.CPYLIB>ESTIMATE.GRP.XREF
+*COPY>JES.CPYLIB>ESTIMATE.MATL
+*COPY>JES.CPYLIB>ESTIMATE.RFQ.FORMULA
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>EDIT.COM.DRIVER
+**COPY>CPYLIB>SCREEN.COM
+*COPY>CPYLIB>FILE.VARS
+*COPY>JES.CPYLIB>JES.FILE.VARS
+*COPY>CPYLIB>GEN.XREF.SUB
+*COPY>CPYLIB>XREF.DATA
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+   MAT SYSCOM.REC =  ""; SYS.TYPE = 2
+   MAT GEN.XREF.REC = ""
+*
+*---- OPEN ALL FILES
+*
+   OPEN "","COMPANY" TO COMPANY ELSE
+      ERRMSG = 'CANNOT OPEN COMPANY FILE'
+      GOSUB 91000
+      STOP
+   END
+   OPEN "","CONTROL" TO CONTROL ELSE
+      ERRMSG = 'CANNOT OPEN CONTROL FILE'
+      GOSUB 91000
+      STOP
+   END
+   OPEN "","DEPARTMENT" TO DEPARTMENT ELSE
+      ERRMSG = 'CANNOT OPEN DEPARTMENT FILE'
+      GOSUB 91000
+      STOP
+   END
+   OPEN "","COST.CNTR" TO COST.CNTR ELSE
+      ERRMSG = 'CANNOT OPEN COST.CNTR FILE'
+      GOSUB 91000
+      STOP
+   END
+   OPEN "","OPERATION" TO OPERATION ELSE
+      ERRMSG = 'CANNOT OPEN OPERATION FILE'
+      GOSUB 91000
+      STOP
+   END
+   OPEN "","ESTIMATE.RFQ.FORMULA" TO ESTIMATE.RFQ.FORMULA ELSE
+      ERRMSG = 'CANNOT OPEN ESTIMATE.RFQ.FORMULA FILE'
+      GOSUB 91000
+      STOP
+   END
+   OPEN "","RFQ.SCREENS" TO M.SCREENS ELSE
+      ERRMSG = 'CANNOT OPEN RFQ.SCREENS FILE'
+      GOSUB 91000
+      STOP
+   END
+   OPEN "","XREF.DATA" TO XREF.DATA ELSE
+      ERRMSG = 'CANNOT OPEN XREF.DATA FILE'
+      GOSUB 91000
+      STOP
+   END
+   OPEN "","RFQ.FORMULA.CODES" TO RFQ.FORMULA.CODES ELSE
+      ERRMSG = 'CANNOT OPEN RFQ.FORMULA.CODES FILE'
+      GOSUB 91000
+      STOP
+   END
+***** GET COMPANY NAME
+   MAT COMP.REC = ''
+   CONO = ''
+   CALL GET.CONO(CONO,MAT COMP.REC)
+   IF CONO = 'END' THEN GOTO 99999
+   MAT EDIT.COM.DRIVER = ''
+   FILL = '#'
+***** MAIN PROCESSING
+   ECD.SCRN.CNT = 1
+   ECD.SCRN.NAME<1> = 'RFQ.FORMULA.MAINT'
+   ECD.ACTION=1;CALL SCRN.EDIT
+   BEGIN.PAGE = 7
+   BEGIN.PAGE.B = 15
+   PAGE.SIZE = 5
+   LINE.SPACE = 1
+   ECD.SCRN.NO = 1
+   LOOP
+20 *
+      MAT SCV.REC = ""
+      ECD.ACTION=2;CALL SCRN.EDIT
+*
+*---- ENTER COST CENTER
+*
+      ECD.NUM = 1
+      ECD.ACTION=4;CALL SCRN.EDIT
+      BEGIN CASE
+         CASE ECD.RET.VALUE = 'END'
+            GOTO 99999
+         CASE ECD.RET.VALUE # ''
+            MATREAD CCTR.REC FROM COST.CNTR, CONO:ECD.RET.VALUE ELSE
+               ERRMSG = "Invalid Cost Center.  Try again!"
+               GOSUB 91000;GOTO 20 
+            END
+            ECD.NUM = 2; SCV.REC(ECD.NUM)<1> = CCTR.DESC
+            ECD.ACTION = 5; CALL SCRN.EDIT
+            CCTR = ECD.RET.VALUE
+         CASE ECD.RET.VALUE = ""
+            GOTO 99999
+      END CASE
+*
+*---- ENTER FORMULA #
+*
+30 *
+      ECD.NUM = 3
+      ECD.ACTION=4;CALL SCRN.EDIT
+      IF ECD.RET.VALUE = "END" THEN GOTO 20
+      GROUP = ECD.RET.VALUE
+      NEW.REC = 0
+      CUR.OPER = ''
+      CUR.DET = ''
+      RFQF.ID = CCTR:'!':GROUP
+      MATREADU RFQF.REC FROM ESTIMATE.RFQ.FORMULA, CONO:RFQF.ID LOCKED
+         ERRMSG = 'FORMULA GROUP record is locked by user - ':GETUSERNAME(STATUS())
+         GOSUB 91000;GOTO 30 
+      END ELSE
+         NEW.REC = 1
+         MAT RFQF.REC = ""
+      END
+      LINES = DCOUNT(RFQF.OPER<1>,VM)
+      LN = 1; OLD.START.LINE = 0
+      IF LINES THEN
+         GOSUB 2900
+      END ELSE
+         ACTION = 'A'
+         GOSUB 2000
+      END
+40 *
+      LOOP
+         MORE = 1
+         ECD.NUM = 50; SCV.REC(ECD.NUM)<1> = ''
+         ECD.ACTION = 4; CALL SCRN.EDIT
+         ACTION = ECD.RET.VALUE
+         BEGIN CASE
+            CASE ACTION = 'E' OR ACTION = 'END'
+               RELEASE ESTIMATE.RFQ.FORMULA, CONO:RFQF.ID
+               MORE = 0
+            CASE ACTION = 'A'
+               LOOP
+                  LN = LINES + 1
+                  OLD.LINES = LINES
+                  GOSUB 2000
+               WHILE LINES > OLD.LINES DO REPEAT
+               LN = LINES
+            CASE ACTION = 'C'
+               GOSUB 2800
+               IF LN.NO THEN
+                  LN = LN.NO
+                  GOSUB 2000
+               END
+            CASE ACTION = 'R'
+               GOSUB 2800
+               IF LN.NO THEN
+                  LN = LN.NO
+*                 SLN = BEGIN.PAGE.B + LINE.SPACE * MOD(LN - 1,PAGE.SIZE)
+                  SLN = BEGIN.PAGE + LINE.SPACE * MOD(LN - 1,PAGE.SIZE)
+                  GOSUB 3000
+               END
+            CASE ACTION = 'D'
+               GOSUB 2800
+               IF LN.NO THEN
+                  LN = LN.NO
+                  RFQF.OPER = DELETE(RFQF.OPER,1,LN,0)
+                  RFQF.CODE = DELETE(RFQF.CODE,1,LN,0)
+                  RFQF.REQD = DELETE(RFQF.REQD,1,LN,0)
+                  RFQF.MIN = DELETE(RFQF.MIN,1,LN,0)
+                  RFQF.MAX = DELETE(RFQF.MAX,1,LN,0)
+                  LINES = DCOUNT(RFQF.OPER<1>,VM)
+                  IF LN > LINES THEN LN = LN - 1
+                  IF LN < 1 THEN LN = 1
+                  OLD.START.LINE = 0
+               END
+               GOSUB 2900
+            CASE ACTION = 'S'
+               LN = 1 + INT((LN - 1)/PAGE.SIZE) * PAGE.SIZE + PAGE.SIZE
+               IF LN > LINES THEN LN = 1
+               GOSUB 2900
+            CASE ACTION = 'SR'
+               LN = 1 + INT((LN - 1)/PAGE.SIZE) * PAGE.SIZE - PAGE.SIZE
+               IF LN < 1 THEN LN = 1
+               GOSUB 2900
+            CASE ACTION = 'ST'
+               LN = 1
+               GOSUB 2900
+            CASE ACTION = 'SB'
+               LN = LINES
+               GOSUB 2900
+            CASE ACTION = 'F'
+               GOSUB 5000
+               MORE = 0
+         END CASE
+      WHILE MORE DO REPEAT
+   REPEAT
+   GOTO 99999
+*-------------------*
+*--- SUBROUTINES ---*
+*-------------------*
+*
+*--- ENTER OPERATION
+*
+2000*
+   GOSUB 2900
+   SLN = BEGIN.PAGE + LINE.SPACE * MOD(LN - 1,PAGE.SIZE)
+   P_X  = 0 ; P_Y = SLN ; P_VALUE = LN "R#3" ; P_OPT = ""
+   P_X  := AM:4 ; P_Y := AM:SLN ; P_VALUE := AM:" "
+   P_X  := AM:6 ; P_Y := AM:SLN ; P_VALUE := AM:"     "
+   P_X  := AM:13 ; P_Y := AM:SLN ; P_VALUE := AM:SPACE(30)
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+2010*
+   X = 6; Y = SLN; TYP = 1; MINL = 4; MAXL = MINL; O.R = 'R'
+   DEFAULT = RFQF.OPER<1,LN>
+   IF DEFAULT # '' THEN O.R = 'O'
+   CALL EDIT.SUB
+   IF VALUE = '' OR VALUE = 'END' THEN
+      IF ACTION = 'A' THEN
+         RFQF.OPER = DELETE(RFQF.OPER,1,LN,0)
+         RFQF.CODE = DELETE(RFQF.CODE,1,LN,0)
+         RFQF.REQD = DELETE(RFQF.REQD,1,LN,0)
+         RFQF.MIN = DELETE(RFQF.MIN,1,LN,0)
+         RFQF.MAX = DELETE(RFQF.MAX,1,LN,0)
+         P_X  = 0 ; P_Y = SLN ; P_VALUE = "   " ; P_OPT = ""
+         P_X  := AM:4 ; P_Y := AM:SLN ; P_VALUE := AM:" "
+         P_X  := AM:6 ; P_Y := AM:SLN ; P_VALUE := AM:"     "
+         P_X  := AM:13 ; P_Y := AM:SLN ; P_VALUE := AM:SPACE(30)
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         GOTO 2099
+      END ELSE
+         MATREAD OPER.REC FROM OPERATION,CONO:RFQF.OPER<1,LN> ELSE
+            MAT OPER.REC = ""
+         END
+         P_X = 6;P_Y = SLN;P_VALUE = RFQF.OPER<1,LN>"L#5";P_OPT = ""
+         P_X := AM:13;P_Y := AM:SLN;P_VALUE := AM:OPER.DESC"L#30"
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         GOTO 2099
+      END
+   END
+   MATREAD OPER.REC FROM OPERATION, CONO:VALUE ELSE
+      ERRMSG = 'OPERATION NOT ON FILE'
+      GOSUB 91000; GOTO 2010
+   END
+   RFQF.OPER<1,LN> = VALUE
+   P_X = 13;P_Y = SLN;P_VALUE = OPER.DESC"L#40";P_OPT = ""
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   LINES = DCOUNT(RFQF.OPER<1>,VM)
+   GOSUB 3000
+2099*
+   RETURN
+*
+*--- GET LINE # FOR OPERATION
+*
+2800*
+   GOSUB 2900
+   ECD.NUM = 5; SCV.REC(ECD.NUM)<1> = ''
+   ECD.MINV = START.LINE; ECD.MAXV = LAST.LINE
+   ECD.ACTION = 4; CALL SCRN.EDIT
+   IF ECD.RET.VALUE = '' OR ECD.RET.VALUE = 'END' THEN
+      LN.NO = 0
+   END ELSE
+      LN.NO = ECD.RET.VALUE
+   END
+   RETURN
+*
+*--- SCROLL OPERATIONS
+*
+2900*
+   START.LINE = 1 + INT((LN-1)/PAGE.SIZE) * PAGE.SIZE
+   LAST.LINE = START.LINE + PAGE.SIZE - 1
+   IF LAST.LINE > LINES THEN LAST.LINE = LINES
+   IF START.LINE = OLD.START.LINE THEN GOTO 2999
+   OLD.START.LINE = START.LINE
+   CNT = 1
+   FOR N = START.LINE TO LAST.LINE
+      MATREAD OPER.REC FROM OPERATION, CONO:RFQF.OPER<1,N> ELSE
+         MAT OPER.REC = ""
+      END
+      SLN = BEGIN.PAGE + LINE.SPACE * MOD(N-1,PAGE.SIZE)
+      P_X  = 0 ; P_Y = SLN ; P_VALUE = N "R#3" ; P_OPT = ""
+      P_X := AM:6;P_Y := AM:SLN;P_VALUE := AM:RFQF.OPER<1,N>"L#5"
+      P_X  := AM:13;P_Y := AM:SLN;P_VALUE := AM:OPER.DESC"L#40"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      CNT = CNT + 1
+   NEXT N
+   FOR N = CNT TO PAGE.SIZE
+      SLN = BEGIN.PAGE + LINE.SPACE * MOD(N-1,PAGE.SIZE)
+      P_X  = 0 ; P_Y = SLN ; P_VALUE = "   " ; P_OPT = ""
+      P_X  := AM:4 ; P_Y := AM:SLN ; P_VALUE := AM:" "
+      P_X  := AM:6 ; P_Y := AM:SLN ; P_VALUE := AM:"     "
+      P_X  := AM:13 ; P_Y := AM:SLN ; P_VALUE := AM:SPACE(40)
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   NEXT N
+2999*
+   RETURN
+*
+*--- OPTIONS FOR DETAIL
+*
+3000*
+   LINES1 = DCOUNT(RFQF.CODE<1,LN>,SVM)
+   LN1 = 1; OLD.START.LINE1 = 0
+   P_X  = 4 ; P_Y = SLN ; P_VALUE = "*" ; P_OPT = ""
+   CUR.OPER = SLN
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   BEGIN CASE
+      CASE LINES1
+         GOSUB 4900
+      CASE ACTION = 'A'
+         LINES1 = 0
+         REQUEST = 'A'
+         LOOP
+            LN1 = LINES1 + 1
+            OLD.LINES1 = LINES1
+            GOSUB 4000
+         WHILE LINES1 > OLD.LINES1 DO REPEAT
+   END CASE
+   LOOP
+      ANCORE = 1
+      ECD.NUM = 51; SCV.REC(ECD.NUM)<1> = ''
+      ECD.ACTION = 4; CALL SCRN.EDIT
+      REQUEST = ECD.RET.VALUE
+      BEGIN CASE
+         CASE REQUEST = 'E' OR REQUEST = 'END' OR REQUEST = ''
+            ANCORE = 0
+         CASE REQUEST = 'A'
+            LOOP
+               LN1 = LINES1 + 1
+               OLD.LINES1 = LINES1
+               GOSUB 4000
+            WHILE LINES1 > OLD.LINES1 DO REPEAT
+         CASE REQUEST = 'C'
+            GOSUB 4800
+            IF LN.NO THEN
+               LN1 = LN.NO
+               GOSUB 4000
+            END
+         CASE REQUEST = 'D'
+            GOSUB 4800
+            IF LN.NO THEN
+               LN1 = LN.NO
+               RFQF.CODE = DELETE(RFQF.CODE,1,LN,LN1)
+               RFQF.REQD = DELETE(RFQF.REQD,1,LN,LN1)
+               RFQF.MIN = DELETE(RFQF.MIN,1,LN,LN1)
+               RFQF.MAX = DELETE(RFQF.MAX,1,LN,LN1)
+               LINES1 = DCOUNT(RFQF.CODE<1,LN>,SVM)
+               IF LN1 > LINES1 THEN LN1 = LN1 - 1
+               IF LN1 < 1 THEN LN1 = 1
+               OLD.START.LINE1 = 0
+            END
+            GOSUB 4900
+         CASE REQUEST = 'S'
+            LN1 = 1 + INT((LN1 - 1)/PAGE.SIZE) * PAGE.SIZE + PAGE.SIZE
+            IF LN1 > LINES1 THEN LN1 = 1
+            GOSUB 4900
+         CASE REQUEST = 'SR'
+            LN1 = 1 + INT((LN1 - 1)/PAGE.SIZE) * PAGE.SIZE - PAGE.SIZE
+            IF LN1 < 1 THEN LN1 = 1
+            GOSUB 4900
+         CASE REQUEST = 'ST'
+            LN1 = 1
+            GOSUB 4900
+         CASE REQUEST = 'SB'
+            LN1 = LINES1
+            GOSUB 4900
+      END CASE
+   WHILE ANCORE DO REPEAT
+   P_X  = 4 ; P_Y = SLN ; P_VALUE = " " ; P_OPT = ""
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   LN1 = 1; LINES1 = 0; OLD.START.LINE1 = 0; GOSUB 4900
+   RETURN
+*
+*--- ENTER DETAIL
+*
+4000*
+   GOSUB 4900
+   SLN1 = BEGIN.PAGE.B + LINE.SPACE * MOD(LN1 - 1,PAGE.SIZE)
+   CUR.DET = SLN1
+   P_X  = 0 ; P_Y = SLN1 ; P_VALUE = LN1 "R#3" ; P_OPT = ""
+   P_X  := AM:5 ; P_Y := AM:SLN1 ; P_VALUE := AM:"   "
+   P_X  := AM:11 ; P_Y := AM:SLN1 ; P_VALUE := AM:SPACE(26)
+   P_X  := AM:39 ; P_Y := AM:SLN1 ; P_VALUE := AM:"        "
+   P_X  := AM:49 ; P_Y := AM:SLN1 ; P_VALUE := AM:"      "
+   P_X  := AM:57 ; P_Y := AM:SLN1 ; P_VALUE := AM:"      "
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+4010*
+   X = 5; Y = SLN1; TYP = 1; MINL = 3; MAXL = MINL; O.R = 'R'
+   DEFAULT = RFQF.CODE<1,LN,LN1>
+   IF DEFAULT # '' THEN O.R = 'O'
+   CALL EDIT.SUB
+   IF VALUE = '' OR VALUE = 'END' THEN
+      IF REQUEST = 'A' THEN
+         RFQF.CODE = DELETE(RFQF.CODE,1,LN,LN1)
+         RFQF.REQD = DELETE(RFQF.REQD,1,LN,LN1)
+         RFQF.MIN = DELETE(RFQF.MIN,1,LN,LN1)
+         RFQF.MAX = DELETE(RFQF.MAX,1,LN,LN1)
+         P_X  = 0 ; P_Y = SLN1 ; P_VALUE = "   " ; P_OPT = ""
+         P_X  := AM:5 ; P_Y := AM:SLN1 ; P_VALUE := AM:"   "
+         P_X  := AM:11 ; P_Y := AM:SLN1 ; P_VALUE := AM:SPACE(26)
+         P_X  := AM:39 ; P_Y := AM:SLN1 ; P_VALUE := AM:"        "
+         P_X  := AM:49 ; P_Y := AM:SLN1 ; P_VALUE := AM:"      "
+         P_X  := AM:57 ; P_Y := AM:SLN1 ; P_VALUE := AM:"      "
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         GOTO 4099
+      END ELSE
+         READ RFDATA FROM RFQ.FORMULA.CODES,CONO:RFQF.CODE<1,LN,LN1> ELSE
+            RFDATA = ''
+         END
+         CODE.DESC = RFDATA<1>
+         P_X=5;P_Y=SLN1;P_VALUE=RFQF.CODE<1,LN,LN1> "L#3";P_OPT=""
+         P_X:=AM:11;P_Y:=AM:SLN1;P_VALUE:=AM:CODE.DESC"L#26"
+         P_X:=AM:39;P_Y:=AM:SLN1;P_VALUE:=AM:RFQF.REQD<1,LN,LN1>"L#8"
+         P_X:=AM:49;P_Y:=AM:SLN1;P_VALUE:=AM:RFQF.MIN<1,LN,LN1>"L#6"
+         P_X:=AM:57;P_Y:=AM:SLN1;P_VALUE:=AM:RFQF.MAX<1,LN,LN1>"L#6"
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         GOTO 4099
+      END
+   END
+   IF VALUE = "???" THEN
+      GXR.CO = CONO
+      GXR.ID = ""
+      GXR.NAME = "GEN.CODE"
+      GXR.FILE = RFQ.FORMULA.CODES
+      GXR.SORT.FILE = "RFQ.FORMULA.CODES"
+      XFLD = 1
+      CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+      ECD.ACTION = 1; CALL SCRN.EDIT
+      ECD.ACTION = 3; CALL SCRN.EDIT
+      SLN = CUR.OPER
+      OLD.START.LINE = OLD.START.LINE - 5
+      IF OLD.START.LINE LE 1 THEN OLD.START.LINE = 0
+      OLD.START.LINE1 = OLD.START.LINE1 - 5
+      IF OLD.START.LINE1 LE 1 THEN OLD.START.LINE1 = 0
+      GOSUB 2900
+      GOSUB 4900
+      SLN1 = CUR.DET
+      P_X  = 4 ; P_Y = CUR.OPER ; P_VALUE = "*" ; P_OPT = ""
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      P_X  = 0 ; P_Y = SLN1 ; P_VALUE = LN1 "R#3" ; P_OPT = ""
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      VALUE = GXR.ID
+      IF VALUE = "" THEN GOTO 4010
+      P_X = 5 ; P_Y = SLN1 ; P_VALUE = VALUE "L#3" ; P_OPT = ""
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   END
+   READ DATA FROM RFQ.FORMULA.CODES,CONO:VALUE ELSE
+      ERRMSG = '** Invalid Code **'
+      GOSUB 91000; GOTO 4010
+   END
+   LOCATE VALUE IN RFQF.CODE<1,LN>,1 SETTING FND ELSE FND = LN1
+   IF FND <> LN1 THEN
+      ERRMSG = 'CODE ALREADY EXIST ON LINE # ' : FND
+      GOSUB 91000; GOTO 4010
+   END
+4015*
+   RFQF.CODE<1,LN,LN1> = VALUE
+   CODE.DESC = DATA<1>
+   P_X=11;P_Y=SLN1;P_VALUE=CODE.DESC;P_OPT=""
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+4016*
+*--- REQUIRED
+4020*
+   X = 39; Y = SLN1; TYP = 1; MINL = 1; MAXL = 8; O.R = 'O'
+   DEFAULT = RFQF.REQD<1,LN,LN1>
+   CALL EDIT.SUB
+   IF VALUE = 'END' THEN GOTO 4010
+   RFQF.REQD<1,LN,LN1> = VALUE
+*--- MINIMUM
+4030*
+   X = 49; Y = SLN1; TYP = 7; MINL = 1; MAXL = 6; O.R = 'O'
+   PATRN = '0N':VM:'0N.2N':VM:'0N.3N'
+   DEFAULT = RFQF.MIN<1,LN,LN1>
+   CALL EDIT.SUB
+   IF VALUE = 'END' THEN GOTO 4010
+   RFQF.MIN<1,LN,LN1> = VALUE
+*--- MAXIMUM
+4040*
+   X = 57; Y = SLN1; TYP = 7; MINL = 1; MAXL = 6; O.R = 'O'
+   PATRN = '0N':VM:'0N.2N':VM:'0N.3N'
+   DEFAULT = RFQF.MAX<1,LN,LN1>
+   CALL EDIT.SUB
+   IF VALUE = 'END' THEN GOTO 4010
+   RFQF.MAX<1,LN,LN1> = VALUE
+   LINES1 = DCOUNT(RFQF.CODE<1,LN>,SVM)
+4099*
+   RETURN
+*
+*--- ENTER LINE # FOR DETAIL
+*
+4800*
+   GOSUB 4900
+   ECD.NUM = 5; SCV.REC(ECD.NUM)<1> = ''
+   ECD.MINV = START.LINE1; ECD.MAXV = LAST.LINE1
+   ECD.ACTION = 4; CALL SCRN.EDIT
+   IF ECD.RET.VALUE = '' OR ECD.RET.VALUE = 'END' THEN
+      LN.NO = 0
+   END ELSE
+      LN.NO = ECD.RET.VALUE
+   END
+   RETURN
+*
+*--- SCROLL DETAIL
+*
+4900*
+   START.LINE1 = 1 + INT((LN1-1)/PAGE.SIZE) * PAGE.SIZE
+   LAST.LINE1 = START.LINE1 + PAGE.SIZE - 1
+   IF LAST.LINE1 > LINES1 THEN LAST.LINE1 = LINES1
+   IF START.LINE1 = OLD.START.LINE1 THEN GOTO 4999
+   OLD.START.LINE1 = START.LINE1
+   CNT = 1
+   FOR N = START.LINE1 TO LAST.LINE1
+      READ RFDATA FROM RFQ.FORMULA.CODES,CONO:RFQF.CODE<1,LN,N> ELSE
+         RFDATA = ''
+      END
+      CODE.DESC = RFDATA<1>
+      SLN1 = BEGIN.PAGE.B + LINE.SPACE * MOD(N-1,PAGE.SIZE)
+      P_X=0;P_Y=SLN1;P_VALUE=N "R#3";P_OPT=""
+      P_X:=AM:5;P_Y:=AM:SLN1;P_VALUE:=AM:RFQF.CODE<1,LN,N> "L#3"
+      P_X:=AM:11;P_Y:=AM:SLN1;P_VALUE:=AM:CODE.DESC "L#26"
+      P_X:=AM:39;P_Y:=AM:SLN1;P_VALUE:=AM:RFQF.REQD<1,LN,N> "L#8"
+      P_X:=AM:49;P_Y:=AM:SLN1;P_VALUE:=AM:RFQF.MIN<1,LN,N> "L#6"
+      P_X:=AM:57;P_Y:=AM:SLN1;P_VALUE:=AM:RFQF.MAX<1,LN,N> "L#6"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      CNT = CNT + 1
+   NEXT N
+   FOR N = CNT TO PAGE.SIZE
+      SLN1 = BEGIN.PAGE.B + LINE.SPACE * MOD(N-1,PAGE.SIZE)
+      P_X  = 0 ; P_Y = SLN1 ; P_VALUE = "   " ; P_OPT = ""
+      P_X  := AM:5 ; P_Y := AM:SLN1 ; P_VALUE := AM:"   "
+      P_X  := AM:11 ; P_Y := AM:SLN1 ; P_VALUE := AM:SPACE(26)
+      P_X  := AM:39 ; P_Y := AM:SLN1 ; P_VALUE := AM:"        "
+      P_X  := AM:49 ; P_Y := AM:SLN1 ; P_VALUE := AM:"      "
+      P_X  := AM:57 ; P_Y := AM:SLN1 ; P_VALUE := AM:"      "
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   NEXT N
+4999*
+   RETURN
+*
+*--- UPDATE ALL FILES
+*
+5000*
+   MATWRITE RFQF.REC ON ESTIMATE.RFQ.FORMULA, CONO:RFQF.ID
+   RETURN
+*
+*--- CALLS FOR SYSCOM
+*
+91000*
+   ERR.TYPE = 1; CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+92000*
+   ERR.TYPE = 2; CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+93000*
+   ERR.TYPE = 3; CALL SYSCOM(MAT SYSCOM.REC)
+99999*
+   RELEASE
+   ECD.ACTION = 99; CALL SCRN.EDIT
+END

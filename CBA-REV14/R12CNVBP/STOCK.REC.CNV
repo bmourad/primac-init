@@ -1,0 +1,242 @@
+* This program is used to create data in the ROLL.SKID.INFO & TEMP files
+* for users who use ROLL ID's but donot use PRIMAC BAR.CODE Inventory. It
+* will create ROLL.SKID.INFO.R12 file data from the STOCK.REC file, add
+* the correct WHSE & LOC from the INV.WHSE.LOC.OLD file and also the curr-
+* ent quantity on-hand (weight, diam & sheets) and UNIT.COST to fields for 
+* this new file only, and mark the items found in the INV.WHSE.LOC.OLD.
+* If the CONTROL file item 'CONVERT.TO.ACTUAL' is "Y" it will update the
+* on-hand fields mentioned above, otherwise it will only write the record
+* and mark as found or not.
+* After completion of creating this file, if RS.PRESENT = 0, it will then
+* copy the items to ROLL.SKID.INFO for items found.
+* If converting to Actual, the final step is to run IWH.CNV.ACTUAL which
+* will modify the on-hand FIFO bucket data from FIFO to Actual using the
+* data in the ROLL.SKID.INFO.R12 file.
+* NOTE: This program is normally run after step 8 in the REV12 conversion
+* process.
+*
+*COPY>CPYLIB>COM1
+*COPY>CPYLIB>FILE.VARS
+*COPY>ICS.CPYLIB>ROLL.SKID.INFO.R12
+*COPY>ICS.CPYLIB>INV.WHSE.LOC.REV11
+*COPY>ICS.CPYLIB>INV.WHSE.REV11
+*COPY>PMC.CPYLIB>PO
+*COPY>ICS.CPYLIB>STOCK.REC
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>ICS.CPYLIB>CATEGORY.REV11
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>INV.CNV
+*
+*COPY>CPYLIB>CHAR
+*
+DIM RSKID.REC(25)
+*
+DEFFUN CALC.STK.QTY(COST.QTY,MAT INV.CNV.REC,ROND,LN)
+*
+OPEN '','INV.WHSE.LOC.OLD' TO INV.WHSE.LOC.OLD ELSE STOP 201
+OPEN '','ROLL.SKID.INFO.R12' TO ROLL.SKID.INFO.R12 ELSE STOP 201
+OPEN '','ROLL.SKID.INFO' TO ROLL.SKID.INFO ELSE STOP 201
+OPEN '','INV.WHSE.OLD' TO INV.WHSE.OLD ELSE STOP 201
+OPEN '','PO' TO PO ELSE STOP 201
+OPEN '','STOCK.REC' TO STOCK.REC ELSE STOP 201
+OPEN '','INVENTORY' TO INVENTORY ELSE STOP 201
+OPEN '','CATEGORY.OLD' TO CATEGORY.OLD ELSE STOP 201
+OPEN '','CONVERSION.ERRORS' TO CONVERSION.ERRORS ELSE STOP 201
+OPEN '','CONTROL' TO CONTROL ELSE STOP 201
+OPEN '','COMPANY' TO COMPANY ELSE STOP 201
+*
+CONO=''; MAT COMP.REC=''
+CALL GET.CONO(CONO,MAT COMP.REC)
+READ BCI FROM CONTROL, CONO:'RL.SK.CONTROL' ELSE BCI = ''
+IF BCI<3> = 'Y' OR BCI<4> = 'Y' THEN RS.PRESENT = 1 ELSE RS.PRESENT = 0
+READ CONV.ACTUAL FROM CONTROL, CONO:'CONVERT.TO.ACTUAL' ELSE CONV.ACTUAL='N'
+ERR=""
+FIRST.TIME=1
+;*
+;* convert from STOCK.REC file
+;*
+PRINT @(-1)
+PRINT @(1,5):'SELECTING STOCK.REC':@(-4)
+CMD='SSELECT STOCK.REC WITH STK.RS.ID # ""'
+UDTEXECUTE CMD CAPTURING MSG
+PRINT @(1,5):'CONVERTING STOCK.REC RECORD':@(-4)
+DONE=0; ERR.CNT=0;ERR=''
+CNT=0
+LOOP
+  READNEXT STKR.ID ELSE DONE=1
+UNTIL (DONE) DO 
+  IWH.ID=CONO:OCONV(STKR.ID,"G1!2")
+  INV.ID=CONO:OCONV(STKR.ID,"G1!1")
+  CNT+=1
+  IF REM(CNT,100)=0 THEN
+    PRINT @(45,5):CNT:@(-4)
+  END
+  ERRMSG=''
+  MATREAD INV.REC FROM INVENTORY,INV.ID THEN
+*COPY>ICSBP>INV.UM.CNV
+    CATG.ID=CONO:INV.LINE
+    MATREAD R11.CATG.REC FROM CATEGORY.OLD,CATG.ID THEN
+      IF R11.CATG.R.S.ID='N' THEN
+        MATREAD STK.REC FROM STOCK.REC, STKR.ID THEN
+          MAT RSKI.REC = ''
+          RSKI.PO.NO = FIELD(STKR.ID,"!",1)[4,8]
+          RSKI.INV.NO = INV.ID[4,15]
+          REC.WHSE = FIELD(IWH.ID,"!",2)
+          PFND = 1
+          MATREAD PO.REC FROM PO,CONO:RSKI.PO.NO THEN
+            PTR = 1
+            LOOP
+              LOCATE RSKI.INV.NO IN PO.PROD.NUM<1>,PTR SETTING PFND THEN
+                IF PO.WHSE<1,PFND> = REC.WHSE THEN
+                  PTR = 0
+                END ELSE
+                  PTR = PFND+1
+                END
+              END ELSE
+                PTR = 0
+                PFND = 0
+              END
+            WHILE PTR DO REPEAT
+          END
+          RSKI.PO.LINE = PFND
+          RCNT=DCOUNT(STK.R.S.ID,VM)
+          FOR R = 1 TO RCNT
+            IF STK.RS.WHT.REC<1,R> > 0 THEN
+              RS.ID = STK.R.S.ID<1,R>
+              LOC = STK.LOC<1,R>
+  * At this point just create the ROLL.SKID.INFO.R12 record.
+              GOSUB SET.RS.VARS
+              READU DUMMY FROM ROLL.SKID.INFO.R12, CONO:RS.ID THEN
+                ERRMSG='DUPLICATE ROLL.SKID ':RS.ID:' EXISTS'
+                ID = STKR.ID
+                GOSUB SET.ERRMSG
+                RELEASE ROLL.SKID.INFO.R12, CONO:RS.ID
+              END ELSE
+                MATWRITE RSKI.REC ON ROLL.SKID.INFO.R12,CONO:RS.ID
+              END
+            END
+          NEXT R
+        END
+      END
+    END
+  END
+REPEAT
+*Now select the INV.WHSE.LOC file and locate the roll in ROLL.SKID.INFO.R12
+CMD='SSELECT INV.WHSE.LOC.OLD WITH TYPE = "ROLL" AND WITH CONO = "':CONO:'"'
+UDTEXECUTE CMD CAPTURING MSG
+PRINT @(1,5):'PROCESSING INV.WHSE.LOC vs ROLL.SKID.INFO.R12':@(-4)
+DONE=0; ERR.CNT=0;ERR=''
+CNT=0
+LOOP
+  READNEXT IWLO.ID ELSE DONE=1
+UNTIL (DONE) DO 
+  IWH.ID = OCONV(IWLO.ID,'G!2')
+  WHSE = FIELD(IWH.ID,"!",2)
+  LOC = FIELD(IWLO.ID,"!",3)
+  MATREAD R11.IWH.REC FROM INV.WHSE.OLD, IWH.ID ELSE CONTINUE
+  MATREAD R11.IWLO.REC FROM INV.WHSE.LOC.OLD,IWLO.ID THEN
+    FOR R = 1 TO DCOUNT(R11.IWLO.R.S.ID,VM)
+      RS.ID = R11.IWLO.R.S.ID<1,R>
+* Now update the file with WHSE, LOC and Current On-Hand.
+      MATREADU RSKI.REC FROM ROLL.SKID.INFO.R12,CONO:RS.ID THEN
+        RSKI.ROLL.FOUND = 1
+        RSKI.LOC = LOC
+        RSKI.WHSE = WHSE
+        IF CONV.ACTUAL='N' THEN GOTO WRITE.RSKI
+        RSKI.CURR.WGHT = R11.IWLO.CURR.WT<1,R>
+        RSKI.CURR.DIAM = R11.IWLO.CURR.DIAM<1,R>
+        RSKI.CURR.SHEET = R11.IWLO.CURR.SHEET<1,R>
+        PTR=1
+        LOOP
+          LOCATE RSKI.PO.NO IN R11.IWH.PO.NO.FI<1>,PTR SETTING PFND ELSE PFND = 0
+          BEGIN CASE
+          CASE PFND = 0
+            PTR = 0
+          CASE R11.IWH.RECV.FI<1,PFND> # RSKI.POST.DATE
+            PTR = PFND+1
+          CASE 1
+            RSKI.U.COST = R11.IWH.COST.FI<1,PFND>
+            PTR = 0
+          END CASE
+        WHILE PTR DO REPEAT
+        IF NOT(PFND) THEN
+          ERRMSG='Cannot locate COST data for ':RS.ID:' in INV.WHSE record'
+          ID = IWH.ID
+          GOSUB SET.ERRMSG
+        END
+WRITE.RSKI:
+        MATWRITE RSKI.REC ON ROLL.SKID.INFO.R12,CONO:RS.ID
+      END ELSE
+        ERRMSG='Cannot find ROLL.SKID.INFO.R12 ':RS.ID:' from INV.WHSE.LOC'
+        ID = IWLO.ID
+        GOSUB SET.ERRMSG
+        RELEASE ROLL.SKID.INFO.R12,CONO:RS.ID
+      END
+    NEXT R
+  END
+REPEAT
+IF NOT(RS.PRESENT) THEN GOSUB CREATE.RSKI.FILZ
+IF ERR # '' THEN
+  WRITE ERR ON CONVERSION.ERRORS,"STOCK.REC.CNV"
+  CALL CONV.RPT("STOCK.REC.CNV")
+END
+GO 99999
+*
+**************************************************************************
+**** S U B R O U T I N E S ***********************************************
+**************************************************************************
+*
+SET.ERRMSG:
+*
+  IF ERRMSG THEN
+    FIND ID IN ERR SETTING FLD THEN
+      CONVERT @AM TO @VM IN ERRMSG
+      ERR<FLD>=ERR<FLD>:@VM:ERRMSG
+    END ELSE
+      ERR.CNT+=1                             
+      ERR<ERR.CNT>=ERRMSG                    
+      ERR=INSERT(ERR,ERR.CNT,1,0,IWH.ID) 
+    END
+  END
+RETURN
+*
+*************
+SET.RS.VARS:
+*************
+RSKI.WHSE = REC.WHSE
+RSKI.LOC = LOC
+RSKI.ROLL.WEIGHT = STK.RS.WHT.REC<1,R>
+RSKI.LBS.ENTERED = CALC.STK.QTY(RSKI.ROLL.WEIGHT,MAT INV.CNV.REC,'.5','')
+RSKI.SHEET = STK.SHEET.REC<1,R>
+RSKI.UNIT = INV.UNIT<1,1>
+RSKI.POST.DATE = STK.DATE.REC
+RSKI.ENTRY.DATE = STK.DATE.ENTRY
+RSKI.PRINT.DATE = STK.DATE.ENTRY
+RSKI.U.COST = STK.UN.PRICE
+RETURN
+*
+**************
+CREATE.RSKI.FILZ:
+**************
+CMD='SELECT ROLL.SKID.INFO.R12 WITH CONO = "':CONO:'"'
+UDTEXECUTE CMD CAPTURING MSG
+CRT @(1,5):'Now creating ROLL.SKID.INFO file data':@(-4)
+DATA=1
+LOOP
+  READNEXT RSKI.ID ELSE DATA=0
+WHILE DATA DO
+  MATREAD RSKI.REC FROM ROLL.SKID.INFO.R12, RSKI.ID THEN
+    IF RSKI.ROLL.FOUND THEN
+      FOR I = 1 TO 25
+        RSKID.REC(I) = RSKI.REC(I)
+      NEXT I
+      MATWRITE RSKID.REC ON ROLL.SKID.INFO, RSKI.ID
+    END ELSE
+      DELETE ROLL.SKID.INFO.R12, RSKI.ID
+    END
+  END
+REPEAT
+RETURN
+*
+99999 
+END

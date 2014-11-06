@@ -1,0 +1,537 @@
+   SUBROUTINE JOB.MATL.SUB(CONO,JOB.NUM,DISPLAY)
+*COPY>CPYLIB>COM1
+*COPY>JCS.CPYLIB>COM.JCS.LINK
+*COPY>ICS.CPYLIB>COM.INV.MAIN  
+*COPY>ICS.CPYLIB>COM.INV.SERIAL
+*COPY>JCS.CPYLIB>COM.INV.STATS 
+*COPY>PMC.CPYLIB>COM.CUST
+*COPY>OPS.CPYLIB>COM.ORDER
+*********************************************************************
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - JCSBP
+* PROGRAM     - JOB.MATL.SUB
+* DATE        - 10/28/83
+* MODIFIED    - NLB
+* DATE MOD    - 10/20/88
+* COMMENTS    - ADDED CUST INVENTORY CHECK
+* DESCRIPTION -
+* MOD TASK 18828 CLS 3/94 CHECK FOR JOB.DIV = WHS.DIV TO RESV MATL
+*
+*T21024 julie 09/27/1996 * CHECK FOR FINISHED GOOD ON THIS SCREEN
+*T21177 diane 11/06/1996 * REV11 UPG
+*T22303 renee 10/20/1997 * Allow 999 lines instead of 99 lines.
+*T22595 lanny 02/11/1998 * When changing resv qty, need to add back orig
+*                          resv qty for availability.
+*T26334 epitka 12/19/2001 * REV12
+*T25978 adelgado 02/14/2002 * Add the use of prompts (S,SR,SB,ST).
+*T26606 cmykleb 07/01/2002 * Add Reserve Serial Inquiry screen.
+*T27778 thompson 11/07/2003 * ALLOW END ON CHANGE FOR RESERVE ON PRODUCT
+*T29061 lross 07/19/2007 * Include SALT T28860 in base REV14.
+*ENDDOC
+*********************************************************************
+*
+*COPY>CPYLIB>EDIT.COM
+*COPY>JCS.CPYLIB>JOB
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>CATEGORY
+*COPY>ICS.CPYLIB>WAREHOUSE
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>CPYLIB>GEN.XREF.SUB
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>CHAR
+*
+   OPEN.FLAG=1
+   DEFFUN CALC.STK.QTY (COST.QTY,MAT INV.CNV.REC,ROND,LN)
+   DEFFUN CALC.COST.QTY (STK.QTY,MAT INV.CNV.REC,ROND,LN)
+*
+   SYS.TYPE = 1
+   CALL SYSCOM(MAT SYSCOM.REC)
+*
+   PAGE.SIZE = 6
+   BEGIN.PAGE = 7
+   LINE.SPACE = 2
+   OLD.START.LINE = 0
+*
+   MAT INV.CNV.REC = ''
+   UNKNOWN = "UNKNOWN"
+*
+   MAT GEN.XREF.REC = ''
+   GXR.CO = CONO
+   GXR.NAME = "INVENTORY"
+   GXR.FILE = INVENTORY
+   GXR.XREF = INVENTORY.XREF
+*
+   MATL.DESC = ''
+   MATL.TYPE = ''
+   MATL.UM = ''
+   MATL.TRACK.QOH = ''
+   RSV.SERIAL=''
+   IF JOB.RESV.MATL = '' AND DISPLAY = 0 THEN
+      LINES = 0
+      ACTION = 'A'
+      LOOP
+         LN = LINES + 1
+         OLD.LINES = LINES
+         GOSUB 1000
+      WHILE LINES > OLD.LINES DO
+      REPEAT
+      LN = LINES
+   END ELSE
+      LINES=DCOUNT(JOB.RESV.MATL,VM)
+      FOR LN = 1 TO LINES
+         MATREAD INV.REC FROM INVENTORY, CONO:JOB.RESV.MATL<1,LN> ELSE
+            MAT INV.REC = ''
+            INV.FULL.DESC = UNKNOWN
+         END
+         MATREAD CATG.REC FROM CATEGORY, CONO : INV.LINE ELSE
+            MAT CATG.REC = ""
+         END
+         GOSUB 8000
+      NEXT LN
+      LN = 1
+   END
+   GOSUB 11000
+   MORE = 1
+   LOOP
+      BEGIN CASE
+         CASE DISPLAY = 0
+            ECD.NUM = 5
+         CASE 1
+            ECD.NUM = 9
+      END CASE
+      SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ''; ECD.ACTION = 4; CALL SCRN.EDIT
+      ACTION = ECD.RET.VALUE
+      BEGIN CASE
+         CASE ACTION = '' OR ACTION = 'E' OR ACTION = 'END'
+            MORE = 0
+*T26606 v
+         CASE NUM(ACTION) AND ECD.NUM = 9
+            LN = ACTION
+            IF RSV.SERIAL<LN> = 'Y' THEN
+               ECD.SCRN.NO=23
+               IWH.ID = CONO:JOB.RESV.MATL<1,LN>:'!':JOB.RESV.WHSE<1,LN>
+               MATREAD IWH.REC FROM INV.WHSE, IWH.ID ELSE MAT IWH.REC = ""
+               CALL SERIAL.RESERVE.INQ(IWH.ID,JOB.NUM,OPEN.FLAG,LN,MAT INV.CNV.REC)
+               ECD.SCRN.NO=3; ECD.ACTION=3 ; CALL SCRN.EDIT
+               OLD.START.LINE=0
+               GOSUB 11000
+            END ELSE
+               ERRMSG = "This product cannot be reserved at the serial level."
+               GOSUB 91000
+            END
+*T26606 ^
+         CASE NUM(ACTION)
+            GOSUB 11000
+            IF ACTION > LAST.LINE OR ACTION < OLD.START.LINE THEN
+               ERRMSG="Line Not Available On This Page"
+               GOSUB 91000
+            END ELSE
+               LN=ACTION
+               JOB.RESV.QTY<1,LN> = 0
+               SLN = BEGIN.PAGE+LINE.SPACE*MOD(LN-1,PAGE.SIZE)
+               P_X  = 57 ; P_Y = SLN
+               P_VALUE=CALC.STK.QTY(JOB.RESV.QTY<1,LN>,MAT INV.CNV.REC,'.5',LN)
+               P_VALUE=OCONV(P_VALUE,ICR.CNV<LN>)
+               P_OPT=''
+               CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            END
+         CASE ACTION = 'A' AND DISPLAY = "0"
+            LOOP
+               LN = LINES + 1
+               OLD.LINES = LINES
+               GOSUB 1000
+            WHILE LINES > OLD.LINES DO
+            REPEAT
+            LN = LINES
+            GOSUB 11000
+         CASE ACTION = 'C' AND DISPLAY = "0"
+            GOSUB 9000
+            IF LN.NO THEN
+               IF MATL.TRACK.QOH<LN.NO> = "Y" THEN
+                  LN = LN.NO; FOUND = 1
+                  IWH.ID = CONO : JOB.RESV.MATL<1,LN> : '!' : JOB.RESV.WHSE<1,LN>
+                  MATREAD IWH.REC FROM INV.WHSE, IWH.ID ELSE
+                     FOUND = 0; ERRMSG = 'WAREHOUSE (':JOB.RESV.WHSE<1,LN>:') IS MISSING'; GOSUB 91000
+                  END
+                  IF FOUND THEN
+                     SLN = BEGIN.PAGE+LINE.SPACE*MOD(LN-1,PAGE.SIZE)
+                     GOSUB ENT.RESERVE.QTY
+                  END
+               END ELSE
+                  ERRMSG = 'CANNOT UPDATE QUANTITY FOR THIS PRODUCT'
+                  GOSUB 91000
+               END
+            END
+         CASE ACTION = 'S'
+            LN = 1+INT((LN-1)/PAGE.SIZE)*PAGE.SIZE+PAGE.SIZE
+            IF LN > LINES THEN LN = 1
+            GOSUB 11000
+      * T25978 v
+         CASE ACTION = 'SR'
+            LN = 1+INT((LN-1)/PAGE.SIZE)*PAGE.SIZE-PAGE.SIZE
+            IF LN < 1 THEN LN = 1
+            GOSUB 11000
+         CASE ACTION = 'ST'
+            LN = 1
+            GOSUB 11000
+         CASE ACTION = 'SB'
+            LN = LINES
+            GOSUB 11000
+      * T25978 ^
+         CASE 1
+            ERRMSG = "That is not a Valid Option  Please Try Again"
+            GOSUB 91000
+      END CASE
+   WHILE MORE DO
+   REPEAT
+   GOTO 99999
+**************************************************************************
+**************************************************************************
+*
+********
+1000 *
+********
+*
+   GOSUB 11000
+   SLN = BEGIN.PAGE + LINE.SPACE * MOD(LN-1,PAGE.SIZE)
+   P_X  = 0 ; P_Y = SLN ; P_VALUE = LN "R#3" ; P_OPT = "CL"
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   P_X  = 0 ; P_Y = SLN+1 ; P_VALUE = "" ; P_OPT = "CL"
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+*
+********
+1100 *
+********
+*
+   X = 4
+   Y = SLN
+   TYP = 1
+   MAXL = 15
+   O.R = 'O'
+   DEFAULT = JOB.RESV.MATL<1,LN>
+   CALL EDIT.SUB
+   IF VALUE = 'END' THEN
+      IF ACTION = "A" THEN
+         JOB.RESV.MATL = DELETE(JOB.RESV.MATL,1,LN,0)
+         JOB.RESV.WHSE = DELETE(JOB.RESV.WHSE,1,LN,0)
+         JOB.RESV.DATE = DELETE(JOB.RESV.DATE,1,LN,0)
+         JOB.ALOC.QTY = DELETE(JOB.ALOC.QTY,1,LN,0)
+         JOB.RESV.QTY = DELETE(JOB.RESV.QTY,1,LN,0)
+         JOB.USED.QTY = DELETE(JOB.USED.QTY,1,LN,0)
+         JOB.ALOC.AMT = DELETE(JOB.ALOC.AMT,1,LN,0)
+         JOB.RESV.AMT = DELETE(JOB.RESV.AMT,1,LN,0)
+         JOB.USED.AMT = DELETE(JOB.USED.AMT,1,LN,0)
+         MATL.DESC = DELETE(MATL.DESC,LN,0,0)
+         MATL.TYPE = DELETE(MATL.TYPE,LN,0,0)
+         MATL.UM = DELETE(MATL.UM,LN,0,0)
+         MATL.TRACK.QOH = DELETE(MATL.TRACK.QOH,LN,0,0)
+         ICR.DV1 = DELETE(ICR.DV1,LN,0,0)
+         ICR.MT1 = DELETE(ICR.MT1,LN,0,0)
+         ICR.DV2 = DELETE(ICR.DV2,LN,0,0)
+         ICR.CNV = DELETE(ICR.CNV,LN,0,0)
+      END
+      P_X  = 0 ; P_Y = SLN ; P_VALUE = "" ; P_OPT = "CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      P_X  = 0 ; P_Y = SLN+1 ; P_VALUE = "" ; P_OPT = "CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      GOTO 1999
+   END
+   IF VALUE = '' THEN
+      X = 4
+      Y = SLN+1
+      O.R = 'O'
+      TYP = 1
+      MAXL = 45
+      CALL EDIT.SUB
+      IF VALUE = '' OR VALUE = 'END' THEN GOTO 1100
+      GXR.SRCH.ID = VALUE
+      CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+      ECD.ACTION = 2; CALL SCRN.EDIT
+      ECD.ACTION = 3; CALL SCRN.EDIT
+      OLD.START.LINE = 0
+      GOSUB 11000
+      IF GXR.ID = '' THEN GOTO 1000
+      VALUE = GXR.ID
+      SLN = BEGIN.PAGE + LINE.SPACE * MOD(LN-1,PAGE.SIZE)
+      P_X  = 0 ; P_Y = SLN ; P_VALUE = LN "R#3" ; P_OPT = "CL"
+      P_X  := AM:4 ; P_Y := AM:SLN ; P_VALUE := AM:VALUE "L#15"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   END
+   MATREAD INV.REC FROM INVENTORY, CONO:VALUE ELSE
+      ERRMSG = 'CANNOT LOCATE INVENTORY (':VALUE:')'
+      GOSUB 91000; GOTO 1100
+   END
+*T29061 v
+*  IF INV.M.LINE = "FNGD" THEN
+*     ERRMSG = 'CANNOT RESERVE A FINISHED GOODS PRODUCT'
+*     GOSUB 91000; GOTO 1100
+*  END
+*T29061 ^
+   MATREAD CATG.REC FROM CATEGORY, CONO : INV.LINE ELSE
+      ERRMSG = 'CANNOT LOCATE CATEGORY (':INV.LINE:')'
+      GOSUB 91000; GOTO 1100
+   END
+   IF CATG.TRACK.QOH # "Y" THEN
+      ERRMSG = 'CANNOT UPDATE QUANTITY FOR THIS PRODUCT'
+      GOSUB 91000; GOTO 1100
+   END
+   IF INV.CUST # "" THEN
+      IF "X":INV.CUST # "X":JOB.CUST THEN
+         ERRMSG = "THIS INVENTORY BELONGS TO CUSTOMER ":INV.CUST
+         GOSUB 91000
+         GOTO 1100
+      END
+   END
+   JOB.RESV.MATL<1,LN> = VALUE
+   GOSUB 8000
+   JOB.ALOC.QTY<1,LN> = JOB.ALOC.QTY<1,LN> + 0
+   JOB.USED.QTY<1,LN> = JOB.USED.QTY<1,LN> + 0
+   JOB.ALOC.AMT<1,LN> = JOB.ALOC.AMT<1,LN> + 0
+   JOB.USED.AMT<1,LN> = JOB.USED.AMT<1,LN> + 0
+   IF MATL.TYPE<LN> = 'REGULAR' THEN MATL.TYPE<LN> = 'REGULR'
+   P_X  = 25 ; P_Y = SLN ; P_VALUE = MATL.TYPE<LN> "L#6" ; P_OPT = ""
+   P_X  := AM:41 ; P_Y := AM:SLN ; P_VALUE := AM:MATL.UM<LN> "L#3"
+   P_X  := AM:45 ; P_Y := AM:SLN
+   TMP=CALC.STK.QTY(JOB.ALOC.QTY<1,LN>,MAT INV.CNV.REC,'.5',LN)
+   TMP=OCONV(TMP,ICR.CNV<LN>)
+   P_VALUE := AM:TMP"R#11"
+   P_X  := AM:69 ; P_Y := AM:SLN
+   TMP=JOB.USED.QTY<1,LN>
+   TMP=CALC.STK.QTY(TMP,MAT INV.CNV.REC,'.5',LN)
+   TMP=OCONV(TMP,ICR.CNV<LN>)"R#11"
+   P_VALUE := AM:TMP
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   P_X  = 4 ; P_Y = SLN+1 ; P_VALUE = MATL.DESC<LN> "L#45" ; P_OPT = ""
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+*
+*********
+1200 *
+*********
+*
+   IF INV.WHSE.CODE = '' THEN
+      ERRMSG = 'INVENTORY (':JOB.RESV.MATL<1,LN>:') HAS NO WAREHOUSES'
+      GOSUB 91000; GOTO 1100
+   END
+   WHSE.CNT = COUNT(INV.WHSE.CODE,VM) + 1
+   IF WHSE.CNT = 1 THEN
+      VALUE = INV.WHSE.CODE<1,1>
+      P_X  = 20 ; P_Y = SLN ; P_VALUE = VALUE "L#4" ; P_OPT = ""
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   END ELSE
+      HMSG = 'WARHOUSE - ' : INV.WHSE.CODE<1,1>
+      VALDAT = INV.WHSE.CODE<1,1>
+      FOR I = 2 TO WHSE.CNT
+         HMSG = HMSG : ', ' : INV.WHSE.CODE<1,I>
+         VALDAT = VALDAT : VM : INV.WHSE.CODE<1,I>
+      NEXT I
+      X = 20
+      Y = SLN
+      TYP = 1
+      MAXL = 4
+      IF JOB.RESV.WHSE<1,LN> # '' THEN
+         O.R = 'O'
+         DEFAULT = JOB.RESV.WHSE<1,LN>
+      END
+      CALL EDIT.SUB
+      IF VALUE = 'END' THEN GOTO 1100
+   END
+   FOR FW = 1 TO LN-1
+      IF JOB.RESV.MATL<1,FW> = JOB.RESV.MATL<1,LN> AND JOB.RESV.WHSE<1,FW> = VALUE THEN
+         ERRMSG = "INVENTORY (":JOB.RESV.MATL<1,FW>:") FOR WAREHOUSE (":VALUE:") ALREADY RESERVED"
+         GOSUB 91000
+         P_X  = 4 ; P_Y = SLN ; P_VALUE = "" ; P_OPT = "CL"
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         GOTO 1100
+      END
+   NEXT FW
+   IWH.ID = CONO : JOB.RESV.MATL<1,LN> : '!' : VALUE
+   MATREAD IWH.REC FROM INV.WHSE, IWH.ID ELSE
+      ERRMSG = 'WAREHOUSE (':VALUE:') IS MISSING'
+      GOSUB 91000; GOTO 1100
+   END
+   MATREAD WHSE.REC FROM WAREHOUSE, CONO:VALUE ELSE MAT WHSE.REC = ""
+   IF WHS.DIV # JOB.DIV AND WHS.DIV # "00" THEN
+      ERRMSG = "WAREHOUSE DIVISION DOES NOT MATCH JOB DIVISION"
+      GOSUB 91000; GOTO 1100
+   END
+   JOB.RESV.WHSE<1,LN> = VALUE
+*
+*********
+1300 *
+*********
+*
+   X = 32; Y = SLN
+   TYP = 6; MAXL = 8
+   O.R = 'O'
+   IF JOB.RESV.DATE<1,LN> = '' THEN DEFAULT = 'DATE' ELSE DEFAULT = OCONV(JOB.RESV.DATE<1,LN>,"D2/")
+   CALL EDIT.SUB
+   IF VALUE = 'END' THEN GOTO 1100
+   JOB.RESV.DATE<1,LN> = VALUE
+*
+****************
+ENT.RESERVE.QTY: 
+****************
+*
+   IF JOB.RESV.QTY<1,LN>+0>0 AND RSV.SERIAL<LN>='Y' THEN
+      ECD.SCRN.NO=11                                      
+      CALL SERIAL.RESERVE.SEL(IWH.ID,JOB.NUM,OPEN.FLAG,LN,MAT INV.CNV.REC)
+      ECD.SCRN.NO=2 ; ECD.ACTION=3 ; CALL SCRN.EDIT       
+      OLD.START.LINE=0                                    
+      GOSUB 11000                                         
+   END ELSE
+      IF ICR.CNV<LN> = "MD0" THEN
+         TYP = 3; MAXV = 999999999
+      END ELSE
+         TYP = 4; SCALER = 2; MAXV = 9999999999
+      END
+      X = 57; Y = SLN; O.R = 'R'; MAXL = 11; MINV = 0
+      IF JOB.RESV.QTY<1,LN> + 0 > 0 THEN
+         O.R = 'O'
+         DEFAULT=CALC.STK.QTY(JOB.RESV.QTY<1,LN>,MAT INV.CNV.REC,'.5',LN)
+         DEFAULT=OCONV(DEFAULT,ICR.CNV<LN>)
+      END
+      CALL EDIT.SUB
+      IF VALUE = 'END' THEN
+*T27778 v
+         OLD.START.LINE = 0
+         GOSUB 11000
+         GOTO 1999
+*         IF ACTION = 'A' THEN
+*         GOTO 1000
+*         END ELSE
+*            GOTO ENT.RESERVE.QTY
+*         END
+*T27778 ^
+      END ELSE
+         AVL.QTY=IWH.ON.HAND-IWH.RESV+JOB.RESV.QTY<1,LN>
+         AVL.QTY=CALC.STK.QTY(AVL.QTY,MAT INV.CNV.REC,'.5',LN)
+         IF VALUE > AVL.QTY THEN
+            ERRMSG = 'MAXIMUM QTY AVAILABLE = '
+            ERRMSG :=OCONV(AVL.QTY,ICR.CNV<LN>):' ':MATL.UM<LN>
+            GOSUB 91000; GOTO ENT.RESERVE.QTY
+         END
+         JOB.RESV.QTY<1,LN>=CALC.COST.QTY(VALUE,MAT INV.CNV.REC,'.5',LN)
+         LINES=DCOUNT(JOB.RESV.MATL,VM)
+         IF RSV.SERIAL<LN>='Y' THEN
+            ECD.SCRN.NO=11
+            CALL SERIAL.RESERVE.SEL(IWH.ID,JOB.NUM,OPEN.FLAG,LN,MAT INV.CNV.REC)
+            ECD.SCRN.NO=2 ; ECD.ACTION=3 ; CALL SCRN.EDIT
+            OLD.START.LINE=0
+            GOSUB 11000
+         END
+      END
+   END
+1999 *
+   RETURN
+*
+********
+8000 *
+********
+*
+   MATL.DESC<LN> = INV.FULL.DESC
+   MATL.TYPE<LN> = INV.PAP.TYPE
+   MATL.UM<LN> = INV.UNIT<1,2>
+   MATL.TRACK.QOH<LN> = CATG.TRACK.QOH
+   RSV.SERIAL<LN>=CATG.RSV.SERIAL
+   BEGIN CASE
+      CASE INV.UNIT<1,2> = 'SHT' AND INV.UNIT<1,3> = 'LBS'
+         ICR.DV1<LN> = INV.M.WT
+         ICR.MT1<LN> = 1
+         ICR.DV2<LN> = 1
+         ICR.CNV<LN> = "MD0"
+      CASE INV.UNIT<1,2> = 'PC' AND INV.UNIT<1,3> = 'MSI'
+         ICR.DV1<LN> = INV.PAP.WIDTH/100
+         ICR.MT1<LN> = 10
+         ICR.DV2<LN> = 1
+         ICR.CNV<LN> = "MD0"
+      CASE INV.UNIT<1,2> = 'FT' AND INV.UNIT<1,3> = 'MSI'
+         ICR.DV1<LN> = INV.PAP.WIDTH/100
+         ICR.MT1<LN> = 100
+         ICR.DV2<LN> = 12
+         ICR.CNV<LN> = "MD0"
+      CASE 1
+         ICR.DV1<LN> = 10
+         ICR.MT1<LN> = 1
+         ICR.DV2<LN> = 1
+         ICR.CNV<LN> = "MD2"
+   END CASE
+   RETURN
+*
+*********
+9000 *
+*********
+*
+   GOSUB 11000
+   ECD.NUM = 7; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ''
+   ECD.MINV = OLD.START.LINE; ECD.MAXV = LAST.LINE
+   ECD.ACTION = 4; CALL SCRN.EDIT
+   LN.NO = ECD.RET.VALUE
+   IF LN.NO = '' OR LN.NO = 'END' THEN LN.NO = 0
+   RETURN
+*
+**********
+11000 *
+**********
+*
+   START.LINE = 1 + INT((LN-1)/PAGE.SIZE)*PAGE.SIZE
+   LAST.LINE = START.LINE + PAGE.SIZE - 1
+   IF LAST.LINE > LINES THEN LAST.LINE = LINES
+   IF START.LINE = OLD.START.LINE THEN GOTO 11999
+   OLD.START.LINE = START.LINE
+   CNT = 1
+   FOR N = START.LINE TO LAST.LINE
+      SLN = BEGIN.PAGE + LINE.SPACE * MOD(N-1,PAGE.SIZE)
+      P_X  = 0 ; P_Y = SLN ; P_VALUE = N "R#3" ; P_OPT = ""
+      P_X  := AM:4 ; P_Y := AM:SLN ; P_VALUE := AM:JOB.RESV.MATL<1,N> "L#15"
+      P_X  := AM:20 ; P_Y := AM:SLN ; P_VALUE := AM:JOB.RESV.WHSE<1,N> "L#4"
+      IF MATL.TYPE<N> = 'REGULAR' THEN MATL.TYPE<N> = 'REGULR'
+      P_X  := AM:25 ; P_Y := AM:SLN ; P_VALUE := AM:MATL.TYPE<N> "L#6"
+      P_X  := AM:32 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(JOB.RESV.DATE<1,N>,"D2/") "L#8"
+      P_X  := AM:41 ; P_Y := AM:SLN ; P_VALUE := AM:MATL.UM<N> "L#3"
+      P_X  := AM:45 ; P_Y := AM:SLN
+      TMP=CALC.STK.QTY(JOB.ALOC.QTY<1,N>,MAT INV.CNV.REC,'.5',N)
+      TMP=OCONV(TMP,ICR.CNV<N>)"R#11"
+      P_VALUE := AM:TMP
+      P_X  := AM:57 ; P_Y := AM:SLN
+      TMP=CALC.STK.QTY(JOB.RESV.QTY<1,N>,MAT INV.CNV.REC,'.5',N)
+      TMP=OCONV(TMP,ICR.CNV<N>)"R#11"
+      P_VALUE := AM:TMP
+      P_X  := AM:69 ; P_Y := AM:SLN
+      TMP=CALC.STK.QTY(JOB.USED.QTY<1,N>,MAT INV.CNV.REC,'.5',N)
+      TMP=OCONV(TMP,ICR.CNV<N>)"R#11"
+      P_VALUE := AM:TMP
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      P_X  = 4 ; P_Y = SLN+1 ; P_VALUE = MATL.DESC<N> "L#45" ; P_OPT = ""
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      CNT = CNT + 1
+   NEXT N
+   FOR M = CNT TO PAGE.SIZE
+      SLN = BEGIN.PAGE + LINE.SPACE * MOD(M-1,PAGE.SIZE)
+      P_X  = 0 ; P_Y = SLN ; P_VALUE = "" ; P_OPT = "CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      P_X  = 0 ; P_Y = SLN+1 ; P_VALUE = "" ; P_OPT = "CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   NEXT M
+11999 *
+   RETURN
+*
+91000 *
+   ERR.TYPE = 1
+   CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+92000 *
+   ERR.TYPE = 2
+   CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+93000 *
+   ERR.TYPE = 3
+   CALL SYSCOM(MAT SYSCOM.REC)
+99999 *
+   ECD.ACTION=99;CALL SCRN.EDIT
+   RETURN
+END

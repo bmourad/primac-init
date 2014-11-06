@@ -1,0 +1,121 @@
+SUBROUTINE GETAPPROVERS
+********************************************************************************
+*   Program name :- GETAPPROVERS
+*   Created:- 10/31/2006
+*   Programmer :  Lakshmi Prasanna.E
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE POS.CPYLIB APP.REQ
+$INCLUDE PMC.CPYLIB DIVISION
+$INCLUDE CPYLIB CHAR
+*
+OPEN 'APP.REQ' TO APP.REQ ELSE
+  ERRMSG = 'APP.REQ FILE IS MISSING'
+  GOTO 93000
+END
+OPEN '', 'DIVISION' TO DIVISION ELSE
+    ERRMSG = 'DIVISION FILE IS MISSING'
+    GOTO 93000
+END
+* Insert method code here
+ DIM HOLD.APP.REQ.REC(20)
+   MAT APP.REQ.REC = ""
+   MAT HOLD.APP.REQ.REC = ""
+*
+STATUS=RBO.getProperty('','ID',ID)
+STATUS = RBO.getProperty('','Req_Type',REQ_TYPE)
+STATUS=RBO.getProperty('','DIV_CODE',DIV.OWNER)
+USER.ID = ID[4,99]
+CONO = ID[1,3]
+*
+REQ.POS = ""
+APP.ARR=""
+TOTAL.AMT=0
+BEGIN CASE
+	CASE REQ_TYPE = "R"
+		REQ.POS = 1
+	CASE REQ_TYPE = "O"
+		REQ.POS = 2
+	CASE REQ_TYPE = "M"
+		REQ.POS = 3
+       *CASE 1
+        *      REQ.POS=""
+END CASE
+*IF REQ.POS="" THEN
+*   STATUS=RBO.setProperty('','ApproverNames',REQ.POS)
+ *  RETURN
+*END
+MATREAD APP.REQ.REC FROM APP.REQ,CONO:USER.ID:"!":"ALL" THEN
+  DIV.OWNER="ALL"
+END
+*TOTAL.AMT="40"
+MATREAD APP.REQ.REC FROM APP.REQ,CONO:USER.ID:"!":DIV.OWNER THEN
+*IF DIV.OWNER="ALL" THEN
+ * DIV.OWNER="00"
+*END
+  IF APP.PO.LEVEL # 1 THEN
+      APP.ARR= '' ;*array of valid approvers  
+      SKIP.RELEASE = 0
+      IF OCONV(TOTAL.AMT,"MD4") <= APP.PO.LIMIT<1,REQ.POS> OR APP.PO.LIMIT<1,REQ.POS>="UNLIMITED" THEN
+         ;* since order amt. is <= then requestor limit
+         ;* it can be released to level 1 approver.
+         LEVEL =1 ; ORD.TOT = OCONV(TOTAL.AMT,"MD4") ; APP.ARR = ""
+         USER= USER.ID ; TYPE = REQ.POS
+         CALL  FIND_APPROVERS (CONO,USER,DIV.OWNER,TYPE,LEVEL,ORD.TOT,APP.ARR,XXX,ZZZ,YYY)
+      END ELSE
+         ;*check to see if default approver is active
+         ;*if not then look for the approver that can send req.
+         ;*directly to level 1 and make it first in the list.
+        * MAT HOLD.APP.REQ.REC = MAT APP.REQ.REC
+         USER = APP.PO.ID<1,REQ.POS,1>
+         APP.REQ.ID = ""
+         CALL CHECK_ACTIVE_STATUS (CONO,USER,DIV.OWNER,RET.FLAG,MAT APP.REQ.REC,APP.REQ.ID,YYY)
+         MAT APP.REQ.REC = MAT HOLD.APP.REQ.REC
+         ACTIVE = RET.FLAG
+         IF NOT(ACTIVE) THEN
+            LEVEL= APP.PO.LEVEL-1;ORD.TOT=OCONV(TOTAL.AMT,"MD4");APP.ARR=""
+            USER = USER.ID ; TYPE = REQ.POS
+            CALL  FIND_APPROVERS (CONO,USER,DIV.OWNER,TYPE,LEVEL,ORD.TOT,APP.ARR,XXX,ZZZ,YYY)
+         END
+      END
+      ;*now that we have a default approver get all
+      ;*active approvers for the user and add them to the list.
+      NBR.IDS = DCOUNT(APP.PO.ID<1,REQ.POS>,SVM)
+*
+      FOR LL =1 TO NBR.IDS
+         MAT HOLD.APP.REQ.REC = MAT APP.REQ.REC
+         USER = APP.PO.ID<1,REQ.POS,LL>
+         CALL CHECK_ACTIVE_STATUS (CONO,USER,DIV.OWNER,RET.FLAG,MAT APP.REQ.REC,APP.REQ.ID,YYY)
+         MAT APP.REQ.REC = MAT HOLD.APP.REQ.REC
+         IF RET.FLAG = 1 THEN
+            LOCATE APP.REQ.ID IN APP.ARR<1>,1 SETTING JUNK ELSE
+               APP.ARR<1,-1> = APP.REQ.ID
+            END
+         END
+      NEXT LL
+       ;*set default and valid approvers values
+      ECD.DEFAULT = OCONV(APP.ARR<1,1>[4,99],"G!1")
+      NBR.IDS = DCOUNT(APP.ARR,VM)
+      VALID.INPUT = ""
+      FOR LL = 1 TO NBR.IDS
+         VALID.INPUT<1,-1>=OCONV(APP.ARR<1,LL>[4,99],"G!1")
+      NEXT LL    
+   END
+END
+STATUS=RBO.setProperty('','ApproverNames',VALID.INPUT)
+RETURN
+*
+93000:
+ STATUS = RBO.setProperty('','ServerStatus',1)        
+ STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+RETURN

@@ -1,0 +1,72 @@
+SUBROUTINE TU.LAUNCH.APP(APPLICATION, OPTIONS, STATUS)
+ INCLUDE TUBP USER.INCLUDE.H
+*
+** SBClient Host 3GL API
+** Copyright (C) Ardent Software Inc. 1998
+** Copyright (C) UniData, Inc. 1996, 1997
+** Copyright (C) System Builder Corporation. 1995
+**
+**      This software is the proprietary property and contains
+**      trade secrets of Ardent Software, Inc. Any unauthorized use,
+**      disclosure or duplication is strictly prohibited.
+**      All rights reserved.
+*
+***************************************************************************
+*-* TU.LAUNCH.APP(Applicationname, Option, Status)
+*-*
+*-*  This function will launch a windows application.
+*-*
+*-* [P] Applicationname	The name of the windows application to be launched.
+*-*
+*-* [P] Option	This parameter indicates the state in which the
+*-* application is to be launched. Possible values are :-
+*-* 	
+*-*  Launch minimized
+*-*  Launch maximized
+*-*  Launch restored
+*-*
+*-* [R] Status	This is an indication of the success or failure of the
+*-* subroutine. A successful call will return with zero
+*-* Status and failure will return with a non-zero value.
+*-*
+*-* In a 32 Bit Environment the API has the following behaviour:
+*-*
+*-* Strip any path info off of application. Locate applications real path
+*-* in the registry. All Application paths on Win32 systems are store in
+*-* the .\HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion
+*-* \App Paths\ key.
+*-*
+*-* If we fail to find the Application path in this key we will search for
+*-* the Application path in .\HKEY_LOCAL_MACHINE\SOFTWARE\Unidata
+*-* \SBClient\App Paths\ key.
+*-*
+*-* If we fail to find it in this key then we will present the user with
+*-* a 'Open Application xxx As' dialog. The user will then browse the client
+*-* and find the application. Once the application has been found a key will
+*-* be written to the '.\Unidata\SBClient\App Paths'.
+***************************************************************************
+*
+ INCLUDE TUBP SPECIAL.H
+ INCLUDE TUBP TU.API.H
+ INCLUDE TUBP TU.ERRORCODES.H
+*
+*
+IF TU.TRACE THEN
+OPEN '','TUSTATE' TO TUSTATE THEN
+WRITEV ('LAUNCH.APP':VM:APPLICATION:VM:OPTIONS) ON TUSTATE,('TRACE.':PORTNO),-1
+END
+END
+*
+PROMPT ''
+STATUS = 0; VERSION = ""
+CALL TU.GET.VERSION(VERSION, STATUS)
+IF STATUS THEN RETURN
+ECHO OFF
+IF NOT(NUM(OPTIONS)) THEN OPTIONS = APP.SHOWNORMAL
+IF OPTIONS < APP.HIDE OR OPTIONS > APP.RESTORE THEN OPTIONS = APP.SHOWNORMAL
+CRT APP.LAUNCH:OPTIONS:APPLICATION:TU.TAIL:
+INPUT STATUS:
+ECHO ON
+IF STATUS THEN STATUS = FTE.UNABLE.TO.LAUNCH.APP
+RETURN
+END

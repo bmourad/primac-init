@@ -1,0 +1,320 @@
+* WIN.SHARE
+* Copy programs to another account
+* Compile for: GENERIC AP MD ME PI PR SQ UD UL UP UV UC IN GA
+* Copyright (c) 1991-1999. Impact Business Systems
+* Copyright (c) 1993-1999. Ardent Software, Inc
+*
+EQU TRUE TO 1, FALSE TO 0
+*
+AMVM=1; AMVM<1,2>=2; AMVM<2>=3
+AM=AMVM[4,1]
+VM=AMVM[2,1]
+OPEN '','WIN.PROGS' TO F.BP ELSE
+  PRINT 'WIN.PROGS IS MISSING'
+  STOP
+END
+*
+READV MACHINE.TYPE FROM F.BP, 'MACHINE.TYPE',1 ELSE MACHINE.TYPE = 'GENERIC'
+IF MACHINE.TYPE = '' THEN MACHINE.TYPE = 'GENERIC'
+*
+SUB.SUFFIX = ''
+IF MACHINE.TYPE # 'GENERIC' THEN SUB.SUFFIX = '.':MACHINE.TYPE
+PARAM = 'WIN.PARAM':SUB.SUFFIX
+MAKEQ = 'WIN.MAKEQ':SUB.SUFFIX
+EXECSUB = 'WIN.EXEC':SUB.SUFFIX
+*
+R.PARAM = ''
+F.MD = ''
+*
+CALL @PARAM(F.MD, R.PARAM)
+*
+PRIME.STYLE = R.PARAM<2>
+ACCOUNT = R.PARAM<8>
+PORT = R.PARAM<9>
+TERM.WIDTH = R.PARAM<10>
+*
+CURRENT.ACCOUNT = ACCOUNT
+QFILE.MD = 'QWINTMD':PORT
+QFILE.BP = 'QWINTBP':PORT
+ACCDESC = "Account name"
+*
+READ REC FROM F.MD, 'WIN.PROGS' THEN
+  BEGIN CASE
+    CASE MACHINE.TYPE = 'PI' 
+      IF INDEX(REC<2>,'/',1) THEN ACCOUNT = FIELD(REC<2>,'/',1)
+    CASE MACHINE.TYPE = 'UD' OR MACHINE.TYPE = 'UC'
+      CALL WIN.ATV.UD(1,ACCOUNT)
+      ACCDESC = "Path to the account"
+    CASE MACHINE.TYPE = 'UV' OR MACHINE.TYPE = 'UP'
+      CALL WIN.ATV.UV(1,ACCOUNT)
+      ACCDESC = "Path to the account"
+    CASE PRIME.STYLE
+      IF INDEX(REC<2>,'>',1) THEN ACCOUNT = FIELD(REC<2>,'>',1)
+    CASE 1
+      IF REC<1>[1,1] = 'Q' THEN ACCOUNT = REC<2>
+  END CASE
+END
+*
+MSGLINE = @(0,6):@(-4)
+MSGLINE2 = @(0,8):@(-4)
+ERRLINE = @(0,23):@(-4)
+*
+PRINT @(-1):'WIN.SHARE':@(18,0):'Set up wIntegrate host programs on another account':
+PRINT @(0,2):ACCDESC:
+*
+OVERWR = FALSE
+GOSUB 100; * Get Account Name
+IF ACCNAME # '' THEN GOSUB 150; * Are you sure
+IF ACCNAME # '' THEN GOSUB 200; * Set up account
+STOP
+*
+* Get account name
+100 LOOP
+  PRINT @(22,2):@(-4):
+  INPUT ACCNAME:
+  ERRMSG = ''
+  BEGIN CASE
+    CASE ACCNAME = ''; NULL
+    CASE ACCNAME = CURRENT.ACCOUNT
+      ERRMSG = 'Account name must be different to current account ':ACCOUNT
+    CASE ACCNAME = ACCOUNT
+      ERRMSG = ACCDESC:' entered already contains the programs'
+    CASE 1
+      CALL @MAKEQ(F.MD, QFILE.BP, QFILE.MD, ACCNAME, 'WIN.PROGS')
+      OPEN '', QFILE.MD TO F.QFILE.MD ELSE
+        ERRMSG = 'Invalid ':ACCDESC:ACCNAME
+      END
+      IF ERRMSG = '' THEN
+        READV WPQ FROM F.QFILE.MD, 'WIN.PROGS', 1 ELSE WPQ = ''
+        READV WSQ FROM F.QFILE.MD, 'WIN.SHARE', 1 ELSE WSQ = ''
+        IF WPQ # '' OR WSQ # '' THEN
+           GOSUB 110; * Prompt for overwrite
+        END
+      END
+  END CASE
+*
+UNTIL ERRMSG = '' DO
+  PRINT ERRLINE: ERRMSG:
+REPEAT
+*
+PRINT ERRLINE:
+*
+RETURN
+*
+* Prompt for overwrite
+110 PRINT MSGLINE:"The programs/files already exist in this account"
+LOOP
+PRINT MSGLINE2:"Do you want to overwrite them (Y/N) ":
+INPUT YORN:
+YORN = OCONV(YORN,"MCU")
+UNTIL YORN = "Y" OR YORN = "N" DO
+REPEAT
+PRINT MSGLINE:
+PRINT MSGLINE2:
+IF YORN = "Y" THEN
+   OVERWR = TRUE
+END ELSE
+   ERRMSG = 'WIN.PROGS already exists in account ':ACCNAME
+END
+RETURN
+*
+* Are you sure prompt
+150 LOOP
+PRINT MSGLINE:"Are you sure you want to setup the programs in ":ACCNAME:" (Y/N) ":
+INPUT YORN:
+YORN = OCONV(YORN,"MCU")
+UNTIL YORN = "Y" OR YORN = "N" DO
+REPEAT
+PRINT MSGLINE:
+IF YORN = "N" THEN
+   PRINT "Programs not setup"
+   ACCNAME = ""
+END
+RETURN
+*
+* Copy pointers
+200 PRINT MSGLINE:'Copying files...Please wait':
+ERRMSG = ''
+READ QREC FROM F.MD, QFILE.BP ELSE ERRMSG = 'Can not read Q-Pointer record ':QFILE.BP
+*
+IF ERRMSG = '' THEN
+  S = ACCNAME
+  R = ACCOUNT
+  GOSUB 300; * Replace
+*
+  STYPE = ""
+  IF MACHINE.TYPE = "UD" OR MACHINE.TYPE = "UC" THEN
+    QREC<1> = "DIR"
+    READV STYPE FROM F.BP, "MACHINE.TYPE",2 ELSE STYPE = ""
+    IF STYPE = "VMS" THEN
+      QREC<2> = FIELD(QREC<2>,']',1) : '.' : FIELD(QREC<2>,']',2) : ']'
+    END
+  END
+*
+  QFCHECK = "WIN.PROGS"; GOSUB 400;* Check if current account contains a qpointer
+  IF QPTR THEN
+    WRITE QPREC ON F.QFILE.MD, 'WIN.PROGS'
+  END ELSE
+    WRITE QREC ON F.QFILE.MD, 'WIN.PROGS'
+  END
+*
+* Only install WIN.SCRIPT if it exists in the current account
+READ DUM FROM F.MD, "WIN.SCRIPT" THEN
+  READ DUM FROM F.QFILE.MD, 'WIN.SCRIPT' ELSE
+    S = 'WIN.PROGS'
+    R = 'WIN.SCRIPT'
+    GOSUB 300; * Replace
+    IF STYPE = "VMS" THEN QREC<1> = "F"
+    QFCHECK = "WIN.SCRIPT"; GOSUB 400;* Check if current account contains a qpointer
+    IF QPTR THEN
+      WRITE QPREC ON F.QFILE.MD, 'WIN.SCRIPT'
+    END ELSE
+      WRITE QREC ON F.QFILE.MD, 'WIN.SCRIPT'
+    END
+  END
+END
+*
+  IF STYPE = "VMS" THEN
+    QREC = ""
+    QREC<1>="PA"
+    QREC<2>="WIN_TRANSFER"
+    WRITE QREC ON F.QFILE.MD, 'WIN':'.TRANSFER'
+    QREC<2>="WIN_SERVER"
+    WRITE QREC ON F.QFILE.MD, 'WIN':'.SERVER'
+  END
+*
+  SELECT F.BP
+*
+  PROGS = ''
+  EOF = 0
+*
+  LOOP
+    READNEXT KEY ELSE EOF = TRUE
+  UNTIL EOF DO
+    IF KEY[1,1] MATCH "1A" THEN
+      READV CHECK FROM F.BP, KEY, 1 ELSE CHECK = ''
+      IF (CHECK[1,2] = 'PQ' AND NOT(PRIME.STYLE)) OR (CHECK[1,2] = 'PA' AND PRIME.STYLE) THEN
+        PROGS<-1> = KEY
+      END ELSE
+        READV CHECK FROM F.BP, KEY, 3 THEN
+          IF INDEX(CHECK, MACHINE.TYPE,1) # 0 THEN PROGS<-1> = KEY
+        END
+      END
+    END
+  REPEAT
+*
+  N = COUNT(PROGS, AM) + (PROGS # "")
+*
+  IF MACHINE.TYPE = "UV" OR MACHINE.TYPE = "UP" THEN GOSUB 220;* UniVerse catalog check
+*
+  FOR J = 1 TO N WHILE ERRMSG = ''
+    KEY = PROGS<J>
+    OK.TO.COPY = TRUE
+    IF NOT(OVERWR) THEN
+       READV DUM FROM F.QFILE.MD, KEY, 1 THEN
+          GOSUB 250;* Item overwrite prompt
+       END
+    END
+*
+    IF OK.TO.COPY THEN
+      READ QREC FROM F.MD, KEY THEN
+        WRITE QREC ON F.QFILE.MD, KEY
+      END
+    END
+*
+  NEXT J
+END
+*
+IF ERRMSG = '' THEN
+  PRINT MSGLINE:'Host programs installed on ':ACCNAME
+END ELSE
+  PRINT MSGLINE:'Unable to install programs on ':ACCNAME
+  PRINT ERRMSG
+END
+*
+DELETE F.MD, QFILE.MD
+DELETE F.MD, QFILE.BP
+*
+RETURN
+*
+* UniVerse catalog check
+220 READV DUM FROM F.MD, "WIN.TRANSFER",2 ELSE DUM = ""
+IF COUNT(DUM,"/") + COUNT(DUM,"\") <= 1 THEN
+   PRINT MSGLINE:"On UniVerse the programs need to be catalogued with the COMPLETE option":
+   LOOP
+      PRINT MSGLINE2:"Do you want this program to do this (Y/N)":
+      INPUT YORN:
+      YORN = OCONV(YORN,"MCU")
+   UNTIL YORN = "Y" OR YORN = "N" DO
+   REPEAT
+   PRINT MSGLINE2:
+   IF YORN = "Y" THEN
+      PRINT MSGLINE:"Re-cataloging programs...":
+      FOR J = 1 TO N
+         PRINT @(0,12):@(-4):"Cataloging ":PROGS<J>:" ":
+         CALL @EXECSUB("CATALOG WIN.PROGS ":PROGS<J>:" COMPLETE FORCE", "",0)
+      NEXT J
+      PRINT @(0,12):@(-3):
+      PRINT MSGLINE:'Copying files...Please wait':
+   END ELSE
+      ERRMSG = "Programs were not catalogued with the COMPLETE option"
+   END   
+END 
+RETURN
+*
+* Overwrite item prompt
+250 PRINT MSGLINE:'Item ':KEY:' already exist in account ':ACCNAME:
+   LOOP
+      PRINT MSGLINE2:"Overwrite (Y=Yes, N=No, A=Yes to All, Q=Quit) ":
+      INPUT YORN:
+*
+      GOOD.ANS = TRUE
+      YORN = OCONV(YORN,"MCU")
+      BEGIN CASE
+         CASE YORN = "Y"; OK.TO.COPY = TRUE
+         CASE YORN = "A"; OK.TO.COPY = TRUE; OVERWR = TRUE
+         CASE YORN = "N"; OK.TO.COPY = FALSE
+         CASE YORN = "Q"; OK.TO.COPY = FALSE; ERRMSG = "Install stopped by user as ":KEY:" already existed"
+         CASE 1;GOOD.ANS = FALSE
+      END CASE
+*
+   UNTIL GOOD.ANS DO
+   REPEAT
+   PRINT MSGLINE:MSGLINE2:
+RETURN
+*
+* Replace S with R in QREC
+300 POS = 0
+LOOP
+  C = INDEX(QREC[POS+1, 99999], S,1)
+WHILE C DO
+  C = C + POS
+  POS = C
+  IF QREC[C+LEN(S),1] # '.' THEN
+    QREC = QREC[1,C-1] : R : QREC[C+LEN(S),99999]
+  END
+REPEAT
+RETURN
+*
+* Check if current account contains a Q-Pointer and return the record from the current VOC
+400 QPTR = 1
+READ QPREC FROM F.MD, QFCHECK ELSE QPTR = 0
+IF QPTR THEN
+  QPTR = 0
+  BEGIN CASE
+    CASE MACHINE.TYPE = 'PI'
+      IF INDEX(REC<2>,'/',1) THEN QPTR = 1
+    CASE MACHINE.TYPE = 'UD' OR MACHINE.TYPE = 'UC' OR MACHINE.TYPE = "UV" OR MACHINE.TYPE = "UP"
+      IF STYPE = "VMS" THEN
+        IF INDEX(REC<2>,":",1) THEN QPTR = 1
+      END ELSE
+        IF INDEX(REC<2>,'/',1) OR INDEX(REC<2>,'\',1) THEN QPTR = 1
+      END
+    CASE MACHINE.TYPE = "PR"
+      IF INDEX(QPREC<2>,'>',1) THEN QPTR = 1
+    CASE 1
+      IF QPREC<1>[1,1] = 'Q' THEN QPTR = 1
+  END CASE 
+END
+RETURN
+END

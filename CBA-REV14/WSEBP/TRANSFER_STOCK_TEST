@@ -1,0 +1,267 @@
+   SUBROUTINE RFT_READ.RCV.RF.RECEIVE(CONO,EMPID,PONO,MANNO,MWGT,NEWFLAG,USER.ID,STRXML,ERRMSG)
+*********************************************************************
+*
+* PROGRAM  - READ.RCV.RF.RECEIVE
+*
+* DESCRIPTION
+*
+* This program is used to process the Roll Receiving transaction
+* from the hand-held R-F units used on the receiving dock.
+*
+*T25697 edvard 03/20/2001 * Make a RCVMAN.TOT.WGT total weight for the
+*                           whole po for the manifest.
+*T26132 cm 09/06/2001 * Change screen size from 21x16 to 20x15.
+*T26461 lross 03/01/2002 * WHSE & LOC not defaulting from prior line.
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+*$INCLUDE ICS.CPYLIB COM.INV.MAIN  
+*$INCLUDE ICS.CPYLIB COM.INV.SERIAL
+*$INCLUDE ICS.CPYLIB COM.INV.LINK  
+$INCLUDE RCV.CPYLIB RCV.FILE.VARS
+$INCLUDE PMC.CPYLIB COMPANY
+$INCLUDE ICS.CPYLIB CATEGORY
+$INCLUDE ICS.CPYLIB DAILY_STOCK
+$INCLUDE ICS.CPYLIB INV_SERIAL
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB WAREHOUSE
+$INCLUDE PMC.CPYLIB PO
+$INCLUDE PMC.CPYLIB VEND
+$INCLUDE ICS.CPYLIB PO.MAN.XREF
+$INCLUDE ICS.CPYLIB PO.RSKI.XREF
+$INCLUDE PMC.CPYLIB EMPLOYEE
+$INCLUDE CPYLIB FILE.VARS
+$INCLUDE CPYLIB CHAR
+*OPEN THE FILES
+  OPEN "","PO.MAN.XREF" TO PO.MAN.XREF ELSE
+      ERRMSG = "PO.MAN.XREF FILE MISSING"; RETURN
+   END
+   OPEN "","PO.RSKI.XREF" TO PO.RSKI.XREF ELSE
+      ERRMSG = "PO.RSKI.XREF FILE MISSING"; RETURN
+   END
+   OPEN "","PO" TO PO ELSE
+      ERRMSG = "PO FILE MISSING"; RETURN
+   END
+   OPEN "","DAILY_STOCK" TO DAILY_STOCK ELSE
+      ERRMSG = "DAILY_STOCK FILE MISSING"; RETURN
+   END
+   OPEN "","CATEGORY" TO CATEGORY ELSE
+      ERRMSG = "CATEGORY FILE MISSING"; RETURN
+   END
+   OPEN "","INV_SERIAL" TO INV_SERIAL ELSE
+      ERRMSG = "INV_SERIAL FILE MISSING"; RETURN
+   END
+   OPEN "","INV_SERIAL_DELETED" TO INV_SERIAL_DELETED ELSE
+      ERRMSG = "INV_SERIAL_DELETED FILE MISSING"; RETURN
+   END
+   OPEN "","INVENTORY" TO INVENTORY ELSE
+      ERRMSG = "INVENTORY FILE MISSING"; RETURN
+   END
+   OPEN "","COMPANY" TO COMPANY ELSE
+      ERRMSG = " COMPANY FILE MISSING"; RETURN
+   END
+   OPEN "","VEND" TO VEND ELSE
+      ERRMSG = "VEND FILE MISSING"; RETURN
+   END
+   OPEN "","EMPLOYEE" TO EMPLOYEE ELSE
+      ERRMSG = "EMPLOYEE FILE MISSING"; RETURN
+   END
+   MATREAD COMP.REC FROM COMPANY,CONO ELSE
+      ERRMSG='COMPANY # MISSING'; RETURN
+   END
+     SPX = ""
+   MATREAD EMP.REC FROM EMPLOYEE, CONO:EMPID THEN
+      EMPNAME = (EMP.FRST.NAME:" ":EMP.LAST.NAME)[1,20]
+   END ELSE
+      ERRMSG = "INVALID EMPLOYEE ID" ; GOTO 91000
+   END
+   IF LEN(EMPNAME) < 20 THEN SPX = SPACE(INT((21-LEN(EMPNAME))/2))
+   EMPNAME = SPX:EMPNAME
+   PO.NO = ""
+   MAN.NO = ""
+   PROD.ID = ""
+   TOT.WGT = ""
+   RCV.WGT = ""
+   WHSE = "" 
+   STRXML="" 
+*
+*---- GET P/O NUMBER
+*
+      IF PONO = "" THEN
+         ERRMSG = "**  PO IS REQUIRED **" ; GOTO 91000
+      END
+      PONO = UPCASE(TRIM(PONO))
+      MANUAL.ENTRY = 0
+      * Replace PO with PO.RSKI.XREF v
+      MATREAD RSXRF.REC FROM PO.RSKI.XREF, CONO:PONO ELSE
+               MAT RSXRF.REC = ''
+               MANUAL.ENTRY = 1
+      END
+      PO.NO = PONO
+      PO.PRESENT = 1
+            MATREAD PO.REC FROM PO, CONO:PO.NO ELSE
+             IF DCOUNT(RSXRF.RS.NO,VM) > 0 THEN MANUAL.ENTRY = 1 ;*T27306
+               IF NOT(MANUAL.ENTRY) THEN
+                  ERRMSG='PO Missing'; GOTO 91000
+               END ELSE
+	          ERRMSG='NO PO-OK TO USE?';GOTO 91000
+		  IF NEWFLAG = 'Y' THEN
+                     MAT PO.REC = ''
+                     PO.DIV.OWNER='00'
+                  END ELSE RETURN
+               END
+               PO.PRESENT=0
+            END    
+            IF PO.PRESENT THEN MANUAL.ENTRY = 0 ;*27306
+            DIV.CODE = PO.DIV.OWNER; USER.ID = UPCASE(USER.ID); ERRMSG = ''
+            CALL RFT_SI.CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+            IF ERRMSG # '' THEN
+               GOTO 91000              
+            END
+            IF NOT(MANUAL.ENTRY) THEN
+               PO.LINE.CNT = DCOUNT(PO.PROD.NUM,VM)
+               BCFLAG=0
+               FOR PO.LINE.PTR=1 TO PO.LINE.CNT WHILE BCFLAG=0
+                  MATREAD INV.REC FROM INVENTORY, CONO:PO.PROD.NUM<1,PO.LINE.PTR> ELSE MAT INV.REC = ""
+                  MATREAD CATG.REC FROM CATEGORY,CONO:INV.LINE ELSE MAT CATG.REC=''
+                  IF CATG.TRK.LVL='S' THEN
+                     BCFLAG=1
+                  END
+               NEXT PO.LINE.PTR
+               IF BCFLAG=0 THEN
+                  ERRMSG='Not Serial PO'; GOTO 91000
+               END
+            END
+            NEW.MANIFEST = ''
+******** ^
+*---- GET MANIFEST NUMBER
+*
+1020 *
+    IF MANNO = "END" THEN
+         MAN.NO = ""
+         GOTO 1090
+      END
+      MANNO = UPCASE(TRIM(MANNO))
+      IF MANNO = "" THEN
+         ERRMSG = "** MANIFEST NUMBER REQUIRED **" ; GOTO 91000
+      END
+      MATREADU DSR.REC FROM DAILY_STOCK, CONO:PO.NO:"!":MANNO LOCKED
+         ERRMSG = "** Manifest Locked **" ; GOTO 91000
+      END ELSE
+         MAT DSR.REC = ""
+      END
+      RELEASE DAILY_STOCK, CONO:PO.NO:"!":MANNO 
+      MATREADU RSMAN.REC FROM PO.MAN.XREF, CONO:PO.NO:"!":MANNO LOCKED
+               ERRMSG = "MANIFEST LOCKED *"; GOTO 91000
+             
+      END ELSE
+             MAT RSMAN.REC = ""
+      END
+      RELEASE PO.MAN.XREF, CONO:PO.NO:"!":MANNO 
+      MAN.NO = MANNO
+      DSR.SHPMNT.NO = MAN.NO
+      RSMAN.MAN.NO = MAN.NO
+      *T27306 v Load Manual PO values.
+            IF MANUAL.ENTRY AND NOT(PO.PRESENT) THEN
+               FOR P = 1 TO DCOUNT(RSMAN.RS.NO,VM)
+                  MATREAD ISTK.REC FROM INV_SERIAL,CONO:RSMAN.RS.NO<1,P> THEN
+                     PTR=1
+                     LOOP
+                        LOCATE ISTK.PROD IN PO.PROD.NUM<1>,PTR SETTING FND THEN
+                           IF ISTK.WHSE = PO.WHSE<1,FND> THEN
+                              PTR = 0
+                           END ELSE
+                              PTR = FND+1
+                           END
+                        END ELSE
+                           INS ISTK.PROD BEFORE PO.PROD.NUM<1,RSMAN.LINE.NO<1,P>>
+                           INS ISTK.WHSE BEFORE PO.WHSE<1,RSMAN.LINE.NO<1,P>>
+                           INS ISTK.UOM BEFORE PO.UNIT.FLG<1,RSMAN.LINE.NO<1,P>>
+                           INS ISTK.UNIT.COST BEFORE PO.GROS.PRICE<1,RSMAN.LINE.NO<1,P>>
+                           PTR = 0
+                        END
+                     WHILE PTR DO
+                     REPEAT
+                  END
+               NEXT P
+            END
+*T27306 ^
+            PCNT = DCOUNT(PO.PROD.NUM,VM)
+	    STRXML := "<Products>"
+            FOR PO.LINE = 1 TO PCNT
+              STRXML := "<ProductId>":PO.PROD.NUM<1,PO.LINE>:"</ProductId>" 
+	      STRXML := "<WarehouseId>":PO.WHSE<1,PO.LINE>:"</WarehouseId>" 
+               PROD.NO = PO.PROD.NUM<1,PO.LINE>
+               MATREAD INV.REC FROM INVENTORY,CONO:PROD.NO ELSE
+                  MAT INV.REC = ""
+               END
+               MATREAD CATG.REC FROM CATEGORY,CONO:INV.LINE ELSE
+                  MAT CATG.REC = ""
+               END
+               IF CATG.TRK.LVL = "S" THEN
+                  LOCATE PO.LINE IN DSR.PO.LINE<1>,1 BY 'AR' SETTING P ELSE
+*                    DSR.PO.LINE<1,P> = PO.LINE
+                     INS PO.LINE BEFORE DSR.PO.LINE<1,P>
+*                    DSR.PROD<1,P> = PROD.NO
+                     *INS PROD.NO BEFORE DSR.PROD<1,P>
+*                    DSR.WHSE<1,P> = PO.WHSE<1,PO.LINE>
+                     INS PO.WHSE<1,PO.LINE> BEFORE DSR.WHSE<1,P>
+*                    DSR.UN.PRICE<1,P> = PO.GROS.PRICE<1,PO.LINE>
+                     INS PO.GROS.PRICE<1,PO.LINE> BEFORE DSR.UN.PRICE<1,P>
+*                    DSR.UOM<1,P> = PO.UNIT.FLG<1,PO.LINE>
+                     INS PO.UNIT.FLG<1,PO.LINE> BEFORE DSR.UOM<1,P>
+*                    DSR.SERIAL<1,P>=''
+                     INS '' BEFORE DSR.SERIAL<1,P>
+                     FOR R = 1 TO DCOUNT(RSMAN.RS.NO,VM)
+                        IF RSMAN.LINE.NO<1,R> = PO.LINE THEN
+                           DSR.SERIAL<1,P,-1> = RSMAN.RS.NO<1,R>
+                        END
+                     NEXT R
+                  END
+               END
+            NEXT PO.LINE
+         STRXML := "</Products>"
+ *---- GET MANIFEST WEIGHT
+*
+1030 *
+         ENTERED = ""
+         IF DSR.SERIAL # "" THEN
+            NUM.PROD = DCOUNT(DSR.PROD,VM)
+            FOR P = 1 TO NUM.PROD
+               NUM.SERIAL = DCOUNT(DSR.SERIAL<1,P>,SVM)
+               FOR S = 1 TO NUM.SERIAL
+                  MATREAD ISTK.REC FROM INV_SERIAL, CONO:DSR.SERIAL<1,P,S> ELSE
+                     MAT ISTK.REC = ""
+                  END
+                  IF DSR.POST.DATE<1,P,S> = "" THEN
+                     IF DSR.UOM<1,P> = "LBS" OR DSR.UOM<1,P> = "MSI" THEN
+                        ENTERED+=ISTK.QTY.ENTERED
+                     END ELSE
+                        ENTERED+=ISTK.QTY.ENTERED*100
+                     END
+                  END
+               NEXT S
+            NEXT P
+         END
+         RCV.WGT = ENTERED  
+	 STRXML := "<ReceivedWeight>":OCONV(RCV.WGT,"MD2,"):"</ReceivedWeight>" 
+    STRXML := "<ManualEntry>":MANUAL.ENTRY:"</ManualEntry>" 
+          IF MWGT = "END" THEN
+               MAN.NO = ""; TOT.WGT = ""
+               GOTO 1090
+           END
+           IF MWGT = "" THEN
+                      ERRMSG = "** REQUIRED  MANIFEST WEIGHT**" ; GOTO 91000
+            END          
+RETURN	    
+1090 *
+   GOTO 99999
+*
+91000 *
+  RETURN
+*---- END OF PROGRAM
+*
+99999 *
+   RETURN
+END

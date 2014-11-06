@@ -1,0 +1,648 @@
+*COPY>CPYLIB>COM1
+*********************************************************************
+* REVISION    - [08.1]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - FASBP
+* PROGRAM     - LOAD.JCS.REPAIRS
+* BY          - Ziad Yamout, Vercom Software, Inc.
+* DATE        - 05/07/90
+* DESCRIPTION - Updates the Equipment REPAIRS.DETAIL records from the
+*               JOB.TIME records.
+*T21177 diane 01/23/1997 * REV11 UPG ADD CLOSE
+*T23278 markt 01/12/1999 * Make fiscal data multi-value by division.
+*T23559 markt 01/18/1999 * Use correct error routine for no data.
+*C36153 cm 04/10/2000 * Move variable to avoid uninitalized variable msg
+*********************************************************************
+*--- Data structure libraries
+*
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>COST.CNTR
+*COPY>PMC.CPYLIB>FISCAL
+*COPY>PMC.CPYLIB>SALESDATES
+*COPY>JCS.CPYLIB>JOB.TIME
+*COPY>JCS.CPYLIB>OPERATION
+*COPY>FAS.CPYLIB>ASSETS
+*COPY>FAS.CPYLIB>EQUIP.FILE
+*COPY>FAS.CPYLIB>REPAIRS
+*COPY>FAS.CPYLIB>REPAIRS.DETAIL
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+  MAT SYSCOM.REC =  ""; SYS.TYPE = 2
+*C36153 v
+  ERRNO = 10001; O.ERRNO = ERRNO
+*C36153 ^
+*
+  DIM R.DATE(4)
+  DIM R.HRS(4)
+  DIM R.UNITS(4)
+  DIM R.COST(4)
+  DIM R.NO(4)
+  DIM COSTM(4)
+  DIM UNITM(4)
+*
+*--- Open files
+*
+  OPEN "CONTROL" TO CONTROL ELSE
+      ERRMSG = "Cannot locate the CONTROL file"
+      GOTO 93000
+  END
+  OPEN "FAS.SCREENS" TO M.SCREENS ELSE
+      ERRMSG = "Cannot locate the FAS.SCREENS file"
+      GOTO 93000
+  END
+  OPEN "COMPANY" TO COMPANY ELSE
+      ERRMSG = "Cannot locate the COMPANY file"
+      GOTO 93000
+  END
+  OPEN "COST.CNTR" TO COST.CNTR ELSE
+      ERRMSG = "Cannot locate the COST.CNTR file"
+      GOTO 93000
+  END
+  OPEN "OPERATION" TO OPERATION ELSE
+      ERRMSG = "Cannot locate the OPERATION file"
+      GOTO 93000
+  END
+  OPEN "JOB.TIME" TO JOB.TIME ELSE
+      ERRMSG = "Cannot locate the JOB.TIME file"
+      GOTO 93000
+  END
+  OPEN "ASSETS" TO ASSETS ELSE
+      ERRMSG = "Cannot locate the ASSETS file"
+      GOTO 93000
+  END
+  OPEN "EQUIP.FILE" TO EQUIP.FILE ELSE
+      ERRMSG = "Cannot locate the EQUIP.FILE file"
+      GOTO 93000
+  END
+  OPEN "REPAIRS" TO REPAIRS ELSE
+      ERRMSG = "Cannot locate the REPAIRS file"
+      GOTO 93000
+  END
+  OPEN "REPAIRS.DETAIL" TO REPAIRS.DETAIL ELSE
+      ERRMSG = "Cannot locate the REPAIRS.DETAIL file"
+      GOTO 93000
+  END
+  OPEN "LOAD.FA.LOG" TO LOAD.FA.LOG ELSE
+      ERRMSG = "Cannot locate the LOAD.FA.LOG file"
+      GOTO 93000
+  END
+*
+*---- Initialization
+*
+  CONO = ""; MAT COMP.REC = ""
+  CALL GET.CONO(CONO,MAT COMP.REC)
+  IF CONO = "END" THEN GOTO 99999
+*
+***** T23278 v
+*
+  PROCREAD INBUFF ELSE
+      ERRMSG = "Must be run from a proc"
+*     GOSUB 91000; GOTO 99999 
+      GOTO 93000
+  END
+*
+  DIV.CODE = INBUFF<3>
+*
+  READ DIVISION.REC FROM CONTROL, CONO:"DIVISIONS" ELSE
+      ERRMSG = "CANNOT LOCATE CONTROL - DIVISONS"; GOTO 93000
+  END
+  READ SECURITY.REC FROM CONTROL, CONO:"DIV.SECURITY" ELSE
+      ERRMSG = "CANNOT LOCATE CONTROL - DIV.SECURITY"; GOTO 93000
+  END
+  IF SECURITY.REC<1> = "Y" AND SECURITY.REC<2> = "Y" THEN
+      LOCATE DIV.CODE IN DIVISION.REC<1>,1 SETTING POS ELSE
+          ERRMSG = "Division ":DIV.CODE:" not found on Control File DIVISIONS Record."
+          GOTO 93000
+      END
+  END ELSE
+      POS = 1
+  END
+***** T23278 ^
+  MATREAD FISCAL.REC FROM CONTROL, CONO:"JCFISCAL" ELSE
+      ERRMSG = "Cannot locate Job Costing Fiscal Period"
+      GOTO 93000
+  END
+***** T23278 v
+*  JCS.PERIOD = FR.CURR.PER
+  JCS.PERIOD = FR.CURR.PER<1,POS>
+***** T23278 ^
+  JCS.YR = JCS.PERIOD[1,4]
+  JCS.MN = JCS.PERIOD[5,2]
+***** T23278 v
+*  JCS.NEXT.PER = FR.NEXT.PER
+*  JCS.PRINT = FR.PRINT
+  JCS.NEXT.PER = FR.NEXT.PER<1,POS>
+  JCS.PRINT = FR.PRINT<1,POS>
+***** T23278 ^
+  MATREAD FISCAL.REC FROM CONTROL, CONO:"FAFISCAL" ELSE
+      ERRMSG = "Cannot locate Fixed Assets Fiscal Record"
+      GOTO 93000
+  END
+***** T23278 v
+*  PERIOD = FR.CURR.PER
+  PERIOD = FR.CURR.PER<1,POS>
+***** T23278 ^
+  FAS.YR = PERIOD[1,4]
+  FAS.MN = PERIOD[5,2]
+*
+  MATREAD SALESDATES.REC FROM CONTROL, CONO:"SALESDATES" ELSE
+      ERRMSG = "Cannot locate the sales dates record"
+      GOTO 93000
+  END
+*
+  TODAY = DATE()
+  RTYPE = "M"
+  RTYPE<2> = "R"
+  RTYPE<3> = "O"
+  RTYPE<4> = "U"
+  MAT COSTM = 1; COSTM(4) = 0
+  MAT UNITM = 0; UNITM(4) = 1
+*
+  SRC = "JC"
+*
+*--- Setup SCRN.EDIT subroutine
+*
+  MAT EDIT.COM.DRIVER = ""
+  ECD.SCRN.CNT = 1
+  ECD.SCRN.NAME = "LOAD.REPAIRS"
+  ECD.ACTION = 1; CALL SCRN.EDIT
+*
+  ECD.SCRN.NO = 1
+  ECD.ACTION = 2; CALL SCRN.EDIT
+*
+  MAT SCV.REC = ""
+  SCV.REC(1) = "  L O A D   J C S   M / R / O / U   T R A N S A C T I O N S"
+  SCV.REC(3) = "   Sales & Job Costing"
+  SCV.REC(4) = FAS.MN
+  SCV.REC(5) = SALESDATES.REC(FAS.MN+1)<1,2>
+  SCV.REC(6) = JCS.MN
+  SCV.REC(7) = SALESDATES.REC(JCS.MN+1)<1,2>
+  SCV.REC(8) = SALESDATES.REC(FAS.MN+1)<1,1>
+  SCV.REC(10)= SALESDATES.REC(JCS.MN+1)<1,1>
+  SCV.REC(33) = DIV.CODE;* T23278
+  BEGIN CASE
+      CASE PERIOD > JCS.PERIOD
+          EXIT.FLG = 1
+          STMT = "*  *  *    E  R  R  O  R    *  *  *"
+          EMSG = "J C S   P E R I O D   I S   B E H I N D   F A S"
+      CASE PERIOD = JCS.PERIOD
+          IF JCS.NEXT.PER = "" THEN
+              EXIT.FLG = 1
+              STMT = "*  *  *    E  R  R  O  R    *  *  *"
+              EMSG = "J C S   E O M   H A S   N O T   B E E N   P R O C E S S E D"
+          END ELSE
+              EXIT.FLG = 0
+              STMT = "*  *  *    W  A  R  N  I  N  G    *  *  *"
+              EMSG = "J C S   &   F A S   H A V E   T H E   S A M E   P E R I O D"
+          END
+      CASE 1
+          EXIT.FLG = 0; STMT = ""; EMSG = ""
+  END CASE
+  BEGIN CASE
+***** T23278 v
+*      CASE FR.PRINT = "X"
+      CASE FR.PRINT<1,POS> = "X"
+***** T 23278 ^
+          EXIT.FLG = 1
+          STMT = "*  *  *    E  R  R  O  R    *  *  *"
+          EMSG = "F A S   E O M   H A S   B E E N   A B O R T E D"
+          SCV.REC(12) = "ABORTED"
+***** T23278 v
+*      CASE FR.PRINT = "P"
+      CASE FR.PRINT<1,POS> = "P"
+***** T23278 ^
+          SCV.REC(12) = "PRINTED"
+***** T23278 v
+*      CASE FR.NEXT.PER # ""
+      CASE FR.NEXT.PER<1,POS> # ""
+***** T23278 ^
+          SCV.REC(12) = " POSTED"
+      CASE 1
+          SCV.REC(12) = "  OPEN"
+  END CASE
+  BEGIN CASE
+      CASE JCS.PRINT = "X"
+          EXIT.FLG = 1
+          STMT = "*  *  *    E  R  R  O  R    *  *  *"
+          EMSG = "J C S   E O M   H A S   B E E N   A B O R T E D"
+          SCV.REC(14) = "ABORTED"
+      CASE JCS.PRINT = "P"
+          SCV.REC(14) = "PRINTED"
+      CASE JCS.NEXT.PER # ""
+          SCV.REC(14) = " POSTED"
+      CASE 1
+          SCV.REC(14) = "  OPEN"
+  END CASE
+  IF STMT # "" THEN
+      SCV.REC(21) = SPACE(INT((60-LEN(STMT))/2)) : STMT
+  END
+  IF EMSG # "" THEN
+      SCV.REC(22) = SPACE(INT((60-LEN(EMSG))/2)) : EMSG
+  END
+  ECD.ACTION = 3; CALL SCRN.EDIT
+  IF GUIFORM THEN
+      P_TITLE = SCV.REC(1)
+      CALL VSI_PTITLE(P_TITLE,ERROR)
+  END
+*
+  IF EXIT.FLG THEN
+      ECD.NUM = 32
+  END ELSE
+      ECD.NUM = 31
+  END
+  ECD.ACTION = 4; CALL SCRN.EDIT
+  IF ECD.RET.VALUE # "C" THEN
+      ECD.ACTION = 99 ; CALL SCRN.EDIT
+      GOTO 99999
+  END
+*
+*---- Select the JOB.TIME records
+*
+  STMT = "S E L E C T I N G   J C S   T R A N S A C T I O N S"
+  SCV.REC(21) = SPACE(INT((60-LEN(STMT))/2)) : STMT
+  ECD.NUM = 21; ECD.ACTION = 5; CALL SCRN.EDIT
+  SCV.REC(22) = ""; ECD.NUM = 22; ECD.ACTION = 5; CALL SCRN.EDIT
+  ERRMSG = "Selecting the M/R/O/U transactions"
+***** T23278 v
+*      STMT = 'SSELECT JOB.TIME.TAG WITH CONO = "':CONO:'" AND WITH PERIOD = "':PERIOD:'" BY CTR BY DATE BY OPER'
+*
+  IF DIV.CODE = "ALL" THEN
+      STMT = 'SSELECT JOB.TIME.TAG WITH CONO = "':CONO:'" AND WITH PERIOD = "':PERIOD:'" BY CTR BY DATE BY OPER'
+  END ELSE
+      STMT = 'SSELECT JOB.TIME.TAG WITH CONO = "':CONO:'" AND WITH PERIOD = "':PERIOD:'" AND WITH DIVISION = "':DIV.CODE:'" BY CTR BY DATE BY OPER'
+  END
+***** T23278 ^
+  EXECUTE STMT CAPTURING ERRMSG
+  DATA = 1; SEL.CNT = 0; JLB.IDS = ""
+  LOOP
+      READNEXT JLB.ID ELSE DATA = 0
+  WHILE DATA DO
+      SEL.CNT = SEL.CNT + 1
+      JLB.IDS<SEL.CNT> = JLB.ID
+  REPEAT
+  BEGIN CASE
+      CASE SEL.CNT < 1
+          ERRMSG = "No items selected"
+          ECD.ACTION = 99 ; CALL SCRN.EDIT
+***** T23559 v
+*          GOTO 93000
+          GOSUB 91000; GOTO 99999
+***** T23559 ^
+      CASE SEL.CNT > 0
+          EMSG = SEL.CNT:"   I T E M S   S E L E C T E D"
+          SCV.REC(22) = SPACE(INT((60-LEN(EMSG))/2)) : EMSG
+          ECD.NUM = 22; ECD.ACTION = 5; CALL SCRN.EDIT
+          CNV = "R%":LEN(SEL.CNT)
+          MNO = INT(SEL.CNT / 10 + .9)
+      CASE 1
+          ERRMSG = "An error was encountered during the selection process"
+          ECD.ACTION = 99 ; CALL SCRN.EDIT
+          GOTO 93000
+  END CASE
+*
+*---- Verify the REPAIRS.DETAIL update
+*
+  STMT = "V  E  R  I  F  Y  I  N  G"
+  SCV.REC(21) = SPACE(INT((60-LEN(STMT))/2)) : STMT
+  ECD.NUM = 21; ECD.ACTION = 5; CALL SCRN.EDIT
+  GOSUB 1100
+  IF ERRMSG # "" THEN
+      ECD.ACTION = 99 ; CALL SCRN.EDIT
+      GOTO 93000
+  END
+  CCTR = FIELD(JLB.ID,"!",3)
+  GOSUB 2000
+  IF ERRMSG # "" THEN
+      ECD.ACTION = 99 ; CALL SCRN.EDIT
+      GOTO 93000
+  END
+  O.CCTR = CCTR; UPD.FLG = 0
+*
+  ERRNO = 10001; O.ERRNO = ERRNO
+  GOSUB 1500
+  GOSUB 1200
+  IF ERRNO > O.ERRNO THEN
+      ERRMSG = (ERRNO-O.ERRNO):" errors were encountered in the verification process"
+      ECD.ACTION = 99 ; CALL SCRN.EDIT
+      GOSUB 91000
+*     ECD.ACTION = 99 ; CALL SCRN.EDIT
+*     GOTO 93000
+      GOTO 99999
+  END
+*
+*---- Update the REPAIRS.DETAIL file
+*
+  STMT = "U  P  D  A  T  I  N  G"
+  SCV.REC(21) = SPACE(INT((60-LEN(STMT))/2)) : STMT
+  ECD.NUM = 21; ECD.ACTION = 5; CALL SCRN.EDIT
+  SCV.REC(22) = SPACE(INT((60-LEN(EMSG))/2)) : EMSG
+  ECD.NUM = 22; ECD.ACTION = 5; CALL SCRN.EDIT
+  GOSUB 1100
+  IF ERRMSG # "" THEN
+      GOSUB 91000
+      ECD.ACTION = 99 ; CALL SCRN.EDIT
+*     GOTO 93000
+      GOTO 99999
+  END
+  CCTR = FIELD(JLB.ID,"!",3)
+  GOSUB 2000
+  IF ERRMSG # "" THEN
+      GOSUB 91000
+      ECD.ACTION = 99 ; CALL SCRN.EDIT
+*     GOTO 93000
+      GOTO 99999
+  END
+  O.CCTR = CCTR; UPD.FLG = 1
+*
+*C36153 v
+* ERRNO = 10001; O.ERRNO = ERRNO
+*C36153 ^
+  GOSUB 1500
+  GOSUB 1200
+  IF ERRNO > O.ERRNO THEN
+      ERRMSG = (ERRNO-O.ERRNO):" errors were encountered, NOT all records were updated"
+      GOSUB 91000
+      ECD.ACTION = 99 ; CALL SCRN.EDIT
+*     GOTO 93000
+      GOTO 99999
+  END
+*
+  ECD.ACTION = 99 ; CALL SCRN.EDIT
+  GOTO 99999
+*
+*---- Get the first record
+1100*
+  DATA = 1; LNO = 1; ERRMSG = ""
+  LOOP
+      JLB.ID = JLB.IDS<LNO>
+      MATREAD JLB.REC FROM JOB.TIME, JLB.ID ELSE
+          ERRMSG = "Cannot locate JOB.TIME, ":JLB.ID
+          DATA = 0; GOTO 1190
+      END
+      IF JLB.MON<1,1> # PERIOD THEN GOTO 1190
+      MATREAD OPER.REC FROM OPERATION, CONO:JLB.OPER ELSE
+          ERRMSG = "Cannot locate Operation, ":JLB.OPER
+          DATA = 0; GOTO 1190
+      END
+      LOCATE OPER.RTYPE IN RTYPE,1 SETTING RPTR THEN
+          DATA = 0; GOTO 1199
+      END
+1190*
+      IF LNO = SEL.CNT THEN
+          ERRMSG = "No matched items"
+          DATA = 0
+      END
+1199*
+  WHILE DATA DO
+      LNO = LNO + 1
+  REPEAT
+  LNO = LNO + 1
+  RETURN
+*
+*---- Get the rest of the records
+1200*
+  FOR SNO = LNO TO SEL.CNT
+      IF MOD(SNO,MNO) = 0 THEN
+          STMT = SNO CNV :"   OF   ":SEL.CNT
+          SCV.REC(22) = SPACE(INT((60-LEN(STMT))/2)) : STMT
+          ECD.NUM = 22; ECD.ACTION = 5; CALL SCRN.EDIT
+      END
+      JLB.ID = JLB.IDS<SNO>
+      MATREAD JLB.REC FROM JOB.TIME, JLB.ID ELSE
+          ERRMSG = "Cannot locate JOB.TIME, ":JLB.ID
+          GOSUB 91000; GOTO 1290
+      END
+      IF JLB.MON<1,1> # PERIOD THEN GOTO 1290
+      MATREAD OPER.REC FROM OPERATION, CONO:JLB.OPER ELSE
+          ERRMSG = "Cannot locate Operation, ":JLB.OPER
+          GOSUB 91000; GOTO 1290
+      END
+      LOCATE OPER.RTYPE IN RTYPE,1 SETTING RPTR ELSE
+          GOTO 1290
+      END
+      CCTR = FIELD(JLB.ID,"!",3)
+      IF O.CCTR # CCTR THEN
+          GOSUB 3000
+          GOSUB 2000
+          IF ERRMSG # "" THEN
+              GOSUB 91000; GOTO 1290
+          END
+          O.CCTR = CCTR
+      END
+      GOSUB 1500
+1290*
+  NEXT SNO
+  GOSUB 3000
+  RETURN
+*
+*---- Accumulate Maintenance, Repairs, Overhaul, and Usage
+1500*
+  LOCATE JLB.DATE IN R.DATE(RPTR),1 BY "AR" SETTING PTR ELSE
+      INS JLB.DATE BEFORE R.DATE(RPTR)<PTR>
+      INS 0 BEFORE R.HRS(RPTR)<PTR>
+      INS 0 BEFORE R.UNITS(RPTR)<PTR>
+      INS 0 BEFORE R.COST(RPTR)<PTR>
+  END
+  R.HRS(RPTR)<PTR> = R.HRS(RPTR)<PTR> + JLB.HRS
+  R.UNITS(RPTR)<PTR> = R.UNITS(RPTR)<PTR> + JLB.IMP
+  R.COST(RPTR)<PTR> = R.COST(RPTR)<PTR> + JLB.COST
+  RETURN
+*
+*---- Validate the JOB.TIME record
+2000*
+  ERRMSG = ""
+  MAT R.DATE = ""
+  MAT R.HRS = ""
+  MAT R.UNITS = ""
+  MAT R.COST = ""
+  MAT R.NO = 0
+  MATREAD CCTR.REC FROM COST.CNTR, CONO:CCTR ELSE
+      ERRMSG = "Cannot locate Cost Center, ":CCTR
+      GOTO 2099
+  END
+  EQP.ID = CONO : CCTR.EQP
+  MATREAD AST.REC FROM ASSETS, EQP.ID ELSE
+      ERRMSG = "Cannot locate Asset (":CCTR.EQP:") for Cost Center, ":CCTR
+      GOTO 2099
+  END
+  MATREADU EQP.REC FROM EQUIP.FILE, EQP.ID ELSE
+      RELEASE EQUIP.FILE, EQP.ID
+      ERRMSG = "Cannot locate Equipment (":CCTR.EQP:") for Cost Center, ":CCTR
+      GOTO 2099
+  END
+  MATREADU RPR.REC FROM REPAIRS, EQP.ID ELSE
+      RELEASE EQUIP.FILE, EQP.ID
+      RELEASE REPAIRS, EQP.ID
+      ERRMSG = "Cannot locate Repairs (":CCTR.EQP:") for Cost Center, ":CCTR
+      GOTO 2099
+  END
+  R.NO(1) = RPR.M.NO
+  R.NO(2) = RPR.R.NO
+  R.NO(3) = RPR.O.NO
+  R.NO(4) = RPR.U.NO
+2099 RETURN
+*
+*---- Check the REPAIRS.DETAIL record
+3000*
+  FOR SEL = 1 TO 4
+      LINES = DCOUNT(R.DATE(SEL),AM)
+      IF LINES THEN
+          TOT.HRS = 0; TOT.UNITS = 0; TOT.COST = 0; LST.DATE = ""
+          FOR PTR = 1 TO R.NO(SEL)
+              RDR.ID = EQP.ID:RTYPE<SEL>:PTR
+              MATREAD RDR.REC FROM REPAIRS.DETAIL, RDR.ID ELSE
+                  ERRMSG = "Cannot locate REPAIRS.DETAIL, ":RDR.ID
+                  GOSUB 91000; GOTO 3019
+              END
+              LOCATE RDR.DATE IN R.DATE(SEL),1 SETTING FND THEN
+                  BEGIN CASE
+                      CASE RDR.SRC # SRC
+                      CASE RDR.UPD = "UPDATED"
+                          BEGIN CASE
+                              CASE R.HRS(SEL)<FND> - RDR.HRS # 0
+                                  ERRMSG = " ":OCONV(R.HRS(SEL)<FND>-RDR.HRS,"MD2<")
+                                  GOSUB 91000
+                              CASE R.UNITS(SEL)<FND> - RDR.UNITS # 0
+                                  ERRMSG = " ":OCONV(R.UNITS(SEL)<FND>-RDR.UNITS,"MD0<")
+                                  GOSUB 91000
+                              CASE R.COST(SEL)<FND> - RDR.COST # 0
+                                  ERRMSG = " ":OCONV(R.HRS(COST)<FND>-RDR.COST,"MD2<")
+                                  GOSUB 91000
+                          END CASE
+                          R.DATE(SEL) = DELETE(R.DATE(SEL),FND,0,0)
+                          R.HRS(SEL) = DELETE(R.HRS(SEL),FND,0,0)
+                          R.UNITS(SEL) = DELETE(R.UNITS(SEL),FND,0,0)
+                          R.COST(SEL) = DELETE(R.COST(SEL),FND,0,0)
+                      CASE 1
+                          MAT RDR.REC = ""
+                          RDR.SRC = SRC
+                          RDR.DATE = R.DATE(SEL)<PTR>
+                          RDR.HRS = R.HRS(SEL)<FND>
+                          RDR.UNITS = R.UNITS(SEL)<FND>
+                          RDR.COST = R.COST(SEL)<FND>
+                          R.DATE(SEL) = DELETE(R.DATE(SEL),FND,0,0)
+                          R.HRS(SEL) = DELETE(R.HRS(SEL),FND,0,0)
+                          R.UNITS(SEL) = DELETE(R.UNITS(SEL),FND,0,0)
+                          R.COST(SEL) = DELETE(R.COST(SEL),FND,0,0)
+                  END CASE
+              END
+              TOT.HRS = TOT.HRS + RDR.HRS
+              TOT.UNITS = TOT.UNITS + RDR.UNITS
+              TOT.COST = TOT.COST + RDR.COST
+              IF RDR.DATE > LST.DATE THEN LST.DATE = RDR.DATE
+3019*
+          NEXT PTR
+          IF UPD.FLG AND ERRNO = O.ERRNO THEN
+              LINES = DCOUNT(R.DATE(SEL),AM)
+              FOR PTR = 1 TO LINES
+                  RDR.ID = EQP.ID:RTYPE<SEL>:(R.NO(SEL)+PTR)
+                  MATREADU RDR.REC FROM REPAIRS.DETAIL, RDR.ID ELSE NULL
+                  MAT RDR.REC = ""
+                  RDR.SRC = SRC
+                  RDR.DATE = R.DATE(SEL)<PTR>
+                  RDR.HRS = R.HRS(SEL)<PTR>
+                  RDR.UNITS = R.UNITS(SEL)<PTR> * UNITM(SEL)
+                  RDR.COST = R.COST(SEL)<PTR> * COSTM(SEL)
+                  TOT.HRS = TOT.HRS + RDR.HRS
+                  TOT.UNITS = TOT.UNITS + RDR.UNITS
+                  TOT.COST = TOT.COST + RDR.COST
+                  IF RDR.DATE > LST.DATE THEN LST.DATE = RDR.DATE
+                  MATWRITE RDR.REC ON REPAIRS.DETAIL, RDR.ID
+              NEXT PTR
+              ON SEL GOSUB 3100,3200,3300,3400
+          END
+      END
+  NEXT SEL
+  IF UPD.FLG AND ERRNO = O.ERRNO THEN
+      MATWRITE RPR.REC ON REPAIRS, EQP.ID
+      MATWRITE EQP.REC ON EQUIP.FILE, EQP.ID
+  END ELSE
+      RELEASE REPAIRS, EQP.ID
+      RELEASE EQUIP.FILE, EQP.ID
+  END
+  RETURN
+*
+*---- Update Maintenance
+3100*
+  RPR.M.NO = R.NO(SEL) + LINES
+  RPR.M.HRS = TOT.HRS
+  RPR.M.COST = TOT.COST
+  RPR.M.DATE = LST.DATE
+  BEGIN CASE
+      CASE RPR.M.SRC = ""
+          RPR.M.SRC = SRC
+      CASE NOT(INDEX(RPR.M.SRC,SRC,1))
+          RPR.M.SRC = RPR.M.SRC : "," : SRC
+  END CASE
+  IF LST.DATE > EQP.LST.DATE THEN
+      EQP.LST.DATE = LST.DATE
+      BEGIN CASE
+          CASE LST.DATE >= EQP.NEXT.DATE + EQP.FREQ.DAYS
+              EQP.SCH.DATE = LST.DATE
+              EQP.NEXT.DATE = EQP.SCH.DATE + EQP.FREQ.DAYS
+          CASE LST.DATE >= EQP.NEXT.DATE
+              EQP.SCH.DATE = EQP.NEXT.DATE
+              EQP.NEXT.DATE = EQP.SCH.DATE + EQP.FREQ.DAYS
+      END CASE
+  END
+  RETURN
+*
+*---- Update Repairs
+3200*
+  RPR.R.NO = R.NO(SEL) + LINES
+  RPR.R.HRS = TOT.HRS
+  RPR.R.COST = TOT.COST
+  RPR.R.DATE = LST.DATE
+  BEGIN CASE
+      CASE RPR.R.SRC = ""
+          RPR.R.SRC = SRC
+      CASE NOT(INDEX(RPR.R.SRC,SRC,1))
+          RPR.R.SRC = RPR.R.SRC : "," : SRC
+  END CASE
+  RETURN
+*
+*---- Update Overhaul
+3300*
+  RPR.O.NO = R.NO(SEL) + LINES
+  RPR.O.HRS = TOT.HRS
+  RPR.O.COST = TOT.COST
+  RPR.O.DATE = LST.DATE
+  BEGIN CASE
+      CASE RPR.O.SRC = ""
+          RPR.O.SRC = SRC
+      CASE NOT(INDEX(RPR.O.SRC,SRC,1))
+          RPR.O.SRC = RPR.O.SRC : "," : SRC
+  END CASE
+  RETURN
+*
+*---- Update Usage
+3400*
+  RPR.U.NO = R.NO(SEL) + LINES
+  RPR.U.HRS = TOT.HRS
+  RPR.U.UNITS = TOT.UNITS
+  RPR.U.DATE = LST.DATE
+  BEGIN CASE
+      CASE RPR.U.SRC = ""
+          RPR.U.SRC = SRC
+      CASE NOT(INDEX(RPR.U.SRC,SRC,1))
+          RPR.U.SRC = RPR.U.SRC : "," : SRC
+  END CASE
+  RETURN
+*
+*---- Error message routines
+91000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC)
+* 91000*
+*       PRINT @(0,23):ERRMSG:
+  WRITE ERRMSG ON LOAD.FA.LOG, ERRNO:SRC
+  ERRNO = ERRNO + 1
+*       RETURN
+       RETURN
+93000 ERR.TYPE=3;CALL SYSCOM(MAT SYSCOM.REC)
+* 93000*
+*       PRINT @(0,23):ERRMSG:
+*       INPUT XX:
+99999 END

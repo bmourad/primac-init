@@ -1,0 +1,477 @@
+SUBROUTINE APVOUM_OSDRCRENTRIES
+********************************************************************************
+*   Program name :- APVOUM_OSDRCRENTRIES
+*   Created:- 9/1/2003
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE CPYLIB CHAR
+$INCLUDE PMC.CPYLIB COA
+$INCLUDE POS.CPYLIB OUTSIDE.PO
+$INCLUDE PMC.CPYLIB COMPANY
+$INCLUDE JCS.CPYLIB CATEGORY.OSP
+* Insert method code here
+ ERRMSG = ""
+
+    OPEN '','COMPANY' TO COMPANY ELSE ERRMSG = 'COMPANY FILE IS MISSING';GOTO 1000    
+    OPEN '','CATEGORY.OSP' TO CATEGORY.OSP ELSE ERRMSG = "CATEGORY.OSP FILE IS MISSING"; GOTO 1000
+    OPEN '','OUTSIDE.PO' TO OUTSIDE.PO ELSE ERRMSG = 'OUTSIDE.PO FILE IS MISSING';GOTO 1000
+    OPEN '','COA' TO COA ELSE ERRMSG = "COA FILE IS MISSING"; GOTO 1000
+
+
+
+GEN.DIV='00';GEN.DEPT='00';GEN.CCTR='000'
+* debit info
+TVO.ACCT     = ""	 
+TVO.DIV      = ""		 
+TVO.DEPT     = ""	 
+TVO.CCTR     = ""	 
+TVO.DIST.AMT = "" 
+TVO.ASSET.ID = "" 
+TVO.ACCT.FLG = ""
+* credit info             
+TVO.AP.ACCT = ""	 
+TVO.AP.DIV  = ""	 
+TVO.AP.DEPT = ""	 
+TVO.AP.CCTR = ""	 
+TVO.AP.AMT  = ""
+TVO.AP.FLG  = ""
+* PO INFO
+TVO.PO.NOS = ""
+TVO.PO.PROD = ""
+TVO.PO.WHSE = ""
+TVO.PO.QTY = ""
+TVO.PO.U.COST = ""
+TEMP.ACCT.ACCRUE = ""
+   TEMP.CNV = "MD2"
+   TEMP.DV1 = 1
+   TEMP.MT1 = 1
+   TEMP.DV2 = 1
+   TEMP.CNV<2> = "MD2"
+   TEMP.DV1<2> = 1
+   TEMP.MT1<2> = 1
+   TEMP.DV2<2> = 1
+
+    STATUS      = RBO.getProperty('','DRCRPOINFO',DRCRPOINFO)	
+    DEBITINFO   = FIELD(DRCRPOINFO,'~',1)
+    CREDITINFO  = FIELD(DRCRPOINFO,'~',2)
+    
+    TOTAL.VOUCH  = ICONV(FIELD(DRCRPOINFO,'~',3),"MD2")
+
+
+	
+    TVO.ACCT	   = FIELD(DEBITINFO,'^',1)
+    TVO.DIV	   = FIELD(DEBITINFO,'^',2)	 
+    TVO.DEPT	   = FIELD(DEBITINFO,'^',3)
+    TVO.CCTR	   = FIELD(DEBITINFO,'^',4)
+    TVO.DIST.AMT = FIELD(DEBITINFO,'^',5)
+    TVO.ASSET.ID = FIELD(DEBITINFO,'^',6)    
+    TVO.ACCT.FLG = FIELD(DEBITINFO,'^',7) 
+
+    FOR RT = 1 TO DCOUNT(TVO.DIST.AMT,VM)
+	TVO.DIST.AMT<1,RT> = ICONV(TVO.DIST.AMT<1,RT>,"MD2")
+    NEXT RT   
+
+    TVO.AP.ACCT  = FIELD(CREDITINFO,'^',1)	 
+    TVO.AP.DIV   = FIELD(CREDITINFO,'^',2)	 
+    TVO.AP.DEPT  = FIELD(CREDITINFO,'^',3)	  
+    TVO.AP.CCTR  = FIELD(CREDITINFO,'^',4)	 
+    TVO.AP.AMT   = FIELD(CREDITINFO,'^',5)  
+    TVO.AP.FLG   = FIELD(CREDITINFO,'^',6)
+
+    FOR RT = 1 TO DCOUNT(TVO.AP.AMT,VM)
+	TVO.AP.AMT<1,RT> = ICONV(TVO.AP.AMT<1,RT>,"MD2")
+    NEXT RT
+
+
+    STATUS        = RBO.getProperty('','ID',ID)	
+    CONO          = ID[1,3]
+    TVO.PO.NOS    = FIELD(ID,'!',1)[4,99]
+    TVO.PO.TYPE   = FIELD(ID,'!',2)
+    TVO.PO.PROD   = FIELD(ID,'!',3)
+    TVO.PO.WHSE   = FIELD(ID,'!',4)
+    TVO.PO.UM     = FIELD(ID,'!',5)
+    TVO.PO.QTY    = FIELD(ID,'!',6)
+    TVO.PO.U.COST = FIELD(ID,'!',7)
+    TVO.PO.VOUCH  = FIELD(ID,'!',8)
+    TVO.DIV.OWNER = FIELD(ID,'!',9)
+
+
+	TVO.PO.QTY = ICONV(TVO.PO.QTY,"MD2")
+
+	TVO.PO.U.COST = ICONV(TVO.PO.U.COST,"MD4")
+	    TVO.PO.VOUCH = ICONV(TVO.PO.VOUCH,"MD2")
+
+  CURR.VOUCH = TVO.PO.VOUCH
+
+MATREAD COMP.REC FROM COMPANY, CONO ELSE MAT COMP.REC = ""    
+    IN.ACCT.LEN = LEN(CO.ACCT.PIC)
+
+
+ MATREAD CAOS.REC FROM CATEGORY.OSP, CONO:TVO.PO.WHSE ELSE
+    ERRMSG = "This category is not on file"
+    GOTO 1000
+  END
+  IF CAOS.ACCRU.LIAB = '' AND CAOS.AP.ACCT = '' THEN   ;* Task 17919
+    ERRMSG = "Invalid Account on Category !"
+    GOTO 1000
+  END
+
+  MATREAD OPO.REC FROM OUTSIDE.PO, CONO:TVO.PO.NOS ELSE MAT OPO.REC=''
+  CURR.PROD = TVO.PO.PROD 
+  CURR.CAT  = TVO.PO.WHSE
+  CURR.OFFSET=0
+  LOCATE CURR.PROD IN OPO.JOB.NO<1>,1 SETTING PRODOFF THEN
+    IF OPO.PROD.LINE<1,PRODOFF> = CURR.CAT THEN
+* this is the loc for the div,dept,cctr
+      CURR.OFFSET=PRODOFF
+    END ELSE
+      NUM.T.PROD = DCOUNT(OPO.JOB.NO,VM)
+      DO.CONTINUE=1
+      FOR III = PRODOFF+1 TO NUM.T.PROD WHILE DO.CONTINUE
+        IF OPO.JOB.NO<1,III> = CURR.PROD THEN
+          IF OPO.PROD.LINE<1,III> = CURR.CAT THEN
+            CURR.OFFSET=III
+            DO.CONTINUE=0
+          END
+        END
+      NEXT III
+    END
+  END
+  IF CURR.OFFSET=0 THEN 
+    CURR.OFFSET=PRODOFF
+  END
+  IF OPO.ACCRUE = "Y" THEN
+    TEMP.ACCT.ACCRUE=1 ;*T20016.1
+    OLD.ACCT = CAOS.ACCRU.LIAB
+    AP.ACCT = CAOS.AP.ACCT                    ;* Task 17919
+  END ELSE
+    OLD.ACCT = CAOS.APL
+    AP.ACCT = CAOS.AP.ACCT
+  END
+  OLD.DV=OPO.DVDPCC<1,1,CURR.OFFSET>
+  OLD.DP=OPO.DVDPCC<1,2,CURR.OFFSET>
+  OLD.CC=OPO.DVDPCC<1,3,CURR.OFFSET>
+  OLD.OPER=OPO.OPER.CODE<1,1,CURR.OFFSET> ;*T25755
+  *TEMP.VALUES<4> = VALUE
+
+
+BEGIN CASE                                                           
+    CASE TVO.PO.UM = 'M'                                          
+      * the quantity to be used is 1000 time the quantity shown        
+      EXTENDED.AMT = INT(TVO.PO.U.COST * TVO.PO.QTY / 100000 + .5)
+    CASE TVO.PO.UM = 'C'                                          
+      * the quantity to be used is 100 time the quantity shown         
+      EXTENDED.AMT = INT(TVO.PO.U.COST * TVO.PO.QTY / 10000 + .5) 
+    CASE 1                                                             
+      EXTENDED.AMT = INT(TVO.PO.U.COST/100 * TVO.PO.QTY + .5)     
+  END CASE                                                             
+
+  EXTENDED.AMT = INT(EXTENDED.AMT/100+.5)
+  OLD.PO.VOUCH = TVO.PO.VOUCH
+  TVO.PO.VOUCH = EXTENDED.AMT
+
+*STATUS = RBO.setProperty('','ServerMessage',TVO.PO.QTY : "  " : TVO.PO.U.COST : " " :TVO.PO.VOUCH) 
+*GOTO 1000
+
+
+*  OLD.PO.VOUCH = TVO.PO.VOUCH<1,LN> + 0
+*  OLD.VOUCH.AMT = 0
+*  OLD.PO.VOUCH = OLD.VOUCH.AMT
+
+
+*ERRMSG = ERRMSG :"OLD.PO.VOUCH ":OLD.PO.VOUCH:"<BR>"
+
+ IF OLD.ACCT # "" THEN
+    OLD.ACCT = OLD.ACCT : STR("0",IN.ACCT.LEN-LEN(OLD.ACCT))
+    OLD.ACCT = OLD.ACCT[1,IN.ACCT.LEN]
+*      REV.AMT = TVO.PO.VOUCH<1,LN>
+    REV.AMT = OLD.PO.VOUCH
+    PTR = 1
+    LOOP
+
+*ERRMSG = ERRMSG :"~ OLD.ACCT ":OLD.ACCT :" IN TVO.ACCT<1> ":TVO.ACCT<1>:"<br>"
+
+      LOCATE OLD.ACCT IN TVO.ACCT<1>,PTR SETTING FND THEN
+*ERRMSG = ERRMSG :FND:" ~ ":TVO.DIV<1,FND>:"=":OLD.DV:"~":TVO.DEPT<1,FND>:"=":OLD.DP:"~":TVO.CCTR<1,FND>:"=":OLD.CC:"<br>"
+        IF TVO.DIV<1,FND>=OLD.DV AND TVO.DEPT<1,FND>=OLD.DP AND TVO.CCTR<1,FND>=OLD.CC THEN
+          IF REV.AMT > TVO.DIST.AMT<1,FND> THEN
+            REV.AMT = REV.AMT - TVO.DIST.AMT<1,FND>
+            TVO.DIST.AMT<1,FND> = 0
+          END ELSE
+            TVO.DIST.AMT<1,FND> = TVO.DIST.AMT<1,FND> - REV.AMT
+            REV.AMT = 0
+          END
+*ERRMSG = ERRMSG :"TVO.DIST.AMT<1,FND> ":TVO.DIST.AMT<1,FND>
+          IF TVO.DIST.AMT<1,FND> = 0 THEN
+            TVO.ACCT = DELETE(TVO.ACCT,1,FND,0)
+            TVO.DIST.AMT = DELETE(TVO.DIST.AMT,1,FND,0)
+            TVO.ASSET.ID = DELETE(TVO.ASSET.ID,1,FND,0)
+            TVO.DIV = DELETE(TVO.DIV,1,FND,0)
+            TVO.DEPT = DELETE(TVO.DEPT,1,FND,0)
+            TVO.CCTR = DELETE(TVO.CCTR,1,FND,0)
+            TVO.ACCT.FLG = DELETE(TVO.ACCT.FLG,1,FND,0)
+            VOUCHER.ACCRUE.FLAG=DELETE(VOUCHER.ACCRUE.FLAG,1,FND,0) ;*T20016.1
+          END
+          IF REV.AMT > 0 THEN
+            PTR = FND + 1
+          END ELSE
+            PTR = 0
+          END
+        END ELSE
+          PTR = FND + 1
+        END
+      END ELSE
+        PTR = 0
+      END
+    WHILE PTR DO REPEAT
+*  END
+    OLD.ACCT = OLD.ACCT : STR("0",IN.ACCT.LEN-LEN(OLD.ACCT))
+    OLD.ACCT = OLD.ACCT[1,IN.ACCT.LEN]
+    PTR = 1
+    LOOP
+      LOCATE OLD.ACCT IN TVO.ACCT<1>,PTR SETTING FND THEN
+        IF TVO.DIV<1,FND>=OLD.DV AND TVO.DEPT<1,FND>=OLD.DP AND TVO.CCTR<1,FND>=OLD.CC THEN
+          PTR = 0
+*T20016.1 v
+          IF TEMP.ACCT.ACCRUE THEN
+            VOUCHER.ACCRUE.FLAG<1,FND>=1
+          END
+*T20016.1 ^                      
+        END ELSE
+          PTR = FND + 1
+        END
+      END ELSE
+        TVO.ACCT<1,FND> = OLD.ACCT
+*T20016.1 v
+        IF TEMP.ACCT.ACCRUE THEN
+          VOUCHER.ACCRUE.FLAG<1,FND>=1
+        END
+*T20016.1 ^                      
+        TVO.DIST.AMT<1,FND> = 0
+        TVO.ASSET.ID<1,FND> = ""
+        IF CURR.OFFSET # 0 THEN
+          TVO.DIV<1,FND>=OPO.DVDPCC<1,1,CURR.OFFSET>
+          TVO.DEPT<1,FND>=OPO.DVDPCC<1,2,CURR.OFFSET>
+          TVO.CCTR<1,FND>=OPO.DVDPCC<1,3,CURR.OFFSET>
+          *TVO.PO.OPER<1,FND>=OPO.OPER.CODE<1,1,CURR.OFFSET> ;*T25755
+        END ELSE
+          TVO.DIV<1,FND> = GEN.DIV
+          TVO.DEPT<1,FND> = GEN.DEPT
+          TVO.CCTR<1,FND> = GEN.CCTR
+          *TVO.PO.OPER<1,FND> = "" ;* T25755
+        END
+*CSF 25150 v
+        IF OPO.ACCRUE = 'Y' THEN
+          TVO.ACCT.FLG<1,FND> = 'P'
+        END ELSE TVO.ACCT.FLG<1,FND> = ''
+*CSF 25150 ^
+          PTR = 0
+      END
+    WHILE PTR DO REPEAT
+    TVO.DIST.AMT<1,FND> = TVO.DIST.AMT<1,FND> + TVO.PO.VOUCH
+    TVO.CTR = COUNT(TVO.ACCT,VM) + (TVO.ACCT # "")
+    TOTAL.VOUCH = TOTAL.VOUCH - CURR.VOUCH + TVO.PO.VOUCH     
+    BEGIN CASE                                    
+      CASE TVO.PO.UM = "M" ; ADJVAL = 100000
+      CASE TVO.PO.UM = "C" ; ADJVAL = 10000 
+      CASE 1 ; ADJVAL = 100                       
+    END CASE                                      
+    * IF TVO.PO.UM<1,LN>="M" THEN ADJVAL = 100000 ELSE ADJVAL = 100 ;*T21177
+    *T23319 ^
+    IF TVO.PO.QTY+0 # 0 AND TVO.PO.VOUCH+0 # 0 THEN
+*T21177       TVO.PO.U.COST<1,LN> = INT(((TVO.PO.VOUCH<1,LN> * 100) / TVO.PO.QTY<1,LN>) * 100 + .5)
+      TVO.PO.U.COST = INT(((TVO.PO.VOUCH * 100) / TVO.PO.QTY) * ADJVAL + .5) ;*T21177
+    END ELSE
+      TVO.PO.U.COST = TVO.PO.VOUCH * 100
+    END
+    LINES = COUNT(TVO.PO.NOS,VM) + (TVO.PO.NOS # "")
+  END
+*
+* Calculate AP account Distribution Amounts
+*
+
+  IF AP.ACCT # "" THEN
+    AP.ACCT = AP.ACCT : STR("0",IN.ACCT.LEN-LEN(AP.ACCT))
+    AP.ACCT = AP.ACCT[1,IN.ACCT.LEN]
+    REV.AMT = OLD.PO.VOUCH
+    PTR = 1
+    LOOP
+*T20016 v
+      LOCATE AP.ACCT IN TVO.AP.ACCT<1>,PTR SETTING FND THEN
+        IF TVO.AP.DIV<1,FND>=OLD.DV AND TVO.AP.DEPT<1,FND>=OLD.DP AND TVO.AP.CCTR<1,FND>=OLD.CC THEN
+          IF REV.AMT > TVO.AP.AMT<1,FND>*(-1) THEN
+            REV.AMT = REV.AMT + TVO.AP.AMT<1,FND>
+            TVO.AP.AMT<1,FND> = 0
+          END ELSE
+            TVO.AP.AMT<1,FND> = TVO.AP.AMT<1,FND> + REV.AMT
+            REV.AMT = 0
+          END
+          IF TVO.AP.AMT<1,FND> = 0 THEN
+            TVO.AP.ACCT = DELETE(TVO.AP.ACCT,1,FND,0)
+            TVO.AP.AMT = DELETE(TVO.AP.AMT,1,FND,0)
+            TVO.AP.FLG = DELETE(TVO.AP.FLG,1,FND,0)
+*T19149 v
+            TVO.AP.DIV = DELETE(TVO.AP.DIV,1,FND,0)
+            TVO.AP.DEPT = DELETE(TVO.AP.DEPT,1,FND,0)
+            TVO.AP.CCTR = DELETE(TVO.AP.CCTR,1,FND,0)
+*T19149 ^           
+            PTR = FND
+          END ELSE
+            IF REV.AMT = 0 THEN PTR = 0 ELSE PTR = FND + 1
+          END
+        END ELSE
+          PTR=FND+1
+        END
+      END ELSE
+        PTR=0
+      END
+    WHILE PTR DO
+    REPEAT
+*T20016 ^
+  END
+  IF AP.ACCT # "" THEN
+    AP.ACCT = AP.ACCT : STR("0",IN.ACCT.LEN-LEN(AP.ACCT))
+    AP.ACCT = AP.ACCT[1,IN.ACCT.LEN]
+    PTR=1
+    LOOP
+      LOCATE AP.ACCT IN TVO.AP.ACCT<1>,PTR SETTING FND THEN
+        IF TVO.AP.DIV<1,FND>=OLD.DV AND TVO.AP.DEPT<1,FND>=OLD.DP AND TVO.AP.CCTR<1,FND>=OLD.CC THEN
+          PTR=0
+        END ELSE
+          PTR=FND+1
+        END
+      END ELSE
+        TVO.AP.ACCT<1,FND> = AP.ACCT
+        TVO.AP.AMT<1,FND> = 0
+*CSF 25150 v
+        IF OPO.ACCRUE = 'Y' THEN
+          TVO.AP.FLG<1,FND> = 'P'
+        END ELSE TVO.AP.FLG<1,FND> = ''
+*CSF 25150 ^
+*T19149 v
+*T20016 v
+*       TVO.AP.DIV<1,FND> = ''
+*       TVO.AP.DEPT<1,FND> = ''
+*       TVO.AP.CCTR<1,FND> = ''
+        IF CURR.OFFSET # 0 THEN
+          TVO.AP.DIV<1,FND>=OPO.DVDPCC<1,1,CURR.OFFSET>
+          TVO.AP.DEPT<1,FND>=OPO.DVDPCC<1,2,CURR.OFFSET>
+          TVO.AP.CCTR<1,FND>=OPO.DVDPCC<1,3,CURR.OFFSET>
+        END ELSE
+          TVO.AP.DIV<1,FND> = GEN.DIV
+          TVO.AP.DEPT<1,FND> = GEN.DEPT
+          TVO.AP.CCTR<1,FND> = GEN.CCTR
+        END
+        PTR=0
+      END
+    WHILE PTR DO
+    REPEAT
+*T20016 ^
+*T19149 ^       
+    TVO.AP.AMT<1,FND> = TVO.AP.AMT<1,FND> - TVO.PO.VOUCH
+  END
+
+
+TVO.DESC 	= ""
+TVO.COA.LEVEL = ""
+DISABLEDCNT   = ""
+FOR MN = 1 TO DCOUNT(TVO.ACCT,VM)
+	MATREAD COA.REC FROM COA,CONO:TVO.ACCT<1,MN> ELSE MAT COA.REC = "" 
+*	READV COA.DESC FROM COA,CONO:TVO.ACCT<1,MN>,1 ELSE COA.DESC = "?????????????"
+	TVO.COA.LEVEL<1,-1>  = COA.LEVEL
+	TVO.DESC<1,-1>       = COA.DESC
+*********************************** STARTS COA LEVEL CODE FOR DIV DEPT CCTR *******************************************
+
+	TVO_DIV      = TVO.DIV<1,MN>
+	TVO_DEPT     = TVO.DEPT<1,MN>
+	TVO_CCTR     = TVO.CCTR<1,MN>		 
+	DISABLED_CNT = DISABLEDCNT<1,MN>
+
+	CALL DR_COALEVEL(TVO_DIV,TVO_DEPT,TVO_CCTR,COA.LEVEL,DISABLED_CNT)
+
+	TVO.DIV<1,MN>      = TVO_DIV
+	TVO.DEPT<1,MN>     = TVO_DEPT
+	TVO.CCTR<1,MN>     = TVO_CCTR		 
+	DISABLEDCNT<1,MN>  = DISABLED_CNT
+
+
+
+*********************************** END COA LEVEL CODE FOR DIV DEPT CCTR *******************************************
+
+NEXT MN
+
+TVO.AP.DESC = ""
+TVO.AP.COA  = ""
+DISABLEDAPCNT  = ""
+DIV.DEPTS      = ""
+DEPT.CCTRSS    = ""
+FOR MN = 1 TO DCOUNT(TVO.AP.ACCT,VM)
+*	READV COA.DESC FROM COA,CONO:TVO.AP.ACCT<1,MN>,1 ELSE COA.DESC = "?????????????"
+	MATREAD COA.REC FROM COA,CONO:TVO.AP.ACCT<1,MN> ELSE MAT COA.REC = "" 
+	TVO.AP.DESC<1,-1> = COA.DESC
+	TVO.AP.COA<1,-1>  = COA.LEVEL
+*********************************** STARTS COA LEVEL CODE FOR DIV DEPT CCTR *******************************************
+
+	TVO_AP_DIV      = TVO.AP.DIV<1,MN>
+	TVO_AP_DEPT     = TVO.AP.DEPT<1,MN>
+	TVO_AP_CCTR     = TVO.AP.CCTR<1,MN>		 
+	DISABLED_AP_CNT = DISABLEDAPCNT<1,MN>
+	DIV_DEPTS       = DIV.DEPTS<1,MN> 
+	DEPT_CCTRSS     = DEPT.CCTRSS<1,MN>
+
+	CALL CR_COALEVEL(CONO,TVO.DIV.OWNER,TVO_AP_DIV,TVO_AP_DEPT,TVO_AP_CCTR,COA.LEVEL,DISABLED_AP_CNT,DIV_DEPTS,DEPT_CCTRSS)
+
+	TVO.AP.DIV<1,MN>      = TVO_AP_DIV
+	TVO.AP.DEPT<1,MN>     = TVO_AP_DEPT
+	TVO.AP.CCTR<1,MN>     = TVO_AP_CCTR		 
+	DISABLEDAPCNT<1,MN>   = DISABLED_AP_CNT
+	DIV.DEPTS<1,MN>       = DIV_DEPTS 
+	DEPT.CCTRSS<1,MN>     = DEPT_CCTRSS
+
+
+
+*********************************** END COA LEVEL CODE FOR DIV DEPT CCTR *******************************************
+
+NEXT MN
+
+
+FOR RT = 1 TO DCOUNT(TVO.DIST.AMT,VM)
+	TVO.DIST.AMT<1,RT> = OCONV(TVO.DIST.AMT<1,RT>,"MD2")
+NEXT RT   
+
+FOR RT = 1 TO DCOUNT(TVO.AP.AMT,VM)
+	TVO.AP.AMT<1,RT> = OCONV(TVO.AP.AMT<1,RT>,"MD2")
+NEXT RT
+
+TVO.PO.VOUCH = OCONV(TVO.PO.VOUCH,"MD2")
+TOTAL.VOUCH = OCONV(TOTAL.VOUCH,"MD2")
+
+DEBITINFO  = TVO.ACCT : "^" : TVO.DIV : "^" : TVO.DEPT : "^" : TVO.CCTR : "^" : TVO.DIST.AMT : "^" : TVO.ASSET.ID : "^" : TVO.DESC : "^" : TVO.ACCT.FLG : "^" : DISABLEDCNT : "~" 
+CREDITINFO = TVO.AP.ACCT : "^" : TVO.AP.DIV  : "^" : TVO.AP.DEPT : "^" : TVO.AP.CCTR : "^" : TVO.AP.AMT : "^" : TVO.AP.DESC : "^" : TVO.AP.FLG : "^" : DISABLEDAPCNT : "^" : DIV.DEPTS : "^" : DEPT.CCTRSS : "~"
+*POGRDINFO  = TVO.PO.NOS : "^" : TVO.PO.PROD : "^" : TVO.PROD.DESC : "^" : TVO.PO.WHSE : "^" : TVO.PO.UM  : "^" : TVO.PO.QTY : "^" : TVO.PO.U.COST : "^" : TVO.PO.VOUCH :
+
+FINALSTR = DEBITINFO : CREDITINFO : TVO.PO.VOUCH : "~" : TOTAL.VOUCH
+*STATUS = RBO.setProperty('','ServerMessage',TVO.AP.AMT<1,FND>:TVO.AP.ACCT<1,FND> : "EEEEEEPPPP" :AP.ACCT : "PPPP " :TVO.PO.VOUCH : "QTY ":TVO.PO.QTY :" COST ": TVO.PO.U.COST :" INV.COST.WT " :INV.COST.WT)
+*GOTO 1000
+
+
+STATUS = RBO.setProperty('','FINALSTR',FINALSTR)
+
+1000*
+    IF ERRMSG # "" THEN
+	STATUS = RBO.setProperty('','ServerStatus',1)        
+	STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+    END
+* End of method code
+RETURN
+

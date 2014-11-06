@@ -1,0 +1,405 @@
+   SUBROUTINE TRAN.UPDATE(CONO,D.TRAN.CODE,MAT TRAN.REC,PROCESS.FLAG,CO.ICS.LOC.TRAN,NEW.ERRMSG)
+*COPY>CPYLIB>COM1             
+*COPY>ICS.CPYLIB>COM.INV.MAIN  
+*COPY>ICS.CPYLIB>COM.INV.SERIAL
+*COPY>ICS.CPYLIB>COM.INV.LINK  
+*********************************************************************
+* REVISION    - [12.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - ICSBP
+* PROGRAM     - TRAN.UPDATE
+* BY          - EDVARD PITKA
+* DATE
+* DESCRIPTION - THIS PROGRAM UPDATES ALL FILES FOR STOCK TRANSFER.
+* TASK
+*
+*T25740 edvard 08/09/2001  REV12
+*T26497 adelgado 03/25/2002 * Implement inter-divisional transfer by  
+*                             using PROCESS.FLAG.
+*                             PROCESS.FLAG = 'Y', works as normal
+*                             PROCESS.FLAG = 'TRANOUT', transfer out
+*                             PROCESS.FLAG = 'TRANIN' , receiving in 
+*T26556 adelgado 05/22/2002 * Write out errors to Daily_Transfer
+*T26767 epitka 07/24/2002 * CHANGE OF ARGUMENTS FOR INV.AVG.COST.MAINT
+*T27396 lross 05/06/2003 * Various problems with Transfers.
+*T27990 lross 03/11/2004 * Call ICS.IWH.SUB w/ERRMSG.
+*T28895 lross 05/17/2006 * If ANY error found DAILY_TRANSFER may not
+*                          reject but get copied to TRANSFER file as if
+*                          ALL had posted correctly.
+*ENDDOC
+*********************************************************************
+*
+**** INSERT FILES EQUETES
+*
+*COPY>ICS.CPYLIB>TRANSFER
+*COPY>ICS.CPYLIB>DAILY_TRANSFER
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>JCS.CPYLIB>JOB.STATS
+*COPY>ICS.CPYLIB>CATEGORY
+*COPY>ICS.CPYLIB>INV_AUDIT_HIST
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>ICS.CPYLIB>INV_SERIAL
+*COPY>ICS.CPYLIB>INV_RECP_WHSE
+*COPY>ICS.CPYLIB>INV_RECEIPTS
+*COPY>ICS.CPYLIB>WAREHOUSE
+*COPY>CPYLIB>TCC
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>FILE.VARS
+*COPY>ICS.CPYLIB>ICS.ID
+*COPY>ICS.CPYLIB>TO.TRANSFER
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+*COPY>PMC.CPYLIB>FISCAL
+*VT101107
+GFRTST = ""
+GFRTST<1>="IN UPDATE D.TRAN.PROD.NO ":D.TRAN.PROD.NO :" D.TRAN.CODE ":D.TRAN.CODE :" PROCESS.FLAG ":PROCESS.FLAG :" CO.ICS.LOC.TRAN ":CO.ICS.LOC.TRAN; WRITE GFRTST ON CONTROL,"T1012"
+*^
+*                                                           
+   DEFFUN DIVISION.POSITION(CONO,CONTROL.FILE,DIV.CODE)        
+   DEFFUN CURRENT.PERIOD(CONO,CONTROL.FILE,DIV.POS,FISCAL.FLAG)
+*                                                           
+   MAT ORG.IWH.REC=''
+SAVE.IWH.RECP.NO = '' ;*T27396
+SAVE.IWH.RECP.PER = '' ;*T27396
+SAVE.IWH.RECP.DATE = '' ;*T27396
+   GEN.DIV = '00'
+*
+   MAT SYSCOM.REC="";SYS.TYPE=2
+*
+   TODAY=DATE()
+   OPEN.FLAG=1
+   ECD.SCRN.NO=1
+   MAT IID.REC=''
+   MAT INAH.REC=''
+   INAH.TRAN=D.TRAN.CODE
+*
+  * T26497 v
+  * 'TRANOUT' & 'TRANIN' response to PROCESS.FLAG is used to identify
+  * an inter-divisional transfer.
+   IF PROCESS.FLAG[1,4] = 'TRAN' THEN
+*     MAT IID.REC = ''
+*     MAT INAH.REC = ''
+*     INAH.TRAN=D.TRAN.CODE
+      GOSUB PROCESS.TRANSFER
+      GOTO 99999
+   END
+  * T26497 ^
+* Not Inter-div xfer
+GFRTST<-1>=" D.TRAN.PROD.NO ":D.TRAN.PROD.NO :" D.TRAN.CODE ":D.TRAN.CODE :" CO.ICS.LOC.TRAN ":CO.ICS.LOC.TRAN; WRITE GFRTST ON CONTROL,"T1012"
+   IF D.TRAN.PROD.NO # '' THEN
+      IF D.TRAN.CODE="N" THEN
+GFRTST<-1>="CALLING GET.DTN "; WRITE GFRTST ON CONTROL,"T1012"
+         GOSUB GET.DTN
+         D.TRAN.CODE=DTN
+      END ELSE
+         DTN=D.TRAN.CODE
+      END
+      INAH.TRAN=D.TRAN.CODE
+GFRTST<-1>="AT WRITE INAH.TRAN ":INAH.TRAN :" CONODTN ":CONO:DTN; WRITE GFRTST ON CONTROL,"T1012"
+      MATWRITE D.TRAN.REC ON DAILY_TRANSFER , CONO:DTN
+   END ELSE
+      IF D.TRAN.CODE # "N" THEN
+         DELETE DAILY_TRANSFER, CONO:D.TRAN.CODE
+      END
+   END
+*
+*  MAT IID.REC=''
+*  MAT INAH.REC=''
+*  INAH.TRAN=D.TRAN.CODE
+*
+   IF PROCESS.FLAG='Y' THEN
+      GOSUB PROCESS.TRANSFER
+   END
+   GOTO 99999
+*
+*************************************************************************
+*** S U B R O U T I N E S ***
+*************************************************************************
+*
+*****************
+PROCESS.TRANSFER: 
+*****************
+*
+GFRTST<-1>="PROCESS.TRANSFER D.TRAN.PROD.NO ":D.TRAN.PROD.NO ; WRITE GFRTST ON CONTROL,"T1012"
+   PCNT=DCOUNT(D.TRAN.PROD.NO, VM)
+   IF PCNT=0 THEN
+      IF D.TRAN.CODE # "N" THEN
+         DTN=D.TRAN.CODE
+         DELETE DAILY_TRANSFER, CONO:DTN
+      END
+   END ELSE
+*T28895 v No reason for processing from last-line to first.
+*     FOR P=PCNT TO 1 STEP -1
+      FOR P = 1 TO PCNT
+         PROD=D.TRAN.PROD.NO<1,P>
+         RECP.NO=D.TRAN.RECP<1,P>
+         SERIAL.NO=D.TRAN.SERIAL<1,P>
+GFRTST<-1>="PROD ":PROD :" RECP.NO ":RECP.NO :" SERIAL.NO ":SERIAL.NO :" D.TRAN.DATE.PROSS ":D.TRAN.DATE.PROSS :" P ":P; WRITE GFRTST ON CONTROL,"T1012"
+         IF D.TRAN.DATE.PROSS<1,P>="" THEN
+            ERRMSG=''
+GFRTST<-1>="MATREAD INV.REC CONO:PROD ":CONO:PROD; WRITE GFRTST ON CONTROL,"T1012"
+            MATREAD INV.REC FROM INVENTORY , CONO:PROD THEN
+               MATREAD CATG.REC FROM CATEGORY, CONO : INV.LINE ELSE MAT CATG.REC=''
+               FROM.WHSE=D.TRAN.FROM.WHSE
+               MATREAD WHSE.REC FROM WAREHOUSE , CONO:FROM.WHSE THEN
+                  TO.WHSE=D.TRAN.TO.WHSE<1,P>
+                  MATREAD WHSE.REC FROM WAREHOUSE , CONO:TO.WHSE THEN
+                     ;* get a current period for division
+                     ;* so average cost can be calculated correctly
+                     IF WHS.DIV='' THEN WHS.DIV=GEN.DIV
+                     DIV.POS=DIVISION.POSITION(CONO,CONTROL,WHS.DIV)
+                     BEGIN CASE 
+                        CASE DIV.POS<1,1>='' 
+                           DIV.POS=DIV.POS<1,2> 
+                           CUR.PERIOD=CURRENT.PERIOD(CONO,CONTROL,DIV.POS,"IC") 
+                           IF CUR.PERIOD<1,1>='' THEN 
+                              CUR.PERIOD=CUR.PERIOD<1,2> 
+                           END ELSE 
+                              IF CUR.PERIOD<1,1>='-2' OR CUR.PERIOD<1,1>='-1' THEN 
+*T27396                          PHS.NO.POST=CUR.PERIOD<1,2>
+                                 ERRMSG=CUR.PERIOD<1,2>
+                              END
+                           END
+                        CASE DIV.POS<1,1>='-1' 
+*T27396                    PHS.NO.POST=DIV.POS<1,2> 
+                           ERRMSG=DIV.POS<1,2> 
+                        CASE DIV.POS<1,1>='-2' 
+*T27396                    PHS.NO.POST=DIV.POS<1,2> 
+                           ERRMSG=DIV.POS<1,2> 
+                     END CASE 
+                  END ELSE
+                     ERRMSG='CANNOT LOCATE TRANSFER-TO WHSE # ':TO.WHSE
+                  END
+                  IF ERRMSG='' THEN
+                     IWH.FROM.ID=CONO:PROD:'!':FROM.WHSE
+                     IWH.TO.ID=CONO:PROD:'!':TO.WHSE
+                     MATREADU IWH.REC FROM INV.WHSE, IWH.FROM.ID THEN
+                        READU CHECK.REC FROM INV.WHSE, IWH.TO.ID THEN
+                           ;* T26497 v
+                           BEGIN CASE
+                              CASE PROCESS.FLAG = 'TRANIN'
+                                 POSTING=3
+                              CASE PROCESS.FLAG = 'TRANOUT'
+                                 POSTING=2
+                              CASE 1
+                                 POSTING=1
+                           END CASE 
+                           ;* T26497 ^
+GFRTST<-1>="CALL RFT_CHECK.TRANSFER.SUB"; WRITE GFRTST ON CONTROL,"T1012"
+GFRTST<-1>="VALUE OF CONO,POSTING,P":CONO:POSTING:P; WRITE GFRTST ON CONTROL,"T1012"
+                           CALL CHECK.TRANSFER.SUB(CONO,POSTING,P,ERRMSG)
+GFRTST<-1>="AFTER CALL CHECK.TRANSFER.SUB,ERRMSG ~ ":ERRMSG; WRITE GFRTST ON CONTROL,"T1012"
+                           IF ERRMSG="" THEN
+GFRTST<-1>="GO IN THE UPDATE BLOCK"; WRITE GFRTST ON CONTROL,"T1012"
+                              IF PROCESS.FLAG = 'Y' THEN GOSUB UPDATE;* T26497
+*T27396 v
+*                          END ELSE
+*                             ACTION.FLAG=1 ;* delete temp records
+GFRTST<-1>="BEFORE CALLING UPD.ICS.FROM.TEMP IN ELSE PART"; WRITE GFRTST ON CONTROL,"T1012"
+MATWRITE IID.REC ON CONTROL,"P1"
+*                             CALL UPD.ICS.FROM.TEMP(CONO,MAT FILE.VARS,MAT IID.REC,ACTION.FLAG)
+*T27396 Merge next 2 lines to before NEXT P
+*                             RELEASE INV.WHSE,IWH.FROM.ID
+*                             RELEASE INV.WHSE,IWH.TO.ID
+*                             MAT IID.REC=''
+                           END
+                        END ELSE
+*                          RELEASE INV.WHSE, IWH.TO.ID
+                           ERRMSG='CANNOT LOCATE "TO" INV.WHSE # ':IWH.TO.ID
+                        END
+                     END ELSE
+*                       RELEASE INV.WHSE, IWH.FROM.ID
+                        ERRMSG='CANNOT LOCATE "FROM" INV.WHSE # ':IWH.FROM.ID
+                     END
+                  END
+               END ELSE
+                  ERRMSG='CANNOT LOCATE WHSE # ':FROM.WHSE
+               END
+            END ELSE
+               ERRMSG='CANNOT LOCATE INVENTORY # ':PROD
+            END
+GFRTST<-1>="OUT OF MAIN IF"; WRITE GFRTST ON CONTROL,"T1012"
+            IF ERRMSG # '' THEN
+               D.TRAN.ERRMSG<1,P>=ERRMSG
+               ACTION.FLAG=1
+GFRTST<-1>="OUT RFT_UPD.ICS.FROM.TEMP "; WRITE GFRTST ON CONTROL,"T1012"
+               CALL UPD.ICS.FROM.TEMP(CONO,MAT FILE.VARS,MAT IID.REC,ACTION.FLAG)
+               MAT IID.REC=''
+            END
+            RELEASE INV.WHSE,IWH.FROM.ID
+            RELEASE INV.WHSE,IWH.TO.ID
+         END
+         RELEASE INV.WHSE,IWH.FROM.ID
+         RELEASE INV.WHSE,IWH.TO.ID
+*T27396 ^
+      NEXT P
+GFRTST<-1>="AFTER FOR PROCESS.FLAG[1,4]":PROCESS.FLAG[1,4] ; WRITE GFRTST ON CONTROL,"T1012"
+      ;* T26497 v
+      IF PROCESS.FLAG[1,4] = 'TRAN' THEN
+         IF D.TRAN.ERRMSG # '' THEN
+GFRTST<-1>="CALLING RFT_UPD.ICS.FROM.TEMP " ; WRITE GFRTST ON CONTROL,"T1012"
+            CALL UPD.ICS.FROM.TEMP(CONO,MAT FILE.VARS,MAT IID.REC,1)
+            RELEASE
+         END ELSE
+GFRTST<-1>="IN ELSE RFT_UPD.ICS.FROM.TEMP " ; WRITE GFRTST ON CONTROL,"T1012"
+            CALL UPD.ICS.FROM.TEMP(CONO,MAT FILE.VARS,MAT IID.REC,2)
+            FOR P=PCNT TO 1 STEP -1
+               PROD=D.TRAN.PROD.NO<1,P>
+               RECP.NO=D.TRAN.RECP<1,P>
+               SERIAL.NO=D.TRAN.SERIAL<1,P>
+               MATREAD INV.REC FROM INVENTORY , CONO:PROD THEN
+                  MATREAD CATG.REC FROM CATEGORY, CONO : INV.LINE ELSE MAT CATG.REC=''
+                  FROM.WHSE=D.TRAN.FROM.WHSE
+                  TO.WHSE=D.TRAN.TO.WHSE<1,P>
+                  IWH.FROM.ID=CONO:PROD:'!':FROM.WHSE
+                  IWH.TO.ID=CONO:PROD:'!':TO.WHSE
+                  MATREADU IWH.REC FROM INV.WHSE, IWH.FROM.ID THEN
+                     READU CHECK.REC FROM INV.WHSE, IWH.TO.ID THEN
+                        GOSUB UPDATE
+                     END
+                  END
+               END
+            NEXT P
+         END
+      END
+      ;* T26497 ^
+   END
+*T28895 v ERRMSG only contains error from last line processed.
+*  IF ERRMSG='' AND PROCESS.FLAG='Y' THEN
+GFRTST<-1>="D.TRAN.ERRMSG ":D.TRAN.ERRMSG :" PROCESS.FLAG ":PROCESS.FLAG ; WRITE GFRTST ON CONTROL,"T1012"
+   IF D.TRAN.ERRMSG='' AND PROCESS.FLAG='Y' THEN
+      NEW.ERRMSG="Please Make note of updated transfer # ":D.TRAN.CODE
+      MATWRITE D.TRAN.REC ON TRANSFER, CONO:D.TRAN.CODE
+      DELETE DAILY_TRANSFER,CONO:D.TRAN.CODE
+   END
+* T26556 v
+*  IF PROCESS.FLAG[1,4] # 'TRAN' AND ERRMSG # '' THEN
+   IF PROCESS.FLAG[1,4] # 'TRAN' AND D.TRAN.ERRMSG # '' THEN
+*T28895 ^
+      MATWRITE D.TRAN.REC ON DAILY_TRANSFER , CONO:D.TRAN.CODE
+   END
+* T26556 ^
+   RETURN
+*
+***************
+UPDATE: 
+***************
+*
+GFRTST<-1>="IN UPDATE PROCESS.FLAG[1,4] ":PROCESS.FLAG[1,4]; WRITE GFRTST ON CONTROL,"T1012"
+   IF PROCESS.FLAG[1,4] # 'TRAN' THEN;* T26497
+      IF DTN='' THEN GOSUB GET.DTN
+      SAVE.IID.IRW = IID.IRW
+      ACTION.FLAG=2
+GFRTST<-1>="CALLING RFT_UPD.ICS.FROM.TEMP ACTION FLAG":ACTION.FLAG; WRITE GFRTST ON CONTROL,"T1012"
+      CALL UPD.ICS.FROM.TEMP(CONO,MAT FILE.VARS,MAT IID.REC,ACTION.FLAG)
+      IF D.TRAN.DATE.PROSS<1,P>="" THEN D.TRAN.DATE.PROSS<1,P>=TODAY
+   END ;* T26497
+   IF ("X":FROM.WHSE) # ("X":TO.WHSE) THEN
+GFRTST<-1>="IN IF X:FROM.WHSE "; WRITE GFRTST ON CONTROL,"T1012"
+      IWH.ON.HAND=IWH.ON.HAND - D.TRAN.TOT.QTY<1,P>
+      ONHAND.DIFF=IWH.ON.HAND-IWH.PERIOD.ONHAND
+      IWH.ON.HAND=IWH.HOLD.ONHAND 
+      IWH.ON.HAND=IWH.ON.HAND+ONHAND.DIFF 
+      IWH.HOLD.ONHAND=''
+      IWH.PERIOD.ONHAND=''
+      MATWRITE IWH.REC ON INV.WHSE, IWH.FROM.ID
+      MATREADU IWH.REC FROM INV.WHSE,IWH.TO.ID THEN
+         ACTION=1
+         TMP.ARR=''; TMP.CNT='' ; LAST=''
+         INAH.PROD=OCONV(IWH.TO.ID,"G!1")[4,99]
+         INAH.WHSE=OCONV(IWH.TO.ID,"G1!1")
+         PERIOD=D.TRAN.PERIOD
+         MAT ORG.IWH.REC = MAT IWH.REC
+*T27396 v NOTE! The following CALL can eliminate IWH.RECP data for future
+*         periods. Must save and restore after return from call.
+         SAVE.IWH.RECP.NO = IWH.RECP.NO
+         SAVE.IWH.RECP.PER = IWH.RECP.PERIOD
+         SAVE.IWH.RECP.DATE = IWH.RECP.ENT.DATE
+*T27990  CALL ICS.IWH.SUB (CONO,PERIOD,TMP.ARR,TMP.CNT,LAST,ACTION,OPEN.FLAG)
+         CALL ICS.IWH.SUB (CONO,PERIOD,TMP.ARR,TMP.CNT,LAST,ACTION,OPEN.FLAG,ERRMSG)
+         IF D.TRAN.PERIOD=CUR.PERIOD THEN
+            CALL INV.AVG.COST.MAINT(MAT IWH.REC,INV.COST.WT,CUR.PERIOD)
+         END
+*T27396 v
+         IWH.RECP.NO = SAVE.IWH.RECP.NO
+         IWH.RECP.PERIOD = SAVE.IWH.RECP.PER
+         IWH.RECP.ENT.DATE = SAVE.IWH.RECP.DATE
+*
+         IWH.ON.HAND+=D.TRAN.TOT.QTY<1,P>
+         ONHAND.DIFF=IWH.ON.HAND-IWH.PERIOD.ONHAND
+         IWH.ON.HAND=IWH.HOLD.ONHAND 
+         IWH.ON.HAND=IWH.ON.HAND+ONHAND.DIFF 
+         IWH.HOLD.ONHAND=''
+         IWH.PERIOD.ONHAND=''
+         IWH.VDR.FI = ""
+         IWH.PO.NO.FI = ""
+         IWH.PO.LN.FI = ""
+         IWH.ORG.FI = ""
+         IWH.RSV.FI = ""
+         IWH.QTY.FI = ""
+         IWH.COST.FI = "" 
+         IWH.ACT.COST = ""
+         IWH.SALE.FI = "" 
+         LOC.CNT=DCOUNT(D.TRAN.TO.LOC<1,P>,SVM)
+         FOR LL=1 TO LOC.CNT
+            LOCATE D.TRAN.TO.LOC<1,P,LL> IN IWH.LOC<1> SETTING LPOS ELSE
+               IWH.LOC<1,-1>=D.TRAN.TO.LOC<1,P,LL> 
+            END
+         NEXT LL
+         MATWRITE IWH.REC ON INV.WHSE,IWH.TO.ID
+      END
+   END ELSE
+      LOC.CNT=DCOUNT(D.TRAN.TO.LOC<1,P>,SVM)
+      FOR LL=1 TO LOC.CNT
+         LOCATE D.TRAN.TO.LOC<1,P,LL> IN IWH.LOC<1> SETTING LPOS ELSE 
+            IWH.LOC<1,-1>=D.TRAN.TO.LOC<1,P,LL>
+         END
+      NEXT LL
+MATWRITE IWH.REC ON CONTROL,"TRFT"
+      MATWRITE IWH.REC ON INV.WHSE,IWH.TO.ID 
+   END
+*T27396 v Update to JOB.STATS was from old version of FNGD in JCS - OBS
+*  IF PROCESS.FLAG[1,4] = 'TRAN' THEN RETURN ;* T26497
+*  MATWRITE JSTAT.REC ON JOB.STATS, CONO : D.TRAN.JOB
+*  MATREAD JSTAT.REC FROM JOB.STATS,CONO:D.TRAN.JOB ELSE MAT JSTAT.REC=""
+   RETURN
+*
+********
+GET.DTN: 
+********
+*
+GFRTST<-1>="IN GET.DTN "; WRITE GFRTST ON CONTROL,"T1012"
+   READU DTN FROM CONTROL,CONO:"TRANSFER" ELSE
+      DTN=1000
+   END
+   FND=1
+   LOOP
+   WHILE FND DO
+      DTN+=1
+      READU REC FROM TRANSFER,CONO:DTN ELSE FND=0
+      REC=""
+      IF FND THEN
+         RELEASE TRANSFER, CONO:DTN
+      END ELSE
+         WRITE DTN ON CONTROL, CONO:'TRANSFER'
+      END
+   REPEAT
+GFRTST<-1>="END GET.DTN "; WRITE GFRTST ON CONTROL,"T1012"
+   RETURN
+*
+**** CALLS FOR SYSCOM
+*
+91000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+92000 ERR.TYPE=2;CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+93000 ERR.TYPE=3;CALL SYSCOM(MAT SYSCOM.REC)
+*
+**** END OF PROGRAM
+99999* 
+   RELEASE
+   END
+***************

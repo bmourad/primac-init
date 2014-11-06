@@ -1,0 +1,410 @@
+      SUBROUTINE TRANSACTION.MAINT(ACTION, CONO, DIV, ERRMSG)
+*********************************************************************
+*
+* PROGRAM  - TRANSACTION.MAINT
+*
+* AUTHOR   - NICK AMENDOLA, NASTech, Inc.
+*
+* DATE     - 05/15/96
+*
+* DESCRIPTION
+*
+* This program is used to view transaction in process for a specified
+* division.
+*
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>CPYLIB>SCOMMON1
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>DIVISION
+*COPY>PSS.CPYLIB>PSS.JOURNAL
+*COPY>CPYLIB>SCREEN.COM
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+      MAT SYSCOM.REC =  ""; SYS.TYPE = 2
+*
+*---- OPEN ALL FILES
+*
+      OPEN "","PSS.JOURNAL" TO PSS.JOURNAL ELSE
+         ERRMSG = "CANNOT OPEN PSS.JOURNAL FILE"
+         GOSUB 90000
+         GOTO 99999
+      END
+      OPEN "","PSS.LOCK" TO PSS.LOCK ELSE
+         ERRMSG = "CANNOT OPEN PSS.LOCK FILE"
+         GOSUB 90000
+         GOTO 99999
+      END
+*
+*---- INITIALIZATION
+*
+      SCREEN DEFINE;TRANSACTION.MAINT
+      SCREEN FORMAT
+      SCREEN COUNT;;11
+      LINE.COUNT = S$LCNT
+      LINE.SPACE = S$LSPC
+      LINE.CNT = 0
+      REF.NO = ""
+      CURR.REF.NO = ""
+      PDIV = ""
+      USER.ID = @LOGNAME
+*     PORT.NO = @TTY
+      PORT.NO = 'TTY'
+      CALL SYSVARS.SUB(PORT.NO)
+      SAVE.ACTION = ACTION
+      GOTO 110
+*
+*---- MAIN PROCESSING
+*
+100 *
+      RELEASE
+      SCREEN CLEAR
+      REF.NO = ""
+      CURR.REF.NO = ""
+      ACTION = SAVE.ACTION
+110 *
+      S$DATA(1)<S$SCR> = DATE()
+      SCREEN DISPLAY;;1
+      IF PDIV = "" THEN
+         SCREEN FIELD;;2
+         SCREEN INPUT;;2;GOTO 99999
+      END ELSE
+         S$VALUE = PDIV
+         S$DATA(2)<S$SCR> = PDIV
+         SCREEN DISPLAY;;2
+         PDIV = ""
+      END
+      IF S$VALUE = "00" THEN
+         MAT DIV.REC = ""
+         DIV.DESC = "ALL DIVISIONS"
+      END ELSE
+         MATREAD DIV.REC FROM DIVISION, CONO:S$VALUE ELSE
+            ERRMSG = "Invalid Division! "; GOSUB 90000
+            GOTO 110
+         END
+      END
+      DIV.ID = S$VALUE
+      S$DATA(3)<S$SCR> = DIV.DESC
+      SCREEN DISPLAY;;3
+112 *
+      NEW.REC = 0
+      IF ACTION = "M" THEN
+         MATREADU JRNLC.REC FROM PSS.JOURNAL, CONO:"CONTROL!":DIV.ID THEN
+            IF JRNLC.USER # USER.ID THEN
+               RELEASE PSS.JOURNAL, CONO:"CONTROL!":DIV.ID
+               ERRMSG = "Process initiated by ":JRNLC.USER:"! "; GOSUB 90000
+               ACTION = "I"
+               GOTO 112
+            END
+            IF JRNLC.PORT # PORT.NO THEN
+               CMD = "w -h | grep ":PORT.NO
+               PCPERFORM CMD CAPTURING LOGONLIST
+               P1 = INDEX(LOGONLIST,(" ":PORT.NO:" "),1)
+               CMD = "w -h | grep ":JRNLC.PORT
+               PCPERFORM CMD CAPTURING LOGONLIST
+               P2 = INDEX(LOGONLIST,(" ":JRNLC.PORT:" "),1)
+               BEGIN CASE
+                  CASE P1 = 0
+                     ERRMSG = "Cannot verify log-on! "; GOSUB 90000
+                     ACTION = "I"
+                     RELEASE PSS.JOURNAL, CONO:"CONTROL!":DIV.ID
+                     GOTO 112
+                  CASE P2 > 0
+                     ERRMSG = "Record is active! "; GOSUB 90000
+                     ACTION = "I"
+                     RELEASE PSS.JOURNAL, CONO:"CONTROL!":DIV.ID
+                     GOTO 112
+               END CASE
+               SCREEN FIELD;;26
+               SCREEN INPUT;;26
+               IF S$VALUE = "Y" THEN
+                  JRNLC.USER = USER.ID
+                  JRNLC.PORT = PORT.NO
+               END ELSE
+                  ACTION = "I"
+                  RELEASE PSS.JOURNAL, CONO:"CONTROL!":DIV.ID
+                  GOTO 112
+               END
+            END
+         END LOCKED
+            ERRMSG = "Record Locked! "; GOSUB 90000
+            ACTION = "I"
+            GOTO 112
+         END ELSE
+            MAT JRNLC.REC = ""
+            NEW.REC = 1
+            CDATE = DATE()
+            CTIME = TIME()
+            IF CTIME < 10 THEN CDATE = DATE()
+            JRNLC.JPTR = 1
+            JRNLC.JCNT = 0
+            JRNLC.SDATE = CDATE
+            JRNLC.STIME = CTIME
+            JRNLC.USER = USER.ID
+            JRNLC.PORT = PORT.NO
+            S$DATA(4)<S$SCR> = JRNLC.USER
+            S$DATA(5)<S$SCR> = JRNLC.PORT
+            S$DATA(6)<S$SCR> = JRNLC.SDATE
+            S$DATA(7)<S$SCR> = OCONV(JRNLC.STIME,"MTS")
+            SCREEN DISPLAY;;4
+            SCREEN DISPLAY;;5
+            SCREEN DISPLAY;;6
+            SCREEN DISPLAY;;7
+         END
+      END ELSE
+         MATREAD JRNLC.REC FROM PSS.JOURNAL, CONO:"CONTROL!":DIV.ID ELSE
+            ERRMSG = "Invalid Item. Try again! "; GOSUB 90000
+            GOTO 100
+         END
+      END
+      DIV = DIV.ID
+120 *
+      IF NEW.REC THEN
+         GOSUB 80000
+         LINE.CNT = 0
+         OPT = "A"
+         GOTO 510
+      END ELSE
+         GOSUB 80000
+         GOSUB 81000
+         LINE.CNT = DCOUNT(JRNLC.TRAN,VM)
+         REF.NO = 1
+         CURR.REF.NO = ""
+         GOSUB 50000
+      END
+*
+*---- GET OPERATOR REPLY
+*
+500 *
+      BEGIN CASE
+         CASE ACTION = "M"
+            SCREEN FIELD;;21
+            SCREEN INPUT;;21
+         CASE 1
+            SCREEN FIELD;;23
+            SCREEN INPUT;;23
+      END CASE
+      OPT = S$VALUE
+510 *
+      BEGIN CASE
+         CASE OPT = "E" OR OPT = "END"
+            IF ACTION = "M" THEN
+               MISMATCH = 0
+               READ VREC FROM PSS.JOURNAL, CONO:"CONTROL!":DIV ELSE VREC = ""
+               FOR VPTR = 1 TO JRNLC.SIZE UNTIL MISMATCH
+                  IF JRNLC.REC(VPTR) # VREC<VPTR> THEN MISMATCH = 1
+               NEXT VPTR
+               IF MISMATCH THEN
+                  SCREEN FIELD;;25
+                  SCREEN INPUT;;25
+                  IF S$VALUE # "Y" THEN GOTO 500
+               END
+            END
+            GOTO 100
+         CASE OPT = "A" AND LINE.CNT < 99
+            MODE = "A"
+            DONE = 0
+            REF.NO = LINE.CNT+1
+            CURR.REF.NO = ""
+            GOSUB 50000
+            GOSUB 10000
+            IF S$VALUE = "END" THEN
+               DONE = 1
+               GOSUB 700
+            END ELSE
+               TDESC = JRNLC.DESC<1,REF.NO>
+               GOSUB 700
+               MATWRITE JRNLC.REC ON PSS.JOURNAL, CONO:"CONTROL!":DIV
+               ERRMSG = "Record Filed. Press <RETURN> to continue."; GOSUB 90000
+               CALL TRANSACTION.START(CONO,DIV,TDESC,PSS.JOURNAL,PSS.LOCK,ERRMSG)
+               IF ERRMSG # "" THEN GOSUB 90000
+               PDIV = DIV
+               GOTO 100
+            END
+            REF.NO = LINE.CNT
+            CURR.REF.NO = ""
+            GOSUB 50000
+         CASE OPT = "C" AND LINE.CNT > 0
+            MODE = "C"
+            IF LINE.CNT = 1 THEN
+               S$VALUE = 1
+            END ELSE
+               GOSUB 600
+            END
+            IF S$VALUE # "" AND S$VALUE # "END" THEN
+               REF.NO = S$VALUE
+               GOSUB 10000
+               IF S$VALUE = "END" THEN
+                  CURR.REF.NO = ""
+                  GOSUB 50000
+               END
+            END
+         CASE OPT = "D" AND LINE.CNT > 0
+            MODE = "D"
+            IF LINE.CNT = 1 THEN
+               ERRMSG = "Cannot delete last active entry."
+               GOSUB 90000
+            END ELSE
+               GOSUB 600
+               IF S$VALUE # "" AND S$VALUE # "END" THEN
+                  REF.NO = S$VALUE
+                  IF JRNLC.TCNT<1,REF.NO>+0 # 0 THEN
+                     ERRMSG = "Un-resolved updates present. Cannot delete."
+                     GOSUB 90000
+                  END ELSE
+                     GOSUB 700
+                     LINE.CNT = LINE.CNT - 1
+                     REF.NO = REF.NO - 1
+                     CURR.REF.NO = ""
+                     GOSUB 50000
+                  END
+               END
+            END
+         CASE OPT = "S" OR OPT = "SF"
+            REF.NO = CURR.REF.NO + LINE.COUNT
+            IF REF.NO > LINE.CNT THEN REF.NO = 1
+            GOSUB 50000
+         CASE OPT = "SR"
+            REF.NO = CURR.REF.NO - LINE.COUNT
+            IF REF.NO < 1 THEN REF.NO = 1
+            GOSUB 50000
+         CASE OPT = "ST"
+            REF.NO = 1
+            GOSUB 50000
+         CASE OPT = "SB"
+            REF.NO = LINE.CNT
+            IF REF.NO < 1 THEN REF.NO = 1
+            GOSUB 50000
+         CASE OPT = "COM" AND JRNLC.JCNT > 0
+            MATWRITE JRNLC.REC ON PSS.JOURNAL, CONO:"CONTROL!":DIV
+            ERRMSG = "Record Filed. Press <RETURN> to continue."; GOSUB 90000
+            P_X  = 3 ; P_Y = 23 ; P_VALUE = "Update in progress.... Please stand-by! " ; P_OPT = "CL"
+            CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            CALL TRANSACTION.COMMIT(CONO,DIV,PSS.JOURNAL,ERRMSG)
+            IF ERRMSG # "" THEN GOSUB 90000
+            PDIV = DIV
+            GOTO 100
+         CASE OPT = "REC" AND JRNLC.JCNT > 0
+            MATWRITE JRNLC.REC ON PSS.JOURNAL, CONO:"CONTROL!":DIV
+            ERRMSG = "Record Filed. Press <RETURN> to continue."; GOSUB 90000
+            P_X  = 3 ; P_Y = 23 ; P_VALUE = "Update in progress.... Please stand-by! " ; P_OPT = "CL"
+            CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            CALL TRANSACTION.RECOVER(CONO,DIV,PSS.JOURNAL,ERRMSG)
+            IF ERRMSG # "" THEN GOSUB 90000
+            PDIV = DIV
+            GOTO 100
+         CASE OPT = "TERM"
+            MATWRITE JRNLC.REC ON PSS.JOURNAL, CONO:"CONTROL!":DIV
+            CALL TRANSACTION.TERM(CONO,DIV,PSS.JOURNAL,PSS.LOCK,ERRMSG)
+            IF ERRMSG = "" THEN
+               SCREEN CLOSE
+               GOTO 99999
+            END
+            GOSUB 90000
+            PDIV = DIV
+            GOTO 100
+         CASE OPT = "F"
+            IF LINE.CNT = 0 THEN
+               ERRMSG = "Cannot file empty record. Add transaction or Terminate processing!"
+               GOSUB 90000
+            END ELSE
+               MATWRITE JRNLC.REC ON PSS.JOURNAL, CONO:"CONTROL!":DIV
+               GOTO 100
+            END
+      END CASE
+      GOTO 500
+*
+*---- GET LINE NUMBER
+*
+600 *
+      SCREEN FIELD;;22
+      S$MINV = CURR.REF.NO
+      S$MAXV = S$MINV + LINE.COUNT - 1
+      IF S$MAXV > LINE.CNT THEN S$MAXV = LINE.CNT
+      SCREEN INPUT;;22
+      RETURN
+*
+*---- DELETE MULTI-LINE DATA
+*
+700 *
+      JRNLC.TRAN = DELETE(JRNLC.TRAN,1,REF.NO,0)
+      JRNLC.DATE = DELETE(JRNLC.DATE,1,REF.NO,0)
+      JRNLC.TIME = DELETE(JRNLC.TIME,1,REF.NO,0)
+      JRNLC.DESC = DELETE(JRNLC.DESC,1,REF.NO,0)
+      JRNLC.TCNT = DELETE(JRNLC.TCNT,1,REF.NO,0)
+      GOSUB 81000
+      RETURN
+*
+*---- GET MULTI-LINE DATA
+*
+10000 *
+      S$VAL = REF.NO
+      SCREEN DISPLAY;;11
+10100 *
+      S$VAL = REF.NO
+      SCREEN FIELD;;14
+      SCREEN INPUT;;14;GOTO 19950
+      TEMP.MF1 = S$VALUE
+19900 *
+      JRNLC.DESC<1,REF.NO> = TEMP.MF1
+      RETURN
+19950 *
+      GOSUB 81000
+      RETURN
+*
+*---- MULTI-LINE SCROLL ROUTINE
+*
+50000 *
+      START.REF.NO = 1 + INT((REF.NO-1)/LINE.COUNT)*LINE.COUNT
+      IF START.REF.NO = CURR.REF.NO THEN RETURN
+      CURR.REF.NO = START.REF.NO
+      S$VAL = START.REF.NO
+      S$CNT = DCOUNT(S$DATA(12)<S$SCR>,VM)
+      SCREEN MULTI;;C;11;12;13;14;15
+      RETURN
+*
+*---- LOAD SCREEN DATA
+*
+80000 *
+      S$DATA(4)<S$SCR> = JRNLC.USER
+      S$DATA(5)<S$SCR> = JRNLC.PORT
+      S$DATA(6)<S$SCR> = JRNLC.SDATE
+      S$DATA(7)<S$SCR> = OCONV(JRNLC.STIME,"MTS")
+80050 *
+      SCREEN DISPLAY;;ALL
+      RETURN
+*
+*---- LOAD SCREEN DATA (MULTI-LINE)
+*
+81000 *
+      S$DATA(12)<S$SCR> = ""
+      S$DATA(13)<S$SCR> = ""
+      S$DATA(14)<S$SCR> = ""
+      S$DATA(15)<S$SCR> = ""
+      CNT = DCOUNT(JRNLC.DATE,VM)
+      FOR REF = 1 TO CNT
+         S$DATA(12)<S$SCR,REF> = JRNLC.DATE<1,REF>
+         S$DATA(13)<S$SCR,REF> = OCONV(JRNLC.TIME<1,REF>,"MTS")
+         S$DATA(14)<S$SCR,REF> = JRNLC.DESC<1,REF>
+         S$DATA(15)<S$SCR,REF> = OCONV(JRNLC.TCNT<1,REF>,"MD0,")
+      NEXT REF
+      RETURN
+*
+*---- ERROR ROUTINE
+*
+90000 ERR.TYPE=1;CALL SI_SYSCOM(MAT SYSCOM.REC);RETURN
+* 90000 *
+*       PRINT @(0,23):@(-4):ERRMSG:
+*       INPUT REPLY:
+*       PRINT @(0,23):@(-4):
+*       RETURN
+*
+*---- END OF PROGRAM
+*
+99999 *
+      SCREEN CLEAR;;D
+      RETURN
+   END

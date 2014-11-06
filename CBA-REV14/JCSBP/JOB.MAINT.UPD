@@ -1,0 +1,760 @@
+   SUBROUTINE JOB.MAINT.UPD(CONO,ORDNO,JOBNUM,JOBNO,OLD.CUST,OLD.MASTER,REQUEST,FSCAL.PER,OJFS.PROD,OJFS.WHSE,OJFS.ORDER,OJFS.ORD.QTY,SAVE.INV.JS.REC,CUR.JOB.BAL,PREV.CRED.AUTH,OLD.EST,EST.MATL,MAT EST.PAR,MAT EST.REC,MAT GJOB.REC,MAT COMP.REC)
+*COPY>CPYLIB>COM1
+*COPY>JCS.CPYLIB>COM.JCS.LINK
+*COPY>ICS.CPYLIB>COM.INV.MAIN  
+*COPY>ICS.CPYLIB>COM.INV.SERIAL
+*COPY>JCS.CPYLIB>COM.INV.STATS 
+*COPY>PMC.CPYLIB>COM.CUST
+*COPY>OPS.CPYLIB>COM.ORDER
+**********************************************
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - JCSBP
+* PROGRAM     - JOB.MAINT.UPD
+* BY          -
+* DATE        -
+* DESCRIPTION -
+*
+*T21177 diane 11/20/1996 * CORRECT 90500 ERR.MSG TO ERRMSG
+*T21177 diane 01/03/1997 * TEST
+*T22040 gat 06/24/1997 * FIX CLEAR ON NEW JOB NUMBER ADVISEMENT
+*T22154 stefanie 08/19/1997 * Fix Rev10B to Rev11 match problems.
+*T23278 markt 11/20/1998 * Accumulate fiscal data by division.
+*T25900 lanny 06/25/2001 * When a JOB is cancelled the PO ALLOC QTYS are
+*                          not being cleared.
+*T26334 epitka 12/19/2001 * Rev12
+*T26372 adelgado 01/22/2002 * Merging
+*T26421 thompson 03/11/2002 * Allow sched of non-sched jobs in pss.
+*T26773 cmykleb 07/30/2002 * Passing line above changed to get the whole
+*                            company record.
+*T27363 thompson 04/03/2003 * FIX PROBLEM WITH REBOOK OF JOB WITH
+*                             ESTIMATE IF CHANGES
+*T28368 lross 12/21/2004 * 'N'ew job# needs to be UP TO 999999.
+*T28375 lross 12/27/2004 * If FSCAL.PER present POS is never set.
+*ENDDOC
+**********************************************
+*COPY>PMC.CPYLIB>FISCAL
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>PMC.CPYLIB>COMPANY          ; * T26773
+*COPY>JCS.CPYLIB>JOB
+*COPY>JCS.CPYLIB>JOB.STATS
+*COPY>JCS.CPYLIB>JOB.CREDIT.STATS
+*COPY>JCS.CPYLIB>GANG.JOB
+*COPY>JES.CPYLIB>ESTIMATE
+*COPY>OPS.CPYLIB>ORDER
+*COPY>OPS.CPYLIB>ORDER.DETAIL.INQ
+*COPY>OPS.CPYLIB>JOB.FNGD.STATS
+*COPY>ICS.CPYLIB>INV.JOB.STATS
+*COPY>ICS.CPYLIB>FNGD.STATS
+*COPY>ICS.CPYLIB>FNGD.JOB.STATS
+*COPY>PSS.CPYLIB>JOB.SCHED
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>GEN.XREF.SUB
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+   MAT SYSCOM.REC =  ""; SYS.TYPE = 2
+*
+* T21796       DIM SAVE.JOB(125)
+   DIM SAVE.JOB(JOB.REC.SIZE)
+   DIM EST.PAR(10)
+   EPRT = 0
+*
+   BEGIN CASE
+      CASE REQUEST = "CA"
+         IF OLD.CUST = "" THEN OLD.CUST = JOB.CUST
+         JOB.CUST = OLD.CUST
+         MATREADU CUST.REC FROM CUSTOMER, CONO : JOB.CUST ELSE
+            ERRMSG = "Cannot locate customer # " : JOB.CUST
+            GOSUB 91000
+            GOTO 501
+         END
+         IF OLD.MASTER = "" OR OLD.MASTER = "N" THEN
+            JOB.MASTER=JOBNO
+         END ELSE
+            JOB.MASTER=OLD.MASTER
+         END
+*T25900 v
+         IF SUM(JOB.ALOC.QTY) # 0 AND CO.POS = 'Y' THEN
+            CALL CLEAR.JOB.ALLOC(CONO,JOBNO)
+         END
+*T25900 ^
+*       IF JOB.WIP<1,1> > 0 THEN
+         IF SUM(JOB.WIP<1,2>) > 0 THEN
+            IF FSCAL.PER = "" THEN
+               MATREAD FISCAL.REC FROM CONTROL, CONO : "JCFISCAL" ELSE
+                  ERRMSG = "Cannot locate CONTROL, JCFISCAL"
+                  GOSUB 91000
+                  GOTO 501
+               END
+***** T23278 v
+               READ DIVISION.REC FROM CONTROL, CONO:"DIVISIONS" ELSE
+                  ERRMSG = "Cannot locate CONTROL, DIVISIONS"
+                  GOSUB 91000
+                  GOTO 501
+               END
+               READ SECURITY.REC FROM CONTROL, CONO:"DIV.SECURITY" ELSE
+                  ERRMSG = "Cannot locate CONTROL, DIV.SECURITY"
+                  GOTO 93000
+               END
+               DIV.CODE = JOB.DIV
+               IF SECURITY.REC<1> = "Y" AND SECURITY.REC<2> = "Y" THEN
+                  IF DIV.CODE = "00" OR DIV.CODE = "ALL" THEN
+                     ERRMSG = " 'ALL' OR '00' INVALID WHEN DIVISION-LEVEL POSTING & CLOSING IS SELECTED"
+                     GOSUB 91000; GOTO 501
+                  END
+                  LOCATE DIV.CODE IN DIVISION.REC<1>,1 SETTING POS ELSE
+                     ERRMSG = "Cannot locate ":DIV.CODE:" in Control File DIVISIONS Record"
+                     GOSUB 91000
+                     GOTO 501
+                  END
+               END ELSE
+                  POS = 1
+               END
+*                  FSCAL.PER = FR.CURR.PER
+               FSCAL.PER = FR.CURR.PER<1,POS>
+***** T23278 ^
+            END
+            WIP.TYPE = "ALL"
+            WIP.PERCENT = 10000
+            WIP.DATE = "ALL"
+            WIP.PER = "ALL"
+*T28375 v   CALL REVERSE.JOB.WIP(CONO,JOBNO,WIP.TYPE,WIP.PERCENT,WIP.DATE,WIP.PER,FR.CURR.PER<1,POS>);* T23278
+            CALL REVERSE.JOB.WIP(CONO,JOBNO,WIP.TYPE,WIP.PERCENT,WIP.DATE,WIP.PER,FSCAL.PER);* T23278
+         END
+         RESV.ACTION = "D"
+         GOSUB 600
+         IF SUM(JOB.ALOC.QTY) + 0 # 0 THEN
+            ERRMSG = "Product quantity still allocated for Job"
+            GOSUB 91000
+         END
+         JOB.STATUS = INSERT(JOB.STATUS,1,1,0,"9")
+         JOB.STAT.DATE = INSERT(JOB.STAT.DATE,1,1,0,DATE())
+         LOCATE JOBNO IN CUST.JOB<1>,1 SETTING JFND ELSE
+            CUST.JOB<1,JFND> = JOBNO
+         END
+         CUST.JOB.BAL<1,JFND> = 0
+         MATWRITE CUST.REC ON CUSTOMER , CONO : JOB.CUST
+         CALL JKT_NOTIFY_SUB ("1",CONO,"JOB",JOBNO,"",JOB.REC.SIZE,MAT JOB.REC,JOB,JSTATUS)
+         MATWRITE JOB.REC ON JOB , CONO : JOBNO
+         IF OJFS.PROD # "" THEN
+            GOSUB 650
+         END
+501      MORE = 0
+      CASE REQUEST="F"
+         IF JOBNO = "N" THEN
+            READU JOBNO FROM CONTROL, CONO:"JOBNO" ELSE
+               JOBNO = 10000
+            END
+            LOOP
+               FND = 1
+               JOBNO = JOBNO + 1
+*T28368 v
+*              IF JOBNO > 99999 THEN JOBNO = 1
+               IF JOBNO > 999999 THEN JOBNO = 1
+               READU O.RECORD FROM JOB, CONO : JOBNO ELSE FND = 0
+            WHILE FND DO
+               RELEASE JOB, CONO : JOBNO
+            REPEAT
+            WRITE JOBNO ON CONTROL, CONO:"JOBNO"
+            ERRMSG = "Please Note Assigned Job Number : ":JOBNO
+            GOSUB 90500
+         END
+         QUOTED.AMT = 0
+         IF JOB.STATUS<1,1> < 4 AND JFS.PROD = "" THEN
+            LOCATE "4" IN JOB.STATUS<1>,1 SETTING DUMMY ELSE
+               IF JOB.TOT.INV > 0 THEN
+                  QUOTED.AMT = JOB.CONF.AMT - JOB.TOT.INV
+               END ELSE
+                  QUOTED.AMT = JOB.CONF.AMT
+               END
+               IF QUOTED.AMT < 0 THEN QUOTED.AMT = 0
+            END
+         END
+         IF JOB.MASTER = "" OR JOB.MASTER = "N" THEN
+            JOB.MASTER = JOBNO
+         END
+         IF OLD.MASTER = "" OR OLD.MASTER = "N" THEN
+            OLD.MASTER = JOB.MASTER
+         END
+         IF OLD.CUST = "" THEN OLD.CUST = JOB.CUST
+         CUR.CUST = JOB.CUST
+         CUR.MASTER = JOB.MASTER
+         MAT SAVE.JOB = MAT JOB.REC
+         IF OLD.MASTER = CUR.MASTER THEN GOTO 502
+         MATREADU JOB.REC FROM JOB, CONO : OLD.MASTER ELSE
+            ERRMSG = "Cannot locate master Job # " : OLD.MASTER
+            GOSUB 91000
+            GOTO 502
+         END
+         LOCATE JOBNO IN JOB.SUBS<1>,1 SETTING JFND ELSE
+            RELEASE JOB, CONO : OLD.MASTER
+            GOTO 502
+         END
+         JOB.SUBS = DELETE(JOB.SUBS,1,JFND,0)
+         MATWRITE JOB.REC ON JOB, CONO : OLD.MASTER
+502      IF OLD.CUST = CUR.CUST THEN GOTO 503
+         MATREADU CUST.REC FROM CUSTOMER, CONO : OLD.CUST ELSE
+            ERRMSG = "Cannot locate customer # " : OLD.CUST
+            GOSUB 91000
+            GOTO 503
+         END
+         LOCATE JOBNO IN CUST.JOB<1>,1 SETTING JFND ELSE
+            RELEASE CUSTOMER, CONO : OLD.CUST
+            GOTO 503
+         END
+         CUST.JOB = DELETE(CUST.JOB,1,JFND,0)
+         CUST.JOB.BAL = DELETE(CUST.JOB.BAL,1,JFND,0)
+         MATWRITE CUST.REC ON CUSTOMER , CONO:OLD.CUST
+503      IF CUR.MASTER = JOBNO THEN GOTO 504
+         MATREADU JOB.REC FROM JOB, CONO : CUR.MASTER ELSE
+            ERRMSG = "Cannot locate master Job # " : CUR.MASTER
+            GOSUB 91000
+            GOTO 505
+         END
+         IF JOB.CUST # CUR.CUST THEN
+            ERRMSG = "Customer mismatch, master Job customer # " : JOB.CUST
+            GOSUB 91000
+            RELEASE JOB, CONO : CUR.MASTER
+            GOTO 505
+         END
+         IF JOB.MASTER = "" OR JOB.MASTER = "N" THEN
+            JOB.MASTER = CUR.MASTER
+         END
+         IF JOB.MASTER # CUR.MASTER THEN
+            ERRMSG = "Master Job cannot be a sub Job"
+            GOSUB 91000
+            RELEASE JOB, CONO : CUR.MASTER
+            GOTO 505
+         END
+         LOCATE JOBNO IN JOB.SUBS<1>,1 SETTING SFND ELSE
+            JOB.SUBS<1,SFND> = JOBNO
+         END
+504      MATREADU CUST.REC FROM CUSTOMER, CONO : CUR.CUST ELSE
+            ERRMSG = "Cannot locate customer # " : CUR.CUST
+            GOSUB 91000
+            IF CUR.MASTER = JOBNO THEN GOTO 505
+            RELEASE JOB, CONO : CUR.MASTER
+505         IF OLD.MASTER = CUR.MASTER THEN GOTO 506
+            MATREADU JOB.REC FROM JOB, CONO : OLD.MASTER ELSE GOTO 506
+            LOCATE JOBNO IN JOB.SUBS<1>,1 SETTING JFND ELSE NULL
+            JOB.SUBS<1,JFND> = JOBNO
+            MATWRITE JOB.REC ON JOB, CONO : OLD.MASTER
+506         MAT JOB.REC = MAT SAVE.JOB
+            IF OLD.CUST = CUR.CUST THEN GOTO 519
+            MATREADU CUST.REC FROM CUSTOMER, OLD.CUST ELSE GOTO 519
+            LOCATE JOBNO IN CUST.JOB<1>,1 SETTING JFND ELSE NULL
+            CUST.JOB<1,JFND> = JOBNO
+            CUST.JOB.BAL<1,JFND> = QUOTED.AMT
+            MATWRITE CUST.REC ON CUSTOMER, CONO : OLD.CUST
+            GOTO 519
+         END
+         IF CUR.MASTER # JOBNO THEN
+            MATWRITE JOB.REC ON JOB, CONO : CUR.MASTER
+         END
+         MAT JOB.REC = MAT SAVE.JOB
+         LOCATE JOBNO IN CUST.JOB<1>,1 SETTING JFND ELSE NULL
+         CUST.JOB<1,JFND> = JOBNO
+         CUST.JOB.BAL<1,JFND> = QUOTED.AMT
+         MATWRITE CUST.REC ON CUSTOMER , CONO : CUR.CUST
+         MCNT = COUNT(JOB.RESV.MATL,VM) + (JOB.RESV.MATL # "")
+         IF SAVE.INV.JS.REC = "" THEN GOTO 507
+         FOR M = 1 TO MCNT
+            JSTAT.ID = JOB.RESV.MATL<1,M>:"!":JOB.RESV.WHSE<1,M>:"!":JOBNO
+            MATREADU INV.JS.REC FROM INV.JOB.STATS,CONO:JSTAT.ID ELSE
+               MAT INV.JS.REC = ""
+            END
+            IJS.JOB.CUST = JOB.CUST
+            IJS.REQ.DATE = SAVE.INV.JS.REC<M,1>
+            IJS.REQ.AMT = SAVE.INV.JS.REC<M,2>
+            IJS.REQ.QTY = SAVE.INV.JS.REC<M,3>
+            MATWRITE INV.JS.REC ON INV.JOB.STATS,CONO:JSTAT.ID
+         NEXT M
+507*
+         RESV.ACTION = "A"
+         GOSUB 600
+         MATREADU JOCS.REC FROM JOB.CREDIT.STATS,CONO:JOBNO ELSE MAT JOCS.REC=""
+         IF PREV.CRED.AUTH = JOB.CREDIT THEN
+            RELEASE JOB.CREDIT.STATS,CONO:JOBNO
+            GOTO 509
+         END
+         AVAIL = ""
+         BEGIN CASE
+            CASE CUST.CREDIT = "E"
+               AVAIL = CUST.CR.LIMIT * 100 - CUST.AR.BAL - CUR.JOB.BAL - QUOTED.AMT
+            CASE CUST.CREDIT = "CASH"
+               AVAIL = CUST.AR.BAL + CUR.JOB.BAL + QUOTED.AMT
+         END CASE
+         JOCS.CRED.CODE = INSERT(JOCS.CRED.CODE,1,1,0,CUST.CREDIT)
+         JOCS.CRED.AUTH = INSERT(JOCS.CRED.AUTH,1,1,0,JOB.CREDIT)
+         JOCS.CUST.NO = INSERT(JOCS.CUST.NO,1,1,0,JOB.CUST)
+         JOCS.CRED.AVAIL = INSERT(JOCS.CRED.AVAIL,1,1,0,AVAIL)
+         JOCS.CRED.LIMIT = INSERT(JOCS.CRED.LIMIT,1,1,0,CUST.CR.LIMIT)
+         JOCS.CHG.DATE = INSERT(JOCS.CHG.DATE,1,1,0,DATE())
+         MATWRITE JOCS.REC ON JOB.CREDIT.STATS, CONO:JOBNO
+509*
+         CALL JKT_NOTIFY_SUB ("1",CONO,"JOB",JOBNO,"",JOB.REC.SIZE,MAT JOB.REC,JOB,JSTATUS)
+         MATWRITE JOB.REC ON JOB , CONO : JOBNO
+         READ SISQUEUE FROM CONTROL, CONO:"SISQUEUE" THEN
+            CALL SISQUEUE (CONO, JOBNO, "JOB", SIS_CONTROL, SIS_OUTPUT, SISERRMSG)
+         END ELSE
+            CALL HNP.UPDATE(CONO, CONO:JOBNO, "JOB", JOB, "")
+         END
+         IF GJOB.JOB<1,1> = "" THEN
+            DELETE GANG.JOB, CONO : JOBNO
+         END ELSE
+            MATWRITE GJOB.REC ON GANG.JOB, CONO : JOBNO
+         END
+         IF JFS.PROD # "" OR OJFS.PROD # "" THEN
+            GOSUB 670
+         END
+**T26421 v
+         IF CO.PSS = "Y" THEN
+            OPEN '','JOB.SCHED' TO JOB.SCHED THEN
+               IF JOB.EST = "" THEN
+*T27363               OPEN '','JOB.SCHED' TO JOB.SCHED THEN
+*           MATREAD JBS.REC FROM JOB.SCHED, CONO:JOBNO ELSE;* T25920
+*T26551 v
+*           FORCE UPDATE TO JOB.SCHED TO HANDLE THEN CHANGES TO JOB FEILDS
+*           SALESMAN, CSR, DESCRIPTION ETC...
+                  MATREAD JBS.REC FROM JOB.SCHED, CONO:JOBNO THEN
+                     IF JBS.DUE.DATE # JOB.TRACK.DATE<1,4> THEN
+                        JBS.DUE.DATE = JOB.TRACK.DATE<1,4>
+                     END
+                     IF JBS.CUST.NAME # CUST.NAME THEN
+                        JBS.CUST.NAME = CUST.NAME
+                     END
+                     IF JBS.DIV # JOB.DIV THEN
+                        JBS.DIV = JOB.DIV
+                     END
+                     IF JBS.CUST.ID # JOB.CUST THEN
+                        JBS.CUST.ID = JOB.CUST
+                     END
+                     IF JBS.JOB.COMMENT # JOB.COMMENTS<1,1> THEN
+                        JBS.JOB.COMMENT = JOB.COMMENTS<1,1>
+                     END
+                     IF JBS.SCH.FLAG = "S" THEN JBS.SCH.FLAG = "J"
+                     CALL GET.JBS.USER.FIELDS(CONO,JOBNO,MAT JOB.REC,MAT JBS.REC,XXX,YYY,ZZZ)
+                     MATWRITE JBS.REC ON JOB.SCHED, CONO:JOBNO
+                  END ELSE
+                     VALDAT = 'Y':VM:'N'
+                     TYP=8; X=0; Y=21; MAXL=1
+                     PMSG="Extract this job for scheduling (Y/N):"
+                     CALL EDIT.SUB
+                     P_X  = 0;P_Y = 21;P_VALUE = "";P_OPT = "CL"
+                     CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+                     IF VALUE = "Y" THEN
+                        MAT JBS.REC = ""
+                        JBS.DUE.DATE = JOB.TRACK.DATE<1,4>
+                        JBS.CUST.NAME = CUST.NAME
+                        JBS.DIV = JOB.DIV
+                        JBS.SCH.FLAG = "P"
+                        JBS.CUST.ID = JOB.CUST
+                        JBS.JOB.COMMENT = JOB.COMMENTS<1,1>
+                        IF CO.PSS.BACKWARD.FLAG = "Y" THEN
+                           JBS.SCHED.MODE = "D"
+                           JBS.SCHED.DATE = JBS.DUE.DATE
+                        END ELSE
+                           JBS.SCHED.MODE = "S"
+                           JOBS.SCHED.DATE = DATE() + 1
+                        END
+                        MATWRITE JBS.REC ON JOB.SCHED, CONO:JOBNO
+*T26551
+                        CALL GET.JBS.USER.FIELDS(CONO,JOBNO,MAT JOB.REC,MAT JBS.REC,XXX,YYY,ZZZ)
+                        MATWRITE JBS.REC ON JOB.SCHED, CONO:JOBNO
+                     END
+                  END
+               END ELSE
+                  MATREAD JBS.REC FROM JOB.SCHED, CONO:JOBNO THEN
+                     IF JBS.DUE.DATE # JOB.TRACK.DATE<1,4> THEN
+                        JBS.DUE.DATE = JOB.TRACK.DATE<1,4>
+                     END
+                     IF JBS.CUST.NAME # CUST.NAME THEN
+                        JBS.CUST.NAME = CUST.NAME
+                     END
+                     IF JBS.DIV # JOB.DIV THEN
+                        JBS.DIV = JOB.DIV
+                     END
+                     IF JBS.CUST.ID # JOB.CUST THEN
+                        JBS.CUST.ID = JOB.CUST
+                     END
+                     IF JBS.JOB.COMMENT # JOB.COMMENTS<1,1> THEN
+                        JBS.JOB.COMMENT = JOB.COMMENTS<1,1>
+                     END
+                     IF JBS.SCH.FLAG = "S" THEN JBS.SCH.FLAG = "J"
+                     CALL GET.JBS.USER.FIELDS(CONO,JOBNO,MAT JOB.REC,MAT JBS.REC,XXX,YYY,ZZZ)
+                     MATWRITE JBS.REC ON JOB.SCHED, CONO:JOBNO
+                  END
+               END
+            END
+         END
+*T26421 ^
+         IF CO.JES = "Y" THEN
+            ESTAT = 0     ;*T22154
+            CALL JOB.BOOK.SUB (CONO,"3",JOBNO,OLD.EST,JOB.EST,MAT EST.PAR,ESTAT,MAT EST.REC,SAVE.INV.JS.REC,EST.MATL)
+         END
+519*
+   END CASE
+   GOTO 99999
+600*
+   RESV.LOC = 0
+   CALL JOB.RESV.SUB(CONO,RESV.ACTION,RESV.LOC,JOBNO)
+   MCNT = COUNT(JOB.RESV.MATL,VM) + (JOB.RESV.MATL # "")
+   FOR M = MCNT TO 1 STEP -1
+      IF JOB.RESV.QTY<1,M> + JOB.ALOC.QTY<1,M> + JOB.USED.QTY<1,M> = 0 THEN
+         JSTAT.ID = JOB.RESV.MATL<1,M>:"!":JOB.RESV.WHSE<1,M>:"!":JOBNO
+         MATREAD INV.JS.REC FROM INV.JOB.STATS, CONO : JSTAT.ID ELSE
+            JOB.RESV.MATL = DELETE(JOB.RESV.MATL,1,M,0)
+            JOB.RESV.WHSE = DELETE(JOB.RESV.WHSE,1,M,0)
+            JOB.RESV.DATE = DELETE(JOB.RESV.DATE,1,M,0)
+            JOB.ALOC.QTY = DELETE(JOB.ALOC.QTY,1,M,0)
+            JOB.RESV.QTY = DELETE(JOB.RESV.QTY,1,M,0)
+            JOB.USED.QTY = DELETE(JOB.USED.QTY,1,M,0)
+            JOB.ALOC.AMT = DELETE(JOB.ALOC.AMT,1,M,0)
+            JOB.RESV.AMT = DELETE(JOB.RESV.AMT,1,M,0)
+            JOB.USED.AMT = DELETE(JOB.USED.AMT,1,M,0)
+         END
+      END
+   NEXT M
+   RETURN
+*
+*---- ORD, JFS, FJS, FOS, & FGS update
+650*
+*
+*---- Clear all allocated quantity
+*
+   MCNT = DCOUNT(JFS.PROD,VM)
+   FOR M = 1 TO MCNT
+      JFS.M.QTY<1,M> = JFS.F.QTY<1,M>
+      OCNT = DCOUNT(JFS.ORDER<1,M>,SVM)
+      FOR O = 1 TO OCNT
+         JFS.ORD.QTY<1,M,O> = 0
+      NEXT O
+      JFS.A.QTY<1,M> = 0
+   NEXT M
+*
+*---- Load old allocated quantities
+670*
+   NJFS.PROD = JFS.PROD
+   NJFS.WHSE = JFS.WHSE
+   NJFS.ORDER = JFS.ORDER
+   NJFS.ORD.QTY = JFS.ORD.QTY
+   MCNT = DCOUNT(JFS.PROD,VM)
+   FOR M = 1 TO MCNT
+      JFS.ORDER<1,M> = ""
+      JFS.ORD.QTY<1,M> = ""
+   NEXT M
+   FOR M = 1 TO MCNT
+      PDNO = JFS.PROD<1,M>; WHNO = JFS.WHSE<1,M>
+      PTR = 1
+      LOOP
+         LOCATE PDNO IN OJFS.PROD<1>,PTR SETTING PLOC THEN
+            IF WHNO = OJFS.WHSE<1,PLOC> THEN
+               JFS.ORDER<1,M> = OJFS.ORDER<1,PLOC>
+               JFS.ORD.QTY<1,M> = OJFS.ORD.QTY<1,PLOC>
+               OJFS.PROD = DELETE(OJFS.PROD,1,PLOC,0)
+               OJFS.WHSE = DELETE(OJFS.WHSE,1,PLOC,0)
+               OJFS.ORDER = DELETE(OJFS.ORDER,1,PLOC,0)
+               OJFS.ORD.QTY = DELETE(OJFS.ORD.QTY,1,PLOC,0)
+               PTR = 0
+            END
+         END ELSE
+            PTR = 0
+         END
+      WHILE PTR DO
+         PTR = PLOC + 1
+      REPEAT
+      JFS.A.QTY<1,M> = SUM(JFS.ORD.QTY<1,M>)
+   NEXT M
+   MATWRITE JFS.REC ON JOB.FNGD.STATS, CONO:JOBNO
+*
+*---- Update FJS &  FGS with the manufacture quantity
+*
+   FOR M = 1 TO MCNT
+      PDNO = JFS.PROD<1,M>; WHNO = JFS.WHSE<1,M>
+      FGS.ID = CONO:PDNO:"!":WHNO
+      MATREADU FGS.REC FROM FNGD.STATS, FGS.ID ELSE
+         MAT FGS.REC = ""
+      END
+      LOCATE JOBNO IN FGS.JOB<1>,1 SETTING L ELSE
+         FGS.JOB<1,L> = JOBNO
+         FGS.A.QTY<1,L> = 0
+      END
+      FGS.M.QTY<1,L> = JFS.M.QTY<1,M> - JFS.F.QTY<1,M>
+      IF FGS.M.QTY<1,L> < 0 THEN FGS.M.QTY<1,L> = 0
+      MATWRITE FGS.REC ON FNGD.STATS, FGS.ID
+      FJS.ID = FGS.ID:"!":JOBNO
+      MATREADU FJS.REC FROM FNGD.JOB.STATS, FJS.ID ELSE
+         MAT FJS.REC = ""
+         FJS.CUST = JOB.CUST
+      END
+      FJS.DATE = JFS.DATE<1,M>
+      FJS.M.QTY = JFS.M.QTY<1,M>
+      FJS.F.QTY = JFS.F.QTY<1,M>
+      FJS.S.QTY = JFS.S.QTY<1,M>
+      MATWRITE FJS.REC ON FNGD.JOB.STATS, FJS.ID
+   NEXT M
+*
+*---- Load all the orders for all the products
+*
+   ORDNOS = ""; PRDPTR = ""; ORDPTR = ""
+   GEN.SHPNO = "000"
+   FOR M = 1 TO MCNT
+      OCNT = DCOUNT(NJFS.ORDER<1,M>,SVM)
+      FOR O = 1 TO OCNT
+         LOCATE NJFS.ORDER<1,M,O> IN ORDNOS,1 SETTING OLOC THEN
+            OPTR = DCOUNT(PRDPTR<OLOC>,VM) + 1
+            PRDPTR<OLOC,OPTR> = M
+            ORDPTR<OLOC,OPTR> = O
+         END ELSE
+            ORDNOS<OLOC> = NJFS.ORDER<1,M,O>
+            PRDPTR<OLOC> = M
+            ORDPTR<OLOC> = O
+         END
+      NEXT O
+   NEXT M
+*
+*---- Update orders with the new allocated quantity
+*
+   OCNT = DCOUNT(ORDNOS,AM)
+   FOR OP = 1 TO OCNT
+      ORDNUM = ORDNOS<OP>
+      PCNT = DCOUNT(ORDPTR<OP>,VM)
+      MATREADU ORD.REC FROM ORDER, CONO:ORDNUM ELSE
+         RELEASE ORDER, CONO:ORDNUM
+         FOR PP = 1 TO PCNT
+            M = PRDPTR<OP,PP>; O = ORDPTR<OP,PP>
+            PDNO = NJFS.PROD<1,M>; WHNO = NJFS.WHSE<1,M>
+            NJFS.ORD.QTY<1,M,O> = 0
+            GOSUB 680
+         NEXT PP
+         GOTO 674
+      END
+      STATUS = "L"; SHPNO = "ALL"
+      CALL ORDER.LINE.UPD(CONO,ORDNUM,SHPNO,STATUS)
+      SHPNO = GEN.SHPNO
+      PCNT = DCOUNT(ORDPTR<OP>,VM)
+      FOR PP = 1 TO PCNT
+         M = PRDPTR<OP,PP>; O = ORDPTR<OP,PP>
+         PDNO = NJFS.PROD<1,M>; WHNO = NJFS.WHSE<1,M>
+         PTR = 1
+         LOOP
+            LOCATE PDNO IN ODQ.PROD<1>,PTR SETTING PLOC THEN
+               IF WHNO = ODQ.WHSE<1,PLOC> AND ODQ.KIT<1,PLOC> = "N" THEN
+                  PTR = 0
+               END
+            END ELSE
+               PLOC = 0; PTR = 0
+            END
+         WHILE PTR DO
+            PTR = PLOC + 1
+         REPEAT
+         IF PLOC = 0 THEN
+            RELEASE ORDER, CONO:ORDNUM
+            NJFS.ORD.QTY<1,M,O> = 0
+            GOSUB 680; GOTO 672
+         END
+         TOT.A.QTY = NJFS.ORD.QTY<1,M,O>; JPTR = 1
+         LOOP
+            LOCATE JOBNO IN ODQ.JOB<1,PLOC>,JPTR SETTING JL THEN
+               BEGIN CASE
+                  CASE TOT.A.QTY >= ODQ.JOB.QTY<1,PLOC,JL>
+                     TOT.A.QTY = TOT.A.QTY - ODQ.JOB.QTY<1,PLOC,JL>
+                     JPTR = JL + 1
+                  CASE TOT.A.QTY > 0
+                     ODQ.JOB.QTY<1,PLOC,JL> = TOT.A.QTY
+                     TOT.A.QTY = 0
+                     JPTR = JL + 1
+                  CASE 1
+                     ODQ.JOB.QTY<1,PLOC,JL> = 0
+               END CASE
+            END ELSE
+               JL = 0
+            END
+         WHILE JL DO REPEAT
+         IF TOT.A.QTY < 1 THEN GOTO 672
+         JPTR = 1
+         LOOP
+            LOCATE JOBNO IN ODQ.JOB<1,PLOC>,JPTR SETTING JL THEN
+               IF ODQ.JOB.SHPNO<1,PLOC,JL> = SHPNO THEN
+                  ODQ.JOB.QTY<1,PLOC,JL> = ODQ.JOB.QTY<1,PLOC,JL> + TOT.A.QTY
+                  JL = 0
+               END
+            END ELSE
+               INS JOBNO BEFORE ODQ.JOB<1,PLOC,1>
+               INS TOT.A.QTY BEFORE ODQ.JOB.QTY<1,PLOC,1>
+               INS GEN.SHPNO BEFORE ODQ.JOB.SHPNO<1,PLOC,1>
+               JL = 0
+            END
+         WHILE JL DO
+            JPTR = JL + 1
+         REPEAT
+         ODQ.A.QTY<1,PLOC> = SUM(ODQ.JOB.QTY<1,PLOC>)
+672*
+      NEXT PP
+      STATUS = "U"; SHPNO = ""
+      CALL ORDER.LINE.UPD(CONO,ORDNUM,SHPNO,STATUS)
+674*
+   NEXT OP
+*
+*---- Update orders with zero out allocated quantity
+*
+   ORDNOS = ""; PRDPTR = ""; ORDPTR = ""
+   MCNT = DCOUNT(OJFS.PROD,VM)
+   FOR M = 1 TO MCNT
+      OCNT = DCOUNT(OJFS.ORDER<1,M>,SVM)
+      FOR O = 1 TO OCNT
+         LOCATE OJFS.ORDER<1,M,O> IN ORDNOS,1 SETTING OLOC THEN
+            OPTR = DCOUNT(PRDPTR<OLOC>,VM) + 1
+            PRDPTR<OLOC,OPTR> = M
+            ORDPTR<OLOC,OPTR> = O
+         END ELSE
+            ORDNOS<OLOC> = OJFS.ORDER<1,M,O>
+            PRDPTR<OLOC> = M
+            ORDPTR<OLOC> = O
+         END
+      NEXT O
+   NEXT M
+   OCNT = DCOUNT(ORDNOS,AM)
+   FOR OP = 1 TO OCNT
+      ORDNUM = ORDNOS<OP>
+      PCNT = DCOUNT(ORDPTR<OP>,VM)
+      MATREADU ORD.REC FROM ORDER, CONO:ORDNUM ELSE
+         RELEASE ORDER, CONO:ORDNUM
+         FOR PP = 1 TO PCNT
+            M = PRDPTR<OP,PP>; O = ORDPTR<OP,PP>
+            PDNO = OJFS.PROD<1,M>; WHNO = OJFS.WHSE<1,M>
+            GOSUB 680
+         NEXT PP
+         GOTO 678
+      END
+      STATUS = "L"; SHPNO = "ALL"
+      CALL ORDER.LINE.UPD(CONO,ORDNUM,SHPNO,STATUS)
+      SHPNO = GEN.SHPNO
+      PCNT = DCOUNT(ORDPTR<OP>,VM)
+      FOR PP = 1 TO PCNT
+         M = PRDPTR<OP,PP>; O = ORDPTR<OP,PP>
+         PDNO = OJFS.PROD<1,M>; WHNO = OJFS.WHSE<1,M>
+         PTR = 1
+         LOOP
+            LOCATE PDNO IN ODQ.PROD<1>,PTR SETTING PLOC THEN
+               IF WHNO = ODQ.WHSE<1,PLOC> THEN
+                  PTR = 0
+               END
+            END ELSE
+               PLOC = 0; PTR = 0
+            END
+         WHILE PTR DO
+            PTR = PLOC + 1
+         REPEAT
+         IF PLOC = 0 THEN
+            RELEASE ORDER, CONO:ORDNUM
+            GOSUB 680; GOTO 676
+         END
+         TOT.A.QTY = 0; JPTR = 1
+         LOOP
+            LOCATE JOBNO IN ODQ.JOB<1,PLOC>,JPTR SETTING JL THEN
+               ODQ.JOB.QTY<1,PLOC,JL> = 0
+               JPTR = JL + 1
+            END ELSE
+               JL = 0
+            END
+         WHILE JL DO REPEAT
+676*
+      NEXT PP
+      STATUS = "U"; SHPNO = ""
+      CALL ORDER.LINE.UPD(CONO,ORDNUM,SHPNO,STATUS)
+678*
+   NEXT OP
+   MATREADU JFS.REC FROM JOB.FNGD.STATS, CONO:JOBNO ELSE MAT JFS.REC = ""
+   MCNT = DCOUNT(OJFS.PROD,VM)
+   FOR M = 1 TO MCNT
+      PDNO = OJFS.PROD<1,M>; WHNO = OJFS.WHSE<1,M>
+      FGS.ID = CONO:PDNO:"!":WHNO
+      FJS.ID = FGS.ID:"!":JOBNO
+      MATREADU FJS.REC FROM FNGD.JOB.STATS, FJS.ID THEN
+         DELETE FNGD.JOB.STATS, FJS.ID
+      END ELSE
+         RELEASE FNGD.JOB.STATS, FJS.ID
+      END
+      MATREADU FGS.REC FROM FNGD.STATS, FGS.ID THEN
+         LOCATE JOBNO IN FGS.JOB<1>,1 SETTING L THEN
+            FGS.JOB = DELETE(FGS.JOB,1,L,0)
+            FGS.M.QTY = DELETE(FGS.M.QTY,1,L,0)
+            FGS.A.QTY = DELETE(FGS.A.QTY,1,L,0)
+         END
+         IF FGS.JOB = "" AND FGS.ORDER = "" THEN
+            DELETE FNGD.STATS, FGS.ID
+         END ELSE
+            MATWRITE FGS.REC ON FNGD.STATS, FGS.ID
+         END
+      END ELSE
+         RELEASE FNGD.STATS, FGS.ID
+      END
+      PTR = 1
+      LOOP
+         LOCATE PDNO IN JFS.PROD<1>,PTR SETTING PLOC THEN
+            IF WHNO = JFS.WHSE<1,PLOC> THEN
+               JFS.PROD = DELETE(JFS.PROD,1,PLOC,0)
+               JFS.WHSE = DELETE(JFS.WHSE,1,PLOC,0)
+               JFS.DATE = DELETE(JFS.DATE,1,PLOC,0)
+               JFS.M.QTY = DELETE(JFS.M.QTY,1,PLOC,0)
+               JFS.A.QTY = DELETE(JFS.A.QTY,1,PLOC,0)
+               JFS.F.QTY = DELETE(JFS.F.QTY,1,PLOC,0)
+               JFS.S.QTY = DELETE(JFS.S.QTY,1,PLOC,0)
+               JFS.ORDER = DELETE(JFS.ORDER,1,PLOC,0)
+               JFS.ORD.QTY = DELETE(JFS.ORD.QTY,1,PLOC,0)
+               PTR = 0
+            END
+         END ELSE
+            PTR = 0
+         END
+      WHILE PTR DO
+         PTR = PLOC + 1
+      REPEAT
+   NEXT M
+   IF JFS.PROD # "" THEN
+      MATWRITE JFS.REC ON JOB.FNGD.STATS, CONO:JOBNO
+   END ELSE
+      DELETE JOB.FNGD.STATS, CONO:JOBNO
+   END
+   RETURN
+*
+*---- Zero out allocated for the FJS
+680*
+   FJS.ID = CONO:PDNO:"!":WHNO:"!":JOBNO
+   MATREADU FJS.REC FROM FNGD.JOB.STATS, FJS.ID THEN
+      LOCATE ORDNUM IN FJS.ORD<1>,1 SETTING FND THEN
+         FJS.ORD = DELETE(FJS.ORD,1,FND,0)
+         FJS.ORD.QTY = DELETE(FJS.ORD.QTY,1,FND,0)
+         FJS.A.QTY = SUM(FJS.ORD.QTY)
+         MATWRITE FJS.REC ON FNGD.JOB.STATS, FJS.ID
+      END ELSE
+         RELEASE FNGD.JOB.STATS, FJS.ID
+      END
+   END ELSE
+      RELEASE FNGD.JOB.STATS, FJS.ID
+   END
+   RETURN
+90500 *
+   X=0;Y=23;TYP=1;MAXL=1;PMSG=ERRMSG
+   O.R = "O"
+   CALL EDIT.SUB
+   P_X= 0;P_Y= 23;P_VALUE= "";P_OPT= "CL"
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   RETURN
+91000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+   ERR.TYPE = 1;CALL SYSCOM(MAT SYSCOM.REC); RETURN
+92000 *
+   ERR.TYPE = 2;CALL SYSCOM(MAT SYSCOM.REC); RETURN
+93000 *
+   ERR.TYPE = 3;CALL SYSCOM(MAT SYSCOM.REC)
+99999 *
+   IF EPRT THEN
+      P_X= 0;P_Y= 23;P_VALUE= "";P_OPT= "CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   END
+   RETURN
+END

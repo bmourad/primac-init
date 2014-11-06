@@ -1,0 +1,123 @@
+SUBROUTINE JOBM_GET_OP_DATA
+********************************************************************************
+*   Program name :- JOBM_GET_OP_DATA
+*   Created:- 7/31/2003
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+*  JOB_NO,Cono
+*
+* Out Properties:
+* ---------------
+*JOB_OP_NUM,JOB_OP_VEND,JOB_OP_CATG,JOB_OP_EXP_DATE,JOB_OP_LAST_RECV,JOB_OP_OPEN_QTY,JOB_OP_OPEN_AMT 
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE JCS.CPYLIB JOB.STATS
+$INCLUDE JCS.CPYLIB JOB
+$INCLUDE POS.CPYLIB OUTSIDE.PO
+$INCLUDE CPYLIB CHAR
+* Insert method code here
+ERRMSG = ''
+OPEN "","JOB" TO JOB ELSE
+	ERRMSG = "CANNOT FIND JOB FILE"
+	GOTO 99999
+END
+
+OPEN "","JOB.OSP" TO JOB.OSP ELSE
+	ERRMSG = "CANNOT FIND JOB.OSP FILE"
+	GOTO 99999
+END
+OPEN "","JOB.STATS" TO JOB.STATS ELSE
+	ERRMSG = "CANNOT FIND JOB.STATS FILE"
+	GOTO 99999
+END
+OPEN "","OUTSIDE.PO" TO OUTSIDE.PO ELSE
+	ERRMSG = "CANNOT FIND OUTSIDE.PO FILE"
+	GOTO 99999
+END
+
+VAL = RBO.getProperty('','JOB_NO',JOB.NUM)
+VAL = RBO.getProperty('','SUB_FLAG',SUB.FLAG) ;* FOR MAINTENANCE 0, FOR INQUIRY IT IS 1
+VAL = RBO.getProperty('','Cono',CONO)
+
+MATREAD JOB.REC FROM JOB, CONO:JOB.NUM ELSE MAT JOB.REC = ''
+
+VAR = ""
+VEND.NO = ""
+PLINE = ""
+EXP.DATE = ""
+DATE.RECVD = ""
+OPEN.QTY = ""
+OPEN.AMT = ""
+PCNT = 0
+
+IF SUB.FLAG = "1" THEN
+	JOB.SUBS = JOB.SUBS : VM : JOB.NUM
+END ELSE
+	JOB.SUBS = JOB.NUM
+END
+
+SUBS = DCOUNT(JOB.SUBS,VM)	
+FOR X = 1 TO SUBS
+	MATREAD  JSTAT.REC FROM JOB.STATS, CONO:JOB.SUBS<1,X> ELSE
+      		MAT JSTAT.REC = ''
+      	END
+	IF JSTAT.OPO.NO # "" THEN
+		JJCNT = DCOUNT(JSTAT.OPO.NO,VM)
+	      	FOR JJ = 1 TO JJCNT
+       		MATREAD OPO.REC FROM OUTSIDE.PO, CONO:JSTAT.OPO.NO<1,JJ> ELSE
+       			MAT OPO.REC = ""
+	       	END
+		      	OJCNT = DCOUNT(OPO.JOB.NO,VM)
+       		FOR OJ = 1 TO OJCNT
+				IF (JOB.SUBS<1,X> = OPO.JOB.NO<1,OJ>) AND (JSTAT.PROD.LINE<1,JJ> = OPO.PROD.LINE<1,OJ>:"@":OPO.PROD.SEQ<1,OJ>) THEN
+              			PCNT = PCNT + 1
+	             			VAR<1,PCNT> = JSTAT.OPO.NO<1,JJ>
+					PLINE<1,PCNT> = FIELD(JSTAT.PROD.LINE<1,JJ>,'@',1)
+	      		       	EXP.DATE<1,PCNT> = OCONV(OPO.EXP.DATE<1,OJ>,"D2/")
+              			OPEN.QTY<1,PCNT> = OPO.QTY<1,OJ> - OPO.QTY.RECVD<1,OJ> - OPO.CANCEL.QTY<1,OJ>
+             				IF OPEN.QTY<1,PCNT> < 0 THEN OPEN.QTY<1,PCNT> = 0
+	             			IF OPEN.QTY<1,PCNT> # 0 THEN
+*                				OPEN.QTY<1,PCNT> = OPO.QTY<1,OJ> - OPO.QTY.RECVD<1,OJ> - OPO.CANCEL.QTY<1,OJ>
+						DESC.PRICE = INT(OPO.U.PRICE<1,OJ>*((OPO.DISCOUNT<1,OJ>/10000)))
+	      		         		DESC.PRICE = INT(OPO.U.PRICE<1,OJ> - DESC.PRICE)
+				             	BEGIN CASE 
+             	    					CASE OPO.UOM<1,OJ> = "M"
+	            						OPEN.AMT<1,PCNT> = OCONV(INT((DESC.PRICE/100)*(OPEN.QTY<1,PCNT>/100000)+.5),"MD2")
+                  					CASE OPO.UOM<1,OJ> = "C"
+	      	             					OPEN.AMT<1,PCNT> = OCONV(INT((DESC.PRICE/100)*(OPEN.QTY<1,PCNT>/10000)+.5),"MD2") 
+	       	           			CASE 1 
+       	       	      				OPEN.AMT<1,PCNT> = OCONV(INT((DESC.PRICE/100) * (OPEN.QTY<1,PCNT>/100)+ .5),"MD2") 
+             		  			END CASE
+					END ELSE
+                				OPEN.AMT<1,PCNT> = 0
+		              	END
+					OPEN.QTY<1,PCNT> = OCONV(OPEN.QTY<1,PCNT>,"MD2")
+       		       	IF OPEN.AMT<1,PCNT> < 0 THEN OPEN.AMT<1,PCNT> = 0
+             				VEND.NO<1,PCNT> = OPO.VEND.NO
+	             			DATE.RECVD<1,PCNT> = OCONV(OPO.DATE.RECVD<1,OJ>,"D2/")
+		            	END
+       		 NEXT OJ
+		NEXT JJ
+	END
+NEXT X
+
+VAL = RBO.setProperty('','JOB_OP_NUM',VAR)
+VAL = RBO.setProperty('','JOB_OP_VEND',VEND.NO)
+VAL = RBO.setProperty('','JOB_OP_CATG',PLINE)
+VAL = RBO.setProperty('','JOB_OP_EXP_DATE',EXP.DATE)
+VAL = RBO.setProperty('','JOB_OP_LAST_RECV',DATE.RECVD)
+VAL = RBO.setProperty('','JOB_OP_OPEN_QTY',OPEN.QTY)
+VAL = RBO.setProperty('','JOB_OP_OPEN_AMT',OPEN.AMT)
+
+99999
+  IF (TRIM(ERRMSG) # "") THEN
+       STATUS = RBO.setProperty('','ServerStatus','1')
+       STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+  END ELSE
+       STATUS = RBO.setProperty('','ServerStatus','')
+       STATUS = RBO.setProperty('','ServerMessage','')
+  END 
+RETURN

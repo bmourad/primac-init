@@ -1,0 +1,115 @@
+SUBROUTINE APVOUMPostRead
+********************************************************************************
+*   Program name :- APVOUMPostRead
+*   Created:- 6/23/2003
+*------------------------------------------------------------------------------*
+*
+*  This server event is triggered from within the {m:WW:uObject=ReadData}, {m- *
+*  :WW:uObject=DeleteData} and {m:WW:uObject=WriteData} server events. In eac- *
+*  h case, this {m:WW:uObject=PostRead} event occurs after the physical datab- *
+*  ase read, but before values are extracted from the database record. This p- *
+*  rovides a window of opportunity in which the database values may be direct- *
+*  ly manipulated. The API functions
+*  RBO.setDBVals() and RBO.getDBVals() are - *
+*  used to do this.
+*  
+*                - *
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE CPYLIB CHAR
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB INV.CNV
+$INCLUDE PMC.CPYLIB GLTABLE
+
+* Insert method code here
+ERRMSG = ""
+
+	OPEN '','INVENTORY' TO INVENTORY ELSE ERRMSG = "INVENTORY FILE IS MISSING"; GOTO 1000
+	OPEN '','CONTROL' TO CONTROL ELSE ERRMSG="CONTROL FILE IS MISSING"; GOTO 1000
+	OPEN '','EQUIP.FILE' TO EQUIP.FILE ELSE ERRMSG = 'EQUIP.FILE IS MISSING';GOTO 1000
+
+	STATUS  = RBO.getProperty('','PMCProperty',PMCProperty)
+
+	USER.ID = PMCProperty<1,3>
+	CONO    = PMCProperty<1,4>
+
+	MATREAD GLTABLE.REC FROM CONTROL ,CONO:"GLTABLE" ELSE
+      		ERRMSG = "GLTABLE IS MISSING FROM CONTROL FILE";GOTO 1000
+   	END
+
+	*MATREAD COMP.REC FROM COMPANY,CONO THEN
+	*	COMPANYDET<1,-1> = CO.ACCT.PIC : "|" : CO.ACCT.MATCH : "|" : CO.POS : "|" : CO.APS.R.INTRF : "|" : CO.APS.O.INTRF : "|" : CO.APS.M.INTRF : "|" : CO.PROX.CUTOFF : "|" : CO.FAS : "|" : CO.ACCT.MASK
+	*END
+
+
+
+* FOLLOWING CODE IS FOR CONVERTING THE TVO_PO_QTY TO MD2
+TVO.PO.QTY  = ""
+TVO_QTY     = ""
+TVO.PO.TYPE = ""
+STATUS=RBO.getDBVals('TVO_PO_QTY',TVO.PO.QTY)
+STATUS=RBO.getDBVals('TVO_PO_TYPE',TVO.PO.TYPE)
+STATUS=RBO.getDBVals('TVO_PO_PROD',TVO.PO.PROD)
+STATUS=RBO.getDBVals('TVO_PO_UM',TVO.PO.UM)
+FOR TA = 1 TO DCOUNT(TVO.PO.PROD,VM)
+	BEGIN CASE
+    	   CASE TVO.PO.TYPE = "R" OR TVO.PO.TYPE = "M"    
+		MATREAD INV.REC FROM INVENTORY, CONO : TVO.PO.PROD<1,TA> ELSE MAT INV.REC = ""
+		 BEGIN CASE
+         	    CASE TVO.PO.UM<1,TA> = "SHT" AND INV.UNIT<1,3> = "LBS"
+            		ICR.CNV<TA> = "MD0"; ICR.DV2<TA> = 1
+            		ICR.DV1<TA> = INV.M.WT; ICR.MT1<TA> = 10
+         	    CASE TVO.PO.UM<1,TA> = "PC" AND INV.UNIT<1,3> = "MSI"
+            		ICR.CNV<TA> = "MD0"; ICR.DV2<TA> = 1
+            		ICR.DV1<TA> = INV.PAP.WIDTH/100; ICR.MT1<TA> = 100
+                 CASE TVO.PO.UM<1,TA> = "FT" AND INV.UNIT<1,3> = "MSI"
+            		ICR.CNV<TA> = "MD0"; ICR.DV2<TA> = 12
+            		ICR.DV1<TA> = INV.PAP.WIDTH/100; ICR.MT1<TA> = 1000
+                 CASE 1
+            		ICR.CNV<TA> = "MD2"; ICR.DV2<TA> = 1
+            		ICR.DV1<TA> = 1; ICR.MT1<TA> = 1
+      		END CASE
+              IF ICR.CNV<TA> = "MD0" THEN
+         		TVO_QTY<1,-1> = INT(((TVO.PO.QTY<1,TA>/ICR.DV1<TA>) * ICR.MT1<TA>)/ICR.DV2<TA> + .5)          		
+      		END ELSE
+         		TVO_QTY<1,-1> = OCONV(TVO.PO.QTY<1,TA>, "MD2") 
+      		END
+          CASE 1
+		TVO_QTY<1,-1> = OCONV(TVO.PO.QTY<1,TA>, "MD2") 
+	END CASE    
+NEXT TA
+*************************** EQUIP IDS CODE ************************************
+	AllID = ""
+	CMD = "SSELECT EQUIP.FILE WITH CONO = '" : CONO : "'"
+	UDTEXECUTE CMD	
+	DATA = 1	
+	LOOP
+   		READNEXT CODEID ELSE DATA = 0		
+	WHILE DATA		
+		AllID<1,-1> = CODEID[4,99]
+	REPEAT
+
+	STATUS = RBO.setProperty('', 'ALLEQPIDS', AllID)
+
+
+*******************************************************************************
+STATUS = RBO.setProperty('','TVO_PO_QTY',TVO_QTY)
+STATUS = RBO.setProperty('','GLTB_AP',GLTB.AP)
+STATUS = RBO.setProperty('','GLTB_CASH',GLTB.CASH)
+
+1000*
+   IF ERRMSG # "" THEN
+      STATUS = RBO.setProperty('', 'ServerStatus', 1)
+      STATUS = RBO.setProperty('', 'ServerMessage', ERRMSG)
+   END
+* End of method code
+RETURN
+

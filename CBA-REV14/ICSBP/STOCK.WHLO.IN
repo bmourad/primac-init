@@ -1,0 +1,706 @@
+   SUBROUTINE STOCK.WHLO.IN(CONO,PO.CODE,FIND.PO,PLN,MAT COMP.REC)
+*COPY>CPYLIB>COM1
+*COPY>ICS.CPYLIB>COM.INV.MAIN  
+*COPY>ICS.CPYLIB>COM.INV.SERIAL
+*COPY>ICS.CPYLIB>COM.INV.LINK  
+*COPY>POS.CPYLIB>COM.PO.INTRF
+*********************************************************************
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - ICSBP
+* PROGRAM     - STOCK.WHLO.IN
+* DATE        - 03/20/85
+* DESCRIPTION
+* This program is used to enter all detail line for stock receipts.
+*T25978 adelgado 02/18/2002 * Add the use of prompts (S,SR,SB,ST).
+*T25740 epitka 04/02/2002 * REV12
+*T27920 cmykleb 09/16/2004 * Add the ability to close a purchase order
+*                            from inventory receipts.
+*********************************************************************
+*
+*COPY>PMC.CPYLIB>PO
+*COPY>PMC.CPYLIB>COMPANY ; * T27920
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>ICS.CPYLIB>INV.WHSE.LOC
+*COPY>ICS.CPYLIB>WAREHOUSE
+*COPY>ICS.CPYLIB>CATEGORY
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>ICS.CPYLIB>SAVE.STOCK.REC
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*
+   DIM SAVE.IWH.REC(65)
+   SYS.TYPE=1
+   CALL SYSCOM(MAT SYSCOM.REC)
+*
+   D8=STR('-',8)
+   D11=STR('-',11)
+   BEGIN.PAGE=14
+   LINE.SPACE=1
+   PAGE.SIZE=5
+   LINES=0
+   FLD.MAX=4
+   OLD.START.LINE=0
+   ;*
+   ;**** GET ALL LOCATIONS
+   ;*
+   MATREAD WHSE.REC FROM WAREHOUSE , CONO:PO.WHSE<1,PLN> ELSE
+      ERRMSG='WAREHOUSE (':PO.WHSE<1,PLN>:') NOT ON FILE'
+      GOSUB 91000; GOTO 99999
+   END
+   VLOC=''
+   HLOC=''
+   HLOC<1,1>='LOCATION - ':WHS.LOC<1,1>
+   VLOC=WHS.LOC<1,1>
+   L.CNT=COUNT(WHS.LOC,VM) + (WHS.LOC # '')
+   I=1
+   FOR L=2 TO L.CNT
+      IF LEN(HLOC<1,I>) > 50 THEN
+         I=I + 1
+         HLOC<1,I>='LOCATION - ':WHS.LOC<1,L>
+      END ELSE
+         HLOC<1,I>=HLOC<1,I>:', ':WHS.LOC<1,L>
+      END
+      VLOC=VLOC:VM:WHS.LOC<1,L>
+   NEXT L
+   CHECK.LOC=''; LLOC.CNT=''; CHECK.R.S.ID=''
+   PROD.CNT=COUNT(PO.PROD.NUM,VM) + 1
+   SAME.PROD=''
+   POS=0; PTR=1
+   LOOP
+      LOCATE PO.PROD.NUM<1,PLN> IN PO.PROD.NUM<1>,PTR SETTING PFND ELSE PFND=0
+   WHILE PFND DO
+      IF PFND <> PLN THEN
+         POS=POS + 1
+         SAME.PROD<POS>=PFND
+      END
+      PTR=PFND + 1
+   REPEAT
+   SAME.PROD.CNT=POS
+   GOSUB DETERMINE.QTY.TYPE
+   IF RQX=0 THEN
+      ERRMSG="CANNOT DETERMINE QUANTITY TYPE"; GOSUB 91000; GOTO 99999
+   END
+   MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE ELSE
+      ERRMSG="PRODUCT LINE '":INV.LINE:"' DOES NOT EXIST"; GOSUB 91000; GO 99999
+   END
+   IF CATG.INV="" OR CATG.ACCRU.LIAB="" OR CATG.AP.ACCT="" THEN
+      ERRMSG="ACCOUNT DETAILS NOT SET UP FOR PRODUCT LINE '":INV.LINE:"'"; GOSUB 91000; GO 99999
+   END
+   P_X =24 ; P_Y=12 ; P_VALUE=FIELD(MAIN.HEAD,VM,1) ; P_OPT=""
+   P_X  := AM:27 ; P_Y := AM:12 ; P_VALUE := AM:FIELD(MAIN.HEAD,VM,2)
+   P_X  := AM:36 ; P_Y := AM:12 ; P_VALUE := AM:FIELD(MAIN.HEAD,VM,3)
+   P_X  := AM:48 ; P_Y := AM:12 ; P_VALUE := AM:FIELD(MAIN.HEAD,VM,4)
+   P_X  := AM:60 ; P_Y := AM:12 ; P_VALUE := AM:FIELD(MAIN.HEAD,VM,5)
+   CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   ECD.NUM=4
+   SCV.REC(ECD.NUM)<ECD.SCRN.NO>=OCONV(INT(((PO.TOT.RECEVED<1,PLN>/ICR.DV1<1>) * ICR.MT1<1>)/ICR.DV2<1> + .5),ICR.CNV)
+   ECD.ACTION=5; CALL SCRN.EDIT
+   ECD.NUM=5
+   SCV.REC(ECD.NUM)<ECD.SCRN.NO>=OCONV(INT(((PO.TOT.CANCEL<1,PLN>/ICR.DV1<1>) * ICR.MT1<1>)/ICR.DV2<1> + .5),ICR.CNV)
+   ECD.ACTION=5; CALL SCRN.EDIT
+   ;*
+   ;**** MAIN PROCESS
+   ;*
+   IF CATG.TRACK.QOH="Y" THEN GOSUB 2000
+   IF SSTK.LOC<1,PLN>='' THEN
+      LOOP
+         ACTION='A'
+         LN=LINES + 1
+         OLD.LINES=LINES
+         GOSUB 11000
+         SLN=BEGIN.PAGE + LINE.SPACE * MOD(LN-1,PAGE.SIZE)
+         SKIP=0
+         FOR FLD=1 TO FLD.MAX UNTIL SKIP=1
+            ON FLD GOSUB ENT.LOC, ENT.SKID,ENT.QTY,ENT.DIAM
+         NEXT FLD
+         IF NOT(SKIP) THEN
+            IF CATG.TRACK.QOH="Y" THEN GOSUB 2000
+            TEMP=PO.TOT.RECEVED<1,PLN> + SSTK.TOT.REC<1,PLN>
+            IF FIND.PO AND TEMP > PO.TOT.ONORD<1,PLN> THEN
+               ERRMSG ='TOTAL RECEIVED EXCEEDS TOTAL ORDERED'
+               GOSUB 91000
+            END
+            LINES=DCOUNT(SSTK.LOC<1,PLN>,SVM)
+         END
+      WHILE LINES > OLD.LINES AND LINES < 99 DO REPEAT
+      LN=LINES
+   END ELSE
+      LINES=COUNT(SSTK.LOC<1,PLN>, SVM) + 1
+      LN=1
+   END
+   GOSUB 11000
+   GOSUB ENT.OPTION
+*
+   GOTO 99999
+*
+**************************************************************************
+**** S U B R O U T I N E S ***********************************************
+**************************************************************************
+*
+***********
+ENT.OPTION: 
+***********
+*
+   MORE=1
+   LOOP
+      ECD.NUM=39
+      SCV.REC(ECD.NUM)<ECD.SCRN.NO>=""
+      ECD.ACTION=4
+      CALL SCRN.EDIT
+      ACTION=ECD.RET.VALUE
+      BEGIN CASE
+         CASE ACTION='E' OR ACTION='END'
+*T27920 v
+500 *
+            IF SCV.REC(8)<ECD.SCRN.NO> GT 0 AND CO.ICS.CANC.OPEN = "Y" THEN
+               ECD.NUM = 42; ECD.ACTION = 4; CALL SCRN.EDIT
+               IF ECD.RET.VALUE = "END" THEN GOTO 500
+               SSTK.COMPLETE<1,PLN> = ECD.RET.VALUE
+            END ELSE
+               SSTK.COMPLETE<1,PLN> = ""
+            END
+*T27920 ^
+            FOR M=12 TO 19
+               IF M=13 THEN CONTINUE
+               P_X =24 ; P_Y=M ; P_VALUE="" ; P_OPT="CL"
+               CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            NEXT M
+            ECD.NUM=3; SCV.REC(3)<ECD.SCRN.NO>=""
+            ECD.ACTION=5; CALL SCRN.EDIT
+            ECD.NUM=4; SCV.REC(4)<ECD.SCRN.NO>=""
+            ECD.ACTION=5; CALL SCRN.EDIT
+            ECD.NUM=5; SCV.REC(5)<ECD.SCRN.NO>=""
+            ECD.ACTION=5; CALL SCRN.EDIT
+            ECD.NUM=6; SCV.REC(6)<ECD.SCRN.NO>=""
+            ECD.ACTION=5; CALL SCRN.EDIT
+            ECD.NUM=7; SCV.REC(7)<ECD.SCRN.NO>=""
+            ECD.ACTION=5; CALL SCRN.EDIT
+            ECD.NUM=8; SCV.REC(8)<ECD.SCRN.NO>=""
+            ECD.ACTION=5; CALL SCRN.EDIT
+            ECD.NUM=9; SCV.REC(9)<ECD.SCRN.NO>=""
+            ECD.ACTION=5; CALL SCRN.EDIT
+            ECD.NUM=10; SCV.REC(10)<ECD.SCRN.NO>=""
+            ECD.ACTION=5; CALL SCRN.EDIT
+            MORE=0
+         CASE ACTION='A'
+            LOOP
+               LN=LINES + 1
+               OLD.LINES=LINES
+               GOSUB 11000
+               SLN=BEGIN.PAGE + LINE.SPACE * MOD(LN-1,PAGE.SIZE)
+               SKIP=0
+               FOR FLD=1 TO FLD.MAX UNTIL SKIP=1
+                  ON FLD GOSUB ENT.LOC, ENT.SKID,ENT.QTY,ENT.DIAM
+               NEXT FLD
+               IF NOT(SKIP) THEN
+                  IF CATG.TRACK.QOH="Y" THEN GOSUB 2000
+                  TEMP=PO.TOT.RECEVED<1,PLN> + SSTK.TOT.REC<1,PLN>
+                  IF FIND.PO AND TEMP > PO.TOT.ONORD<1,PLN> THEN
+                     ERRMSG ='TOTAL RECEIVED EXCEEDS TOTAL ORDERED'
+                     GOSUB 91000
+                  END
+                  LINES=DCOUNT(SSTK.LOC<1,PLN>,SVM)
+               END
+            WHILE LINES > OLD.LINES AND LINES < 99 DO REPEAT
+            LN=LINES
+            GOSUB 11000
+         CASE ACTION='C'
+            GOSUB ENT.LINE
+            IF LN.NO THEN
+               LN=LN.NO
+               GOSUB 11000
+               SLN=BEGIN.PAGE + LINE.SPACE * MOD(LN-1,PAGE.SIZE)
+               P_X =27 ; P_Y=SLN ; P_VALUE="" ; P_OPT="CL"
+               CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+               SKIP=0
+               FOR FLD=1 TO FLD.MAX UNTIL SKIP=1
+                  ON FLD GOSUB ENT.LOC, ENT.SKID,ENT.QTY,ENT.DIAM
+               NEXT FLD                                        
+               IF NOT(SKIP) THEN
+                  IF CATG.TRACK.QOH="Y" THEN GOSUB 2000
+                  TEMP=PO.TOT.RECEVED<1,PLN> + SSTK.TOT.REC<1,PLN>
+                  IF FIND.PO AND TEMP > PO.TOT.ONORD<1,PLN> THEN
+                     ERRMSG ='TOTAL RECEIVED EXCEEDS TOTAL ORDERED'
+                     GOSUB 91000
+                  END
+                  LINES=DCOUNT(SSTK.LOC<1,PLN>,SVM)
+               END
+            END
+         CASE ACTION='D'
+            GOSUB ENT.LINE
+            IF LN.NO THEN
+               LN=LN.NO
+               SSTK.LOC=DELETE(SSTK.LOC,1,PLN,LN)
+               SSTK.SERIAL=DELETE(SSTK.SERIAL,1,PLN,LN)
+               SSTK.TOT.REC<1,PLN>=SSTK.TOT.REC<1,PLN> - SSTK.QTY<1,PLN,LN>
+               SSTK.QTY=DELETE(SSTK.QTY,1,PLN,LN)
+               SSTK.SHEET=DELETE(SSTK.SHEET,1,PLN,LN)
+               SSTK.DIAM=DELETE(SSTK.DIAM,1,PLN,LN)
+               IF CATG.TRACK.QOH="Y" THEN GOSUB 2000
+               LINES=DCOUNT(SSTK.LOC<1,PLN>,SVM)
+               IF LN > 1 AND LN > LINES THEN LN=LN - 1
+               IF LN < 1 THEN LN=1
+               OLD.START.LINE=0
+            END
+            GOSUB 11000
+         CASE ACTION='S'
+            LN=LN + PAGE.SIZE
+            IF LN > LINES THEN LN=1
+            GOSUB 11000
+      * T25978 v
+         CASE ACTION = 'SR'
+            LN -= PAGE.SIZE
+            IF LN < 1 THEN LN = 1
+            GOSUB 11000
+         CASE ACTION = 'ST'
+            LN = 1
+            GOSUB 11000
+         CASE ACTION = 'SB'
+            LN = LINES
+            GOSUB 11000
+      * T25978 ^
+         CASE ACTION='J'
+            IF CATG.TRACK.QOH="Y" THEN
+               CALL STOCK.JOB.IN(CONO,PLN,MAT INV.CNV.REC,FIND.PO)
+               P_X=24 ; P_Y=12 ; P_VALUE="" ; P_OPT="CL"
+               CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+               P_X=24 ; P_Y=12 ; P_VALUE=FIELD(MAIN.HEAD,VM,1) ; P_OPT=""
+               P_X  := AM:27 ; P_Y := AM:12 ; P_VALUE := AM:FIELD(MAIN.HEAD,VM,2) ; P_OPT=""
+               P_X  := AM:36 ; P_Y := AM:12 ; P_VALUE := AM:FIELD(MAIN.HEAD,VM,3) ; P_OPT=""
+               P_X  := AM:48 ; P_Y := AM:12 ; P_VALUE := AM:FIELD(MAIN.HEAD,VM,4)
+               P_X  := AM:60 ; P_Y := AM:12 ; P_VALUE := AM:FIELD(MAIN.HEAD,VM,5)
+               CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+               OLD.START.LINE=0; GOSUB 11000
+            END
+      END CASE
+   WHILE MORE DO REPEAT
+   RETURN
+*
+**********
+ENT.LOC: 
+**********
+*
+   EOI=0
+   LOOP
+      ERRMSG=''
+      P_X =24 ; P_Y=SLN ; P_VALUE="" ; P_OPT="CL"
+      P_X  := AM:24 ; P_Y := AM:SLN ; P_VALUE := AM:LN "R#2"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      X=27 ; Y=SLN ; TYP=1 ; MAXL=4
+      SAVE.MAXL=MAXL      ;*T23931
+      HMSG=HLOC
+      IF ACTION='A' THEN
+         IF SSTK.LOC<1,PLN,LN-1>='' THEN
+            O.R='R'
+         END ELSE
+            DEFAULT=SSTK.LOC<1,PLN,LN-1>
+            O.R='O'
+         END
+      END ELSE
+         O.R='O'
+         DEFAULT=SSTK.LOC<1,PLN,LN>
+      END
+      CALL EDIT.SUB
+      IF VALUE='END' THEN
+         EOI=1
+         IF ACTION='A' THEN
+            SSTK.LOC=DELETE(SSTK.LOC,1,PLN,LN)
+            SSTK.SERIAL=DELETE(SSTK.SERIAL,1,PLN,LN)
+            SSTK.SHEET=DELETE(SSTK.SHEET,1,PLN,LN)
+            SSTK.DIAM=DELETE(SSTK.DIAM,1,PLN,LN)
+            SSTK.TOT.REC<1,PLN>=SSTK.TOT.REC<1,PLN> - SSTK.QTY<1,PLN,LN>
+            SSTK.QTY=DELETE(SSTK.QTY,1,PLN,LN)
+            P_X =24 ; P_Y=SLN ; P_VALUE="" ; P_OPT="CL"
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            IF CATG.TRACK.QOH="Y" THEN GOSUB 2000
+         END
+         SKIP=1
+      END ELSE
+         IF RSX=0 OR RSX=36 THEN
+            IF FIELD(TRIM(VALUE),' ',2) # "" OR TRIM(VALUE)="" THEN
+               ERRMSG='Spaces are not allowed in location ID'
+               GOSUB 91000
+            END ELSE
+               VALUE=TRIM(VALUE)
+               LOCATE VALUE IN SSTK.LOC<1,PLN>,1 SETTING LFND ELSE LFND=LN
+               IF LFND <> LN THEN
+                  ERRMSG='Cannot Enter Same Location Twice'
+                  GOSUB 91000
+               END ELSE
+                  IF LEN(VALUE) GT SAVE.MAXL THEN
+                     ERRMSG='Invalid Entry, too long'
+                     GOSUB 91000
+                  END
+               END
+            END
+         END
+         IF ERRMSG='' THEN
+            EOI=1
+            SSTK.LOC<1,PLN,LN>=VALUE
+            LOC.CNT=DCOUNT(IWH.LOC,VM)
+            LOCATE VALUE IN IWH.LOC<1>,1 SETTING LLOC ELSE
+               LLOC=LOC.CNT + 1
+            END
+         END
+      END
+   UNTIL (EOI) DO REPEAT
+   RETURN
+*
+**********
+ENT.SKID: 
+**********
+*
+   EOI=1
+   LOOP
+      ERRMSG=''
+      FND=0
+      IF RSX=0 THEN
+         FOR PP=1 TO SAME.PROD.CNT WHILE FND=0
+            P=SAME.PROD<PP>
+            LOCATE SSTK.LOC<1,PLN,LN> IN SSTK.LOC<1,P>,1 SETTING FND ELSE FND=0
+            IF FND AND PO.WHSE<1,PLN>=PO.WHSE<1,P> THEN
+               ERRMSG='You Are Adjusting A Previously Entered Location'
+               GOSUB 91000
+            END ELSE
+               FND=0
+            END
+         NEXT PP
+      END
+      IF ERRMSG='' AND (FND) THEN
+         IF CATG.TRK.LVL="G" THEN
+            SKID.NUM=PO.WHSE<1,PLN>:"!":SSTK.LOC<1,PLN,LN>
+            LOCATE SKID.NUM IN SSTK.SERIAL<1,PLN>,1 SETTING FND ELSE FND=LN
+            IF FND <> LN THEN
+               ERRMSG='Cannot Enter Same Location Twice'
+               GOSUB 91000
+            END ELSE
+               P_X =RSX ; P_Y=SLN ; P_VALUE=SKID.NUM "L#11" ; P_OPT=""
+               CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+               SSTK.SERIAL<1,PLN,LN> = SKID.NUM
+            END
+         END
+      END
+   UNTIL (EOI) DO REPEAT
+   RETURN
+*
+**************
+ENT.QTY: 
+**************
+*
+   EOI=0
+   LOOP
+      ERRMSG=''
+      BEGIN CASE
+         CASE OQX AND ICR.DV1<2>=''
+            X=OQX; Y=SLN; MAXL=10; O.R='R'
+            TYP=4; SCALER=2; MINV=0; MAXV=999999900
+            MAXV=999999999; * T20896
+            BEGIN CASE
+               CASE SSTK.QTY<1,PLN,LN> # '' AND ICR.CNV<1>="MD2"
+                  O.R='O'
+                  DEFAULT=INT(((SSTK.QTY<1,PLN,LN>/ICR.DV1<1>)*ICR.MT1<1>)/ICR.DV2<1>+.5)
+                  DEFAULT=OCONV(DEFAULT/INV.SBR,"MD2")
+               CASE SSTK.QTY<1,PLN,LN> # "" AND ICR.CNV<1>="MD0"
+                  O.R='O'
+                  DEFAULT=INT(SSTK.QTY<1,PLN,LN>/10)
+                  DEFAULT=OCONV(DEFAULT/INV.SBR,"MD2")
+               CASE 1
+            END CASE
+            CALL EDIT.SUB
+            IF VALUE#"END" THEN
+               VALUE=VALUE * INV.SBR
+               VALUE=VALUE * 10
+               RQ.VALUE=INT(((VALUE/ICR.DV1<1>)*ICR.MT1<1>)/ICR.DV2<1>+.5)
+               WT.VALUE=INT(((RQ.VALUE/ICR.MT1<1>)*ICR.DV1<1>)*ICR.DV2<1>+.5)
+               OQ.VALUE=INT(WT.VALUE/10/INV.SBR+.5)
+               P_X =OQX ; P_Y=SLN ; P_VALUE=OCONV(OQ.VALUE,"MD2") "R#11" ; P_OPT=""
+               CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            END
+         CASE OQX
+            TYP=3; X=OQX; Y=SLN; MAXL=7; O.R='R'
+            MINV=0; MAXV=9999999
+            IF SSTK.QTY<1,PLN,LN> # '' THEN
+               O.R='O'
+               DEFAULT=INT(((SSTK.QTY<1,PLN,LN>/ICR.DV1<2>)*ICR.MT1<2>)/ICR.DV2<2>+.5)
+            END
+            CALL EDIT.SUB
+            IF VALUE#"END" THEN
+               WT.VALUE=INT(((VALUE/ICR.MT1<2>)*ICR.DV1<2>)*ICR.DV2<2>+.5)
+               RQ.VALUE=INT(((WT.VALUE/ICR.DV1<1>)*ICR.MT1<1>)/ICR.DV2<1>+.5)
+               WT.VALUE=INT(((RQ.VALUE/ICR.MT1<1>)*ICR.DV1<1>)*ICR.DV2<1>+.5)
+               OQ.VALUE=INT(((WT.VALUE/ICR.DV1<2>)*ICR.MT1<2>)/ICR.DV2<2>+.5)
+               P_X =OQX ; P_Y=SLN ; P_VALUE=OCONV(OQ.VALUE,ICR.CNV) "R#11" ; P_OPT=""
+               CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            END
+         CASE RQX
+            X=RQX; Y=SLN; MAXL=10; O.R='R'
+            MINV=0; MAXV=999999999  ;*T20896
+            BEGIN CASE
+               CASE ICR.CNV="MD0"
+                  TYP=3
+                  MAXL=7
+                  MAXV=9999999
+               CASE 1
+                  TYP=4; SCALER=2
+            END CASE
+            IF SSTK.QTY<1,PLN,LN> <> '' THEN
+               O.R='O'
+               DEFAULT=INT(((SSTK.QTY<1,PLN,LN>/ICR.DV1<1>) *ICR.MT1<1>)/ICR.DV2<1> + .5)
+               DEFAULT=OCONV(DEFAULT,ICR.CNV)
+            END
+            CALL EDIT.SUB
+            IF VALUE#"END" THEN
+               WT.VALUE=INT(((VALUE/ICR.MT1<1>)*ICR.DV1<1>)*ICR.DV2<1>+.5)
+               OQ.VALUE=0
+               RQ.VALUE=INT(((WT.VALUE/ICR.DV1<1>)*ICR.MT1<1>)/ICR.DV2<1>+.5)
+            END
+      END CASE
+      IF VALUE#"END" THEN
+         EOI=1
+         P_X =RQX ; P_Y=SLN ; P_VALUE=OCONV(RQ.VALUE,ICR.CNV) "R#11" ; P_OPT=""
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         SSTK.TOT.REC<1,PLN>=SSTK.TOT.REC<1,PLN> - SSTK.QTY<1,PLN,LN> + WT.VALUE
+         SSTK.QTY<1,PLN,LN>=WT.VALUE
+         SSTK.SHEET<1,PLN,LN>=RQ.VALUE
+      END ELSE
+         EOI=1
+         FLD=0
+      END
+   UNTIL (EOI) DO REPEAT
+   RETURN
+*
+************
+ENT.DIAM: 
+************
+*
+   IF DQX THEN
+      X=DQX; Y=SLN; TYP=4; SCALER=2; MAXL=10
+      MINV=0; MAXV=999999900
+      MAXV=999999999 ;* T20896
+      IF SSTK.DIAM<1,PLN,LN> # "" THEN
+         DEFAULT=OCONV(SSTK.DIAM<1,PLN,LN>,"MD2"); O.R="O"
+      END
+      CALL EDIT.SUB
+      IF VALUE='END' THEN
+         FLD.CNT=FLD.CNT-2
+      END ELSE
+         SSTK.DIAM<1,PLN,LN>=VALUE
+      END
+   END
+   RETURN
+*
+*******
+2000: 
+*******
+*
+   ALOC.TO.PROD=SSTK.TOT.REC<1,PLN> - SSTK.JOB.REC<1,PLN>
+   BEGIN CASE
+      CASE ALOC.TO.PROD < 0
+         ALOC.TO.PROD=0 - ALOC.TO.PROD
+         JCNT=COUNT(PO.JOB.NO<1,PLN>,SVM) + (PO.JOB.NO<1,PLN> # '')
+         FOR J=JCNT TO 1 STEP -1 WHILE ALOC.TO.PROD > 0
+            ALOC.TO.JOB=SSTK.JOB.QTY<1,PLN,J>
+            IF ALOC.TO.PROD < ALOC.TO.JOB THEN
+               ALOC.TO.JOB=ALOC.TO.PROD
+            END
+            SSTK.JOB.QTY<1,PLN,J>=SSTK.JOB.QTY<1,PLN,J> - ALOC.TO.JOB
+            SSTK.JOB.REC<1,PLN>=SSTK.JOB.REC<1,PLN> - ALOC.TO.JOB
+            ALOC.TO.PROD=ALOC.TO.PROD - ALOC.TO.JOB
+         NEXT J
+      CASE SSTK.JOB.ALC<1,PLN> < 1
+      CASE ALOC.TO.PROD > 0
+         IF ALOC.TO.PROD > SSTK.JOB.ALC<1,PLN> THEN
+            ALOC.TO.PROD=SSTK.JOB.ALC<1,PLN>
+         END
+         JCNT=COUNT(PO.JOB.NO<1,PLN>,SVM) + (PO.JOB.NO<1,PLN> # '')
+         FOR J=1 TO JCNT WHILE ALOC.TO.PROD > 0
+            ALOC.TO.JOB=PO.JB.OPEN<1,PLN,J> - SSTK.JOB.QTY<1,PLN,J>
+            BEGIN CASE
+               CASE ALOC.TO.JOB < 0
+                  ALOC.TO.JOB=0
+               CASE ALOC.TO.JOB > ALOC.TO.PROD
+                  ALOC.TO.JOB=ALOC.TO.PROD
+            END CASE
+            SSTK.JOB.QTY<1,PLN,J>=SSTK.JOB.QTY<1,PLN,J> + ALOC.TO.JOB
+            SSTK.JOB.REC<1,PLN>=SSTK.JOB.REC<1,PLN> + ALOC.TO.JOB
+            ALOC.TO.PROD=ALOC.TO.PROD - ALOC.TO.JOB
+         NEXT J
+   END CASE
+   TEMP.OPEN=PO.TOT.ONORD<1,PLN> - PO.TOT.RECEVED<1,PLN> - PO.TOT.CANCEL<1,PLN> - SSTK.TOT.REC<1,PLN>
+   IF TEMP.OPEN < 0 THEN TEMP.OPEN=0
+   ECD.NUM=3
+   SCV.REC(ECD.NUM)<ECD.SCRN.NO>=OCONV(INT(((PO.TOT.ONORD<1,PLN>/ICR.DV1<1>) *ICR.MT1<1>)/ICR.DV2<1> + .5),ICR.CNV)
+   ECD.ACTION=5; CALL SCRN.EDIT
+   ECD.NUM=6
+   TEMP=INT((((SSTK.JOB.ALC<1,PLN> - SSTK.JOB.REC<1,PLN>)/ICR.DV1<1>)*ICR.MT1<1>)/ICR.DV2<1> + .5)
+   IF TEMP < 0 THEN TEMP=0
+   SCV.REC(ECD.NUM)<ECD.SCRN.NO>=OCONV(TEMP,ICR.CNV)
+   ECD.ACTION=5; CALL SCRN.EDIT
+   ECD.NUM=7
+   SCV.REC(ECD.NUM)<ECD.SCRN.NO>=OCONV(INT(((SSTK.TOT.REC<1,PLN>/ICR.DV1<1>) *ICR.MT1<1>)/ICR.DV2<1> + .5),ICR.CNV)
+   ECD.ACTION=5; CALL SCRN.EDIT
+   ECD.NUM=8
+   SCV.REC(ECD.NUM)<ECD.SCRN.NO>=OCONV(INT(((TEMP.OPEN/ICR.DV1<1>) * ICR.MT1<1>)/ICR.DV2<1> + .5),ICR.CNV)
+   ECD.ACTION=5; CALL SCRN.EDIT
+   ECD.NUM=9
+   SCV.REC(ECD.NUM)<ECD.SCRN.NO>=OCONV(INT(((IWH.ON.HAND/ICR.DV1<1>) * ICR.MT1<1>)/ICR.DV2<1> + .5),ICR.CNV)
+   ECD.ACTION=5; CALL SCRN.EDIT
+   ECD.NUM=10
+   SCV.REC(ECD.NUM)<ECD.SCRN.NO>=OCONV(INT((((IWH.ON.HAND + SSTK.TOT.REC<1,PLN>)/ICR.DV1<1>) * ICR.MT1<1>)/ICR.DV2<1> + .5),ICR.CNV)
+   ECD.ACTION=5; CALL SCRN.EDIT
+   RETURN
+*
+***********
+ENT.LINE: 
+***********
+*
+   GOSUB 11000
+   ECD.NUM=38
+   SCV.REC(ECD.NUM)<ECD.SCRN.NO>=""
+   ECD.MINV=OLD.START.LINE
+   ECD.MAXV=LAST.LINE
+   ECD.ACTION=4
+   CALL SCRN.EDIT
+   LN.NO=ECD.RET.VALUE
+   IF LN.NO='' OR LN.NO='END' THEN LN.NO=0
+   RETURN
+*
+*********
+11000: 
+*********
+*
+   START.LINE=1 + INT((LN-1)/PAGE.SIZE) * PAGE.SIZE
+   LAST.LINE=START.LINE + PAGE.SIZE - 1
+   IF LAST.LINE > LINES THEN LAST.LINE=LINES
+   IF START.LINE=OLD.START.LINE THEN GOTO 11999
+   OLD.START.LINE=START.LINE
+   CNT=1
+   FOR N=START.LINE TO LAST.LINE
+      SLN=BEGIN.PAGE + LINE.SPACE * MOD(N-1,PAGE.SIZE)
+      P_X =24 ; P_Y=SLN ; P_VALUE=N "R#2" ; P_OPT="CL"
+      P_X  := AM:27 ; P_Y := AM:SLN ; P_VALUE := AM:SSTK.LOC<1,PLN,N> "L#4"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      IF RSX THEN
+         P_X =RSX ; P_Y=SLN ; P_VALUE=SSTK.SERIAL<1,PLN,N> "L#11" ; P_OPT=""
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      END
+      IF OQX THEN
+         IF ICR.DV1<2> # "" THEN
+            TEMP=INT(((SSTK.QTY<1,PLN,N>/ICR.DV1<2>) * ICR.MT1<2>)/ICR.DV2<2> + .5)
+            P_X =OQX ; P_Y=SLN ; P_VALUE=TEMP "R#11" ; P_OPT=""
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         END ELSE
+            IF ICR.CNV<1>="MD2" THEN
+               TEMP=INT(((SSTK.QTY<1,PLN,N>/ICR.DV1<1>) * ICR.MT1<1>)/ICR.DV2<1> + .5)
+            END ELSE
+               TEMP=INT(SSTK.QTY<1,PLN,N>10)
+            END
+            P_X =OQX ; P_Y=SLN ; P_VALUE=OCONV(TEMP/INV.SBR,"MD2") "R#11" ; P_OPT=""
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         END
+      END
+      IF ICR.CNV="MD2" THEN
+         P_X =RQX ; P_Y=SLN ; P_VALUE=OCONV(SSTK.SHEET<1,PLN,N>,'MD2') "R#11" ; P_OPT=""
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      END ELSE
+         P_X =RQX ; P_Y=SLN ; P_VALUE=SSTK.SHEET<1,PLN,N> "R#11" ; P_OPT=""
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      END
+      IF DQX THEN
+         P_X =DQX ; P_Y=SLN ; P_VALUE=OCONV(SSTK.DIAM<1,PLN,N>,'MD2') "R#8" ; P_OPT=""
+         CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      END
+      CNT=CNT + 1
+   NEXT N
+   FOR M=CNT TO PAGE.SIZE
+      SLN=BEGIN.PAGE + LINE.SPACE * MOD(M-1,PAGE.SIZE)
+      P_X =24 ; P_Y=SLN ; P_VALUE="" ; P_OPT="CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   NEXT M
+11999 RETURN
+*
+*******************
+DETERMINE.QTY.TYPE: 
+*******************
+*
+   MAIN.HEAD='Ln':VM:'Loc'
+   REC.QTY.HEAD='Rec Qty ':INV.UNIT<1,2> "L#3"
+   RSX=0; DQX=0; OQX=0; RQX=0
+   BEGIN CASE
+      CASE INV.UNIT<1,2>='SHT' AND INV.UNIT<1,3>='LBS'
+         ICR.DV1=INV.M.WT; ICR.MT1=1; ICR.DV2=1; ICR.CNV="MD0"
+         MAIN.HEAD := VM:'Skid Number'
+         RSX=36
+         BEGIN CASE
+            CASE PO.UNIT.FLG<1,PLN>=INV.UNIT<1,2>
+               RQX=48
+            CASE PO.UNIT.FLG<1,PLN>='LBS'
+               OQX=48; RQX=60
+               MAIN.HEAD := VM:'Rec Qty LBS'
+         END CASE
+         MAIN.HEAD := VM:REC.QTY.HEAD
+      CASE INV.UNIT<1,2>='PC' AND INV.UNIT<1,3>='MSI'
+         ICR.DV1=INV.PAP.WIDTH/100; ICR.MT1=10; ICR.DV2=1; ICR.CNV="MD0"
+         MAIN.HEAD := VM:'Roll Number'
+         RSX=36
+         BEGIN CASE
+            CASE PO.UNIT.FLG<1,PLN>='PC'
+               RQX=48
+            CASE PO.UNIT.FLG<1,PLN>='MSI'
+               OQX=48; RQX=60
+               MAIN.HEAD := VM:'Rec Qty MSI'
+            CASE PO.UNIT.FLG<1,PLN>='FT'
+               ICR.DV1<2>=INV.PAP.WIDTH/100; ICR.MT1<2>=100; ICR.DV2<2>=12
+               OQX=48; RQX=60
+               MAIN.HEAD := VM:'Rec Qty FT'
+         END CASE
+         MAIN.HEAD := VM:REC.QTY.HEAD
+      CASE INV.UNIT<1,2>='FT' AND INV.UNIT<1,3>='MSI'
+         ICR.DV1=INV.PAP.WIDTH/100; ICR.MT1=100; ICR.DV2=12; ICR.CNV="MD0"
+         MAIN.HEAD := VM:'Roll Number'
+         RSX=36
+         BEGIN CASE
+            CASE PO.UNIT.FLG<1,PLN>='FT'
+               RQX=48
+            CASE PO.UNIT.FLG<1,PLN>='MSI'
+               OQX=48; RQX=60
+               MAIN.HEAD := VM:'Rec Qty MSI'
+            CASE PO.UNIT.FLG<1,PLN>='PC'
+               ICR.DV1<2>=INV.PAP.WIDTH/100; ICR.MT1<2>=10; ICR.DV2<2>=1
+               OQX=48; RQX=60
+               MAIN.HEAD := VM:'Rec Qty PC'
+         END CASE
+         MAIN.HEAD := VM:REC.QTY.HEAD
+      CASE 1
+         ICR.DV1=10; ICR.MT1=1; ICR.DV2=1; ICR.CNV="MD2"
+         BEGIN CASE
+            CASE INV.PAP.TYPE="ROLL" OR INV.PAP.TYPE="LROLL" OR INV.PAP.TYPE="PCOAT"
+               RSX=36; RQX=48; DQX=60
+               MAIN.HEAD := VM:'Roll Number':VM:REC.QTY.HEAD:VM:'Diameter'
+            CASE PO.UNIT.FLG<1,PLN> # INV.UNIT<1,2>
+               OQX=36; RQX=48
+               MAIN.HEAD := VM:'Rec Qty ':PO.UNIT.FLG<1,PLN> "L#3":VM:REC.QTY.HEAD
+            CASE 1
+               RQX=36
+               MAIN.HEAD := VM:REC.QTY.HEAD
+         END CASE
+   END CASE
+   RETURN
+*
+91000 ERR.TYPE=1
+   CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+92000 ERR.TYPE=2
+   CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+93000 ERR.TYPE=3
+   CALL SYSCOM(MAT SYSCOM.REC)
+99999 *
+   RETURN
+END

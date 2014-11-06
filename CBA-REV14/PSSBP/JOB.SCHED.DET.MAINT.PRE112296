@@ -1,0 +1,1167 @@
+*COPY>CPYLIB>SCOMMON1
+*COPY>PSS.CPYLIB>COM.PSS.FILE.VARS
+*COPY>PSS.CPYLIB>COM.CCTR.SCHED
+*COPY>PSS.CPYLIB>COM.JOB.SCHED
+*COPY>PMC.CPYLIB>COM.COMPANY
+*COPY>PMC.CPYLIB>COM.DIVISION
+*********************************************************************
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* PROGRAM  - JOB.SCHED.DET.MAINT
+* AUTHOR   - CURTIS WILLIAMS, COMPUTER BUSINESS ASSOCIATES
+* DATE     - 07/14/87
+* MODIFIED - 08/26/88 BY KERRY WILSON
+* MODIFIED - 11/01/95 BY TERRY NORTHCUTT - TASK 19407 DIVISIONALIZATION
+*          - 19972 01/26/96 LLH - INPENDING STATUS FOR SHOP FLOOR
+* MODIFIED - 02/21/96, NA, TASK 19938, DISPLAY COST CENTER DESCRIPTION
+* MODIFIED - 02/21/96, NA, TASK 20124, LOAD PEND FORWARD, ADD HEADER INFO
+* DESCRIPTION
+* This program allows the user to maintain the JOB.SCHED record by
+* adding unestimated/forcasted jobs, changing the hours, modify the
+* sequence of cost centers, adding or changing the hold codes in
+* maintenance mode. Also, designed to view the status of a job and
+* unscheduled time posted in inquiry mode.
+* TASK 20683 JR UPDATE PSS.JOB.XREF WHEN DELETING JOB.SCHED RECORDS
+* TASK 20713 JR ONLY PURGE RECORDS THAT HAVE STATUS OF PENDING OR COMPLETE
+* AND DELETE JOB FROM PEND.CCTR.SCHED.
+*********************************************************************
+*
+*---- FILE COPY STATEMENTS
+*
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>PMC.CPYLIB>DIVISION
+*COPY>PMC.CPYLIB>DEPARTMENT
+*COPY>PMC.CPYLIB>CSR.CODE
+*COPY>PSS.CPYLIB>JOB.SCHED
+*COPY>PSS.CPYLIB>PSS.FILE.VARS
+*COPY>PSS.CPYLIB>PSS.HIERARCHY
+*COPY>JCS.CPYLIB>JOB
+*COPY>JCS.CPYLIB>JOB.TRANS
+*COPY>JCS.CPYLIB>JOB.TRACKING
+*COPY>JES.CPYLIB>ESTIMATE
+*COPY>CPYLIB>SCREEN.COM
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>GEN.XREF
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+MAT SYSCOM.REC =  ""; SYS.TYPE = 2
+*
+*----PROCREAD
+*
+*---- TASK 19407
+      PROCREAD PARAM ELSE
+         ERRMSG = "MUST RUN FROM PROC"
+         GOSUB 90000
+         GOTO 999999
+      END
+      IF PARAM<1> = "I" THEN
+         PROC.TYPE = "I"
+      END ELSE
+         PROC.TYPE = "M"
+      END
+*---- TASK 19407
+      BEGIN CASE
+         CASE PROC.TYPE = "I"
+            PROC.CALL = PARAM<2>
+            PROC.JOB = PARAM<3>
+         CASE PROC.TYPE = "M"
+            PROC.CALL = ""
+            PROC.JOB = ""
+            DIV.OWNER = PARAM<3>  ; *---- TASK 19407
+         CASE 1
+P_X  = 0 ; P_Y = 23 ; P_VALUE = "ERROR IN PROCREAD" ; P_OPT = ""
+CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            STOP
+      END CASE
+*
+*---- INITIALIZATION
+*
+      MV.JOB = 1
+      MV.TYPE = 2
+      MV.DATE = 3
+      ERRMSG = ""
+      MAT CCTR.SCHED.REC = ""
+      OLD.CUST.NAME = ""
+      DIM TEMP.JBS.REC(JBS.REC.SIZE)
+      MAT TEMP.JBS.REC = ""
+      DIM TEMP.JBS(JBS.REC.SIZE)
+      MAT TEMP.JBS = ""
+      EQU TEMP.JBS.STATUS        TO TEMP.JBS.REC(1) ;* Job status
+      EQU TEMP.JBS.DUE.DATE      TO TEMP.JBS.REC(2) ;* Date due for completion
+      EQU TEMP.JBS.COMPL.DATE    TO TEMP.JBS.REC(3) ;* Completion date
+      EQU TEMP.JBS.SCH.FLAG      TO TEMP.JBS.REC(4) ;* "R" = Re-schedule
+      EQU TEMP.JBS.CUST.NAME     TO TEMP.JBS.REC(5) ;* Customer Name
+      EQU TEMP.JBS.DIV           TO TEMP.JBS.REC(6) ;* Division ID
+      EQU TEMP.JBS.EXT.PRIOR     TO TEMP.JBS.REC(7) ;* External priority
+      EQU TEMP.JBS.REQ.HRS       TO TEMP.JBS.REC(8) ;* Required hours remaining
+      EQU TEMP.JBS.JOB.COMMENT   TO TEMP.JBS.REC(9) ;* Job Comments
+      EQU TEMP.JBS.CUST.ID       TO TEMP.JBS.REC(10);* Customer Id
+      EQU TEMP.JBS.SCHED.MODE    TO TEMP.JBS.REC(11);* Schedule mode (S,D)
+      EQU TEMP.JBS.SCHED.DATE    TO TEMP.JBS.REC(12);* Schedule start date
+            *
+      EQU TEMP.JBS.DEPT          TO TEMP.JBS.REC(16);* (MV1) Department
+      EQU TEMP.JBS.DEPT.STATUS   TO TEMP.JBS.REC(17);* (MV1) Department status
+      EQU TEMP.JBS.SCH.SHIFT     TO TEMP.JBS.REC(18);* (MV1) Expecting start shift
+      EQU TEMP.JBS.EXP.SHIFT     TO TEMP.JBS.REC(19);* (MV1) Expecting finish shift
+      EQU TEMP.JBS.ACT.SHIFT     TO TEMP.JBS.REC(20);* (MV1) Actual shift started
+      EQU TEMP.JBS.CCTR          TO TEMP.JBS.REC(21);* (MV1) Cost Center
+      EQU TEMP.JBS.CCTR.STATUS   TO TEMP.JBS.REC(22);* (MV1) Cost Center status
+      EQU TEMP.JBS.SCH.DATE      TO TEMP.JBS.REC(23);* (MV1) Cost center schedule date
+      EQU TEMP.JBS.EXP.DATE      TO TEMP.JBS.REC(24);* (MV1) Expected completion date
+      EQU TEMP.JBS.REV.DATE      TO TEMP.JBS.REC(25);* (MV1) Cost center revised schedule date
+      EQU TEMP.JBS.CMP.SHIFT     TO TEMP.JBS.REC(26);* (MV1) Actual shift completed
+      EQU TEMP.JBS.SCH.HRS       TO TEMP.JBS.REC(27);* (MV1) Cost center scheduled hours
+      EQU TEMP.JBS.ACT.DATE      TO TEMP.JBS.REC(28);* (MV1) Cost center actual date started
+      EQU TEMP.JBS.CMP.DATE      TO TEMP.JBS.REC(29);* (MV1) Cost center actual date completed
+      EQU TEMP.JBS.ACT.HRS       TO TEMP.JBS.REC(30);* (MV1) Cost center actual hours
+      EQU TEMP.JBS.USD.HRS       TO TEMP.JBS.REC(31);* (MV1) Cost center hours scheduled
+      EQU TEMP.JBS.SCH.IMP       TO TEMP.JBS.REC(32);* (MV1) Cost center schedule impressions
+      EQU TEMP.JBS.ACT.IMP       TO TEMP.JBS.REC(33);* (MV1) Cost center actual impressions
+      EQU TEMP.JBS.LAST.TRAN     TO TEMP.JBS.REC(34);* Last transaction number used
+      EQU TEMP.JBS.TRAN          TO TEMP.JBS.REC(35);* (MV1) Transaction number
+      EQU TEMP.JBS.OPER          TO TEMP.JBS.REC(36);* (MV1,MSV) Operation
+      EQU TEMP.JBS.OPER.STATUS   TO TEMP.JBS.REC(37);* (MV1,MSV) Operation status
+      EQU TEMP.JBS.OPER.SCH.DATE TO TEMP.JBS.REC(38);* (MV1,MSV) Operation schedule date
+      EQU TEMP.JBS.OPER.EXP.DATE TO TEMP.JBS.REC(39);* (MV1,MSV) Operation expected completion date
+      EQU TEMP.JBS.OPER.REV.DATE TO TEMP.JBS.REC(40);* (MV1,MSV) Operation revised schedule date
+      EQU TEMP.JBS.OPER.SCH.HRS  TO TEMP.JBS.REC(41);* (MV1,MSV) Operation scheduled hours
+      EQU TEMP.JBS.OPER.ACT.DATE TO TEMP.JBS.REC(42);* (MV1,MSV) Operation actual date started
+      EQU TEMP.JBS.OPER.ACT.HRS  TO TEMP.JBS.REC(43);* (MV1,MSV) Operation actual hours
+      EQU TEMP.JBS.OPER.ACT.TIME TO TEMP.JBS.REC(44);* (MV1,MSV) Time of last transaction (NEBC)
+      EQU TEMP.JBS.LAST.OPER     TO TEMP.JBS.REC(45);* Last operation completed (NEBC)
+      EQU TEMP.JBS.NEXT.OPER     TO TEMP.JBS.REC(46);* Next operation to be done (NEBC)
+      EQU TEMP.JBS.COMP.NO       TO TEMP.JBS.REC(47);* Component Number (MV1,MSV)
+      EQU TEMP.JBS.COMP.DESC     TO TEMP.JBS.REC(48);* Component Desc   (MV1,MSV)
+            *
+      EQU TEMP.JBS.HOLD.CODE     TO TEMP.JBS.REC(50);* (MV1) Hold Code
+      EQU TEMP.JBS.HOLD.COMMENT  TO TEMP.JBS.REC(51);* (MV1) Hold Comments
+      EQU TEMP.JBS.SHIFT         TO TEMP.JBS.REC(52);* (MV1) Hold Shift
+      EQU TEMP.JBS.EQUIP         TO TEMP.JBS.REC(53);* (MV1) Hold Equipment
+      EQU TEMP.JBS.OVER.LOAD     TO TEMP.JBS.REC(54);* (MV1) Hold Over Load Flag
+      EQU TEMP.JBS.HOLD.DATE     TO TEMP.JBS.REC(55);* (MV1) Hold until date
+      EQU TEMP.JBS.HOLD.PO       TO TEMP.JBS.REC(56);* (MV1) Hold PO/Job
+      EQU TEMP.JBS.HOLD.DP.CC    TO TEMP.JBS.REC(57);* (MV1) Hold Conc. line number
+      EQU TEMP.JBS.HOLD.DAYS     TO TEMP.JBS.REC(58);* (MV1) Hold days
+      EQU TEMP.JBS.HOLD.ID       TO TEMP.JBS.REC(59);* (MV1) Hold Id if code SC
+            *
+      EQU TEMP.JBS.CONT.SCH      TO TEMP.JBS.REC(61);* (MV1) Continuous schedule flag
+      EQU TEMP.JBS.SAME.EQUIP    TO TEMP.JBS.REC(62);* (MV1) Same equipment flag
+            *
+      EQU TEMP.JBS.CRTCL.REF     TO TEMP.JBS.REC(66);* (MV2) Critical date Cctr line
+      EQU TEMP.JBS.PROMISE.OUT   TO TEMP.JBS.REC(67);* (MV2) Promise delivery date
+      EQU TEMP.JBS.ACTUAL.OUT    TO TEMP.JBS.REC(68);* (MV2) Actual delivery date
+      EQU TEMP.JBS.PROMISE.IN    TO TEMP.JBS.REC(69);* (MV2) Promise reciept date
+      EQU TEMP.JBS.ACTUAL.IN     TO TEMP.JBS.REC(70);* (MV2) Actual reciept date
+      EQU TEMP.JBS.CRTCL.DESC    TO TEMP.JBS.REC(71);* (MV2) Critical reason
+            *
+      EQU TEMP.JBS.POST.FLAG     TO TEMP.JBS.REC(75);* (MV1,MSV) Not-posted flag
+            *
+*
+*---- OPEN ALL FILES
+*
+      OPEN "","COMPANY" TO COMPANY ELSE PRINT "CANNOT OPEN COMPANY FILE"; STOP
+      OPEN "","CONTROL" TO CONTROL ELSE PRINT "CANNOT OPEN CONTROL FILE"; STOP
+      OPEN "","DEPARTMENT" TO DEPARTMENT ELSE PRINT "CANNOT OPEN DEPARTMENT FILE"; STOP
+      OPEN "","CSR.CODE" TO CSR.CODE ELSE PRINT "CANNOT OPEN CSR.CODE FILE"; STOP
+      OPEN "","CUSTOMER" TO CUSTOMER ELSE PRINT "CANNOT OPEN CUSTOMER FILE"; STOP
+      OPEN "","PSS.DIVISION" TO DIVISION ELSE PRINT "CANNOT OPEN PSS.DIVISION FILE"; STOP
+      OPEN "","PSS.SCREENS" TO M.SCREENS ELSE PRINT "CANNOT OPEN PSS.SCREENS FILE"; STOP
+      OPEN "","JOB.SCHED.TEMPLATE" TO JOB.SCHED.TEMPLATE ELSE PRINT "CANNOT OPEN JOB.SCHED.TEMPLATE FILE"; STOP
+      OPEN "","JOB.SCHED" TO JOB.SCHED ELSE PRINT "CANNOT OPEN JOB.SCHED FILE"; STOP
+      OPEN "","PEND.JOB.SCHED" TO PEND.JOB.SCHED ELSE PRINT "CANNOT OPEN PEND.JOB.SCHED FILE"; STOP
+      OPEN "","JOB.CRTL.DATE.EXC" TO JOB.CRTL.DATE.EXC ELSE PRINT "CANNOT OPEN JOB.CRTL.DATE.EXC FILE"; STOP
+      OPEN "","CCTR.SCHED" TO CCTR.SCHED ELSE PRINT "CANNOT OPEN CCTR.SCHED FILE"; STOP
+      OPEN "","PEND.CCTR.SCHED" TO PEND.CCTR.SCHED ELSE PRINT "CANNOT OPEN PEND.CCTR.SCHED FILE"; STOP
+      OPEN "","CCTR.AVAIL" TO CCTR.AVAIL ELSE PRINT "CANNOT OPEN CCTR.AVAIL FILE"; STOP
+      OPEN "","COST.CNTR" TO COST.CNTR ELSE PRINT "CANNOT OPEN COST.CNTR FILE"; STOP
+      OPEN "","OPERATION" TO OPERATION ELSE PRINT "CANNOT OPEN OPERATION FILE"; STOP
+      OPEN "","JOB" TO JOB ELSE PRINT "CANNOT OPEN JOB FILE"; STOP
+      OPEN "","JOB.TRACKING" TO JOB.TRACKING ELSE PRINT "CANNOT OPEN JOB.TRACKING FILE"; STOP
+      OPEN "","JOB.TRANS" TO JOB.TRANS ELSE PRINT "CANNOT OPEN JOB.TRANS FILE"; STOP
+      OPEN "","ESTIMATE" TO ESTIMATE ELSE PRINT "CANNOT OPEN ESTIMATE FILE"; STOP
+      OPEN "","INVENTORY" TO INVENTORY ELSE PRINT "CANNOT OPEN INVENTORY FILE"; STOP
+      OPEN "","PSS.CONTROL" TO PSS.CONTROL ELSE PRINT "CANNOT OPEN PSS.CONTROL FILE"; STOP
+      OPEN "","PSS.HIERARCHY" TO PSS.HIERARCHY ELSE PRINT "CANNOT OPEN PSS.HIERARCHY FILE"; STOP
+      OPEN "","HOLIDAY.SCHED" TO HOLIDAY.SCHED ELSE PRINT "CANNOT OPEN HOLIDAY.SCHED FILE"; STOP
+      OPEN "","PREFIX" TO PREFIX ELSE ERRMSG = "PREFIX FILE IS MISSING"; GOSUB 90000; STOP
+      OPEN "","CUSTOMER.XREF" TO CUSTOMER.XREF ELSE ERRMSG = "CUSTOMER.XREF FILE IS MISSING"; GOSUB 90000; STOP
+      OPEN "","CUST.EST.XREF" TO CUST.EST.XREF ELSE ERRMSG = "CUST.EST.XREF FILE IS MISSING"; GOSUB 90000; STOP
+      OPEN "","PSS.JOB.XREF" TO PSS.JOB.XREF ELSE ERRMSG = "PSS.JOB.XREF FILE IS MISSING"; GOSUB 90000; STOP
+*
+*--- CHECK HIERARCHY
+*
+      MATREAD PSHR.REC FROM PSS.CONTROL, "HIERARCHY" ELSE
+         ERRMSG = "SYSTEM HIERARCHY RECORD IS MISSING"
+         GOSUB 90000
+         GOTO 999999
+      END
+      MAT PSHR.REC = ""
+*
+*---- GET CONO
+*
+      CONO = ""
+      CALL GET.CONO1 (CONO, MAT COMP.REC, COMPANY, CONTROL)
+      IF CONO = "END" THEN GOTO 999999
+      READ DEMODATE FROM CONTROL,"DEMODATE" THEN TODAY=ICONV(DEMODATE,"D") ELSE TODAY=DATE()
+      IF CO.POS = 'Y' THEN
+         OPEN "PO" TO PO ELSE
+P_X  = 0 ; P_Y = 23 ; P_VALUE = "CANNOT OPEN PO FILE" ; P_OPT = ""
+CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            STOP
+         END
+         OPEN "OUTSIDE.PO" TO OUTSIDE.PO ELSE
+P_X  = 0 ; P_Y = 23 ; P_VALUE = " CANNOT OPEN OUTSIDE.PO FILE" ; P_OPT = ""
+CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+            STOP
+         END
+      END
+*
+*--- GET LOADING FLAG
+*
+      READ LOADING.FLG FROM PSS.CONTROL, CONO : "LOADING.FLG" ELSE
+         READ LOADING.FLG FROM PSS.CONTROL, "LOADING.FLG" ELSE LOADING.FLG = "N"
+      END
+*
+*--- INIT SCREEN
+*
+      SCREEN INIT;#
+      S$SCR = 1
+      SCREEN DEFINE;JOB.SCHED.DET.MAINT
+      SCREEN FORMAT
+      SCREEN COUNT;;12
+      LINE.COUNT = S$LCNT
+      LINE.SPACE = S$LSPC
+*
+*--- VARIABLE INIT.
+*
+      MAT GEN.XREF.REC = ""
+      GXR.CO = CONO
+      P.DEPT = ""
+      P.STMV = ""
+      P.EDMV = ""
+      REF = 0
+      LINE.CNT = 0
+      GOTO 110
+*
+*---- MAIN PROCESSING
+*
+100*
+      RELEASE
+      SCREEN CLEAR
+110*
+      S$DATA(1)<S$SCR> = TODAY
+      SCREEN DISPLAY;;1
+      IF PROC.TYPE = "M" THEN
+         S$DATA(26)<S$SCR> = "M A I N T E N A N C E"
+         S$DATA(35)<S$SCR> = "UP/Stat"
+         S$DATA(36)<S$SCR> = "-------"
+      END ELSE
+         S$DATA(26)<S$SCR> = "I N Q U I R Y"
+         S$DATA(35)<S$SCR> = "       "
+         S$DATA(36)<S$SCR> = "       "
+      END
+      SCREEN DISPLAY;;26
+      SCREEN DISPLAY;;35
+      SCREEN DISPLAY;;36
+      IF PROC.CALL = "AUTO" THEN
+         JOB.NUM = PROC.JOB
+         S$DATA(2)<S$SCR> = JOB.NUM
+      END ELSE
+120      S$DATA(2)<S$SCR> = ""
+         SCREEN FIELD;;2
+         SCREEN INPUT;;2;GOTO 999999
+         BEGIN CASE
+            CASE S$VALUE = "???" OR S$VALUE = ""
+               S$DATA(5)<S$SCR> = ""
+               SCREEN FIELD;;5
+               SCREEN INPUT;;5
+               BEGIN CASE
+                  CASE S$VALUE = "END" OR S$VALUE = ""
+                     GOTO 120
+                  CASE 1
+                     GXR.XREF = PSS.JOB.XREF
+                     GXR.SRCH.ID = S$VALUE
+                     GXR.FILE = JOB.SCHED
+                     GXR.LOC = 1
+                     GXR.TOP.LINE = "JOB SCHEDULE SEARCH"
+                     GXR.TOP.LINE<1,2> = "SEARCH BY NAME : " : S$VALUE
+                     GXR.HEADING = "Job Num"
+                     GXR.ATT = 0
+                     GXR.LEN = 9
+                     GXR.HEADING<1,2> = "Cust Num"
+                     GXR.ATT<1,2> = 10
+                     GXR.LEN<1,2> = 9
+                     GXR.HEADING<1,3> = "Customer Name"
+                     GXR.ATT<1,3> = 5
+                     GXR.LEN<1,3> = 25
+                     GXR.HEADING<1,4> = "Job Comments"
+                     GXR.ATT<1,4> = 9
+                     GXR.LEN<1,4> = 25
+                     GXR.ID = ""
+                     GXR.OCONV = ""
+                     CALL GEN.XREF1 (MAT GEN.XREF.REC,PREFIX)
+                     IF GXR.ACTION # "X" THEN
+                        SCREEN FORMAT
+                     END
+                     IF GXR.ID = "" THEN GOTO 120
+                     S$DATA(2)<S$SCR> = GXR.ID
+                     SCREEN DISPLAY;;2
+                     JOB.NUM = GXR.ID
+               END CASE
+            CASE 1
+               JOB.NUM = S$VALUE
+         END CASE
+      END
+      NEW.REC = 0
+      MAT JTRN.REC = ""
+      MAT JTRK.REC = ""
+      ALL.JOBS = ""
+      BEGIN CASE
+         CASE PROC.TYPE = "I"
+            MATREAD JBS.REC FROM JOB.SCHED, CONO:JOB.NUM ELSE
+               ERRMSG = "Job (":JOB.NUM:") is not found in JOB.SCHED file"
+               GOSUB 90000
+               IF PROC.CALL = "AUTO" THEN GOTO 999999 ELSE GOTO 100
+            END
+            MATREAD PJBS.REC FROM PEND.JOB.SCHED, CONO:JOB.NUM ELSE
+               MAT PJBS.REC = ""
+            END
+            MATREAD JTRN.REC FROM JOB.TRANS, CONO:JOB.NUM ELSE
+               MAT JTRN.REC = ""
+            END
+            MATREAD JTRK.REC FROM JOB.TRACKING, CONO:JOB.NUM ELSE
+               MAT JTRK.REC = ""
+            END
+            IF JTRN.TIME.STAMP # "" THEN
+               CALL JOB.SCHED.TRANS.UPD(CONO,JOB.NUM,MAT JTRN.REC,MAT JTRK.REC)
+            END
+            MATREAD JOB.REC FROM JOB, CONO:JOB.NUM ELSE MAT JOB.REC = ""
+            OLD.CUST.NAME = JBS.CUST.NAME
+         CASE 1
+            MATREAD JOB.REC FROM JOB, CONO:JOB.NUM ELSE MAT JOB.REC = ""
+            MATREADU JBS.REC FROM JOB.SCHED, CONO:JOB.NUM THEN
+*
+*--- TASK 19972
+               MATREAD JTRN.REC FROM JOB.TRANS, CONO:JOB.NUM ELSE
+                  MAT JTRN.REC = ""
+               END
+               MATREAD JTRK.REC FROM JOB.TRACKING, CONO:JOB.NUM ELSE
+                  MAT JTRK.REC = ""
+               END
+               IF JTRN.TIME.STAMP # "" THEN
+                  MAT TEMP.JBS.REC = MAT JBS.REC
+                  CALL JOB.SCHED.TRANS.UPD(CONO,JOB.NUM,MAT JTRN.REC,MAT JTRK.REC)
+                  MAT TEMP.JBS = MAT JBS.REC
+                  MAT JBS.REC = MAT TEMP.JBS.REC
+                  MAT TEMP.JBS.REC = MAT TEMP.JBS
+               END
+               MATREADU PJBS.REC FROM PEND.JOB.SCHED,CONO:JOB.NUM ELSE MAT PJBS.REC = ""
+*---- TASK 19407
+*
+*---- TEST FOR DIVISION OWNERSHIP
+*
+               IF JOB.DIV = "" THEN
+                  IF JBS.DIV # DIV.OWNER THEN
+                     ERRMSG = "Job not owned by selected division ":DIV.OWNER
+                     GOSUB 90000
+                     GOTO 100
+                  END
+               END ELSE
+                  IF JOB.DIV # DIV.OWNER THEN
+                     ERRMSG = "Job not owned by selected division ":DIV.OWNER
+                     GOSUB 90000
+                     GOTO 100
+                  END
+               END
+*---- TASK 19407
+            END ELSE
+               NEW.REC = 1
+300*
+               MAT JBS.REC = ""
+*CSF 22664
+               MAT PJBS.REC = ""
+*
+               SCREEN FIELD;;25
+               SCREEN INPUT;;25;GOTO 100
+               BEGIN CASE
+                  CASE S$VALUE = ""
+                  CASE 1
+                     MATREAD JBS.REC FROM JOB.SCHED.TEMPLATE, CONO:S$VALUE ELSE
+                        ERRMSG = "Invalid template"
+                        GOSUB 90000
+                        GOTO 300
+                     END
+                     MATREADU PJBS.REC FROM PEND.JOB.SCHED,CONO:JOB.NUM ELSE MAT PJBS.REC = ""
+                     JBS.CUST.NAME = ""
+                     JBS.CUST.ID = ""
+                     BEGIN CASE
+                        CASE JBS.DIV = ""
+                           ERRMSG = "No division for that template"
+                           GOSUB 90000
+                           GOTO 300
+                        CASE JOB.DIV = ""
+*---- TASK 19407
+*
+                           IF JBS.DIV # DIV.OWNER THEN
+                              ERRMSG = "Template not like selected division ":DIV.OWNER
+                              GOSUB 90000
+                              GOTO 300
+                           END
+*---- TASK 19407
+                        CASE JBS.DIV # JOB.DIV
+                           ERRMSG = "Template belongs to different division than the job"
+                           GOSUB 90000
+                           GOTO 300
+                     END CASE
+                     GOSUB 60000
+                     GOSUB 40000
+                     REF = 1
+                     CURR.REF.NO = ""
+                     GOSUB 50000
+               END CASE
+            END
+            OLD.CUST.NAME = JBS.CUST.NAME
+      END CASE
+      IF NEW.REC THEN
+         JBS.CUST.ID = JOB.CUST
+*---- TASK 19407
+*        IF JOB.DIV # "" THEN JBS.DIV = JOB.DIV
+         IF JOB.DIV # "" THEN
+            JBS.DIV = JOB.DIV
+         END ELSE
+            JOB.DIV = DIV.OWNER
+            JBS.DIV = JOB.DIV
+         END
+*---- TASK 19407
+         IF JOB.CUST # "" THEN
+            MATREAD CUST.REC FROM CUSTOMER, CONO : JOB.CUST ELSE
+               MAT CUST.REC = ""
+               CUST.NAME = "NOT ON FILE"
+            END
+            JBS.CUST.NAME = CUST.NAME
+         END
+         GOSUB 60000
+         FOR X = 1 TO 4 UNTIL S$VALUE = "END"
+            ON X GOSUB 2000,3000,4000,6000
+         NEXT X
+         IF S$VALUE = "END" THEN GOTO 100
+      END ELSE
+         GOSUB 60000
+         GOSUB 40000
+         REF = 1
+         CURR.REF.NO = ""
+         GOSUB 50000
+      END
+*
+*---- GET OPERATOR REQUEST
+*
+500*
+      BEGIN CASE
+         CASE PROC.TYPE = "I"
+            SCREEN FIELD;;21
+            SCREEN INPUT;;21
+         CASE 1
+            SCREEN FIELD;;20
+            SCREEN INPUT;;20
+      END CASE
+      OPTION = S$VALUE
+510*
+      BEGIN CASE
+         CASE OPTION = "P"
+            BEGIN CASE
+               CASE PROC.CALL = "AUTO"
+                  ERRMSG = "Use Job Schedule Maintenance function to purge."
+                  GOSUB 90000
+               CASE SUM(JBS.USD.HRS) = 0
+                  SCREEN FIELD;;27
+                  SCREEN INPUT;;27
+                  IF S$VALUE = "Y" THEN
+* T20713
+                     ST.PTR = 0 ; EN.PTR = 0
+                     IF PJBS.DEPT # "" THEN
+                        DCNT = DCOUNT(PJBS.SCH.DATE,VM)
+                        FOR X = DCNT TO 1 STEP -1
+                           IF PJBS.SCH.DATE<1,X> # "" THEN
+                              IF EN.PTR = 0 THEN EN.PTR = DCNT
+                              ST.PTR = X
+                           END
+                        NEXT X
+                        SDATE = ""; ALL.FLG = 1; ACTION = ""
+                        CALL PUNSCHED.JOB.SUB(CONO,ACTION,JOB.NUM,TODAY,ST.PTR,EN.PTR,SDATE,ALL.FLG)
+                        DEPT.CNT = DCOUNT(PJBS.DEPT,VM)
+                        FOR DC = DEPT.CNT TO 1 STEP -1
+                           AC = DCOUNT(JBS.A1,",")
+                           FOR AP = 1 TO AC
+                              AA = FIELD(JBS.A1,",",AP)
+                              AA1 = FIELD(AA,"-",1)
+                              AA2 = FIELD(AA,"-",2)
+                              IF AA2 = "" THEN AA2 = AA1
+                              FOR AAP = AA1 TO AA2
+                                 PJBS.REC(AAP) = DELETE(PJBS.REC(AAP),1,DC,0)
+                              NEXT AAP
+                           NEXT AP
+                        NEXT DC
+                     END
+* T20713
+                     DELETE JOB.SCHED, CONO:JOB.NUM
+* ADDED DEL PEND.JOB.SCHED 10/20/94 (LMR)
+                     DELETE PEND.JOB.SCHED, CONO:JOB.NUM
+*---- TASK 19407
+* T20683
+                     CALL GEN.XREF.MAINT(CONO,JOB.NUM,JBS.CUST.NAME,"",PSS.JOB.XREF,PREFIX)
+* T20683          
+                     READU ALL.JOBS FROM PSS.CONTROL, CONO : DIV.OWNER : "JOB.SCHED.LIST" THEN
+                        LOCATE JOB.NUM IN ALL.JOBS,1 SETTING JFND THEN
+                           DEL ALL.JOBS<JFND>
+                           WRITE ALL.JOBS ON PSS.CONTROL, CONO : DIV.OWNER : "JOB.SCHED.LIST"
+                        END ELSE RELEASE PSS.CONTROL, CONO:DIV.OWNER:"JOB.SCHED.LIST"
+                     END ELSE RELEASE PSS.CONTROL, CONO:DIV.OWNER:"JOB.SCHED.LIST"
+                     READU PSL.REC FROM PSS.CONTROL,CONO:DIV.OWNER:"PEND.SCHED.LIST" THEN
+                        LOCATE JOB.NUM IN PSL.REC<1>,1 SETTING JFND THEN
+                           DEL PSL.REC<1,JFND>
+                           DEL PSL.REC<2,JFND>
+                           DEL PSL.REC<3,JFND>
+                           WRITE PSL.REC ON PSS.CONTROL, CONO:DIV.OWNER:"PEND.SCHED.LIST"
+                        END ELSE RELEASE PSS.CONTROL, CONO:DIV.OWNER:"PEND.SCHED.LIST"
+                     END ELSE RELEASE PSS.CONTROL, CONO:DIV.OWNER:"PEND.SCHED.LIST"
+*---- TASK 19407
+*
+                     GOTO 100
+                  END
+               CASE 1
+                  ERRMSG = "Job is scheduled. Cannot be purged."
+                  GOSUB 90000
+            END CASE
+         CASE OPTION = "S" OR OPTION = "SF"
+            REF = CURR.REF.NO + LINE.COUNT
+            IF REF > LINE.CNT THEN REF = 1
+            GOSUB 50000
+         CASE OPTION = "ST"
+            REF = 1
+            GOSUB 50000
+         CASE OPTION = "SB"
+            REF = LINE.CNT
+            IF REF < 1 THEN REF = 1
+            GOSUB 50000
+         CASE OPTION = "SR"
+            REF = CURR.REF.NO - LINE.COUNT
+            IF REF < 1 THEN REF = 1
+            GOSUB 50000
+         CASE OPTION = "E" OR OPTION = "END"
+            IF PROC.CALL = "AUTO" THEN GOTO 999999 ELSE GOTO 100
+         CASE OPTION = "F" AND PROC.TYPE # "I"
+            LINE.CNT = DCOUNT(JBS.DEPT,VM)
+            USED.UP = 0
+            FOR XX = LINE.CNT TO 1 STEP - 1 UNTIL USED.UP
+               BEGIN CASE
+                  CASE JBS.DEPT.STATUS<1,XX> = "C"
+                  CASE JBS.DEPT.STATUS<1,XX> = "I"
+                  CASE JBS.SCH.HRS<1,XX>-JBS.USD.HRS<1,XX> > 0
+                     USED.UP = 1
+               END CASE
+            NEXT XX
+            IF USED.UP THEN
+               SCREEN FIELD;;24
+               SCREEN INPUT;;24;GOTO 500
+               IF S$VALUE = "Y" THEN
+                  READU ALL.JOBS FROM PSS.CONTROL, CONO : DIV.OWNER : "JOB.SCHED.LIST" ELSE ALL.JOBS = "" ; *---- TASK 19407
+                  XCNT = DCOUNT(ALL.JOBS,AM)
+                  AA = 0
+                  FOR XPTR = 1 TO XCNT UNTIL AA
+                     IF JOB.NUM = ALL.JOBS<XPTR,MV.JOB> THEN AA = XPTR
+                  NEXT XPTR
+                  IF AA = 0 THEN
+                     LCNT = DCOUNT(ALL.JOBS,AM) + 1
+                     ALL.JOBS<LCNT> = JOB.NUM
+                  END
+                  WRITE ALL.JOBS ON PSS.CONTROL, CONO : DIV.OWNER : "JOB.SCHED.LIST" ; *---- TASK 19407
+               END
+            END
+            READU PSL.REC FROM PSS.CONTROL,CONO:DIV.OWNER:"PEND.SCHED.LIST" ELSE PSL.REC = "" ; *---- TASK 19407
+            LOCATE JOB.NUM IN PSL.REC<1>,1 SETTING PSL.POS ELSE
+               PSL.REC<1,PSL.POS> = JOB.NUM
+               PSL.REC<2,PSL.POS> = "D"
+               PSL.REC<3,PSL.POS> = PJBS.DUE.DATE
+            END
+            ST.PTR = 0 ; EN.PTR = 0
+            IF PJBS.DEPT # "" THEN
+               DCNT = DCOUNT(PJBS.SCH.DATE,VM)
+               FOR X = DCNT TO 1 STEP -1
+                  IF PJBS.SCH.DATE<1,X> # "" THEN
+                     IF EN.PTR = 0 THEN EN.PTR = DCNT
+                     ST.PTR = X
+                  END
+               NEXT X
+               SDATE = ""; ALL.FLG = 1; ACTION = ""
+               CALL PUNSCHED.JOB.SUB(CONO,ACTION,JOB.NUM,TODAY,ST.PTR,EN.PTR,SDATE,ALL.FLG)
+               DEPT.CNT = DCOUNT(PJBS.DEPT,VM)
+               FOR DC = DEPT.CNT TO 1 STEP -1
+                  AC = DCOUNT(JBS.A1,",")
+                  FOR AP = 1 TO AC
+                     AA = FIELD(JBS.A1,",",AP)
+                     AA1 = FIELD(AA,"-",1)
+                     AA2 = FIELD(AA,"-",2)
+                     IF AA2 = "" THEN AA2 = AA1
+                     FOR AAP = AA1 TO AA2
+                        PJBS.REC(AAP) = DELETE(PJBS.REC(AAP),1,DC,0)
+                     NEXT AAP
+                  NEXT AP
+               NEXT DC
+            END
+            DEPT.CNT = DCOUNT(JBS.DEPT,VM)
+            FOR DC = 1 TO DEPT.CNT
+               AC = DCOUNT(JBS.A1,",")
+               FOR AP = 1 TO AC
+                  AA = FIELD(JBS.A1,",",AP)
+                  AA1 = FIELD(AA,"-",1)
+                  AA2 = FIELD(AA,"-",2)
+                  IF AA2 = "" THEN AA2 = AA1
+                  FOR AAP = AA1 TO AA2
+                     PJBS.REC(AAP) = INSERT(PJBS.REC(AAP),1,DC,0,"")
+                  NEXT AAP
+               NEXT AP
+               PJBS.DEPT<1,DC> = JBS.DEPT<1,DC>
+               PJBS.CCTR<1,DC> = JBS.CCTR<1,DC>
+               PJBS.SCH.HRS<1,DC> = JBS.SCH.HRS<1,DC>
+               PJBS.SCH.IMP<1,DC> = JBS.SCH.IMP<1,DC>
+               PJBS.OPER<1,DC> = JBS.OPER<1,DC>
+               PJBS.OPER.SCH.HRS<1,DC> = JBS.OPER.SCH.HRS<1,DC>
+               FOR XX = 50 TO 71
+                  PJBS.REC(XX)<1,DC> = JBS.REC(XX)<1,DC>
+               NEXT XX
+            NEXT DC
+            PJBS.REQ.HRS = JBS.REQ.HRS
+550*
+            ACTION = ""
+            UPDATE.PEND = 1
+            DUE.DATE = PJBS.DUE.DATE
+            PRCS.BLK = 0
+            REQ.DATE = ""
+            BCK.FLG = ""
+            REQ.DATE = TODAY + 1
+            CALL PEN.JOB.SCHED.FWD(CONO,ACTION,JOB.NUM,REQ.DATE,TODAY,DUE.DATE,ST.PTR,EN.PTR,BCK.FLG)
+            SDATE = REQ.DATE
+            BEGIN CASE
+               CASE ACTION = ""
+               CASE ACTION = "E"
+                  IF ST.PTR > 0 AND EN.PTR > 0 AND SDATE # "" THEN
+                     ALL.FLG = 0
+                     CALL PUNSCHED.JOB.SUB(CONO,ACTION,JOB.NUM,SDATE,ST.PTR,EN.PTR,SDATE,ALL.FLG)
+                  END
+                  PRCS.BLK = 1
+               CASE 1
+                  PRCS.BLK = 1
+            END CASE
+            WRITE PSL.REC ON PSS.CONTROL, CONO:DIV.OWNER:"PEND.SCHED.LIST" ; *---- TASK 19407
+            CALL JOB.CRTL.DATE.EXC.UPD (CONO,JOB.NUM)
+            MATWRITE JBS.REC ON JOB.SCHED, CONO:JOB.NUM
+            IF UPDATE.PEND THEN
+               MATWRITE PJBS.REC ON PEND.JOB.SCHED, CONO:JOB.NUM
+            END
+            CALL GEN.XREF.MAINT(CONO,JOB.NUM,OLD.CUST.NAME,JBS.CUST.NAME,PSS.JOB.XREF,PREFIX)
+            GOTO 100
+         CASE OPTION = "N" AND PROC.TYPE # "I"
+            IF JBS.DIV = "" THEN
+               ERRMSG = "Must enter a Division before continuing to next screen"
+               GOSUB 90000
+            END ELSE
+               S$SCR = S$SCR + 1
+               CALL JOB.SCHED.DET.SUB(CONO,JOB.NUM,TODAY,LOADING.FLG,PROC.TYPE)
+               S$SCR = S$SCR - 1
+               JBS.REQ.HRS = SUM(JBS.SCH.HRS)
+               S$DATA(8) = JBS.REQ.HRS
+               GOSUB 700
+               GOSUB 40000
+               REF = 1
+               CURR.REF.NO = ""
+               GOSUB 50000
+            END
+         CASE OPTION = "R" AND PROC.TYPE = "I"
+            GOSUB 600
+            IF S$VALUE # "" AND S$VALUE # "END" THEN
+               REF = S$VALUE
+               DEPT.DESC = S$DATA(14)<S$SCR,REF>
+               S$SCR = S$SCR + 1
+               CALL JOB.SCHED.DET.INQ(CONO,JOB.NUM,TODAY,LOADING.FLG,PROC.TYPE,P.DEPT<1,REF>,DEPT.DESC,P.STMV<1,REF>,P.EDMV<1,REF>)
+               S$SCR = S$SCR - 1
+               GOSUB 700
+               CURR.REF.NO = ""
+               GOSUB 50000
+            END
+         CASE OPTION = "CD"
+            S$SCR = S$SCR + 2
+            CALL JOB.SCHED.DET.DATE(CONO,JOB.NUM,TODAY,LOADING.FLG,PROC.TYPE)
+            S$SCR = S$SCR - 2
+            GOSUB 700
+            CURR.REF.NO = ""
+            GOSUB 50000
+         CASE OPTION = "T" AND PROC.TYPE = "I"
+            IF DCOUNT(JTRK.TIME.STAMP,VM) THEN
+               S$SCR = S$SCR + 3
+               CALL JOB.TRACKING.ERRORS (CONO,JOB.NUM,TODAY,MAT JTRK.REC)
+               S$SCR = S$SCR - 3
+               GOSUB 700
+               CURR.REF.NO = ""
+               GOSUB 50000
+            END ELSE
+               ERRMSG = "No tracking errors for this job"
+               GOSUB 90000
+            END
+         CASE NUM(OPTION) AND PROC.TYPE # "I"
+            ON OPTION GOSUB 2000,3000,4000,6000
+         CASE 1
+            ERRMSG = "Invalid Selection"
+            GOSUB 90000
+      END CASE
+      GOTO 500
+*
+*---- GET LINE REFERENCE NUMBER
+*
+600*
+      SCREEN FIELD;;23
+      S$MINV = CURR.REF.NO
+      S$MAXV = S$MINV + LINE.COUNT - 1
+      IF S$MAXV > LINE.CNT THEN S$MAXV = LINE.CNT
+      SCREEN INPUT;;23
+      RETURN
+*
+*---- FORMAT SCREEN
+*
+700*
+      SCREEN FORMAT
+      GOSUB 61000
+      RETURN
+*
+*---- CUSTOMER
+*
+2000*
+      SCREEN FIELD;;4
+      SCREEN INPUT;;4;RETURN
+      IF S$VALUE = "" THEN
+         SCREEN FIELD;;5
+         SCREEN INPUT;;5;RETURN
+         JBS.CUST.NAME = S$VALUE
+      END ELSE
+         MATREAD CUST.REC FROM CUSTOMER, CONO:S$VALUE ELSE
+            ERRMSG = "Can't locate Customer (":S$VALUE:")"
+            GOSUB 90000;GOTO 2000
+         END
+         JBS.CUST.ID = S$VALUE
+         JBS.CUST.NAME = CUST.NAME
+         S$DATA(5) = JBS.CUST.NAME
+         SCREEN DISPLAY;;5
+      END
+      RETURN
+*
+*---- DIVISION
+*
+3000*
+      SCREEN FIELD;;6
+      SCREEN INPUT;;6
+      IF S$VALUE # "END" THEN
+         MATREAD DIV.REC FROM DIVISION, CONO:S$VALUE ELSE
+            ERRMSG = "Can't locate Division (":S$VALUE:")"
+            GOSUB 90000;GOTO 3000
+         END
+         JBS.DIV = S$VALUE
+         JBS.DIV = DIV.OWNER
+         S$DATA(22) = DIV.DESC  ; *---- TASK 19407
+*        S$DATA(22) = DIV.OWNER ; *---- TASK 19407
+         SCREEN DISPLAY;;22
+*---- TASK 19407
+*
+*---- TEST FOR DIVISION OWNERSHIP
+*
+         IF S$VALUE # DIV.OWNER THEN
+            ERRMSG = "Job not owned by selected division ":DIV.OWNER
+            GOSUB 90000
+            GOTO 3000
+         END
+*---- TASK 19407
+      END
+      RETURN
+*
+*---- DUE DATE
+*
+4000*
+      SCREEN FIELD;;7
+      IF JOB.TRACK.DATE<1,4> # "" THEN
+         S$O.R = "O"; S$DEFAULT = JOB.TRACK.DATE<1,4>
+      END
+      SCREEN INPUT;;7;RETURN
+      IF S$VALUE < TODAY THEN
+         ERRMSG = "Must be a future date"
+         GOSUB 90000
+         GOTO 4000
+      END
+      JBS.DUE.DATE = S$VALUE
+      PJBS.DUE.DATE = S$VALUE
+4010*
+      SCREEN FIELD;;53
+      S$DEFAULT = "S"
+      SCREEN INPUT;;53;RETURN
+      JBS.SCHED.MODE = S$VALUE
+4020*
+      SCREEN FIELD;;54
+      BEGIN CASE
+         CASE JBS.SCHED.MODE = "S"
+            S$O.R = "O"; S$DEFAULT = TODAY+1
+         CASE JBS.SCHED.MODE = "D" AND JBS.DUE.DATE > TODAY
+            S$O.R = "O"; S$DEFAULT = JBS.DUE.DATE
+      END CASE
+      SCREEN INPUT;;54;RETURN
+      IF S$VALUE < TODAY THEN
+         ERRMSG = "Must be a future date"
+         GOSUB 90000
+         GOTO 4020
+      END
+      JBS.SCHED.DATE = S$VALUE
+      RETURN
+*
+*---- JOB.COMMENTS
+*
+6000*
+      SCREEN FIELD;;9
+      SCREEN INPUT;;9;RETURN
+      JBS.JOB.COMMENT = S$VALUE
+      RETURN
+*
+*---- LOAD S$DATA MATRIX
+*
+40000*
+      S$DATA(13)<S$SCR> = ""
+      S$DATA(14)<S$SCR> = ""
+      S$DATA(15)<S$SCR> = ""
+      S$DATA(16)<S$SCR> = ""
+      S$DATA(17)<S$SCR> = ""
+      S$DATA(18)<S$SCR> = ""
+      S$DATA(19)<S$SCR> = ""
+      S$DATA(31)<S$SCR> = ""
+      P.DEPT = ""
+      P.STMV = ""
+      P.EDMV = ""
+      LINE.CNT = DCOUNT(JBS.DEPT,VM)
+      IF LINE.CNT < 1 THEN GOTO 40999
+*
+*--- SUM UP DEPARTMENTS
+*
+      LCNT = 1
+      P.DEPT<1,LCNT> = JBS.DEPT<1,1>
+      P.STMV<1,LCNT> = 1
+      P.EDMV<1,LCNT> = 1
+      MATREAD DEPT.REC FROM DEPARTMENT,CONO:P.DEPT<1,LCNT> ELSE
+         MAT DEPT.REC = ""
+         DEPT.DESC = "NOT ON FILE"
+      END
+      S$DATA(13)<S$SCR,LCNT> = P.DEPT<1,LCNT>
+      S$DATA(14)<S$SCR,LCNT> = DEPT.DESC
+      S$DATA(15)<S$SCR,LCNT> = JBS.SCH.HRS<1,1>
+      FOR REF = 2 TO LINE.CNT
+         IF P.DEPT<1,LCNT> # JBS.DEPT<1,REF> THEN
+            LCNT = LCNT + 1
+            P.DEPT<1,LCNT> = JBS.DEPT<1,REF>
+            MATREAD DEPT.REC FROM DEPARTMENT,CONO:P.DEPT<1,LCNT> ELSE
+               MAT DEPT.REC = ""
+               DEPT.DESC = "NOT ON FILE"
+            END
+            S$DATA(13)<S$SCR,LCNT> = P.DEPT<1,LCNT>
+            S$DATA(14)<S$SCR,LCNT> = DEPT.DESC
+            S$DATA(15)<S$SCR,LCNT> = ""
+            P.STMV<1,LCNT> = REF
+         END
+         S$DATA(15)<S$SCR,LCNT> = S$DATA(15)<S$SCR,LCNT> + JBS.SCH.HRS<1,REF>
+         P.EDMV<1,LCNT> = REF
+      NEXT REF
+      LINE.CNT = LCNT
+*
+*--- LOAD STATUS
+*
+      FOR REF = 1 TO LINE.CNT
+*--- NO STATUS
+         BLK = 0
+         FOR LCNT = P.STMV<1,REF> TO P.EDMV<1,REF> UNTIL BLK
+            BEGIN CASE
+               CASE JBS.DEPT.STATUS<1,LCNT> # ""
+                  BLK = 1
+               CASE JBS.USD.HRS<1,LCNT> > 0
+                  BLK = 1
+            END CASE
+         NEXT LCNT
+         S$DATA(17)<S$SCR,REF> = PJBS.SCH.DATE<1,P.STMV<1,REF>>
+         S$DATA(18)<S$SCR,REF> = PJBS.EXP.DATE<1,P.STMV<1,REF>>
+         S$DATA(19)<S$SCR,REF> = "PND"
+         IF BLK = 0 THEN GOTO 40199
+*--- SCH STATUS
+         BLK = 0
+         S$DATA(16)<S$SCR,REF> = ""
+         S$DATA(17)<S$SCR,REF> = JBS.SCH.DATE<1,P.STMV<1,REF>>
+         S$DATA(18)<S$SCR,REF> = JBS.EXP.DATE<1,P.STMV<1,REF>>
+         S$DATA(19)<S$SCR,REF> = "SCH"
+         FOR LCNT = P.STMV<1,REF> TO P.EDMV<1,REF> UNTIL BLK
+            BEGIN CASE
+               CASE JBS.DEPT.STATUS<1,LCNT> # ""
+                  BLK = 1
+                  GOTO 40129
+               CASE JBS.USD.HRS<1,LCNT> < JBS.SCH.HRS<1,LCNT>
+                  S$DATA(18)<S$SCR,REF> = ""
+               CASE JBS.EXP.DATE<1,LCNT> = ""
+                  S$DATA(18)<S$SCR,REF> = ""
+               CASE JBS.SCH.DATE<1,LCNT> = ""
+                  S$DATA(18)<S$SCR,REF> = ""
+            END CASE
+            S$DATA(16)<S$SCR,REF> = S$DATA(16)<S$SCR,REF> + JBS.USD.HRS<1,LCNT>
+            BEGIN CASE
+               CASE JBS.SCH.DATE<1,LCNT> = ""
+               CASE JBS.SCH.DATE<1,LCNT> < S$DATA(17)<S$SCR,REF>
+                  S$DATA(17)<S$SCR,REF> = JBS.SCH.DATE<1,LCNT>
+            END CASE
+            BEGIN CASE
+               CASE S$DATA(18)<S$SCR,REF> = ""
+               CASE JBS.EXP.DATE<1,LCNT> > S$DATA(18)<S$SCR,REF>
+                  S$DATA(18)<S$SCR,REF> = JBS.EXP.DATE<1,LCNT>
+            END CASE
+40129*
+         NEXT LCNT
+         IF BLK = 0 THEN GOTO 40199
+*--- CMP STATUS
+         BLK = 0
+         S$DATA(16)<S$SCR,REF> = ""
+         S$DATA(17)<S$SCR,REF> = JBS.ACT.DATE<1,P.STMV<1,REF>>
+         S$DATA(18)<S$SCR,REF> = JBS.CMP.DATE<1,P.STMV<1,REF>>
+         S$DATA(19)<S$SCR,REF> = "CMP"
+         FOR LCNT = P.STMV<1,REF> TO P.EDMV<1,REF> UNTIL BLK
+            IF JBS.DEPT.STATUS<1,LCNT> = "C" THEN
+               S$DATA(16)<S$SCR,REF> = S$DATA(16)<S$SCR,REF> + JBS.ACT.HRS<1,LCNT>
+               IF JBS.ACT.DATE<1,LCNT> < S$DATA(17)<S$SCR,REF> THEN
+                  S$DATA(17)<S$SCR,REF> = JBS.ACT.DATE<1,LCNT>
+               END
+               IF JBS.CMP.DATE<1,LCNT> > S$DATA(18)<S$SCR,REF> THEN
+                  S$DATA(18)<S$SCR,REF> = JBS.CMP.DATE<1,LCNT>
+               END
+            END ELSE
+               BLK = 1
+            END
+         NEXT LCNT
+         IF BLK = 0 THEN GOTO 40199
+*--- INP STATUS
+         LCNT = P.STMV<1,REF>
+         S$DATA(16)<S$SCR,REF> = ""
+         S$DATA(17)<S$SCR,REF> = JBS.ACT.DATE<1,LCNT>
+         S$DATA(18)<S$SCR,REF> = ""
+         BEGIN CASE
+            CASE JBS.DEPT.STATUS<1,LCNT> = "C"
+               S$DATA(18)<S$SCR,REF> = JBS.CMP.DATE<1,LCNT>
+            CASE JBS.DEPT.STATUS<1,LCNT> = "I"
+               IF JBS.EXP.DATE<1,LCNT> > JBS.ACT.DATE<1,LCNT> THEN
+                  S$DATA(18)<S$SCR,REF> = JBS.EXP.DATE<1,LCNT>
+               END
+            CASE JBS.USD.HRS<1,LCNT> < JBS.SCH.HRS<1,LCNT>
+            CASE JBS.SCH.DATE<1,LCNT> = ""
+            CASE JBS.EXP.DATE<1,LCNT> # ""
+               S$DATA(18)<S$SCR,REF> = JBS.EXP.DATE<1,LCNT>
+         END CASE
+         S$DATA(19)<S$SCR,REF> = "INP"
+         FOR LCNT = P.STMV<1,REF> TO P.EDMV<1,REF>
+            S$DATA(16)<S$SCR,REF> = S$DATA(16)<S$SCR,REF> + JBS.ACT.HRS<1,LCNT>
+            BEGIN CASE
+               CASE S$DATA(18)<S$SCR,REF> = ""
+               CASE JBS.DEPT.STATUS<1,LCNT> = "C"
+                  IF JBS.CMP.DATE<1,LCNT> > S$DATA(18)<S$SCR,REF> THEN
+                     S$DATA(18)<S$SCR,REF> = JBS.CMP.DATE<1,LCNT>
+                  END
+               CASE JBS.DEPT.STATUS<1,LCNT> = "I"
+                  BEGIN CASE
+                     CASE JBS.EXP.DATE<1,LCNT> > S$DATA(18)<S$SCR,REF>
+                        S$DATA(18)<S$SCR,REF> = JBS.EXP.DATE<1,LCNT>
+                     CASE JBS.EXP.DATE<1,LCNT> < JBS.ACT.DATE<1,LCNT>
+                        S$DATA(18)<S$SCR,REF> = ""
+                  END CASE
+               CASE JBS.SCH.DATE<1,LCNT> = ""
+                  S$DATA(18)<S$SCR,REF> = ""
+               CASE JBS.EXP.DATE<1,LCNT> = ""
+                  S$DATA(18)<S$SCR,REF> = ""
+               CASE JBS.USD.HRS<1,LCNT> < JBS.SCH.HRS<1,LCNT>
+                  S$DATA(18)<S$SCR,REF> = ""
+               CASE 1
+                  IF JBS.EXP.DATE<1,LCNT> > S$DATA(18)<S$SCR,REF> THEN
+                     S$DATA(18)<S$SCR,REF> = JBS.EXP.DATE<1,LCNT>
+                  END
+            END CASE
+            BEGIN CASE
+               CASE JBS.ACT.DATE<1,LCNT> = ""
+               CASE S$DATA(17)<S$SCR,REF> = ""
+                  S$DATA(17)<S$SCR,REF> = JBS.ACT.DATE<1,LCNT>
+               CASE JBS.ACT.DATE<1,LCNT> < S$DATA(17)<S$SCR,REF>
+                  S$DATA(17)<S$SCR,REF> = JBS.ACT.DATE<1,LCNT>
+            END CASE
+         NEXT LCNT
+40199*
+      NEXT REF
+      MAT DEPT.REC = ""
+*
+*--- LOAD TEMP STATUS
+*    TASK 19972
+*
+      IF PROC.TYPE = "I" THEN
+         FOR REF = 1 TO LINE.CNT
+            NPF = 0
+            FOR LCNT = P.STMV<1,REF> TO P.EDMV<1,REF> WHILE NPF = 0
+               LOCATE "N" IN JBS.POST.FLAG<1,LCNT>,1 SETTING NPF ELSE NPF=0
+               IF NPF > 0 THEN S$DATA(31)<S$SCR,REF> = "*"
+            NEXT LCNT
+         NEXT REF
+         RETURN
+      END
+      FOR REF = 1 TO LINE.CNT
+*--- NO STATUS
+         BLK = 0
+         FOR LCNT = P.STMV<1,REF> TO P.EDMV<1,REF> UNTIL BLK
+            BEGIN CASE
+               CASE TEMP.JBS.DEPT.STATUS<1,LCNT> # ""
+                  BLK = 1
+               CASE TEMP.JBS.USD.HRS<1,LCNT> > 0
+                  BLK = 1
+            END CASE
+         NEXT LCNT
+         S$DATA(33)<S$SCR,REF> = "PND"
+         IF BLK = 0 THEN GOTO 41199
+*--- SCH STATUS
+         BLK = 0
+         S$DATA(33)<S$SCR,REF> = "SCH"
+         FOR LCNT = P.STMV<1,REF> TO P.EDMV<1,REF> UNTIL BLK
+            BEGIN CASE
+               CASE TEMP.JBS.DEPT.STATUS<1,LCNT> # ""
+                  BLK = 1
+                  GOTO 41129
+               CASE TEMP.JBS.USD.HRS<1,LCNT> < TEMP.JBS.SCH.HRS<1,LCNT>
+               CASE TEMP.JBS.EXP.DATE<1,LCNT> = ""
+               CASE TEMP.JBS.SCH.DATE<1,LCNT> = ""
+            END CASE
+41129*
+         NEXT LCNT
+         IF BLK = 0 THEN GOTO 41199
+*--- CMP STATUS
+         BLK = 0
+         S$DATA(33)<S$SCR,REF> = "CMP"
+         FOR LCNT = P.STMV<1,REF> TO P.EDMV<1,REF> UNTIL BLK
+            IF TEMP.JBS.DEPT.STATUS<1,LCNT> = "C" THEN
+               BLK = 0
+            END ELSE
+               BLK = 1
+            END
+         NEXT LCNT
+         IF BLK = 0 THEN GOTO 41199
+*--- INP STATUS
+         LCNT = P.STMV<1,REF>
+         BEGIN CASE
+            CASE TEMP.JBS.DEPT.STATUS<1,LCNT> = "C"
+            CASE TEMP.JBS.DEPT.STATUS<1,LCNT> = "I"
+            CASE TEMP.JBS.USD.HRS<1,LCNT> < TEMP.JBS.SCH.HRS<1,LCNT>
+            CASE TEMP.JBS.SCH.DATE<1,LCNT> = ""
+            CASE TEMP.JBS.EXP.DATE<1,LCNT> # ""
+         END CASE
+         S$DATA(33)<S$SCR,REF> = "INP"
+41199*
+         NPF = 0
+         FOR LCNT = P.STMV<1,REF> TO P.EDMV<1,REF> WHILE NPF = 0
+            LOCATE "N" IN TEMP.JBS.POST.FLAG<1,LCNT>,1 SETTING NPF ELSE NPF=0
+            IF NPF > 0 THEN S$DATA(31)<S$SCR,REF> = "*"
+         NEXT LCNT
+         IF NPF = 0 THEN S$DATA(33)<S$SCR,REF> = S$DATA(19)<S$SCR,REF>
+40998*
+      NEXT REF
+      MAT DEPT.REC = ""
+40999*
+      RETURN
+*
+*---- DISPLAY MULTI-VALUE DATA
+*
+50000*
+      START.REF.NO = 1 + INT((REF-1)/LINE.COUNT)*LINE.COUNT
+      IF START.REF.NO = CURR.REF.NO THEN RETURN
+      CURR.REF.NO = START.REF.NO
+      S$VAL = START.REF.NO
+      S$CNT = LINE.CNT
+      SCREEN MULTI;;C;12;13;14;15;16;17;18;19;31;33
+      RETURN
+60000*
+      S$DATA(3) = JOB.MASTER
+      S$DATA(4) = JBS.CUST.ID
+      S$DATA(5) = JBS.CUST.NAME
+      S$DATA(6) = JBS.DIV
+      IF JBS.DUE.DATE = "" THEN
+         S$DATA(7) = JOB.TRACK.DATE<1,4>
+      END ELSE
+         S$DATA(7) = JBS.DUE.DATE
+      END
+      S$DATA(8) = JBS.REQ.HRS
+      S$DATA(9) = JBS.JOB.COMMENT
+      S$DATA(10) = JOB.EST
+      IF JOB.EST # "" THEN
+         MATREAD EST.REC FROM ESTIMATE,CONO:JOB.EST THEN
+            S$DATA(11) = EST.MASTER
+         END
+      END
+      MAT EST.REC = ""
+      IF JBS.DIV = "" THEN
+         MAT DIV.REC = ""
+      END ELSE
+         MATREAD DIV.REC FROM DIVISION, CONO:JBS.DIV ELSE
+            MAT DIV.REC = ""
+            DIV.DESC = "UNKNOWN"
+         END
+      END
+      S$DATA(22) = DIV.DESC
+      IF JOB.CSR = "" THEN
+         MAT CSR.REC = ""
+      END ELSE
+         MATREAD CSR.REC FROM CSR.CODE, CONO:JOB.CSR ELSE
+            MAT CSR.REC=""
+            CSR.DESC = "UNKNOWN"
+         END
+      END
+      S$DATA(41) = JOB.CSR
+      S$DATA(42) = CSR.DESC
+      S$DATA(43) = JOB.QTY<1,1>
+      S$DATA(51) = JOB.TRACK.DATE<1,4>
+      SDATE = JBS.EXP.DATE<1,1>
+      CCNT = DCOUNT(JBS.CCTR,VM)
+      FOR JPTR = 1 TO CCNT
+         IF JBS.EXP.DATE<1,JPTR> > SDATE THEN SDATE = JBS.EXP.DATE<1,JPTR>
+      NEXT JPTR
+      S$DATA(52) = SDATE
+      S$DATA(53) = JBS.SCHED.MODE
+      S$DATA(54) = JBS.SCHED.DATE
+      IF JTRK.TIME.STAMP = "" THEN
+         S$DATA(30) = ""
+      END ELSE
+         S$DATA(30) = "** TRACKING ERRORS PRESENT **"
+      END
+      BEGIN CASE
+         CASE JOB.STATUS<1,1> = "4"
+            S$DATA(32) = "** COMPLETED **"
+         CASE JOB.STATUS<1,1> > "5"
+            S$DATA(32) = "** COMPLETED **"
+         CASE JOB.TRACK.DATE<1,6> # ""
+            S$DATA(32) = "** DELIVERED **"
+      END CASE
+61000*
+      SCREEN DISPLAY;;ALL
+      RETURN
+*
+*---- ERROR ROUTINE
+*
+90000 ERR.TYPE=1;CALL SI_SYSCOM(MAT SYSCOM.REC);RETURN
+* 90000*
+*       PRINT @(0,23):@(-4):ERRMSG:
+*       INPUT REPLY:
+*       PRINT @(0,23):@(-4):
+*       RETURN
+*
+*---- END OF PROGRAM
+*
+999999*
+*       PRINT @(-1):
+      STOP
+   END

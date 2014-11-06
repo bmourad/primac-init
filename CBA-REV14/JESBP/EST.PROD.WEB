@@ -1,0 +1,221 @@
+      SUBROUTINE EST.PROD.WEB (CONO,ACTION,COMP)
+***************************************************************************
+*
+* REVISION - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+*
+* PROGRAM  - EST.PROD.WEB
+*
+* AUTHOR   - NICK AMENDOLA, COMPUTER BUSINESS ASSOCIATES
+*
+* DATE     - 04/27/86
+*
+* DESCRIPTION
+*
+* This program is used to calculate order paper quantity and impressions
+* the various quantities being estimated. All calculation are for roll
+* paper.
+* T16090 dlg 09/10/91 * Use the field EST.PROD.OS.LENTH instead of the
+*                       the field EQP.PRESS.CUTOFF.LEN
+*
+***************************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>JES.CPYLIB>SCOMMON.ESTIMATE
+*COPY>JES.CPYLIB>ESTIMATE
+*COPY>JES.CPYLIB>EQUIPMENT
+*COPY>JES.CPYLIB>ESTIMATE.BIND.SPOIL
+*COPY>JES.CPYLIB>ESTIMATE.PRESS.SPOIL
+*COPY>JES.CPYLIB>ESTIMATE.MATL
+*COPY>JES.CPYLIB>ESTIMATE.PAPER.GROUP
+*COPY>JES.CPYLIB>JES.FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+MAT SYSCOM.REC =  ""; SYS.TYPE = 2
+*
+*---- INITIALIZATION
+*
+      PRODS = ""
+      WGHTS = ""
+      QCNT = COUNT(EST.QTY,VM) + (EST.QTY # "")
+      WEB.CNT = EST.PROD.WEB.CNT<1,COMP>
+      NUMBER.UP=EST.PROD.NO.UP<1,COMP,1>+0
+      IF NUMBER.UP = 0 THEN NUMBER.UP = 1
+      FORMS = EST.PROD.FORMS<1,COMP,1>+0
+      IF FORMS = 0 THEN FORMS = 1
+      MATREAD EQUIPMENT.REC FROM EQUIPMENT, CONO:EST.PROD.PRESS.ID<1,COMP> ELSE
+         ERRMSG = "Invalid press ID"
+         GOSUB 90000
+         GOTO 99999
+      END
+      IF NOT(NUM(EST.PROD.BIND.SPOIL<1,COMP,1>)) THEN
+         MATREAD BST.REC FROM ESTIMATE.BIND.SPOIL, CONO:EST.PROD.BIND.SPOIL<1,COMP,1> ELSE
+            MAT BST.REC = ""
+         END
+      END
+      IF NOT(NUM(EST.PROD.PRESS.SPOIL<1,COMP,1>)) THEN
+         MATREAD PST.REC FROM ESTIMATE.PRESS.SPOIL, CONO:EST.PROD.PRESS.SPOIL<1,COMP,1> ELSE
+            MAT PST.REC = ""
+         END
+      END
+*
+*---- MAIN PROCESSING
+*
+      FOR MPTR = 1 TO WEB.CNT
+         PROD = EST.PROD.OS.PROD<1,COMP,MPTR>:"!":EST.PROD.OS.USAGE<1,COMP,MPTR>
+         LOCATE PROD IN PRODS<1>,1 SETTING PPTR ELSE
+            PRODS<1,PPTR> = PROD
+         END
+         PLC = COUNT(EST.PROD.PQTY<1,COMP,MPTR>,"!") + (EST.PROD.PQTY<1,COMP,MPTR> # "")
+         FOR X = PLC TO QCNT+1 STEP -1
+*           EST.PROD.PQTY = DELETE(EST.PROD.PQTY,1,COMP,X)
+            MACRO DELVAL;EST.PROD.PQTY<1,COMP,MPTR>;"!";X
+*           EST.PROD.PCST = DELETE(EST.PROD.PCST,1,COMP,X)
+            MACRO DELVAL;EST.PROD.PCST<1,COMP,MPTR>;"!";X
+         NEXT X
+         MATREAD ESTPG.REC FROM ESTIMATE.PAPER.GROUP, CONO:EST.PROD.OS.USAGE<1,COMP,MPTR> ELSE
+            ERRMSG = "Invalid paper group"
+            GOSUB 90000
+            GOTO 99999
+         END
+*    
+         BW = EST.PROD.BASIS.WT<1,COMP,MPTR>
+         BSW = ESTPG.WIDTH/10000
+         BSL = ESTPG.LENGTH/10000
+         OSW = EST.PROD.OS.WIDTH<1,COMP,MPTR>/10000
+         * TASK 16090 *
+         IF EST.PROD.OS.LENGTH<1,COMP> NE "" THEN
+            OSL = EQP.PRESS.OS.LENGTH<1,COMP>/10000
+         END ELSE
+            OSL = EQP.PRESS.CUTOFF.LEN/10000
+         END
+         M.WEIGHT = 2 * BW * (OSW * OSL) / (BSW * BSL)
+         M.WEIGHT = INT(M.WEIGHT * 100 + 0.5) / 100
+         EST.PROD.PSS.OSS<1,COMP,MPTR> = 1
+         FOR QPTR = 1 TO QCNT
+            EQTY = EST.QTY<1,QPTR>
+            BEGIN CASE
+            CASE EST.PROD.BIND.SPOIL<1,COMP,1> = "MULT"
+               BIND.SPOIL = 0
+               FOR MQ = 1 TO 3
+                  QTY = FIELD(EST.BOOK.BIND.QTY<1,1,MQ>,"!",QPTR)
+                  BSP = EST.BOOK.BIND.SPOIL<1,1,MQ>
+                  IF NUM(BSP) THEN
+                     BSM = INT(QTY*(BSP/100)+0.99)
+                  END ELSE
+                     MATREAD BST.REC FROM ESTIMATE.BIND.SPOIL,CONO:BSP ELSE MAT BST.REC = ""
+                     LOCATE QTY IN BST.QTY<1>,1 BY "AR" SETTING BP ELSE NULL
+                     BEGIN CASE
+                     CASE BP = 1
+                        BSPCT = BST.PCT<1,BP>
+                     CASE BP > COUNT(BST.QTY,VM) + 1
+                        BSPCT = BST.PCT<1,BP-1>
+                     CASE BST.EXTR = "Y"
+                        BSPCT = INT(BST.PCT<1,BP>-(BST.QTY<1,BP>-QTY)/(BST.QTY<1,BP>-BST.QTY<1,BP-1>)*(BST.PCT<1,BP>-BST.PCT<1,BP-1>)+0.5)
+                     CASE 1
+                        BSPCT = BST.PCT<1,BP>
+                     END CASE
+                     BSM = INT(QTY*(BSPCT/10000)+0.99)
+                     IF BSM < BST.MIN.QTY THEN BSM = BST.MIN.QTY
+                  END
+                  BIND.SPOIL = BIND.SPOIL + BSM
+                  MACRO REPVAL;EST.BOOK.BIND.REQ<1,COMP,MQ>;"!";QPTR;BSM
+               NEXT MQ
+            CASE NUM(EST.PROD.BIND.SPOIL<1,COMP,1>)
+               BIND.SPOIL = INT(EQTY * (EST.PROD.BIND.SPOIL<1,COMP,1>/100) + 0.99)
+            CASE 1
+               LOCATE EQTY IN BST.QTY<1>,1 BY "AR" SETTING BP ELSE NULL
+               BEGIN CASE
+               CASE BP = 1
+                  BSPCT = BST.PCT<1,BP>
+               CASE BP > COUNT(BST.QTY,VM) + 1
+                  BSPCT = BST.PCT<1,BP-1>
+               CASE BST.EXTR = "Y"
+                  BSPCT = INT(BST.PCT<1,BP>-(BST.QTY<1,BP>-EQTY)/(BST.QTY<1,BP>-BST.QTY<1,BP-1>)*(BST.PCT<1,BP>-BST.PCT<1,BP-1>)+0.5)
+               CASE 1
+                  BSPCT = BST.PCT<1,BP>
+               END CASE
+               BIND.SPOIL = INT(EQTY * (BSPCT/10000) + 0.99)
+               IF BIND.SPOIL < BST.MIN.QTY THEN BIND.SPOIL = BST.MIN.QTY
+            END CASE
+*           EST.PROD.BS.REQ<1,COMP,QPTR> = BIND.SPOIL
+            MACRO REPVAL;EST.PROD.BS.REQ<1,COMP,1>;"!";QPTR;BIND.SPOIL
+            PROD.QTY = EQTY + BIND.SPOIL
+            RUN.SHT = INT(PROD.QTY / NUMBER.UP + 0.99)
+            RUN.IMP = RUN.SHT              ;* Impressions per pass
+            IF NUM(EST.PROD.PRESS.SPOIL<1,COMP,1>) THEN
+               SPL.SHT = INT(RUN.IMP * (EST.PROD.PRESS.SPOIL<1,COMP,1>/100) + 0.99)
+            END ELSE
+               LOCATE RUN.IMP IN PST.QTY<1>,1 BY "AR" SETTING P ELSE NULL
+               BEGIN CASE
+               CASE P = 1
+                  PSPCT = PST.PCT<1,P>
+               CASE P > COUNT(PST.QTY,VM) + 1
+                  PSPCT = PST.PCT<1,P-1>
+               CASE PST.EXTR = "Y"
+                  PSPCT = INT(PST.PCT<1,P>-(PST.QTY<1,P>-RUN.IMP)/(PST.QTY<1,P>-PST.QTY<1,P-1>)*(PST.PCT<1,P>-PST.PCT<1,P-1>)+0.5)
+               CASE 1
+                  PSPCT = PST.PCT<1,P>
+               END CASE
+               SPL.SHT = INT(RUN.IMP * (PSPCT/10000) + 0.99)
+            END
+*           EST.PROD.PS.REQ<1,COMP,QPTR> = SPL.SHT
+            MACRO REPVAL;EST.PROD.PS.REQ<1,COMP,1>;"!";QPTR;SPL.SHT
+            MR.SHT = EST.PROD.INIT.MR.CNT<1,COMP,1> * EST.PROD.INIT.MR.IMP<1,COMP,1>
+            MR.SHT = MR.SHT + (EST.PROD.SUBS.MR.CNT<1,COMP,1> * EST.PROD.SUBS.MR.IMP<1,COMP,1>)
+*           EST.PROD.MR.REQ<1,COMP,QPTR> = MR.SHT
+            MACRO REPVAL;EST.PROD.MR.REQ<1,COMP,1>;"!";QPTR;MR.SHT
+            TOT.SHT = MR.SHT + ((RUN.SHT + SPL.SHT) * FORMS)
+            ORD.SHT = TOT.SHT
+            ORD.LBS = INT(M.WEIGHT*(ORD.SHT/1000)+0.5)
+*           EST.PROD.PQTY<1,COMP,QPTR> = ORD.LBS
+            MACRO REPVAL;EST.PROD.PQTY<1,COMP,MPTR>;"!";QPTR;ORD.LBS
+*           EST.PROD.IMP<1,COMP,QPTR> = (RUN.SHT + SPL.SHT)
+            MACRO REPVAL;EST.PROD.IMP<1,COMP,MPTR>;"!";QPTR;(RUN.SHT + SPL.SHT)
+            WGHTS<1,PPTR,QPTR> = WGHTS<1,PPTR,QPTR> + ORD.LBS
+         NEXT QPTR
+      NEXT MPTR
+*
+*---- CALCULATE STOCK PRICING
+*
+      PCNT = COUNT(PRODS,VM) + (PRODS # "")
+      FOR PPTR = 1 TO PCNT
+         PROD = PRODS<1,PPTR>
+         PROD = FIELD(PRODS<1,PPTR>,"!",1)
+         USAGE = FIELD(PRODS<1,PPTR>,"!",2)
+         MATREAD ESTM.REC FROM ESTIMATE.MATL, CONO:EST.PROD.OS.TYPE<1,COMP>:USAGE ELSE
+            GOTO 290
+         END
+         LOCATE PROD IN ESTM.PROD<1>,1 SETTING MP ELSE GOTO 290
+         FOR QPTR = 1 TO QCNT
+            WGHT = WGHTS<1,PPTR,QPTR>
+            LOCATE WGHT IN ESTM.END.QTY<1,MP>,1 BY "AR" SETTING PP ELSE NULL
+            IF PP > COUNT(ESTM.END.QTY<1,MP>,SM) + 1 THEN PP = PP - 1
+*           COST = INT(ORD.LBS / 100 * ESTM.QCOST<1,MP,PP> + 0.5)
+            COST = ESTM.QCOST<1,MP,PP>
+            IF COST = "" THEN GOTO 280
+            FOR MPTR = 1 TO WEB.CNT
+               IF EST.PROD.OS.PROD<1,COMP,MPTR> = PROD THEN
+*                 EST.PROD.PCST<1,COMP,QPTR> = COST
+                  MACRO REPVAL;EST.PROD.PCST<1,COMP,MPTR>;"!";QPTR;COST
+               END
+            NEXT MPTR
+280      NEXT QPTR
+290   NEXT PPTR
+      GOTO 99999
+*
+*---- ERROR ROUTINE
+*
+90000 ERR.TYPE=1;CALL SI_SYSCOM(MAT SYSCOM.REC);RETURN
+* 90000*
+*       PRINT @(0,23):CL:ERRMSG:
+*       INPUT REPLY:
+*       PRINT @(0,23):CL:
+*       RETURN
+*
+*---- END OF PROGRAM
+*
+99999*
+      RETURN
+   END

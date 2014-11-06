@@ -1,0 +1,3756 @@
+  SUBROUTINE SCREEN_MAINT(PASS_VARS,ID_VARS,M_REC,OLD_M_REC,IMGDEF,IMGSIZE,MAT IMGREC,USER.MAIL,FVAR_SIZE,FVAR_REC,OPN_FILES)
+*COPY>CPYLIB>COM1
+*********************************************************************
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* Revision      - [10.0]
+* Revision Date - 04/28/94
+* System        - PRIMAC
+* Library       - JISBP/SCREEN_MAINT
+* Author        - Ziad Yamout, VERCOM Software, Inc.
+*
+*TASK20265 MWS 3/29/96   * ADD ABILITY TO CLONE CANCELED OR COMPLETED
+*                          JOB TICKETS.
+*T22268 bilal 10/06/1997 * ALLOW USER TO PRINT BAR CODE ON ANY DEFINED
+*                          PRINT FORM.
+*CSF25470 4/10/96        * IF 'N' USED TO GET NEW TKT ID,
+*                          PRINTS 'N' IN TKT NUMBER FIELD ON PRINT FORM
+*                          RATHER THAN NEWLY ASSIGND TICKET NUMBER.
+*                          ALSO NOT PRINTING USING PRINT FORM
+*C30029 renee 01/16/1998 * Fixing cloning feature so that it will clone
+*                          multi values correctly    (Also, see T22486)
+*T23211 renee 08/28/1998 * Display the old information when and old
+*                          version is pulled up.
+*T23593 renee 09/13/1999 * Fix multiple problems regarding component
+*                          dependent forms. Ziad added "909" to be used
+*                          as the "current component" for formulas and
+*                          subroutines.
+*T25024 diane 05/02/2000 * Update with version
+*C36747 bilal 02/27/2001 * editing a multifield date field is processed
+*                          as TEXT field.
+*T26856 ajibaly 09/11/2002 * Add email in PDF format option
+*T27646 thompson 08/18/2003 * Modify to run on multi platform.
+*T28052 thompson 04/06/2004 * Initialize OPTION variable.
+*ENDDOC
+*********************************************************************
+*
+*---- Data Structure Libraries
+*
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>JIS.CPYLIB>SYS_TKT_DEF
+*COPY>JIS.CPYLIB>SYS_SCN_DEF
+*COPY>JIS.CPYLIB>PFX_FILES
+*COPY>JIS.CPYLIB>SYS_FILES
+*COPY>JIS.CPYLIB>SYS_FIELDS
+*COPY>JIS.CPYLIB>JKT_NOTIFY
+*COPY>CPYLIB>PORT.CONTROL
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>TCC
+*COPY>CPYLIB>GEN.XREF.SUB
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>ROC.H
+*COPY>CPYLIB>SPECIAL.H
+*
+  DIM DREC(300)
+  DIM TBL_REC(60)
+  DIM TBL_ID(60)
+  DIM TBL_ID_TYPE(60)
+  DIM TBL_KEY(60)
+  DIM TBL_ID_FNO(60)
+  DIM IMGREC(IMGSIZE)
+*
+  EQU FLD_FNAME TO FLD_ESTK
+  EQU FLD_VNAME TO FLD_TSTK
+*
+  SCNO = 1; MAX_SNO = 2
+  SCN_X = 79
+  DIM SCN_HDR_CRT(MAX_SNO)
+  DIM SCN_CLR_CRT(MAX_SNO)
+  X_ADJ = 0; X_ADJ<2> = 80
+*
+  EXPFNAME = ""; EXPFPTR = ""
+  SUBRFLG = "@SUBR"
+  OLD.VERSION = 0         ; * T23211
+*
+*---- Get Parameters & Initialize variables
+*
+  SYS.TYPE = 1; CALL SYSCOM(MAT SYSCOM.REC)
+*
+  BARCODE.ON = CHAR(027):"(0Y":CHAR(027):"(s0p4.6h0T"
+  BARCODE.OFF = CHAR(027):CHAR(040):CHAR(051):CHAR(064)
+*
+  THIS_FUNC = PASS_VARS<1>
+  SCN_LOC = PASS_VARS<2>
+  SCN_NAMES = PASS_VARS<3>
+  PRT_NAMES = PASS_VARS<4>
+  O_EDITMODE = PASS_VARS<5>
+  CHGMODE = PASS_VARS<6>
+  UPDMODE = PASS_VARS<7>
+  PRT_CRT = PASS_VARS<8>
+  ERRFLG = PASS_VARS<9>
+  TKTDEF = PASS_VARS<10>
+  RTNFLG = PASS_VARS<11>
+  REV_CTL = PASS_VARS<12>
+  GEN_N_ID = PASS_VARS<13>
+  BATCHMODE = PASS_VARS<14>
+  TRANSMODE = PASS_VARS<15>
+  MAXPLINES = PASS_VARS<16>
+  BLNPRT = PASS_VARS<17>
+  ELNPRT = PASS_VARS<18>
+  BCLPTR = PASS_VARS<19>
+  BCROW = PASS_VARS<20>
+  BCCOL = PASS_VARS<21>
+  SCN_CMPS = PASS_VARS<22>
+  IF SCN_LOC = 1 THEN ORIG_CMPS = SCN_CMPS   ; * RENEE
+  PRT_CMPS = PASS_VARS<23>
+*----T22268
+  BC_FLG = PASS_VARS<24>
+*----^
+  GUI_FORMS = PASS_VARS<25>
+  MAXPV = 26
+*
+**********
+  GUI_APP_NAME = TKTDEF
+*
+  PORT.NO = "TTY"; CALL SYSVARS.SUB(PORT.NO)
+  MATREAD USER.REC FROM SECURITY, "R.":PORT.NO ELSE
+    ERRMSG = "Cannot locate the logged on user ID !"
+    GOTO 93000
+  END
+*
+*---- Get company
+*
+  CONO = ""; MAT COMP.REC = ""
+  CALL GET.CONO(CONO,MAT COMP.REC)
+  IF CONO = "END" THEN GOTO 99999
+  IF CO.JIS # "Y" THEN
+    ERRMSG = "Job Information System functionality not purchased"
+    GOSUB 91000; GOTO 99999
+  END
+*
+  CALC_FLDS = "@DATE"
+  CALC_FLDS<2> = "@TIME"
+  EDIT_FILES = "JOB_TKT"
+*
+  OPTION = "" ;*T28052
+  MAT DREC = ""
+  SCN_FLDS = ""; FLD_ORG = ""
+  FLD_FPTR = ""; FLD_TPTR = ""; FLD_IPTR = ""
+  FLD_X = ""; FLD_Y = ""
+  FLD_CNV = ""; FLD_FMT = ""
+  FLD_LOC = ""; FLD_REF = ""
+  FLD_MVNO = ""; FLD_SMVNO = ""
+  MVNO_MV = ""; SMVNO_MV = ""
+  MVNO_SMV = ""; SMVNO_SMV = ""
+  MVNO_REF = ""; SMVNO_REF = ""
+  MVNO_RCNT = 0; SMVNO_RCNT = 0
+  FLD_LINES = ""; FLD_LNSPC = ""
+  FLD_LNK = ""; FLD_LPTR = ""; FLD_LCNT = ""
+  FLD_LCHR = ""; FLD_HIDE = ""
+  FLD_DSTLST = ""
+  FLD_SUBR = ""; FLD_EXPR = ""; FLD_ESTK = ""; FLD_TSTK = ""
+  FLD_SBR_VID = ""; FLD_SBR_VVALUE = ""
+  FLD_SBR_FPTR = ""; FLD_SBR_VPTR = ""
+*
+  DSP_LNO = ""; DSP_OLNO = ""; DSP_FNO = ""
+*
+  KEYCNT = 1; TBL_IDX = ""; TBL_LOC = ""; TBL_FLD_LOC = ""
+*
+  MIN_ROW = 0; MAX_ROW = 23
+  MIN_Y = MIN_ROW + 1; MAX_Y = MAX_ROW + 1
+  MIN_COL = 0; MAX_COL = 79
+  MIN_X = MIN_COL + 1; MAX_X = MAX_COL + 1
+  MAX_SPC = SPACE(MAX_X)
+**************************************
+*
+  TYPE_INI = "T"; TYPE_DSC = "Text"; OTYP_INI = 1
+  TYPE_INI<2> = "N"; TYPE_DSC<2> = "Numeric"; OTYP_INI<2> = 3
+  TYPE_INI<3> = "C"; TYPE_DSC<3> = "deCimal"; OTYP_INI<3> = 4
+  TYPE_INI<4> = "A"; TYPE_DSC<4> = "Alpha"; OTYP_INI<4> = 2
+  TYPE_INI<5> = "D"; TYPE_DSC<5> = "Date"; OTYP_INI<5> = 6
+  TYPE_INI<6> = "L"; TYPE_DSC<6> = "Logical"; OTYP_INI<6> = 8
+  TYPE_INI<7> = "P"; TYPE_DSC<7> = "Pattern"; OTYP_INI<7> = 7
+  TYPE_INI<8> = "U"; TYPE_DSC<8> = "coUnter"; OTYP_INI<8> = 3
+*
+*---- Begin Processing
+*
+  SCN_NAME = FIELD(SCN_NAMES,",",SCN_LOC)
+  IF SCN_NAME = "" THEN
+    ERRMSG = "No specified Screen function to EXECUTE"
+    GOTO 93000
+  END
+*
+*---- Get Screen Definitions
+*
+  MATREAD SSD.REC FROM SYS_SCN_DEF, SCN_NAME ELSE
+    ERRMSG = "Cannot access Screen (":SCN_NAME:")"
+    GOTO 93000
+  END
+*
+*---- Open Screen file
+*
+  IF SCN_LOC = 1 THEN
+    OPEN "",SSD_SRC_FILE TO M.SCREENS ELSE
+      ERRMSG = "Cannot access Screen file (":SSD_SRC_FILE:")"
+      GOTO 93000
+    END
+    OPEN "","JKT_NOTIFY" TO JKT_NOTIFY ELSE
+      ERRMSG = "Cannot open JKT_NOTIFY file"
+      GOTO 93000
+    END
+    OPEN "","JOB_JKT_IMG" TO JOB_JKT_IMG ELSE
+      ERRMSG = "Cannot open JOB_JKT_IMG file"
+      GOTO 93000
+    END
+    ORG_SCN_NAMES = SCN_NAMES
+    ORG_PRT_NAMES = PRT_NAMES
+    ORG_BLNPRT = BLNPRT
+    ORG_ELNPRT = ELNPRT
+    ORG_SCN_CMPS = SCN_CMPS
+    ORG_PRT_CMPS = PRT_CMPS
+  END
+  READ SCN_FLD_DEF FROM M.SCREENS, SCN_NAME:"_FLD" ELSE
+*        ERRMSG = "Cannot access Screen Fields Definition (":SCN_NAME:")"
+*        GOTO 93000
+    SCN_FLD_DEF = ""
+  END
+*
+*---- Open Data files
+*
+  MATREAD SFR.REC FROM SYS_FILES, SSD_M_TABLE ELSE
+    ERRMSG = "Cannot locate table (":SSD_M_TABLE:") definition"
+    GOTO 93000
+  END
+  FID_CNT = DCOUNT(SFR.ID,VM)
+  IF FID_CNT < 1 THEN
+    ERRMSG = "Cannot determine the KEY fields for table - ":SSD_M_TABLE
+    GOTO 93000
+  END
+  IDCNT = 0; IDPTR = ""; IDDEF = ""
+  REQ_CO = 0; MID_NO = 0
+  FOR I = 1 TO FID_CNT
+    BEGIN CASE
+      CASE SFR.ID<1,I> = "CO"
+        REQ_CO = 1
+        IDDEF<-1> = SFR.ID<1,I>
+      CASE SFR.ID.TYPE<1,I> # "T"
+        LOCATE SFR.ID<1,I> IN SSD_M_ID<1>,1 SETTING FND THEN
+          IDDEF<-1> = SFR.ID<1,I>
+          IDCNT = IDCNT + 1
+          IDPTR<IDCNT> = FND
+          IF SFR.ID.TYPE<1,I> = "I" THEN
+            MID_NO = IDCNT
+          END
+        END ELSE
+          ERRMSG = "Cannot locate the screen definition for Key - ":SFR.ID<1,I>
+          FID_CNT = 0
+        END
+    END CASE
+  NEXT I
+  BEGIN CASE
+    CASE FID_CNT = 0
+      GOTO 93000
+    CASE IDCNT < 1
+      ERRMSG = "Cannot determine the Key field for table - ":SSD_M_TABLE
+      GOTO 93000
+  END CASE
+  IF FVAR_SIZE < 1 THEN
+    READ FVAR_REC FROM CPYLIB, "FILE.VARS" ELSE
+      ERRMSG = "Cannot locate CPYLIB, FILE.VARS"
+      GOTO 93000
+    END
+    PFX = "^IGNORE^"
+    CALL CPYLIB_SUB(FVAR_REC,PFX,ARRAY_NAME,FVAR_SIZE,ERRMSG)
+    IF ERRMSG # "" THEN
+      GOTO 93000
+    END
+  END
+  BEGIN CASE
+    CASE UPDMODE
+    CASE TRANSMODE AND SCN_LOC = 1
+      CALL SCREEN_TRN_SET(TKTDEF,IDDEF,IMGDEF,TRN_FILE,ERRMSG)
+      IF ERRMSG # "" THEN
+        GOTO 93000
+      END
+    CASE PRT_CRT
+      CALL SCN_CRT_BLD(SCN_NAME,MAT SCN_HDR_CRT,MAT SCN_CLR_CRT,ERRMSG)
+      IF ERRMSG # "" THEN GOTO 93000
+    CASE 1
+      CALL SCN_PRT_BLD(SCN_NAME,SCN_HDR_PRT,ERRMSG)
+      IF ERRMSG # "" THEN GOTO 93000
+  END CASE
+  LOCATE SSD_M_TABLE IN FVAR_REC,1 SETTING MTBL_PTR THEN
+    LOCATE SSD_M_TABLE IN EDIT_FILES,1 SETTING FND THEN
+      MAINTMODE = 1
+    END ELSE
+      MAINTMODE = 0
+    END
+  END ELSE
+    LIMIT = 1; MTBL_PTR = 0
+    FOR I = FVAR_SIZE TO LIMIT STEP -1
+      IF FVAR_REC<I> = "" THEN
+        FVAR_REC<I> = CONVERT(".","_",SSD_M_TABLE)
+        LIMIT = FVAR_SIZE; MTBL_PTR = I
+      END
+    NEXT I
+    IF MTBL_PTR = 0 THEN
+      ERRMSG = "Cannot determine the ":SSD_M_TABLE:" main table link pointer"
+      GOTO 93000
+    END
+    MAINTMODE = 1
+  END
+  BEGIN CASE
+    CASE SCN_LOC = 1
+      OPEN "",SSD_M_TABLE TO FILE.VARS(MTBL_PTR) ELSE
+        ERRMSG = "Cannot locate the ":SSD_M_TABLE:" table"
+        GOTO 93000
+      END
+      OPN_FILES = MTBL_PTR
+    CASE MTBL_PTR # OPN_FILES<1>
+      ERRMSG = "Master data file mismatch between screens"
+      GOTO 93000
+  END CASE
+  FLDCNT = DCOUNT(SSD_FIELDS,VM)
+  FOR I = 1 TO FLDCNT
+    IF SSD_FLD_EXPR<1,I> = SUBRFLG THEN
+      CNT = DCOUNT(SSD_SBR_FNAME<1,I>,SVM)
+      FOR J = 1 TO CNT
+        TBL_NAME = SSD_SBR_FNAME<1,I,J>
+        LOCATE TBL_NAME IN SSD_S_TABLE<1>,1 SETTING FND ELSE
+          SSD_S_TABLE<1,FND> = TBL_NAME
+        END
+      NEXT J
+    END
+  NEXT I
+  STCNT = DCOUNT(SSD_S_TABLE,VM)
+  IF STCNT > 0 THEN
+    FOR ST = 1 TO STCNT
+      LOCATE SSD_S_TABLE<1,ST> IN FVAR_REC,1 SETTING FND THEN
+        LOCATE FND IN OPN_FILES,2 SETTING OFPTR ELSE
+          OPEN "",SSD_S_TABLE<1,ST> TO FILE.VARS(FND) THEN
+            OPN_FILES<OFPTR> = FND
+          END ELSE
+            ERRMSG = "Cannot locate the [":SSD_S_TABLE<1,ST>:"] table"
+            STCNT = 0
+          END
+        END
+      END ELSE
+        LIMIT = 1; FND = 0
+        FOR I = FVAR_SIZE TO LIMIT STEP -1
+          IF FVAR_REC<I> = "" THEN
+            FVAR_REC<I> = SSD_S_TABLE<1,ST>
+            LIMIT = FVAR_SIZE; FND = I
+          END
+        NEXT I
+        IF FND = 0 THEN
+          ERRMSG = "Cannot initiate the (":SSD_S_TABLE<1,ST>:") table link pointer"
+          STCNT = 0
+        END ELSE
+          LOCATE FND IN OPN_FILES,2 SETTING OFPTR ELSE
+            OPEN "",SSD_S_TABLE<1,ST> TO FILE.VARS(FND) THEN
+              OPN_FILES<OFPTR> = FND
+            END ELSE
+              ERRMSG = "Cannot locate the [":SSD_S_TABLE<1,ST>:"] table"
+              STCNT = 0
+            END
+          END
+        END
+      END
+    NEXT ST
+    IF STCNT = 0 THEN GOTO 93000
+  END
+  ID_FNO = ""; MID_FNO = 0
+  FOR I = 1 TO IDCNT
+    FLD_NAME = SSD_M_ID<1,IDPTR<I>>
+    LOCATE FLD_NAME IN SCN_FLDS,1 SETTING FNO THEN
+      ERRMSG = "Field (":FLD_NAME:") is defined twice"
+      IDCNT = 0
+    END ELSE
+      GOSUB 310
+      FLD_TPTR<FNO> = 0
+      FLD_X<FNO> = SSD_ID_X<1,I>
+      FLD_Y<FNO> = SSD_ID_Y<1,I>
+      FLD_FMT<FNO> = SSD_ID_FMT<1,I>
+      FLD_CNV<FNO> = SSD_ID_CNV<1,I>
+      ID_FNO<I> = FNO
+      IF I = MID_NO THEN
+        MID_FNO = FNO
+      END
+    END
+  NEXT I
+  IF IDCNT < 1 THEN
+    GOTO 93000
+  END
+  FLD_FNO = ""
+  FOR I = 1 TO FLDCNT
+    FLD_NAME = SSD_FIELDS<1,I>
+    ORG_NAME = SSD_FLD_ORG<1,I>
+    TBL_NAME = SSD_FLD_TABLE<1,I>
+    LOCATE FLD_NAME IN SCN_FLDS,1 SETTING FNO THEN
+      ERRMSG = "Field (":FLD_NAME:") is defined twice"
+      GOSUB 91000; GOTO 19
+    END
+    IF ORG_NAME # "" THEN
+*     LOCATE ORG_NAME IN SCN_FLDS,1 SETTING ONO THEN
+      LOCATE ORG_NAME IN SSD_FIELDS<1>,1 SETTING ONO THEN
+        FLD_ORG<FNO> = ONO
+      END ELSE
+        ERRMSG = "Could not locate orig field (":ORG_NAME:") for # ":FLD_NAME
+        GOSUB 91000
+      END
+    END
+    SCN_FLDS<FNO> = FLD_NAME
+    LOCATE FLD_NAME IN CALC_FLDS,1 SETTING CALC_FLG ELSE
+      LOCATE ORG_NAME IN CALC_FLDS,1 SETTING CALC_FLG ELSE
+        CALC_FLG = 0
+      END
+    END
+    BEGIN CASE
+      CASE CALC_FLG
+        FLD_FPTR<FNO> = 0
+        FLD_TPTR<FNO> = 0
+        GOTO 17
+      CASE TBL_NAME = ""
+        FLD_FPTR<FNO> = MTBL_PTR
+        FLD_TPTR<FNO> = 0
+        GOTO 17
+    END CASE
+    LOCATE TBL_NAME IN TBL_IDX,1 SETTING FND THEN
+      IF SSD_FLD_LNKREF<1,I> = "" THEN
+        FLD_FPTR<FNO> = TBL_LOC<FND>
+        FLD_TPTR<FNO> = FND
+        TBL_FLD_LOC<FND,-1> = FNO
+        GOTO 17
+      END ELSE
+        FPTR = TBL_LOC<FND>
+        FND = DCOUNT(TBL_IDX,AM) + 1
+      END
+    END ELSE
+      LOCATE TBL_NAME IN FVAR_REC,1 SETTING FPTR ELSE
+        ERRMSG = "Cannot determine the ":TBL_NAME:" table link pointer"
+        GOSUB 91000; GOTO 17
+      END
+      LOCATE FPTR IN OPN_FILES,2 SETTING OFPTR ELSE
+        ERRMSG = "Cannot locate the ":TBL_NAME:" table"
+        GOSUB 91000; GOTO 17
+      END
+    END
+    MATREAD SFR.REC FROM SYS_FILES, TBL_NAME ELSE
+      ERRMSG = "Cannot locate table (":TBL_NAME:") definition"
+      GOSUB 91000; GOTO 17
+    END
+    TBL_ID_FNO(FND) = ""
+    ICNT = DCOUNT(SFR.ID,VM)
+    FOR II = 1 TO ICNT
+      BEGIN CASE
+        CASE SFR.ID<1,II> = "CO"
+        CASE SFR.ID.TYPE<1,II> = "T"
+        CASE 1
+          IF SSD_FLD_LNKREF<1,I> = "" THEN
+            LOCATE SFR.ID<1,II> IN SSD_FLD_PFX<1>,1 SETTING PLOC ELSE
+              PLOC = 0
+            END
+          END ELSE
+            LOCATE SSD_FLD_LNKREF<1,I> IN SSD_FIELDS<1>,1 SETTING PLOC THEN
+              IF SSD_FLD_PFX<1,PLOC> # SFR.ID<1,II> THEN
+                GOSUB 91000; PLOC = 0
+              END
+            END ELSE
+              PLOC = 0
+            END
+          END
+          BEGIN CASE
+            CASE PLOC >= I
+              ERRMSG = "out of sequence, ":SFR.ID<1,II>:" @ ":PLOC:" while ":FLD_NAME:" @ ":I:" on form ":SCN_NAME
+              GOSUB 91000; ICNT = 0
+            CASE PLOC
+              TBL_ID_FNO(FND)<II> = FLD_FNO<PLOC>
+              IF FLD_IPTR<FLD_FNO<PLOC>> < 1 THEN
+                FLD_IPTR<FLD_FNO<PLOC>> = FND
+              END
+            CASE 1
+              ERRMSG = "Cannot determine file prefix - ":SFR.ID<1,II>
+              GOSUB 91000; ICNT = 0
+          END CASE
+      END CASE
+    NEXT II
+    IF ICNT THEN
+      TBL_ID(FND) = SFR.ID
+      TBL_ID_TYPE(FND) = SFR.ID.TYPE
+      TBL_IDX<FND> = TBL_NAME
+      TBL_LOC<FND> = FPTR
+      TBL_FLD_LOC<FND> = FNO
+      FLD_FPTR<FNO> = FPTR
+      FLD_TPTR<FNO> = FND
+    END
+17*
+    FLD_LOC<FNO> = SSD_FLD_ATTNO<1,I>
+    FLD_LCHR<FNO> = SSD_FLD_LCHR<1,I>
+    FLD_MVNO<FNO> = FIELD(SSD_FLD_MVNO<1,I>,",",1)
+    MVNO_MV<FNO> = FIELD(SSD_FLD_MVNO<1,I>,",",2)
+    MVNO_SMV<FNO> = FIELD(SSD_FLD_MVNO<1,I>,",",3)
+    IF NOT(NUM(FLD_MVNO<FNO>)) THEN
+      MVNO_RCNT = MVNO_RCNT + 1
+      MVNO_REF<MVNO_RCNT> = FNO
+      BEGIN CASE
+        CASE NOT(NUM(MVNO_MV<FNO>))
+          MVNO_MV<FNO> = 1
+        CASE MVNO_MV<FNO> < 1
+          MVNO_MV<FNO> = 1
+      END CASE
+      BEGIN CASE
+        CASE NOT(NUM(MVNO_SMV<FNO>))
+          MVNO_SMV<FNO> = 1
+*           CASE MVNO_SMV<FNO> < 1
+*              MVNO_SMV<FNO> = 1
+      END CASE
+    END
+    FLD_SMVNO<FNO> = FIELD(SSD_FLD_SMVNO<1,I>,",",1)
+    SMVNO_MV<FNO> = FIELD(SSD_FLD_SMVNO<1,I>,",",2)
+    SMVNO_SMV<FNO> = FIELD(SSD_FLD_SMVNO<1,I>,",",3)
+    IF NOT(NUM(FLD_SMVNO<FNO>)) THEN
+      SMVNO_RCNT = SMVNO_RCNT + 1
+      SMVNO_REF<SMVNO_RCNT> = FNO
+      BEGIN CASE
+        CASE NOT(NUM(SMVNO_MV<FNO>))
+          SMVNO_MV<FNO> = 1
+        CASE SMVNO_MV<FNO> < 1
+          SMVNO_MV<FNO> = 1
+      END CASE
+      BEGIN CASE
+        CASE NOT(NUM(SMVNO_SMV<FNO>))
+          SMVNO_SMV<FNO> = 1
+*           CASE SMVNO_SMV<FNO> < 1
+*              SMVNO_SMV<FNO> = 1
+      END CASE
+    END
+    FLD_LINES<FNO> = SSD_FLD_LINES<1,I>
+    FLD_LNSPC<FNO> = SSD_FLD_LNSPC<1,I>
+    FLD_HIDE<FNO> = SSD_FLD_HIDE<1,I>
+    IF SSD_FLD_LNK<1,I> # "" AND FLD_LINES<FNO> > 1 AND FLD_HIDE<FNO> < 1 THEN
+      FLD_LNK<FNO> = SSD_FLD_LNK<1,I>
+    END
+    DSP_LNO<FNO> = 1
+    FLD_REF<FNO> = SSD_FLD_REF<1,I>
+    FLD_X<FNO> = SSD_FLD_X<1,I>
+    FLD_Y<FNO> = SSD_FLD_Y<1,I>
+    FLD_FMT<FNO> = SSD_FLD_FMT<1,I>
+    FLD_CNV<FNO> = SSD_FLD_CNV<1,I>
+    FLD_DSTLST<FNO> = SSD_FLD_DSTLST<1,I>
+    FLD_EXPR<FNO> = SSD_FLD_EXPR<1,I>
+    FLD_ESTK<FNO> = SSD_FLD_ESTK<1,I>
+    FLD_TSTK<FNO> = SSD_FLD_TSTK<1,I>
+    FLD_SUBR<FNO> = SSD_FLD_SUBR<1,I>
+    FLD_SBR_VID<FNO> = SSD_SBR_VID<1,I>
+    FLD_SBR_VVALUE<FNO> = SSD_SBR_VVALUE<1,I>
+    FLD_FNO<I> = FNO
+19*
+  NEXT I
+  FOR I = 1 TO FLDCNT
+    IF FLD_LNK<I> # "" AND FLD_LPTR<I> = "" THEN
+      LPTR = I + 1
+      LOOP
+        LOCATE FLD_LNK<I> IN FLD_LNK,LPTR SETTING II THEN
+          BEGIN CASE
+            CASE FLD_LINES<I> # FLD_LINES<II>
+            CASE FLD_Y<I> # FLD_Y<II>
+            CASE 1
+              CNT = DCOUNT(FLD_LPTR<I>,VM) + 1
+              FLD_LCNT<I> = CNT
+              FLD_LPTR<I,CNT> = II
+              FLD_LPTR<II> = I
+              FLD_HIDE<II> = 1
+          END CASE
+        END ELSE
+          II = 0
+        END
+      WHILE II DO
+        LPTR = II + 1
+      REPEAT
+    END
+  NEXT I
+  FOR I = 1 TO FLDCNT
+    FNO = FLD_FNO<I>
+    IF SSD_FLD_PFX<1,I> # "" THEN
+      IF FLD_IPTR<FNO> < 1 AND FLD_FPTR<FNO> = MTBL_PTR THEN
+        FLD_NAME = SSD_FIELDS<1,I>
+        PFX_NAME = SSD_FLD_PFX<1,I>
+        MATREAD PFR.REC FROM PFX_FILES, PFX_NAME THEN
+          TBL_NAME = PFR_FILE
+          LOCATE TBL_NAME IN TBL_IDX,1 SETTING FND ELSE
+            LOCATE TBL_NAME IN FVAR_REC,1 SETTING FPTR THEN
+              LOCATE FPTR IN OPN_FILES,2 SETTING OFPTR THEN
+                OPEN.OK = 1
+              END ELSE
+                OPEN "",TBL_NAME TO FILE.VARS(FPTR) THEN
+                  OPEN.OK = 1
+                  OPN_FILES<OFPTR> = FPTR
+                END ELSE
+                  OPEN.OK = 0
+                END
+              END
+              IF OPEN.OK THEN
+                MATREAD SFR.REC FROM SYS_FILES, TBL_NAME THEN
+                  TBL_ID_FNO(FND) = ""
+                  ICNT = DCOUNT(SFR.ID,VM)
+                  FOR II = 1 TO ICNT
+                    BEGIN CASE
+                      CASE SFR.ID<1,II> = "CO"
+                      CASE SFR.ID.TYPE<1,II> = "T"
+                      CASE SFR.ID<1,II> = PFX_NAME
+                        TBL_ID_FNO(FND)<II> = FNO
+                        IF FLD_IPTR<FNO> < 1 THEN
+                          FLD_IPTR<FNO> = FND
+                        END
+                      CASE 1
+                        IF SSD_FLD_LNKREF<1,I> = "" THEN
+                          LOCATE SFR.ID<1,II> IN SSD_FLD_PFX<1>,1 SETTING PLOC ELSE
+                            PLOC = 0
+                          END
+                        END ELSE
+                          LOCATE SSD_FLD_LNKREF<1,I> IN SSD_FIELDS<1>,1 SETTING PLOC THEN
+                            IF SSD_FLD_PFX<1,PLOC> # SFR.ID<1,II> THEN
+                              GOSUB 91000; PLOC = 0
+                            END
+                          END ELSE
+                            PLOC = 0
+                          END
+                        END
+                        BEGIN CASE
+                          CASE PLOC >= I
+                            ERRMSG = "out of sequence, ":SFR.ID<1,II>:" @ ":PLOC:" while ":FLD_NAME:" @ ":I:" on form ":SCN_NAME
+                            GOSUB 91000; ICNT = 0
+                          CASE PLOC
+                            TBL_ID_FNO(FND)<II> = FLD_FNO<PLOC>
+                            IF FLD_IPTR<FLD_FNO<PLOC>> < 1 THEN
+                              FLD_IPTR<FLD_FNO<PLOC>> = FND
+                            END
+                          CASE 1
+                            ERRMSG = "Cannot determine file prefix (":SFR.ID<1,II>:")"
+                            GOSUB 91000; ICNT = 0
+                        END CASE
+                    END CASE
+                  NEXT II
+                  IF ICNT THEN
+                    TBL_ID(FND) = SFR.ID
+                    TBL_ID_TYPE(FND) = SFR.ID.TYPE
+                    TBL_IDX<FND> = TBL_NAME
+                    TBL_LOC<FND> = FPTR
+                  END
+                END ELSE
+                  ERRMSG = "Cannot locate table (":TBL_NAME:") definition"
+                  GOSUB 91000
+                END
+              END ELSE
+                ERRMSG = "Cannot locate the ":TBL_NAME:" table"
+                GOSUB 91000
+              END
+            END ELSE
+              ERRMSG = "Cannot determine the ":TBL_NAME:" table link pointer"
+              GOSUB 91000
+            END
+          END
+        END ELSE
+          ERRMSG = "cannot locate Table name for Prefix,Field (":PFX_NAME:",":FLD_NAME:")"
+          GOSUB 91000
+        END
+      END
+    END
+    IF FLD_EXPR<FNO> = SUBRFLG THEN
+      CNT = DCOUNT(FLD_FNAME<FNO>,SVM)
+      FOR J = 1 TO CNT
+        LOCATE FLD_FNAME<FNO,1,J> IN FVAR_REC,1 SETTING FND THEN
+          FLD_SBR_FPTR<FNO,J> = FND
+        END ELSE
+          FLD_EXPR<FNO> = ""; FLD_SUBR<FNO> = ""
+          FLD_FNAME<FNO> = ""; FLD_VNAME<FNO> = ""
+          FLD_SBR_VID = ""; FLD_SBR_VVALUE = ""
+          ERRMSG = "Cannot locate the (":FLD_FNAME<FNO,1,J>:") subroutine table"
+          GOSUB 91000; CNT = 0
+        END
+      NEXT J
+      CNT = DCOUNT(FLD_VNAME<FNO>,SVM)
+      FOR J = 1 TO CNT
+        LOCATE FLD_VNAME<FNO,1,J> IN SCN_FLDS,1 SETTING FND THEN
+          FLD_SBR_VPTR<FNO,J> = FND
+        END ELSE
+          IF FLD_VNAME<FNO,1,J>[1,1] = "^" THEN
+            FLD_SBR_VPTR<FNO,J> = 0
+          END ELSE
+            FLD_SBR_VPTR<FNO,J> = FNO
+          END
+        END
+      NEXT J
+    END
+29*
+  NEXT I
+  IF MVNO_RCNT THEN
+    MVNO_RPTR = ""
+    FOR IR = MVNO_RCNT TO 1 STEP -1
+      FNO = MVNO_REF<IR>
+      LOCATE FLD_MVNO<FNO> IN SCN_FLDS,1 SETTING FND THEN
+        MVNO_RPTR<IR> = FND
+      END ELSE
+        FLD_MVNO<FNO> = 1
+        MVNO_REF = DELETE(MVNO_REF,IR,0,0)
+        MVNO_RPTR = DELETE(MVNO_RPTR,IR,0,0)
+      END
+    NEXT IR
+    MVNO_RCNT = DCOUNT(MVNO_REF,AM)
+  END
+  IF SMVNO_RCNT THEN
+    SMVNO_RPTR = ""
+    FOR IR = SMVNO_RCNT TO 1 STEP -1
+      FNO = SMVNO_REF<IR>
+      LOCATE FLD_SMVNO<FNO> IN SCN_FLDS,1 SETTING FND THEN
+        SMVNO_RPTR<IR> = FND
+      END ELSE
+        FLD_SMVNO<FNO> = 1
+        SMVNO_REF = DELETE(SMVNO_REF,IR,0,0)
+        SMVNO_RPTR = DELETE(SMVNO_RPTR,IR,0,0)
+      END
+    NEXT IR
+    SMVNO_RCNT = DCOUNT(SMVNO_REF,AM)
+  END
+*
+  FLD_NAME = "_PROMPT_LINE"
+  LOCATE FLD_NAME IN SCN_FLDS,1 SETTING FNO THEN
+    ERRMSG = "Field (":FLD_NAME:") is defined twice"
+    GOSUB 91000
+  END ELSE
+    GOSUB 310
+    FLD_X<FNO> = 1
+    FLD_Y<FNO> = 21
+    FLD_FMT<FNO> = "L#4"
+    FLD_CNV<FNO> = ""
+  END
+  PLN_FNO = FNO
+*
+  TBLCNT = DCOUNT(TBL_IDX,AM)
+  TBL_READ = ""; TBL_S_ID = ""
+  FOR TT = 1 TO TBLCNT
+    LIMIT = TT - 1
+    FOR TTR = 1 TO LIMIT
+      IF TBL_ID(TT) = TBL_ID(TTR) THEN
+        TBL_S_ID<TT,-1> = TTR
+      END
+    NEXT TTR
+    LIMIT = TT + 1
+    FOR TTR = LIMIT TO TBLCNT
+      IF TBL_ID(TT) = TBL_ID(TTR) THEN
+        TBL_S_ID<TT,-1> = TTR
+      END
+    NEXT TTR
+  NEXT TT
+*
+*---- Check for selecting records
+*
+  IF BATCHMODE AND PASS_VARS<MAXPV> = "" THEN
+    SELLIST = ""
+    CALL SCREEN_TRN_SEL(TKTDEF,MTBL_PTR,SSD_M_TABLE,SELLIST)
+  END
+*
+*---- Setup re-used values
+*
+  S_FLD_MVNO = FLD_MVNO; S_FLD_SMVNO = FLD_SMVNO
+*
+  IOFLG = 1
+  INQMODE = 0
+  IF PRT_CRT AND NOT(TRANSMODE) THEN
+    IF PC.PORT.TYPE = "termulator" THEN
+      TFILE = "JISFORMS"
+      TNAME = SCN_NAME
+      M_FRMHNDL = ""
+      TU_FUNC = "TU.FORM.LOAD":TU_VERNO     ;*T25024
+      CALL @TU_FUNC(TFILE,TNAME,M_FRMHNDL,"",FRMHNDL,ERROR)     ;*T25024
+      IF ERROR = 0 THEN
+        GUIFORM = FRMHNDL
+        GUI_FORMS<1,SCN_LOC> = GUIFORM
+      END ELSE
+        PC.PORT.TYPE = "STD"
+        GUIFORM = ""
+        GOSUB 700
+      END
+    END ELSE
+      GOSUB 700
+    END
+  END
+*
+*---- Get Key fields
+100*
+  EDITMODE = O_EDITMODE
+  IF SCN_LOC = 1 THEN
+    SCN_NAMES = ORG_SCN_NAMES
+*CSF25470
+*         PRT_NAMES = ORG_SCN_NAMES
+    PRT_NAMES = ORG_PRT_NAMES
+*** ^
+    BLNPRT = ORG_BLNPRT
+    ELNPRT = ORG_ELNPRT
+    SCN_CMPS = ORG_SCN_CMPS
+*CSF25470
+    PRT_CMPS = ORG_PRT_CMPS
+*         PRT_CMPS = ORG_SCN_CMPS
+*** ^
+    IF EDITMODE THEN
+      IF TRANSMODE THEN
+        EDITMODE = 0
+      END ELSE
+        EDITMODE = MAINTMODE
+      END
+    END
+  END
+  IDNUM = 1
+  FNO = ID_FNO<IDNUM>
+  BEGIN CASE
+    CASE SCN_LOC > 1 AND UPDMODE
+      VALUE = ID_VARS<IDNUM>
+      DREC(FNO)<1,FLD_MVNO<FNO>,FLD_SMVNO<FNO>> = VALUE
+    CASE SCN_LOC > 1
+      VALUE = ID_VARS<IDNUM>
+      DREC(FNO)<1,FLD_MVNO<FNO>,FLD_SMVNO<FNO>> = VALUE
+      GOSUB 3110
+    CASE BATCHMODE
+      IF SELLIST = "" THEN
+        IF TRANSMODE THEN
+          CALL SCREEN_TRN_UPD(TKTDEF,IDDEF,IMGDEF,ERRMSG)
+          IF ERRMSG # "" THEN
+            GOTO 93000
+          END ELSE
+            GOTO 99999
+          END
+        END ELSE
+          GOTO 99999
+        END
+      END
+      VALUE = SELLIST<1>
+      SELLIST = DELETE(SELLIST,1,0,0)
+      ID_VARS = VALUE
+      DREC(FNO)<1,FLD_MVNO<FNO>,FLD_SMVNO<FNO>> = VALUE
+      GOSUB 3110
+******************************************
+*CASE PC.PORT.TYPE = "termIte"
+*PIX_MORE = 1
+*LOOP
+*   CALL PIX_GUI_GET_EVENT(GUI_APP_NAME,CTL_ID,EVENT,OPTS)
+*   BEGIN CASE
+*   CASE EVENT = "CLICKED"
+*      BEGIN CASE
+*      CASE CTL_ID = "FILE"
+*      CASE CTL_ID = "CANCEL"
+*         PIX_MORE = 0
+*         VALUE = "END"
+*      CASE CTL_ID = "LOAD"
+*         CTL_ID = SCN_FLDS<MID_FNO>:",EDIT"
+*         CALL PIX_GUI_CONTROL_READ_VALUE(GUI_APP_NAME,CTL_ID,VALUE,ERRMSG)
+*         IF VALUE = "" THEN
+*            ERRMSG = "The Ticket number is required for the LOAD function"
+*            GOSUB 91000
+*         END ELSE
+*DREC(FNO)<1,FLD_MVNO<FNO>,FLD_SMVNO<FNO>> = VALUE
+*ID_VARS = VALUE
+*            PIX_MORE = 0
+*         END
+*      END CASE
+*   END CASE
+*WHILE PIX_MORE DO REPEAT
+******************************************
+    CASE THIS_FUNC = "JOB.MAINT"
+      VALUE = ID_VARS<IDNUM>
+      DREC(FNO)<1,FLD_MVNO<FNO>,FLD_SMVNO<FNO>> = VALUE
+      GOSUB 3110
+    CASE 1
+      GOSUB 1000
+      IF VALUE = "END" THEN
+        IF GUIFORM THEN
+          TU_FUNC = "TU.FORM.KILL":TU_VERNO     ;*T25024
+          CALL @TU_FUNC(FRMHNDL,ERROR)     ;*T25024
+        END
+        GOTO 99999
+      END
+      IF IDCNT = 1 AND VALUE = "???" THEN
+        MAT GEN.XREF.REC = ""
+        GXR.CO = CONO
+        GXR.NAME = "GEN.CODE"
+        GXR.FILE = FILE.VARS(MTBL_PTR)
+        GXR.SORT.FILE = SSD_M_TABLE
+        CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+        GOSUB 700
+        DREC(FNO)<1,FLD_MVNO<FNO>,FLD_SMVNO<FNO>> = GXR.ID
+        GOSUB 3110
+        IF GXR.ID = "" THEN
+          GOTO 100
+        END
+        ID_VARS = GXR.ID
+      END ELSE
+        ID_VARS = VALUE
+      END
+  END CASE
+  GOSUB 210
+  IF LIMIT = 0 THEN
+    IF GUIFORM THEN
+      TU_FUNC = "TU.FORM.KILL":TU_VERNO     ;*T25024
+      CALL @TU_FUNC(FRMHNDL,ERROR)     ;*T25024
+    END
+    GOTO 99999
+  END
+  BEGIN CASE
+    CASE SCN_LOC > 1
+* T23211 v Check to make sure that this is the latest version of the 
+*          ticket. If not, then read and display the record from
+*          JOB_JKT_IMG file.
+      CHECKREV = FIELD(IDKEY,"-",2)
+      IF CHECKREV = "" THEN CHECKREV = "00"
+      CHECKREV = (CHECKREV+1)
+      IF LEN(CHECKREV) 1 THEN CHECKREV = "0":CHECKREV
+      CHECKID = FIELD(IDKEY,"-",1):"-":CHECKREV
+      OPEN "","JOB_TKT" TO JOB_TKT ELSE NULL
+      READ CHECKREC FROM JOB_TKT,CHECKID ELSE CHECKREC = ""
+      IF CHECKREC NE "" THEN
+        OPEN "","JOB_JKT_IMG" TO JOB_JKT_IMG ELSE NULL
+        IMG.REC = IMGDEF
+        IMGREC.CNT = DCOUNT(IMG.REC,@AM)+ 1
+        READU JJI.REC FROM JOB_JKT_IMG, IDKEY THEN
+          DREC(1) = IDKEY[4,99]
+          FOR III = 1 TO IMGREC.CNT
+            LOCATE IMG.REC<III> IN SSD_FIELDS<1>,1 SETTING ADDPOS THEN
+              DREC(ADDPOS+1) = JJI.REC<III>
+            END
+          NEXT III
+          OLD.VERSION = 1
+        END
+      END
+* T23211 ^
+    CASE EDITMODE
+      READU M_REC FROM FILE.VARS(MTBL_PTR), IDKEY THEN
+        CHGMODE = 1
+        IF REV_CTL AND MID_FNO THEN
+          VALUE = DREC(MID_FNO)
+          L_VALUE = LEN(VALUE)
+          IF VALUE[L_VALUE-2,1] # "-" OR NOT(NUM(VALUE[L_VALUE-1,2])) THEN
+            IF L_VALUE > (FIELD(FLD_FMT<MID_FNO>,"#",2) - 3) THEN
+              RELEASE FILE.VARS(MTBL_PTR), IDKEY
+              ERRMSG = "The last three digits of the ID are reserved for revision control"
+              GOSUB 91000; GOTO 100
+            END
+            VALUE = VALUE :"-00"
+            L_VALUE = LEN(VALUE)
+          END
+          VALUE_BASE = VALUE[1,L_VALUE-2]
+          CNTR = VALUE[L_VALUE-1,2]
+          OLD_IDKEY = IDKEY; OLD_IDREF = IDREF
+          OLD_VALUE = DREC(MID_FNO)
+          LOOP
+            NEW_IDKEY = IDKEY
+            NEW_VALUE = DREC(MID_FNO)
+            LST_IDREF = IDREF
+            CNTR = CNTR + 1
+            DREC(MID_FNO) = VALUE_BASE:STR("0",2-LEN(CNTR)):CNTR
+            GOSUB 220
+            READ T_REC FROM FILE.VARS(MTBL_PTR), IDKEY ELSE
+              IDREF = LST_IDREF
+              CNTR = 0
+            END
+          WHILE CNTR DO REPEAT
+          IDKEY = OLD_IDKEY
+          DREC(MID_FNO) = OLD_VALUE
+          IF IDREF = OLD_IDREF THEN
+            LOCATE "JOB" IN SSD_FLD_PFX<1>,1 SETTING X THEN
+              READ JOBREC FROM JOB, CONO:M_REC<1> THEN
+                GOSUB 320
+*TASK20265
+*                        IF STATUS = "" THEN
+                IF STATUS = "" OR STATUS = "COMPLETED" OR STATUS = "CANCELLED" THEN
+*                           EDITMODE = 0
+                  EDITMODE = 10
+*** ^
+                  RELEASE FILE.VARS(MTBL_PTR), IDKEY
+*                           ERRMSG = "Inquiry mode, Job (":VALUE:") has a ":STATUS:" status"
+                  ERRMSG = "Inquiry mode, Job (":M_REC<1>:") has a status of ":STATUS
+                  GOSUB 91000
+                END
+              END
+            END
+          END ELSE
+            BEGIN CASE
+              CASE THIS_FUNC = "JOB.MAINT"
+                IDKEY = NEW_IDKEY
+                DREC(MID_FNO) = NEW_VALUE
+                FNO = MID_FNO
+                GOSUB 3110
+***               CASE EDITMODE
+              CASE 1
+                EDITMODE = 0
+                RELEASE FILE.VARS(MTBL_PTR), IDKEY
+                ERRMSG = "Inquiry mode, Last Revision = ":LST_IDREF
+                GOSUB 91000
+* T23211 v Read and display the record from JOB_JKT_IMG file.
+                IMG.REC = IMGDEF
+                IMG.REC = DELETE (IMG.REC,1,0,0)
+                IMGREC.CNT = DCOUNT(IMG.REC,@AM)+ 1
+                READU JJI.REC FROM JOB_JKT_IMG, IDKEY THEN
+                  DREC(1) = IDKEY[4,99]
+                  FOR III = 1 TO IMGREC.CNT
+                    DREC(III+1) = JJI.REC<III>
+                  NEXT III
+                  OLD.VERSION = 1
+                END
+* T23211 ^
+            END CASE
+          END
+        END
+      END LOCKED
+        IF MID_FNO THEN
+          ERRMSG = DREC(MID_FNO)
+        END ELSE
+          ERRMSG = IDKEY
+        END
+        ERRMSG = "Record (":ERRMSG:") is locked by user # ":GETUSERNAME(STATUS())
+        GOSUB 91000; GOTO 100
+      END ELSE
+******************************************
+*IF PC.PORT.TYPE = "termIte" THEN
+*   ERRMSG = "Cannot locate # ":ID_VARS<1>
+*   GOSUB 91000; GOTO 100
+*END
+******************************************
+        IF REV_CTL AND MID_FNO THEN
+          VALUE = DREC(MID_FNO)<1,FLD_MVNO<MID_FNO>,FLD_SMVNO<MID_FNO>>
+          BEGIN CASE
+            CASE INDEX(VALUE,"-",1)
+              RELEASE FILE.VARS(MTBL_PTR), IDKEY
+              ERRMSG = "Cannot utilize the dash '-', it is reserved for revision control"
+              GOSUB 91000; GOTO 100
+            CASE LEN(VALUE) > (FIELD(FLD_FMT<MID_FNO>,"#",2) - 3)
+              RELEASE FILE.VARS(MTBL_PTR), IDKEY
+              ERRMSG = "The last three digits of the ID are reserved for revision control"
+              GOSUB 91000; GOTO 100
+          END CASE
+        END
+        IF GEN_N_ID AND MID_FNO THEN
+          IF DREC(MID_FNO) = "N" THEN
+            RELEASE FILE.VARS(MTBL_PTR), IDKEY
+          END
+        END
+        M_REC = ""; CHGMODE = 0
+      END
+      OLD_M_REC = M_REC
+    CASE 1
+      READ M_REC FROM FILE.VARS(MTBL_PTR), IDKEY THEN
+        CHGMODE = 1
+*           IF REV_CTL AND MID_FNO THEN
+*              VALUE = DREC(MID_FNO)
+*              L_VALUE = LEN(VALUE)
+*              IF VALUE[L_VALUE-2,1] # "-" OR NOT(NUM(VALUE[L_VALUE-1,2])) THEN
+*                 IF L_VALUE > (FIELD(FLD_FMT<MID_FNO>,"#",2) - 3) THEN
+*                    ERRMSG = "The last three digits of the ID are reserved for revision control"
+*                    GOSUB 91000; GOTO 100
+*                 END
+*                 VALUE = VALUE :"-00"
+*                 L_VALUE = LEN(VALUE)
+*              END
+*              VALUE_BASE = VALUE[1,L_VALUE-2]
+*              CNTR = VALUE[L_VALUE-1,2]
+*              OLD_IDKEY = IDKEY; OLD_IDREF = IDREF
+*              OLD_VALUE = DREC(MID_FNO)
+*              LOOP
+*                 NEW_IDKEY = IDKEY
+*                 NEW_VALUE = DREC(MID_FNO)
+*                 LST_IDREF = IDREF
+*                 CNTR = CNTR + 1
+*                 DREC(MID_FNO) = VALUE_BASE:STR("0",2-LEN(CNTR)):CNTR
+*                 GOSUB 220
+*                 READ T_REC FROM FILE.VARS(MTBL_PTR), IDKEY ELSE
+*                    IDREF = LST_IDREF
+*                    CNTR = 0
+*                 END
+*              WHILE CNTR DO REPEAT
+*              IDKEY = OLD_IDKEY
+*              DREC(MID_FNO) = OLD_VALUE
+*              IF IDREF # OLD_IDREF THEN
+*                 ERRMSG = "Last Revision = ":LST_IDREF
+*                 GOSUB 91000
+*              END
+*           END
+      END ELSE
+        ERRMSG = "Cannot locate ":SSD_M_TABLE:" # ":IDREF
+        GOSUB 91000; GOTO 100
+      END
+  END CASE
+  IF CHGMODE<1,1> OR CHGMODE<1,SCN_LOC> THEN
+    IF NOT(OLD.VERSION) THEN       ; * T23211
+      OPTR = 1
+      LOOP
+        LOCATE MTBL_PTR IN FLD_FPTR,OPTR SETTING OPT ELSE
+          OPTR = 0
+        END
+      WHILE OPTR DO
+        IF FLD_EXPR<OPT> = "" THEN
+          DREC(OPT) = M_REC<FLD_LOC<OPT>>
+        END
+        OPTR = OPT + 1
+      REPEAT
+      FOR TT = 1 TO TBLCNT
+        TBL_TO_READ = TT
+        IOFLG = 0; GOSUB 4010
+      NEXT TT
+      TBL_READ = ""
+    END      ; * T23211
+    GOSUB 4090
+    FOR I = 1 TO MVNO_RCNT
+      FNO = MVNO_REF<I>; RNO = MVNO_RPTR<I>
+      GOSUB 4030
+    NEXT I
+    FOR I = 1 TO SMVNO_RCNT
+      FNO = SMVNO_REF<I>; RNO = SMVNO_RPTR<I>
+      GOSUB 4050
+    NEXT I
+    FMODE = ""; GOSUB 70000
+    FOR I = 1 TO MVNO_RCNT
+      FNO = MVNO_REF<I>; RNO = MVNO_RPTR<I>
+      GOSUB 4030
+    NEXT I
+    FOR I = 1 TO SMVNO_RCNT
+      FNO = SMVNO_REF<I>; RNO = SMVNO_RPTR<I>
+      GOSUB 4050
+    NEXT I
+    IF NOT(UPDMODE) THEN
+      GOSUB 3000
+    END
+  END ELSE
+******************************************
+*IF PC.PORT.TYPE = "termIte" THEN
+*CALL PIX_GUI_STATUS_LINE("ADD MODE":IDKEY,"")
+*END
+******************************************
+*ADD MODE QUESTION
+    OPTR = 1
+    LOOP
+      LOCATE MTBL_PTR IN FLD_FPTR,OPTR SETTING OPT THEN
+        FNO = OPT
+        BEGIN CASE
+          CASE  SCN_LOC = 1 AND THIS_FUNC = "JOB.MAINT" AND FIELD(SCN_FLDS<FNO>,"_",2,3) = "JOB_NO"
+            VALUE = ID_VARS<IDNUM>
+            DREC(FNO) = VALUE; GOSUB 3110
+            MVNO = FLD_MVNO<FNO>
+            SMVNO = FLD_SMVNO<FNO>
+            DREC(FNO) = ""; GOSUB 1130
+          CASE FLD_ORG<FNO>
+          CASE FLD_EXPR<FNO> = ""
+            IF SCN_LOC = 1 THEN
+              GOSUB 1000
+              IF FIELD(SCN_FLDS<FNO>,"_",2,3) = "JOB_NO" THEN
+                READ JOBREC FROM JOB, CONO:VALUE THEN
+                  GOSUB 320
+*                           IF STATUS = "" THEN
+                  IF STATUS = "" OR STATUS = "COMPLETED" OR STATUS = "CANCELLED" THEN
+                    ERRMSG = "Cannot utilize Job (":VALUE:") with a ":STATUS:" status"
+*                              ERRMSG = "Can utilize Job (":VALUE:") with a ":STATUS:" status"
+                    GOSUB 91000
+                    VALUE = "END"; OPTR = 0
+                  END
+                END
+              END
+            END ELSE
+              MVNO = FLD_MVNO<FNO>
+              SMVNO = FLD_SMVNO<FNO>
+              VALUE = M_REC<FLD_LOC<FNO>>
+              BEGIN CASE
+                CASE VALUE = "" AND (MVNO < 1 OR SMVNO < 1)
+                  GOSUB 1000
+                CASE VALUE<1,MVNO,SMVNO> = ""
+                  GOSUB 1000
+                CASE 1
+                  DREC(FNO) = VALUE; GOSUB 3110
+                  MVNO = FLD_MVNO<FNO>
+                  SMVNO = FLD_SMVNO<FNO>
+                  DREC(FNO) = ""; GOSUB 1130
+              END CASE
+            END
+          CASE FLD_EXPR<FNO> = SUBRFLG
+            I_FNAME = FLD_FNAME<FNO>
+            I_VNAME = FLD_VNAME<FNO>
+            GOSUB 71000
+            DREC(FNO) = VALUE; DSP_FNO<-1> = FNO
+          CASE 1
+            ESTACK = FLD_ESTK<FNO>
+            TSTACK = FLD_TSTK<FNO>
+            GOSUB 72000
+            DREC(FNO) = VALUE; DSP_FNO<-1> = FNO
+        END CASE
+        IF VALUE = "END" THEN OPTR = 0
+      END ELSE
+        OPTR = 0
+      END
+    WHILE OPTR DO
+      OPTR = OPT + 1
+    REPEAT
+    IF VALUE = "END" THEN
+      IF SCN_LOC = 1 THEN
+        IF THIS_FUNC = "JOB.MAINT" THEN
+          ERRFLG = SCN_LOC
+          GOTO 99999
+        END ELSE
+          IF EDITMODE THEN
+            RELEASE FILE.VARS(MTBL_PTR), IDKEY
+          END
+          MAT DREC = ""
+          DSP_FNO = ""
+          IF SCNO = 1 THEN
+            GOSUB 710
+          END ELSE
+            SCNO = 1
+            GOSUB 700
+          END
+          GOTO 100
+        END
+      END ELSE
+        IF GUIFORM THEN
+          TU_FUNC = "TU.FORM.KILL":TU_VERNO     ;*Close GUI Form
+          CALL @TU_FUNC(FRMHNDL,ERROR)     ;*Close GUI Form
+        END
+        ERRFLG = SCN_LOC
+        GOTO 99999
+      END
+    END
+    FOR I = 1 TO MVNO_RCNT
+      FNO = MVNO_REF<I>; RNO = MVNO_RPTR<I>
+      GOSUB 4030
+    NEXT I
+    FOR I = 1 TO SMVNO_RCNT
+      FNO = SMVNO_REF<I>; RNO = SMVNO_RPTR<I>
+      GOSUB 4050
+    NEXT I
+    VCNT = DCOUNT(DSP_FNO,AM)
+    FOR V = 1 TO VCNT
+      FNO = DSP_FNO<V>; GOSUB 3110
+    NEXT V
+    DSP_FNO = ""
+    IF SCN_LOC > 1 THEN
+      CHGMODE<1,SCN_LOC> = 1
+    END
+  END
+  BEGIN CASE
+    CASE UPDMODE
+      GOSUB 86000
+      IF CHGMODE<1,1> THEN
+        NEW_REV = 0
+        IF REV_CTL AND MID_FNO THEN
+          GOSUB 510
+        END
+      END
+      GOTO 99999
+    CASE PRT_CRT
+    CASE SCN_NAME = FIELD(PRT_NAMES,",",1)
+      BLN_PRT = BLNPRT<1,SCN_LOC>
+*----T22268
+      IF BC_FLG<1,SCN_LOC> = "Y" THEN
+        GOSUB 80000
+        BLN_PRT = BCROW + 1
+      END
+      ELN_PRT = ELNPRT<1,SCN_LOC>
+      FOR I = BLN_PRT TO ELN_PRT
+*            PRINT SCN_HDR_PRT<I>
+        PRINT TRIMB(SCN_HDR_PRT<I>)
+      NEXT I
+      GOTO 99999
+    CASE 1
+*----T22268
+      BLN_PRT = BLNPRT<1,SCN_LOC>
+      IF BC_FLG<1,SCN_LOC> = "Y" THEN
+        GOSUB 80000
+        BLN_PRT = BCROW + 1
+      END
+*----^
+*            FOR I = BLNPRT<1,SCN_LOC> TO ELNPRT<1,SCN_LOC>
+      FOR I = BLN_PRT TO ELNPRT<1,SCN_LOC>
+*            PRINT SCN_HDR_PRT<I>
+        PRINT TRIMB(SCN_HDR_PRT<I>)
+      NEXT I
+      GOTO 99999
+  END CASE
+*
+*---- Get prompt line request
+*
+  MORE = 1
+  IF EDITMODE THEN
+*TASK20265
+    IF EDITMODE = 1 THEN
+      VAR1 = "edit,"
+      ;*
+      ;* T26856 * Added 'mail' to prompt
+      ;*
+      VAR2 = "(H)orz,(C)lone,(P)rint,(M)ail,(R)el,(F)ile,"
+    END
+    IF EDITMODE = 10 THEN
+      VAR1 = "review,"
+      VAR2 = "(H)orz,(C)lone"
+    END
+  END ELSE
+    VAR1 = "review,"
+    VAR2 = "(H)orz,"
+*** ^
+  END
+  IF SCN_LOC = 1 THEN
+    IF FIELD(SCN_NAMES,",",2) = "" THEN
+      OPT_MSG = "Enter # to ":VAR1:VAR2:"(E)xit:"
+    END ELSE
+      OPT_MSG = "Enter # to ":VAR1:"(N)ext,":VAR2:"(E)xit:"
+    END
+  END ELSE
+    IF FIELD(SCN_NAMES,",",SCN_LOC+1) = "" THEN
+      OPT_MSG = "Enter # to ":VAR1:"(E)nd :"
+    END ELSE
+      OPT_MSG = "Enter # to ":VAR1:"(N)ext,(E)nd :"
+    END
+  END
+  LOOP
+    FNO = PLN_FNO
+    PMSG = OPT_MSG
+    DREC(FNO) = ""
+    BEGIN CASE
+      CASE TRANSMODE
+        VALUE = "F"
+******************************************
+*CASE PC.PORT.TYPE = "termIte"
+*PIX_MORE = 1; VALUE = ""
+*LOOP
+*   CALL PIX_GUI_GET_EVENT(GUI_APP_NAME,CTL_ID,EVENT,OPTS)
+*   BEGIN CASE
+*   CASE EVENT = "CLICKED"
+*      BEGIN CASE
+*      CASE CTL_ID = "FILE"
+*      CASE CTL_ID = "CANCEL"
+*         VALUE = "EX"
+*         PIX_MORE = 0
+*      CASE CTL_ID = "LOAD"
+*      END CASE
+*   END CASE
+*WHILE PIX_MORE DO REPEAT
+******************************************
+      CASE 1
+        GOSUB 1000
+    END CASE
+    PMSG = ""
+    OPTION = OCONV(VALUE,"MCU")
+    BEGIN CASE
+      CASE OPTION = "END" OR OPTION = "E" OR OPTION = "EX"
+        IF SCN_LOC = 1 THEN
+          IF EDITMODE THEN
+            FNO = PLN_FNO
+            PMSG = "Ticket has not been filed. Continue (Y/N) :"
+            DREC(FNO) = ""
+            GOSUB 1000
+******************************************
+*IF PC.PORT.TYPE = "termIte" THEN
+*   VALUE = "Y"
+*END ELSE
+*   GOSUB 1000
+*END
+******************************************
+            PMSG = ""
+            IF VALUE = "Y" THEN
+              RELEASE FILE.VARS(MTBL_PTR), IDKEY
+              MORE = 0
+            END
+          END ELSE
+            MORE = 0
+          END
+        END ELSE
+          FOR I = 1 TO FLDCNT
+            FNO = FLD_FNO<I>
+            IF FLD_FPTR<FNO> = MTBL_PTR AND FLD_ORG<FNO> < 1 THEN
+              IF FLD_MVNO<FNO> < 1 OR FLD_SMVNO<FNO> < 1 THEN
+                M_REC<FLD_LOC<FNO>> = DREC(FNO)
+              END ELSE
+                M_REC<FLD_LOC<FNO>,FLD_MVNO<FNO>,FLD_SMVNO<FNO>> = DREC(FNO)<1,FLD_MVNO<FNO>,FLD_SMVNO<FNO>>
+              END
+            END
+          NEXT I
+          MORE = 0
+        END
+      CASE OPTION[1,1] = "N"
+        O_SCN_LOC = SCN_LOC
+        IF OPTION = "N" THEN
+          SCN_LOC = SCN_LOC + 1
+        END ELSE
+          SCN_LOC = OPTION[2,99]
+        END
+        BEGIN CASE
+          CASE NOT(NUM(SCN_LOC))
+          CASE O_SCN_LOC = SCN_LOC
+          CASE SCN_LOC < 1
+          CASE FIELD(SCN_NAMES,",",SCN_LOC) = ""
+          CASE OPTION # "N" AND (CHGMODE<1,1> + CHGMODE<1,SCN_LOC> < 1)
+          CASE RTNFLG # ""
+            FOR I = 1 TO FLDCNT
+              FNO = FLD_FNO<I>
+              IF FLD_FPTR<FNO> = MTBL_PTR AND FLD_ORG<FNO> < 1 THEN
+                IF FLD_MVNO<FNO> < 1 OR FLD_SMVNO<FNO> < 1 THEN
+                  M_REC<FLD_LOC<FNO>> = DREC(FNO)
+                END ELSE
+                  M_REC<FLD_LOC<FNO>,FLD_MVNO<FNO>,FLD_SMVNO<FNO>> = DREC(FNO)<1,FLD_MVNO<FNO>,FLD_SMVNO<FNO>>
+                END
+              END
+            NEXT I
+            IF SCN_LOC > 1 THEN
+              RTNFLG<1,2> = SCN_LOC
+            END
+            MORE = 0
+          CASE 1
+            FOR I = 1 TO FLDCNT
+              FNO = FLD_FNO<I>
+              IF FLD_FPTR<FNO> = MTBL_PTR AND FLD_ORG<FNO> < 1 THEN
+                IF FLD_MVNO<FNO> < 1 OR FLD_SMVNO<FNO> < 1 THEN
+                  M_REC<FLD_LOC<FNO>> = DREC(FNO)
+                END ELSE
+                  M_REC<FLD_LOC<FNO>,FLD_MVNO<FNO>,FLD_SMVNO<FNO>> = DREC(FNO)<1,FLD_MVNO<FNO>,FLD_SMVNO<FNO>>
+                END
+              END
+            NEXT I
+            LOOP
+              RTNFLG = O_SCN_LOC
+              GOSUB 470
+            WHILE RTNFLG<1,2> DO
+              SCN_LOC = RTNFLG<1,2>
+            REPEAT
+            IF NOT(NUM(OPTION)) THEN
+              OPTR = 1
+              LOOP
+                LOCATE MTBL_PTR IN FLD_FPTR,OPTR SETTING OPT ELSE
+                  OPTR = 0
+                END
+              WHILE OPTR DO
+                IF FLD_EXPR<OPT> = "" THEN
+                  DREC(OPT) = M_REC<FLD_LOC<OPT>>
+                END
+                OPTR = OPTR + 1
+              REPEAT
+            END
+            GUIFORM = GUI_FORMS<1,O_SCN_LOC>
+            RTNFLG = ""
+            GOSUB 700
+            FOR IDNO = 1 TO IDCNT
+              FNO = ID_FNO<IDNO>
+              GOSUB 3110
+            NEXT IDNO
+            GOSUB 3000
+        END CASE
+        SCN_LOC = O_SCN_LOC
+*TASK20265
+      CASE OPTION = "C" AND EDITMODE AND SCN_LOC = 1
+*         CASE OPTION   = "C" AND SCN_LOC = 1
+        VAR2 = "(H)orz,(C)lone,(F)ile,"
+        IF FIELD(SCN_NAMES,",",2) = "" THEN
+          OPT_MSG = "Enter # to ":VAR1:VAR2:"(E)xit:"
+        END ELSE
+          OPT_MSG = "Enter # to ":VAR1:"(N)ext,":VAR2:"(E)xit:"
+        END
+        EDITMODE = 1 ;* TO ENABEL THE FILE FUNCTION
+*** ^
+        IDNUM = 1
+        FNO = ID_FNO<IDNUM>
+        OLD_IDKEY = IDKEY
+        OLD_IDVALUE = DREC(FNO)<1,FLD_MVNO<FNO>,FLD_SMVNO<FNO>>
+        GOSUB 1000
+        IF VALUE = "END" THEN
+          DREC(FNO)<1,FLD_MVNO<FNO>,FLD_SMVNO<FNO>> = OLD_IDVALUE
+          GOSUB 3110
+        END ELSE
+          FOR IDNO = 2 TO IDCNT
+            FNO = ID_FNO<IDNO>
+            OLD_IDVALUE<IDNO> = DREC(FNO)<1,FLD_MVNO<FNO>,FLD_SMVNO<FNO>>
+          NEXT IDNO
+          ID_VARS = VALUE
+          GOSUB 210
+          IF LIMIT THEN
+            IF IDKEY = OLD_IDKEY THEN
+              ERRMSG = "Cannot move to the same record ID !"
+              LIMIT = 0; GOSUB 91000
+            END ELSE
+              READU T_REC FROM FILE.VARS(MTBL_PTR), IDKEY THEN
+                RELEASE FILE.VARS(MTBL_PTR), IDKEY
+                ERRMSG = SSD_M_TABLE:" (":IDREF:") already exists on file !"
+                LIMIT = 0; GOSUB 91000
+              END ELSE
+                CHGMODE<1,1> = 0
+                RELEASE FILE.VARS(MTBL_PTR), OLD_IDKEY
+              END
+            END
+          END
+          IF LIMIT THEN
+            OPTR = 1
+            LOOP
+              LOCATE MTBL_PTR IN FLD_FPTR,OPTR SETTING OPT THEN
+                FNO = OPT
+                IF SCN_LOC = 1 AND FLD_REF<FNO> < 1 THEN
+                  IF FLD_ORG<FNO> < 1 AND FLD_EXPR<FNO> = "" THEN
+                    DREC(FNO) = ""
+                    GOSUB 1000
+*TASK20265
+                    IF FIELD(SCN_FLDS<FNO>,"_",2,3) = "JOB_NO" THEN
+                      READ JOBREC FROM JOB, CONO:VALUE THEN
+                        GOSUB 320
+*                           IF STATUS = "" THEN
+                        IF STATUS = "" OR STATUS = "COMPLETED" OR STATUS = "CANCELLED" THEN
+                          ERRMSG = "Cannot utilize Job (":VALUE:") with a ":STATUS:" status"
+                          GOSUB 91000
+                          VALUE = "END"; OPTR = 0
+                        END
+                      END
+                    END
+*** ^
+                  END
+                END
+                IF VALUE = "END" THEN
+                  OPTR = 0; LIMIT = 0
+                END
+              END ELSE
+                OPTR = 0
+              END
+            WHILE OPTR DO
+              OPTR = OPT + 1
+            REPEAT
+          END
+          IF NOT(LIMIT) THEN
+            IDKEY = OLD_IDKEY
+            FOR IDNO = 1 TO IDCNT
+              FNO = ID_FNO<IDNO>
+              DREC(FNO)<1,FLD_MVNO<FNO>,FLD_SMVNO<FNO>> = OLD_IDVALUE<IDNO>
+              GOSUB 3110
+            NEXT IDNO
+          END
+        END
+      CASE OPTION = "F" AND TRANSMODE AND NOT(EDITMODE) AND SCN_LOC = 1
+        GOSUB 86000
+        IF FIELD(SCN_NAMES,",",2) # "" THEN
+          UPDMODE = 1
+          OLD_PRT_CRT = PRT_CRT; PRT_CRT = 0
+          LOOP
+            SCN_LOC = SCN_LOC + 1
+            SCN_NAME = FIELD(SCN_NAMES,",",SCN_LOC)
+          WHILE SCN_NAME # "" DO
+            GOSUB 470
+          REPEAT
+          SCN_LOC = 1; GUIFORM = GUI_FORMS<1,SCN_LOC>
+          SCN_NAME = FIELD(SCN_NAMES,",",SCN_LOC)
+          UPDMODE = 0
+          PRT_CRT = OLD_PRT_CRT
+        END
+        GOSUB 3000
+        IMGCNT = DCOUNT(IMGDEF,AM)
+        IF IDDEF<1> = "CO" THEN
+          IMGREC(IMGCNT+1) = IDKEY[1,3]
+          IMGREC(IMGCNT+2) = IDKEY[4,999]
+        END ELSE
+          IMGREC(IMGCNT+1) = IDKEY
+        END
+        MATWRITE IMGREC ON TRN_FILE, IDKEY
+        MORE = 0
+      CASE (OPTION="F" OR OPTION="R" OR OPTION="P" OR OPTION="M") AND (EDITMODE OR TRANSMODE) AND SCN_LOC=1
+        ;* T26856 * Added "M"ail option
+        GOSUB 500
+      CASE OPTION = "H"
+        SCNO = SCNO + 1
+        IF SCNO > MAX_SNO THEN SCNO = 1
+        GOSUB 700
+        OLD2_FNO = FNO
+        FOR IDNO = 1 TO IDCNT
+          FNO = ID_FNO<IDNO>
+          GOSUB 3110
+        NEXT IDNO
+        GOSUB 3000
+        FNO = OLD2_FNO
+      CASE OPTION # "0"
+        LOCATE OPTION IN FLD_REF,1 SETTING FNO THEN
+*              FNO = FLD_RPTR<FND>
+          BEGIN CASE
+            CASE EDITMODE = 0
+              INQMODE = 1
+            CASE FLD_ORG<FNO>
+              INQMODE = 1
+            CASE FLD_FPTR<FNO> = 0 OR FLD_FPTR<FNO> = MTBL_PTR
+              INQMODE = 0
+            CASE 1
+              INQMODE = 1
+          END CASE
+          IF FLD_EXPR<FNO> = "" THEN
+            GOSUB 1000
+            FMODE = "C"; GOSUB 70000
+          END
+          INQMODE = 0
+        END ELSE
+          ERRMSG = "Invalid entry, please re-enter"
+          GOSUB 91000
+        END
+    END CASE
+  WHILE MORE DO REPEAT
+  IF SCN_LOC = 1 THEN
+    IF OPTION = "EX" OR THIS_FUNC = "JOB.MAINT" THEN
+      IF GUIFORM THEN
+        TU_FUNC = "TU.FORM.KILL":TU_VERNO     ;*T25024
+        CALL @TU_FUNC(FRMHNDL,ERROR)     ;*T25024
+      END
+      GOTO 99999
+    END ELSE
+      IF SCNO # 1 THEN
+        SCNO = 1
+      END
+      IF NOT(TRANSMODE) THEN
+        GOSUB 710
+      END
+      MAT DREC = ""
+      OLD.VERSION = 0     ; * T23211
+      DSP_LNO = ""; DSP_OLNO = ""
+      FLD_MVNO = S_FLD_MVNO; FLD_SMVNO = S_FLD_SMVNO
+      I = 1
+      LOOP
+        LOCATE "0" IN FLD_MVNO,I SETTING FNO ELSE FNO = 0
+      WHILE FNO DO
+        DSP_LNO<FNO> = 1
+        I = FNO + 1
+      REPEAT
+      I = 1
+      LOOP
+        LOCATE "0" IN FLD_SMVNO,I SETTING FNO ELSE FNO = 0
+      WHILE FNO DO
+        DSP_LNO<FNO> = 1
+        I = FNO + 1
+      REPEAT
+      GOTO 100
+    END
+  END ELSE
+    IF GUIFORM THEN
+      TU_FUNC = "TU.FORM.KILL":TU_VERNO     ;*T25024
+      CALL @TU_FUNC(FRMHNDL,ERROR)     ;*T25024
+    END
+    GOTO 99999
+  END
+*
+*--- Build Item ID
+210*
+  LIMIT = IDCNT
+  FOR IDNUM = 2 TO LIMIT
+    FNO = ID_FNO<IDNUM>
+    IF SCN_LOC > 1 THEN
+      VALUE = ID_VARS<IDNUM>
+      DREC(FNO)<1,FLD_MVNO<FNO>,FLD_SMVNO<FNO>> = VALUE
+      GOSUB 3110
+    END ELSE
+      GOSUB 1000
+      IF VALUE = "END" THEN
+        LIMIT = 0
+      END
+      ID_VARS<IDNUM> = VALUE
+    END
+  NEXT IDNUM
+  IF LIMIT THEN
+    GOSUB 220
+  END
+  IDNUM = 0
+  RETURN
+220*
+  IDNO = 0; IDKEY = ""; IDREF = ""
+  FOR I = 1 TO FID_CNT
+    BEGIN CASE
+      CASE SFR.ID<1,I> = "CO"
+        IDKEY = IDKEY:CONO
+      CASE SFR.ID.TYPE<1,I> = "T"
+        IDKEY = IDKEY:SFR.ID<1,I>
+        IDREF = IDREF:SFR.ID<1,I>
+      CASE 1
+        IDNO = IDNO + 1
+        IDKEY = IDKEY:DREC(ID_FNO<IDNO>)
+        IDREF = IDREF:DREC(ID_FNO<IDNO>)
+    END CASE
+  NEXT I
+  RETURN
+*
+310*
+  SCN_FLDS<FNO> = FLD_NAME
+  FLD_FPTR<FNO> = 0
+  FLD_LOC<FNO> = 0
+  FLD_MVNO<FNO> = 1
+  MVNO_MV<FNO> = 1
+  MVNO_SMV<FNO> = 1
+  FLD_SMVNO<FNO> = 1
+  SMVNO_MV<FNO> = 1
+  SMVNO_SMV<FNO> = 1
+  FLD_LINES<FNO> = 1
+  FLD_LNSPC<FNO> = 1
+  DSP_LNO<FNO> = 1
+  FLD_DSTLST<FNO> = ""
+  FLD_EXPR<FNO> = ""
+  FLD_ESTK<FNO> = ""
+  FLD_TSTK<FNO> = ""
+  RETURN
+*
+320*
+  CALL JOB.STATUS.SUB(JOBREC<2>,JOBREC<10>,STATUS)
+  BEGIN CASE
+    CASE STATUS = "BOOKED"
+    CASE STATUS = "IN PROCESS"
+    CASE STATUS = "INVOICED"
+    CASE STATUS = "REOPENED"
+    CASE STATUS = "COSTED"       
+    CASE STATUS = "RDY-TO-BILL"  
+    CASE STATUS = "DELIVERED"    
+    CASE STATUS = "COMPLETED"
+    CASE STATUS = "CANCELLED"
+    CASE 1
+      STATUS = ""
+  END CASE
+  RETURN
+470*
+  PASS_VARS = THIS_FUNC
+  PASS_VARS<2> = SCN_LOC
+  PASS_VARS<3> = SCN_NAMES
+  PASS_VARS<4> = PRT_NAMES
+  PASS_VARS<5> = EDITMODE
+  PASS_VARS<6> = CHGMODE
+  PASS_VARS<7> = UPDMODE
+  PASS_VARS<8> = PRT_CRT
+  PASS_VARS<9> = ERRFLG
+  PASS_VARS<10> = TKTDEF
+  PASS_VARS<11> = RTNFLG
+  PASS_VARS<12> = REV_CTL
+  PASS_VARS<13> = GEN_N_ID
+  PASS_VARS<14> = BATCHMODE
+  PASS_VARS<15> = TRANSMODE
+  PASS_VARS<16> = MAXPLINES
+  PASS_VARS<17> = BLNPRT
+  PASS_VARS<18> = ELNPRT
+  PASS_VARS<19> = BCLPTR
+  PASS_VARS<20> = BCROW
+  PASS_VARS<21> = BCCOL
+  PASS_VARS<22> = SCN_CMPS
+  PASS_VARS<23> = PRT_CMPS
+*----T22268
+  PASS_VARS<24> = BC_FLG
+  PASS_VARS<25> = GUI_FORMS
+  PASS_VARS<MAXPV> = 1
+  GUIFORM = ""
+  CALL SCREEN_MAINT(PASS_VARS,ID_VARS,M_REC,OLD_M_REC,IMGDEF,IMGSIZE,MAT IMGREC,USER.MAIL,FVAR_SIZE,FVAR_REC,OPN_FILES)
+  CHGMODE = PASS_VARS<6>
+  ERRFLG = PASS_VARS<9>
+  RTNFLG = PASS_VARS<11>
+  RETURN
+*
+*---- Update Routine
+500*
+  OLD_JKTID = ID_VARS<1>
+  IF CHGMODE<1,1> THEN
+    GOSUB 86000
+    NEW_REV = 0
+    IF REV_CTL AND MID_FNO THEN
+      GOSUB 510
+      IF FIELD(SCN_NAMES,",",2) # "" THEN
+        UPDMODE = 1
+        OLD_PRT_CRT = PRT_CRT; PRT_CRT = 0
+        LOOP
+          SCN_LOC = SCN_LOC + 1
+          SCN_NAME = FIELD(SCN_NAMES,",",SCN_LOC)
+        WHILE SCN_NAME # "" DO
+          GOSUB 470
+        REPEAT
+        SCN_LOC = 1; GUIFORM = GUI_FORMS<1,SCN_LOC>
+        SCN_NAME = FIELD(SCN_NAMES,",",SCN_LOC)
+        UPDMODE = 0
+        PRT_CRT = OLD_PRT_CRT
+      END
+      GOSUB 520
+      ATT_FLDS = ""
+    END ELSE
+      FOR I = 1 TO FLDCNT
+        FNO = FLD_FNO<I>
+        IF FLD_FPTR<FNO> = MTBL_PTR AND FLD_ORG<FNO> < 1 THEN
+          ATTNO = FLD_LOC<FNO>
+          M_REC<ATTNO> = DREC(FNO)
+        END
+      NEXT I
+    END
+  END ELSE
+    NEW_REV = 0; ERRMSG = ""
+    LOOP
+      SCN_LOC = SCN_LOC + 1
+      BEGIN CASE
+        CASE FIELD(SCN_NAMES,",",SCN_LOC) = ""
+          SCN_LOC = 1
+        CASE CHGMODE<1,SCN_LOC> < 1
+          ERRMSG = "Screen (":SCN_LOC:") information has not been loaded!!"
+          SCN_LOC = 1
+      END CASE
+    WHILE SCN_LOC > 1 DO REPEAT
+    IF ERRMSG # "" THEN
+      GOSUB 91000; GOTO 509
+    END
+    FOR I = 1 TO FLDCNT
+      FNO = FLD_FNO<I>
+      IF FLD_FPTR<FNO> = MTBL_PTR AND FLD_ORG<FNO> < 1 THEN
+        ATTNO = FLD_LOC<FNO>
+        M_REC<ATTNO> = DREC(FNO)
+      END
+    NEXT I
+    IF GEN_N_ID AND MID_FNO THEN
+      IF DREC(MID_FNO) = "N" THEN
+        FLD_NAME = SCN_FLDS<MID_FNO>
+        READU CNTR FROM CONTROL, CONO:FLD_NAME ELSE
+          CNTR = 1000
+        END
+        CNTR = CNTR + 1
+        DREC(MID_FNO) = CNTR
+        GOSUB 220
+        LOOP
+          LST_IDKEY = IDKEY
+          READU T_REC FROM FILE.VARS(MTBL_PTR), IDKEY THEN
+            RELEASE FILE.VARS(MTBL_PTR), IDKEY
+            CNTR = CNTR + 1
+            DREC(MID_FNO) = CNTR
+            GOSUB 220
+          END
+        WHILE IDKEY # LST_IDKEY DO REPEAT
+        WRITE CNTR ON CONTROL, CONO:FLD_NAME
+*CSF25470
+        ID_VARS<1> = DREC(MID_FNO)
+*** ^
+        FNO = MID_FNO
+        GOSUB 3110
+        ERRMSG = "Please note down the new number"
+        GOSUB 91000
+*               WRITE CNTR ON CONTROL, CONO:FLD_NAME
+      END
+    END
+  END
+*     IF NEW_REV THEN
+  IF NEW_REV AND OPTION = "R" THEN
+    VALUE = DREC(MID_FNO)
+    L_VALUE = LEN(VALUE)
+    IF VALUE[L_VALUE-2,1] # "-" OR NOT(NUM(VALUE[L_VALUE-1,2])) THEN
+      IF L_VALUE > (FIELD(FLD_FMT<MID_FNO>,"#",2) - 3) THEN
+        ERRMSG = "The last three digits of the ID are reserved for revision control"
+        GOSUB 91000; GOTO 509
+      END
+      VALUE = VALUE :"-00"
+      L_VALUE = LEN(VALUE)
+    END
+    VALUE_BASE = VALUE[1,L_VALUE-2]
+    CNTR = VALUE[L_VALUE-1,2]
+    LOOP
+      CNTR = CNTR + 1
+      DREC(MID_FNO) = VALUE_BASE:STR("0",2-LEN(CNTR)):CNTR
+      ID_VARS<1> = DREC(MID_FNO)
+      GOSUB 220
+      READU T_REC FROM FILE.VARS(MTBL_PTR), IDKEY THEN
+        RELEASE FILE.VARS(MTBL_PTR), IDKEY
+      END ELSE
+        CNTR = 0
+      END
+    WHILE CNTR DO REPEAT
+    FNO = MID_FNO
+    GOSUB 3110
+    ERRMSG = "Please note down the new revision number"
+    GOSUB 91000
+  END
+  WRITE M_REC ON FILE.VARS(MTBL_PTR), IDKEY
+  GOSUB 86000
+  IF FIELD(SCN_NAMES,",",2) # "" THEN
+    UPDMODE = 1
+    OLD_PRT_CRT = PRT_CRT; PRT_CRT = 0
+    LOOP
+      SCN_LOC = SCN_LOC + 1
+      SCN_NAME = FIELD(SCN_NAMES,",",SCN_LOC)
+    WHILE SCN_NAME # "" DO
+      GOSUB 470
+    REPEAT
+    SCN_LOC = 1; GUIFORM = GUI_FORMS<1,SCN_LOC>
+    SCN_NAME = FIELD(SCN_NAMES,",",SCN_LOC)
+    UPDMODE = 0
+    PRT_CRT = OLD_PRT_CRT
+  END
+  IF OPTION = "F" THEN
+    IF TRANSMODE THEN
+      ERRMSG = "updateing transfer file # ":IDKEY; GOSUB 91000
+      GOSUB 3000
+      IMGCNT = DCOUNT(IMGDEF,AM)
+      IF IDDEF<1> = "CO" THEN
+        IMGREC(IMGCNT+1) = IDKEY[1,3]
+        IMGREC(IMGCNT+2) = IDKEY[4,999]
+      END ELSE
+        IMGREC(IMGCNT+1) = IDKEY
+      END
+      MATWRITE IMGREC ON TRN_FILE, IDKEY
+    END
+    MORE = 0
+    GOTO 509
+  END
+  IF OPTION = "R" THEN
+    GOSUB 85000
+    GOSUB 87000
+    MORE = 0
+    GOTO 509
+  END
+  O_SCN_NAMES = SCN_NAMES
+* T23593 v Save SCN_CMPS before equating it to PRT_CMPS for print process
+  O_SCN_CMPS  = SCN_CMPS
+* T23593 ^
+  IF PRT_NAMES # "" THEN
+    SCN_NAMES = PRT_NAMES
+         * T23593 v Change SCN_CMPS to match up with PRT_NAMES
+    SCN_CMPS = PRT_CMPS
+    SCN_CMPS = "0":VM:SCN_CMPS ; * use 0 to mark 1st display form.
+         * T23593 ^
+  END
+  CALL SCN_PRT_BLD(SCN_NAME,SCN_HDR_PRT,ERRMSG)
+  IF ERRMSG # "" THEN
+    GOSUB 91000
+    GOTO 509
+  END
+  PRT_CRT = 0
+  FOR IDNO = 1 TO IDCNT
+    FNO = ID_FNO<IDNO>
+    GOSUB 3110
+  NEXT IDNO
+  GOSUB 3000
+  ;*
+  ;* 26865 v
+  ;* Capture the print output and redirect it to the hold file for mailing
+  ;*
+  OPEN "_HOLD_" TO HOLD.FILE ELSE
+    ERRMSG = "Cannot open _HOLD_ file."
+    GOSUB 91000
+    RETURN
+  END
+  RESTORE.PRINTER.CMD = "SETPTR " : GETPTR(0) : ",BRIEF"
+  NEW.PRINTER.CMD     = "SETPTR ,,,,,3,BRIEF,NOMESSAGE,NOHEAD,BANNER "
+  ;*
+  ;* Setup email
+  ;*
+  DEFFUN PMC_SEND_MAIL(MAIL.ADDRESS.LIST,MAIL.SUBJECT,MAIL.TEXT,MAIL.ATTACH)
+  MAIL.ADDR = ''
+  MAIL.ATTACH.FILE = "TKT-" : @USERNO
+  IF OPTION = 'M' THEN
+    LOGNAME = 'LOGNAME'; CALL SYSVARS.SUB(LOGNAME); *T27646
+    READV MAIL.ADDR FROM SECURITY, CONO : UPCASE(LOGNAME), 29 ELSE NULL; *T27646
+    UDTEXECUTE NEW.PRINTER.CMD : MAIL.ATTACH.FILE CAPTURING CAP RETURNING RET
+  END
+  ;* 26865 ^
+  ;*
+  PRINTER ON
+  IF SCN_NAME = FIELD(SCN_NAMES,",",1) THEN
+    BLN_PRT = BLNPRT<1,SCN_LOC>
+*----T22268
+    IF BC_FLG<1,SCN_LOC> = "Y" THEN
+      GOSUB 80000
+*----^
+      BLN_PRT = BCROW + 1
+    END
+    ELN_PRT = ELNPRT<1,SCN_LOC>
+    FOR I = BLN_PRT TO ELN_PRT
+*            PRINT SCN_HDR_PRT<I>
+      PRINT TRIMB(SCN_HDR_PRT<I>)
+    NEXT I
+    PRTLINES = ELNPRT<1,1> - BLNPRT<1,1> + 1
+  END ELSE
+    SCN_NAMES = SCN_NAME:",":SCN_NAMES
+    INS 1 BEFORE BLNPRT<1,1>
+**** C33179 & C33470
+*         INS 22 BEFORE ELNPRT<1,1>
+    INS 3 BEFORE ELNPRT<1,1>
+**** C33179 & C33470
+    PRTLINES = 0
+  END
+  IF FIELD(SCN_NAMES,",",2) # "" THEN
+    LOOP
+      SCN_LOC = SCN_LOC + 1
+      SCN_NAME = FIELD(SCN_NAMES,",",SCN_LOC)
+**** C33179 & C33470
+      IF SCN_LOC = 2 THEN
+        ELNPRT<1,SCN_LOC> = ORG_ELNPRT
+        BLNPRT<1,SCN_LOC> = ORG_BLNPRT
+      END
+**** C33179 & C33470
+    WHILE SCN_NAME # "" DO
+      PLINES = ELNPRT<1,SCN_LOC> - BLNPRT<1,SCN_LOC> + 1
+      IF PRTLINES + PLINES > MAXPLINES THEN
+        BLINES = MAXPLINES - PRTLINES - PLINES
+        FOR I = 1 TO BLINES
+          PRINT
+        NEXT I
+      END
+      GOSUB 470
+      PRTLINES = PRTLINES + PLINES
+    REPEAT
+    SCN_LOC = 1; GUIFORM = GUI_FORMS<1,SCN_LOC>
+    SCN_NAMES = O_SCN_NAMES
+    ;* T23593 v After printing, put back to initial value for display
+    SCN_CMPS = O_SCN_CMPS
+    ;* T23593 ^
+    SCN_NAME = FIELD(SCN_NAMES,",",SCN_LOC)
+  END
+  PRINTER OFF
+  ;*
+  ;* T26856 v
+  ;* Send out mail with attached job ticket
+  ;*
+  IF OPTION = 'M' THEN
+    IF MAIL.ADDR THEN
+      LINEFEED = CHAR(10)
+      ;* Convert to postscript then to PDF
+      FORMATSTR = ''
+      MATREAD STKD.REC FROM SYS_TKT_DEF, TKTDEF THEN
+        IF STKD_PRT_FORMATSTR # '' THEN
+          FORMATSTR<1,-1> = "FORMATSTR-PATH"
+          FORMATSTR<2,-1> = STKD_PRT_FORMATSTR
+        END ELSE
+          FORMATSTR<1,-1> = "FORMATSTR-PATH"
+*         FORMATSTR<2,-1> = "PMC_GRAPHICS/letterhead.formatstr"
+          FORMATSTR<2,-1> = "PMC_GRAPHICS/invoice.formatstr"
+        END
+      END
+      CALL CONVERT.TO.PDF("_HOLD_",MAIL.ATTACH.FILE,FORMATSTR)
+      IF CAP # '' THEN
+        ERRMSG = "Warning: " : CAP
+        GOSUB 91000
+      END
+      MAIL.ATTACH     = "BIN"
+      MAIL.ATTACH<2>  = "_HOLD_/" : MAIL.ATTACH.FILE : ".pdf"
+      MAIL.TEXT.FILE  = "TKT-TEXT-" : @USERNO
+      MAIL.TEXT       = "_HOLD_/" : MAIL.TEXT.FILE
+      DESC = "This email from " : CO.NAME : " contains a(n) "
+      DESC:= "Job Ticket attachment in Adobe PDF (Portable Document Format). "
+      DESC:= "To open it you must have Adobe Acrobat Reader, "
+      DESC:= "which you can download at http://www.acrobat.com."
+      DESC:= LINEFEED : LINEFEED
+      DESC:= "Solutions by PRIMAC -- http://www.primacsystems.com"
+      OSWRITE DESC ON MAIL.TEXT
+      MAIL.STATUS = PMC_SEND_MAIL(MAIL.ADDR,"Job Ticket",MAIL.TEXT,MAIL.ATTACH)
+      DELETE HOLD.FILE, MAIL.ATTACH.FILE : ".pdf"
+      DELETE HOLD.FILE, MAIL.TEXT.FILE
+      IF MAIL.STATUS THEN
+        ERRMSG = "Send mail error: " : MAIL.STATUS<2>
+      END ELSE
+        ERRMSG = "Mail sent successfully."
+      END
+    END ELSE
+      ERRMSG = "You must set up an email address before sending any mail."
+    END
+    GOSUB 91000
+    ;*
+    ;* Delete hold records and reset printer
+    ;*
+    UDTEXECUTE RESTORE.PRINTER.CMD CAPTURING CAP RETURNING RET
+    DELETE HOLD.FILE, MAIL.ATTACH.FILE
+  END
+  ;* T26856 ^
+  ;*
+  CALL PRINTER_CLOSE
+  PRT_CRT = 1
+509*
+  RETURN
+510*
+  FOR I = 1 TO FLDCNT
+    FNO = FLD_FNO<I>
+    IF FLD_FPTR<FNO> = MTBL_PTR AND FLD_ORG<FNO> < 1 THEN
+      ATTNO = FLD_LOC<FNO>
+      M_REC<ATTNO> = DREC(FNO)
+    END
+  NEXT I
+  RETURN
+*
+*---- CHECK FOR NEW REVISION
+520*
+  IF SCN_LOC = 1 THEN
+    JKTID = ID_VARS<1>
+    READ IREC FROM JOB_JKT_IMG, CONO:JKTID THEN
+      CALL JKT_NOTIFY_SUB("0",CONO,"JOB_JKT_IMG",JKTID,TKTDEF,IMGSIZE,MAT IMGREC,JOB_JKT_IMG,ISTATUS)
+      IF ISTATUS[1,2] # "00" THEN NEW_REV = 1
+* I added the following lines because there were problems with the 
+* initial release of a job ticket. Renee 08/19/98
+    END ELSE        ; * added by Renee
+      NEW_REV = 1   ; * added by Renee
+    END
+  END
+  RETURN
+700*
+  BEGIN CASE
+******************************************
+*CASE PC.PORT.TYPE = "termIte"
+*   IF SCN_HDR_CRT(SCNO) # "" THEN
+*
+*      CTL_DTL = "MAINGROUP,DEFGROUP"
+*      CTL_DTL<-1> = "ALLCONTROLS,COLOUR,BLACK,LIGHTGREY"
+*      CTL_DTL<-1> = SCN_HDR_CRT(SCNO)
+*      SCN_HDR_CRT(SCNO) = ""
+*
+*      CTL_DTL<-1> = "ALLCONTROLS,COLOUR,BLACK,WHITE"
+*      CRT_FNO = FNO
+*      FOR I = 1 TO IDCNT
+*         FNO = ID_FNO<I>
+*         CTL_DTL<-1> = SCN_FLDS<FNO>:",EDIT,":FLD_X<FNO>:",":FLD_Y<FNO>:",":FIELD(FLD_FMT<FNO>,"#",2):",1,,HSCROLL,SCULPTURE"
+*      NEXT I
+*      FOR I = 1 TO FLDCNT
+*         FNO = FLD_FNO<I>
+*         CTL_DTL<-1> = SCN_FLDS<FNO>:",EDIT,":FLD_X<FNO>:",":FLD_Y<FNO>:",":FIELD(FLD_FMT<FNO>,"#",2):",1,,HSCROLL,SCULPTURE"
+*         IF FLD_LINES<FNO> > 1 THEN
+*            FOR II = 2 TO FLD_LINES<FNO>
+*               CTL_DTL<-1> = SCN_FLDS<FNO>:II:",EDIT,":FLD_X<FNO>:",":FLD_Y<FNO>+II-1:",":FIELD(FLD_FMT<FNO>,"#",2):",1,,HSCROLL,SCULPTURE"
+*            NEXT II
+*         END
+*      NEXT I
+*      FNO = CRT_FNO
+*      CTL_DTL<-1> = "ALLCONTROLS,COLOUR,BLACK,LIGHTGREY"
+*
+*      CTL_DTL<-1> = "LOAD,TEXTBUTTON,30,22,6,2,&Load,Helv10,Right"
+*      CTL_DTL<-1> = "NEXT,TEXTBUTTON,37,22,6,2,&Next,Helv10,Right"
+*      CTL_DTL<-1> = "RELEASE,TEXTBUTTON,44,22,9,2,&Release,Helv10,Right"
+*      CTL_DTL<-1> = "PRINT,TEXTBUTTON,54,22,7,2,&Print,Helv10,Right"
+*      CTL_DTL<-1> = "CANCEL,TEXTBUTTON,62,22,8,2,&Cancel,Helv10,Right"
+*      CTL_DTL<-1> = "FILE,TEXTBUTTON,71,22,6,2,&File,Helv10,Right"
+*
+*      CTL_DTL<-1> = "LOAD,EVENTS,ON,CLICKED"
+*      CTL_DTL<-1> = "CANCEL,EVENTS,ON,CLICKED"
+*      CTL_DTL<-1> = "FILE,EVENTS,ON,CLICKED"
+*
+*      CALL PIX_GUI_CONTROL_LOAD(GUI_APP_NAME,CTL_DTL,"","")
+*   END
+******************************************
+    CASE GUIFORM
+    CASE CRT.DSPLY.MODE = "STD"
+      CRT SCN_HDR_CRT(SCNO) :
+    CASE 1
+      CRT SCN_HDR_CRT(SCNO) :
+      GOSUB 3500
+  END CASE
+  RETURN
+710*
+  BEGIN CASE
+******************************************
+*CASE PC.PORT.TYPE = "termIte"
+******************************************
+    CASE GUIFORM
+      FRMHNDL = GUIFORM
+      TU_FUNC = "TU.FORM.CLEAR":TU_VERNO     ;*T25024
+      CALL @TU_FUNC(FRMHNDL,ERROR)     ;*T25024
+    CASE CRT.DSPLY.MODE = "STD"
+      CRT SCN_CLR_CRT(SCNO) :
+    CASE 1
+      GOSUB 3500
+  END CASE
+  RETURN
+*
+*---- Prompt for a Data field
+1000*
+  FLD_NAME = SCN_FLDS<FNO>
+  GOSUB 7000
+  IF ERRMSG # "" THEN
+    GOSUB 91000; GOTO 1016
+  END
+  BEGIN CASE
+    CASE PMSG # ""
+    CASE FLD_X<FNO> > SCN_X AND SCNO < MAX_SNO
+      SCNO = MAX_SNO
+      GOSUB 700
+      OLD3_FNO = FNO
+      FOR IDNO = 1 TO IDCNT
+        FNO = ID_FNO<IDNO>
+        GOSUB 3110
+      NEXT IDNO
+      GOSUB 3000
+      FNO = OLD3_FNO
+    CASE FLD_X<FNO> < SCN_X AND SCNO > 1
+      SCNO = 1
+      GOSUB 700
+      OLD3_FNO = FNO
+      FOR IDNO = 1 TO IDCNT
+        FNO = ID_FNO<IDNO>
+        GOSUB 3110
+      NEXT IDNO
+      GOSUB 3000
+      FNO = OLD3_FNO
+  END CASE
+  BEGIN CASE
+    CASE FLD_SMVNO<FNO> < 1 AND FLD_MVNO<FNO> < 1
+      ERRMSG = "Canot utilize an MV & SMV values at the same time"
+      GOSUB 91000; GOTO 1016
+    CASE FLD_SMVNO<FNO> < 1
+      MVNO = FLD_MVNO<FNO>
+      LN_PG = FLD_LINES<FNO>; LN_SPC = FLD_LNSPC<FNO>
+      LN_Y = FLD_Y<FNO>; LN_OLD_FST = DSP_OLNO<FNO>
+      LN_CNT = DCOUNT(DREC(FNO)<1,MVNO>,SVM)
+      GOSUB 1017
+      IF LN_CNT < 1 AND NOT(INQMODE) THEN
+        GOSUB 1020
+      END ELSE
+        LNO = DSP_LNO<FNO>
+        P_VALUE = INT(LNO/LN_PG+.9) "R%2"
+        P_X = 70; P_Y = 22; P_OPT = ""
+        CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      END
+      GOSUB 3100
+      P_VALUE = INT(LN_CNT/LN_PG+.9) "R%2"
+      P_X = 76; P_Y = 22; P_OPT = ""
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      IF INQMODE THEN
+        SMVPMSG = "Enter (S)croll, (E)nd :"
+      END ELSE
+        SMVPMSG = "Enter (A)dd, (C)hange, (D)elete, (S)croll, (E)nd :"
+      END
+      VMORE = 1
+      LOOP
+        SMVFNO = FNO
+        FNO = PLN_FNO
+        PMSG = SMVPMSG
+        DREC(FNO) = ""
+        GOSUB 1000
+        FNO = SMVFNO
+        PMSG = ""
+        VOPT = OCONV(VALUE,"MCU")
+        GOSUB 1070
+      WHILE VMORE DO REPEAT
+      GOSUB 1018
+      DSP_LNO<FNO> = LNO; DSP_OLNO<FNO> = LN_OLD_FST
+    CASE FLD_MVNO<FNO> < 1
+      SMVNO = FLD_SMVNO<FNO>
+      LN_PG = FLD_LINES<FNO>; LN_SPC = FLD_LNSPC<FNO>
+      LN_Y = FLD_Y<FNO>; LN_OLD_FST = DSP_OLNO<FNO>
+      LN_CNT = DCOUNT(DREC(FNO),VM)
+      GOSUB 1017
+      IF LN_CNT < 1 AND NOT(INQMODE) THEN
+        GOSUB 1040
+      END ELSE
+        LNO = DSP_LNO<FNO>
+        P_VALUE = INT(LNO/LN_PG+.9) "R%2"
+        P_X = 70; P_Y = 22; P_OPT = ""
+        CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      END
+      GOSUB 3100
+      P_VALUE = INT(LN_CNT/LN_PG+.9) "R%2"
+      P_X = 76; P_Y = 22; P_OPT = ""
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      IF INQMODE THEN
+        MVPMSG = "Enter (S)croll, (E)nd :"
+      END ELSE
+        MVPMSG = "Enter (A)dd, (C)hange, (D)elete, (S)croll, (E)nd :"
+      END
+      VMORE = 2
+      LOOP
+        MVFNO = FNO
+        FNO = PLN_FNO
+        PMSG = MVPMSG
+        DREC(FNO) = ""
+        GOSUB 1000
+        FNO = MVFNO
+        PMSG = ""
+        VOPT = OCONV(VALUE,"MCU")
+        GOSUB 1070
+      WHILE VMORE DO REPEAT
+      GOSUB 1018
+      DSP_LNO<FNO> = LNO; DSP_OLNO<FNO> = LN_OLD_FST
+    CASE FLD_LCHR<FNO> # ""
+      LCHR = FLD_LCHR<FNO>
+      MVNO = FLD_MVNO<FNO>; SMVNO = FLD_SMVNO<FNO>
+      LN_PG = FLD_LINES<FNO>; LN_SPC = FLD_LNSPC<FNO>
+      LN_Y = FLD_Y<FNO>; LN_OLD_FST = DSP_OLNO<FNO>
+      LN_CNT = DCOUNT(DREC(FNO)<1,MVNO,SMVNO>,LCHR)
+      GOSUB 1017
+      LNO = DSP_LNO<FNO>
+      P_VALUE = INT(LNO/LN_PG+.9) "R%2"
+      P_X = 70; P_Y = 22; P_OPT = ""
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      GOSUB 3100
+      P_VALUE = INT(LN_CNT/LN_PG+.9) "R%2"
+      P_X = 76; P_Y = 22; P_OPT = ""
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      VMORE = 3
+      LOOP
+        LCHRFNO = FNO
+        FNO = PLN_FNO
+        PMSG = "Enter (S)croll, (E)nd :"
+        DREC(FNO) = ""
+        GOSUB 1000
+        FNO = LCHRFNO
+        PMSG = ""
+        VOPT = OCONV(VALUE,"MCU")
+        GOSUB 1070
+      WHILE VMORE DO REPEAT
+      GOSUB 1018
+      DSP_LNO<FNO> = LNO; DSP_OLNO<FNO> = LN_OLD_FST
+    CASE INQMODE AND PMSG = ""
+    CASE 1
+      MVNO = FLD_MVNO<FNO>
+      SMVNO = FLD_SMVNO<FNO>
+      Y = FLD_Y<FNO>
+      GOSUB 7100; GOSUB 1100
+  END CASE
+1016*
+  RETURN
+1017*
+  IF GUIFORM THEN
+    CRT GUI.LABEL:
+    CRT @(64,22):" Page":
+    CRT @(73,22):"of":
+    CRT GUI.END:
+  END ELSE
+    CRT @(64,22):"(Page 01 of 01)":
+  END
+  RETURN
+1018*
+  P_X = 64; P_Y = 22; P_VALUE = ""; P_OPT = "CL"
+  CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+  RETURN
+*
+1020*
+  GOSUB 1027
+  LOOP
+    SMVNO = LN_CNT + 1
+    OLD_LN_CNT = LN_CNT
+    Y = LN_Y + LN_SPC * MOD(SMVNO-1,LN_PG)
+    LNO = SMVNO
+    P_VALUE = LNO "R%3"
+    P_X = 58; P_Y = 22; P_OPT = ""
+    CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+    GOSUB 3100
+    GOSUB 7100; GOSUB 1100
+    LN_CNT = DCOUNT(DREC(FNO)<1,MVNO>,SVM)
+  WHILE LN_CNT > OLD_LN_CNT DO
+    P_VALUE = INT(LNO/LN_PG+.9) "R%2"
+    P_X = 70; P_Y = 22; P_OPT = ""
+    P_VALUE<2> = INT(LN_CNT/LN_PG+.9) "R%2"
+    P_X<2> = 76; P_Y<2> = 22
+    CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+  REPEAT
+  LNO = LN_CNT
+  GOSUB 1028
+  RETURN
+1027*
+  IF GUIFORM THEN
+    CRT GUI.LABEL:
+    CRT @(52,22):" Line"
+    CRT GUI.END:
+  END ELSE
+    CRT @(52,22):"(Line    ),":
+  END
+  RETURN
+1028*
+  IF GUIFORM THEN
+    CRT GUI.LABEL:
+    CRT @(52,22):" ":
+    CRT @(58,22):" ":
+    CRT GUI.END:
+  END ELSE
+    CRT @(52,22):SPACE(11):
+  END
+  RETURN
+*
+1040*
+  GOSUB 1027
+  LOOP
+    MVNO = LN_CNT + 1
+    OLD_LN_CNT = LN_CNT
+    Y = LN_Y + LN_SPC * MOD(MVNO-1,LN_PG)
+    LNO = MVNO
+    P_VALUE = LNO "R%3"
+    P_X = 58; P_Y = 22; P_OPT = ""
+    CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+    GOSUB 3100
+    GOSUB 7100; GOSUB 1100
+    LN_CNT = DCOUNT(DREC(FNO),VM)
+  WHILE LN_CNT > OLD_LN_CNT DO
+    P_VALUE = INT(LNO/LN_PG+.9) "R%2"
+    P_X = 70; P_Y = 22; P_OPT = ""
+    P_VALUE<2> = INT(LN_CNT/LN_PG+.9) "R%2"
+    P_X<2> = 76; P_Y<2> = 22
+    CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+  REPEAT
+  LNO = LN_CNT
+  GOSUB 1028
+  RETURN
+*
+1070*
+  BEGIN CASE
+    CASE VOPT = "" OR VOPT = "END" OR VOPT = "E" 
+      VMORE = 0
+    CASE VOPT = "" OR VOPT = "S" OR VOPT = "SF"
+      LNO = 1 + INT((LNO-1)/LN_PG) * LN_PG + LN_PG
+      IF LNO > LN_CNT THEN LNO = 1
+      GOSUB 3100
+    CASE VOPT = "SR"
+      LNO = 1 + INT((LNO-1)/LN_PG) * LN_PG - LN_PG
+      IF LNO < 1 THEN LNO = LN_CNT
+      GOSUB 3100
+    CASE VOPT = "ST"
+      LNO = 1; GOSUB 3100
+    CASE VOPT = "SB"
+      LNO = LN_CNT; GOSUB 3100
+    CASE VOPT[1,1] = "S" AND NUM(VOPT[2,99])
+      LN_NO = VOPT[2,99] + 0
+      IF LN_NO < 1 OR LN_NO > LN_CNT THEN
+        ERRMSG = "*** Invalid Selection ***"
+        GOSUB 91000
+      END
+      LN = LN_NO; GOSUB 3100
+    CASE INQMODE OR VMORE = 3
+    CASE VOPT = "A"
+      ON VMORE GOSUB 1020,1040
+      GOSUB 3100
+      P_VALUE = INT(LN_CNT/LN_PG+.9) "R%2"
+      P_X = 76; P_Y = 22; P_OPT = ""
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+    CASE VOPT = "D"
+      DELFNO = FNO
+      FNO = PLN_FNO
+      PMSG = "Enter Line Number :"
+      DREC(FNO) = ""
+      GOSUB 1000
+      FNO = DELFNO
+      PMSG = ""
+      LN_NO = VALUE
+      BEGIN CASE
+        CASE LN_NO = "" OR LN_NO = "END"
+          LN_NO = 0
+        CASE NOT(NUM(LN_NO))
+          LN_NO = 0
+        CASE LN_NO < 1 OR LN_NO > LN_CNT
+        CASE 1
+          LNO = LN_NO
+          BEGIN CASE
+            CASE VMORE = 1
+              DREC(FNO) = DELETE(DREC(FNO),1,MVNO,LNO)
+              LN_CNT = DCOUNT(DREC(FNO)<1,MVNO>,SVM)
+            CASE VMORE = 2
+              DREC(FNO) = DELETE(DREC(FNO),1,LNO,0)
+              LN_CNT = DCOUNT(DREC(FNO),VM)
+          END CASE
+          IF LNO > LN_CNT THEN LNO = LNO - 1
+          LN_OLD_FST = 0; GOSUB 3100
+          P_VALUE = INT(LN_CNT/LN_PG+.9) "R%2"
+          P_X = 76; P_Y = 22; P_OPT = ""
+          CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      END CASE
+    CASE VOPT = "C"
+      CHGFNO = FNO
+      FNO = PLN_FNO
+      PMSG = "Enter Line Number :"
+      DREC(FNO) = ""
+      GOSUB 1000
+      FNO = CHGFNO
+      PMSG = ""
+      LN_NO = VALUE
+      BEGIN CASE
+        CASE LN_NO = "" OR LN_NO = "END"
+          LN_NO = 0
+        CASE NOT(NUM(LN_NO))
+          LN_NO = 0
+        CASE LN_NO < 1 OR LN_NO > LN_CNT
+        CASE 1
+          GOSUB 1027
+          LNO = LN_NO
+          P_VALUE = LNO "R%3"
+          P_X = 58; P_Y = 22; P_OPT = ""
+          CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+          BEGIN CASE
+            CASE VMORE = 1
+              SMVNO = LN_NO
+              GOSUB 3100
+              Y = LN_Y + LN_SPC * MOD(SMVNO-1,LN_PG)
+            CASE VMORE = 2
+              MVNO = LN_NO
+              GOSUB 3100
+              Y = LN_Y + LN_SPC * MOD(MVNO-1,LN_PG)
+          END CASE
+*                  GOSUB 7100; GOSUB 1100; GOSUB 1028
+          GOSUB 7000; GOSUB 7100; GOSUB 1100; GOSUB 1028
+      END CASE
+  END CASE
+  RETURN
+*
+*---- Get value
+1100*
+  X = FLD_X<FNO>
+  IF PMSG = "" THEN
+    X = X - X_ADJ<SCNO>
+  END
+  IF DREC(FNO)<1,MVNO,SMVNO> # "" THEN
+    O.R = "O"
+    IF FLD_CNV<FNO> = "" THEN
+      DEFAULT = DREC(FNO)<1,MVNO,SMVNO>
+    END ELSE
+      DEFAULT = OCONV(DREC(FNO)<1,MVNO,SMVNO>,FLD_CNV<FNO>)
+    END
+  END
+*C36747 v
+  BEGIN CASE
+    CASE FLD_CNV<FNO> = "D2/"
+      TYP = 6
+  END CASE
+*C36747 ^
+  CALL EDIT.SUB
+  BEGIN CASE
+    CASE VALUE # "???"
+      GOTO 1130
+    CASE IDNUM OR INQMODE
+      GOTO 1130
+    CASE FLD_IPTR<FNO> = 0
+      GOTO 1130
+  END CASE
+  MAT GEN.XREF.REC = ""
+  GXR.CO = CONO
+  GXR.NAME = "GEN.CODE"
+  GXR.FILE = FILE.VARS(TBL_LOC<FLD_IPTR<FNO>>)
+  GXR.SORT.FILE = TBL_IDX<FLD_IPTR<FNO>>
+  CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+  GOSUB 700
+  OLD1_FNO = FNO
+  FOR IDNO = 1 TO IDCNT
+    FNO = ID_FNO<IDNO>
+    GOSUB 3110
+  NEXT IDNO
+  GOSUB 3000
+  FNO = OLD1_FNO
+  IF GXR.ID = "" THEN
+    GOSUB 7100; GOTO 1100
+  END ELSE
+    VALUE = GXR.ID
+    GXR.ID = DREC(FNO)<1,FLD_MVNO<FNO>,FLD_SMVNO<FNO>>
+    DREC(FNO)<1,FLD_MVNO<FNO>,FLD_SMVNO<FNO>> = VALUE
+    GOSUB 3110
+    DREC(FNO)<1,FLD_MVNO<FNO>,FLD_SMVNO<FNO>> = GXR.ID
+  END
+1130*
+  BEGIN CASE
+    CASE VALUE = "END"
+    CASE CHGMODE<1,SCN_LOC> AND VALUE = DREC(FNO)<1,MVNO,SMVNO>
+    CASE 1
+**** 
+* C30029 v If a field was multivalued the DREC was filled in wrong below.
+*          The entire multivalued attribute was inserted into value 2 of 
+*          DREC(2). (Example : If ATT5 = 1:VM:2, then ATT5 got inserted
+*          into DREC(2)<1,2> so DREC(2) ended up looking like VM:1:VM:2
+*          when it should also look like 1:VM:2)
+      IF MVNO < 1 OR SMVNO < 1 THEN ; * changed from 0's to 1's
+        OLD_VALUE = DREC(FNO)
+        DREC(FNO) = VALUE
+      END ELSE
+        OLD_VALUE = DREC(FNO)<1,MVNO,SMVNO>
+* C30292 v When cloning, VALUE is the entire multivalued field. But when
+*          editing a line, VALUE is a single valued field representing
+*          the multivalue chosen. If VALUE is single valued, insert whole
+*          field. Otherwise, specify the value and subvalue.
+        VCOUNT = DCOUNT(VALUE,VM)                             ; * C30292
+        IF VCOUNT = 1 THEN                                    ; * C30292
+          DREC(FNO)<1,MVNO,SMVNO> = VALUE
+        END ELSE                                              ; * C30292
+          DREC(FNO)<1,MVNO,SMVNO> = VALUE<1,MVNO,SMVNO>       ; * C30292
+        END                                                   ; * C30292
+* C30292 ^
+      END
+* C30029 ^
+      IF FLD_IPTR<FNO> > 0 THEN
+        TBL_TO_READ = FLD_IPTR<FNO>
+        IOFLG = 2; GOSUB 4010
+        IF IOFLG = 2 THEN
+          DREC(FNO)<1,MVNO,SMVNO> = OLD_VALUE
+          GOSUB 7100; GOTO 1100
+        END
+        LOOP WHILE TBL_TO_READ # "" DO
+          GOSUB 4010
+        REPEAT
+        TBL_READ = ""
+        GOSUB 4090
+      END
+  END CASE
+  RETURN
+*
+*---- Display Data
+3000*
+  FOR I = 1 TO FLDCNT
+    FNO = I + 1
+    GOSUB 3110
+  NEXT I
+  RETURN
+3100*
+  BEGIN CASE
+    CASE FLD_HIDE<FNO> = 1
+    CASE FLD_HIDE<FNO> = 2 AND NOT(PRT_CRT)
+    CASE FLD_SMVNO<FNO> < 1 AND FLD_MVNO<FNO> < 1
+      GOSUB 3210
+    CASE FLD_SMVNO<FNO> < 1
+      MVNO = FLD_MVNO<FNO>
+      GOSUB 3310
+      IF LN_OLD_FST # LN_FST THEN
+        P_VALUE = INT(LN_LST/LN_PG+.9) "R%2"
+        P_X = 70; P_Y = 22; P_OPT = ""
+        CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+        GOSUB 3220
+      END
+    CASE FLD_MVNO<FNO> < 1
+      SMVNO = FLD_SMVNO<FNO>
+      GOSUB 3310
+      IF LN_OLD_FST # LN_FST THEN
+        P_VALUE = INT(LN_LST/LN_PG+.9) "R%2"
+        P_X = 70; P_Y = 22; P_OPT = ""
+        CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+        GOSUB 3230
+      END
+    CASE FLD_LCHR<FNO> # ""
+      LCHR = FLD_LCHR<FNO>
+      MVNO = FLD_MVNO<FNO>; SMVNO = FLD_SMVNO<FNO>
+      GOSUB 3310
+      IF LN_OLD_FST # LN_FST THEN
+        P_VALUE = INT(LN_LST/LN_PG+.9) "R%2"
+        P_X = 70; P_Y = 22; P_OPT = ""
+        CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+        GOSUB 3240
+      END
+    CASE 1
+      GOSUB 3250
+  END CASE
+  RETURN
+3110*
+  BEGIN CASE
+    CASE FLD_HIDE<FNO> = 1
+    CASE FLD_HIDE<FNO> = 2 AND NOT(PRT_CRT)
+    CASE FLD_SMVNO<FNO> < 1 AND FLD_MVNO<FNO> < 1
+      GOSUB 3210
+    CASE FLD_SMVNO<FNO> < 1
+      MVNO = FLD_MVNO<FNO>
+      LNO = DSP_LNO<FNO>
+      LN_OLD_FST = 0
+      LN_CNT = DCOUNT(DREC(FNO)<1,MVNO>,SVM)
+      GOSUB 3310
+      IF LN_OLD_FST # LN_FST THEN
+        GOSUB 3220
+      END
+      DSP_OLNO<FNO> = LN_OLD_FST
+    CASE FLD_MVNO<FNO> < 1
+      SMVNO = FLD_SMVNO<FNO>
+      LNO = DSP_LNO<FNO>
+      LN_OLD_FST = 0
+      LN_CNT = DCOUNT(DREC(FNO),VM)
+      GOSUB 3310
+      IF LN_OLD_FST # LN_FST THEN
+        GOSUB 3230
+      END
+      DSP_OLNO<FNO> = LN_OLD_FST
+    CASE FLD_LCHR<FNO> # ""
+      LCHR = FLD_LCHR<FNO>
+      MVNO = FLD_MVNO<FNO>; SMVNO = FLD_SMVNO<FNO>
+      LNO = DSP_LNO<FNO>
+      LN_OLD_FST = 0
+      LN_CNT = DCOUNT(DREC(FNO),LCHR)
+      GOSUB 3310
+      IF LN_OLD_FST # LN_FST THEN
+        GOSUB 3240
+      END
+      DSP_OLNO<FNO> = LN_OLD_FST
+    CASE 1
+      GOSUB 3250
+  END CASE
+  RETURN
+3210*
+  Y_L = FLD_Y<FNO>
+  PVALUE = DREC(FNO)<1,1>
+  GOSUB 3300
+  RETURN
+3220*
+  LN_OLD_FST = LN_FST
+  LN_CNTR = 1
+  IF FLD_LCNT<FNO> THEN
+    FOR LN_NO = LN_FST TO LN_LST
+      Y_L = LN_Y + LN_SPC * MOD(LN_NO-1,LN_PG)
+      PVALUE = DREC(FNO)<1,MVNO,LN_NO>
+      GOSUB 3300
+      LCNT = FLD_LCNT<FNO>
+      SAVE_FNO = FNO
+      FOR CLN = 1 TO LCNT
+        FNO = FLD_LPTR<SAVE_FNO,CLN>
+        PVALUE = DREC(FNO)<1,MVNO,LN_NO>
+        GOSUB 3300
+      NEXT CLN
+      FNO = SAVE_FNO
+      LN_CNTR = LN_CNTR + 1
+    NEXT LN_NO
+  END ELSE
+    FOR LN_NO = LN_FST TO LN_LST
+      Y_L = LN_Y + LN_SPC * MOD(LN_NO-1,LN_PG)
+      PVALUE = DREC(FNO)<1,MVNO,LN_NO>
+      GOSUB 3300
+      LN_CNTR = LN_CNTR + 1
+    NEXT LN_NO
+  END
+  GOSUB 3320
+  RETURN
+3230*
+  LN_OLD_FST = LN_FST
+  LN_CNTR = 1
+  IF FLD_LCNT<FNO> THEN
+    FOR LN_NO = LN_FST TO LN_LST
+      Y_L = LN_Y + LN_SPC * MOD(LN_NO-1,LN_PG)
+      PVALUE = DREC(FNO)<1,LN_NO,SMVNO>
+      GOSUB 3300
+      LCNT = FLD_LCNT<FNO>
+      SAVE_FNO = FNO
+      FOR CLN = 1 TO LCNT
+        FNO = FLD_LPTR<SAVE_FNO,CLN>
+        PVALUE = DREC(FNO)<1,LN_NO,SMVNO>
+        GOSUB 3300
+      NEXT CLN
+      FNO = SAVE_FNO
+      LN_CNTR = LN_CNTR + 1
+    NEXT LN_NO
+  END ELSE
+    FOR LN_NO = LN_FST TO LN_LST
+      Y_L = LN_Y + LN_SPC * MOD(LN_NO-1,LN_PG)
+      PVALUE = DREC(FNO)<1,LN_NO,SMVNO>
+      GOSUB 3300
+      LN_CNTR = LN_CNTR + 1
+    NEXT LN_NO
+  END
+  GOSUB 3320
+  RETURN
+3240*
+  LN_OLD_FST = LN_FST
+  LN_CNTR = 1
+  IF FLD_LCNT<FNO> THEN
+    FOR LN_NO = LN_FST TO LN_LST
+      Y_L = LN_Y + LN_SPC * MOD(LN_NO-1,LN_PG)
+      PVALUE = FIELD(DREC(FNO)<1,MVNO,SMVNO>,LCHR,LN_NO)
+      GOSUB 3300
+      LCNT = FLD_LCNT<FNO>
+      SAVE_FNO = FNO
+      FOR CLN = 1 TO LCNT
+        FNO = FLD_LPTR<SAVE_FNO,CLN>
+        PVALUE = FIELD(DREC(FNO)<1,MVNO,SMVNO>,LCHR,LN_NO)
+        GOSUB 3300
+      NEXT CLN
+      FNO = SAVE_FNO
+      LN_CNTR = LN_CNTR + 1
+    NEXT LN_NO
+  END ELSE
+    FOR LN_NO = LN_FST TO LN_LST
+      Y_L = LN_Y + LN_SPC * MOD(LN_NO-1,LN_PG)
+      PVALUE = FIELD(DREC(FNO)<1,MVNO,SMVNO>,LCHR,LN_NO)
+      GOSUB 3300
+      LN_CNTR = LN_CNTR + 1
+    NEXT LN_NO
+  END
+  GOSUB 3320
+  RETURN
+3250*
+  Y_L = FLD_Y<FNO>
+  PVALUE = DREC(FNO)<1,FLD_MVNO<FNO>,FLD_SMVNO<FNO>>
+  GOSUB 3300
+  RETURN
+3300*
+  X_L = FLD_X<FNO>
+  F_L = FLD_FMT<FNO>
+  IF FLD_CNV<FNO> # "" THEN
+    PVALUE = OCONV(PVALUE,FLD_CNV<FNO>)
+  END
+  BEGIN CASE
+    CASE TRANSMODE
+      LOCATE SCN_FLDS<FNO> IN IMGDEF,1 SETTING ILOC THEN
+        IMGREC(ILOC) = PVALUE
+      END ELSE
+        STMT = PVALUE F_L
+        ERRMSG = SCN_FLDS<FNO>:"=":STMT:"|"; GOSUB 91000
+      END
+    CASE NOT(PRT_CRT)
+      STMT = PVALUE F_L
+      Y_L = Y_L + 1
+      L = LEN(STMT) + 1
+      SCN_HDR_PRT<Y_L> = SCN_HDR_PRT<Y_L>[1,X_L]:STMT:SCN_HDR_PRT<Y_L>[X_L+L,999]
+      Y_L = Y_L - 1
+******************************************
+*CASE PC.PORT.TYPE = "termIte"
+*   IF Y_L > FLD_Y<FNO> THEN
+*      CTL_ID = SCN_FLDS<FNO>:(Y_L - FLD_Y<FNO> + 1):",EDIT"
+*   END ELSE
+*      CTL_ID = SCN_FLDS<FNO>:",EDIT"
+*   END
+*   CALL PIX_GUI_CONTROL_SET_VALUE(GUI_APP_NAME,CTL_ID,PVALUE,ERRMSG)
+******************************************
+    CASE SCNO = 1
+      M_L = FIELD(F_L,"#",2)
+      IF X_L <= SCN_X THEN
+        IF X_L + M_L > 80 THEN
+          M_L = 80 - X_L
+          PVALUE = (PVALUE F_L)[1,M_L]
+          F_L = FIELD(F_L,"#",1):"#":M_L
+        END
+        BEGIN CASE
+          CASE GUIFORM
+            CRT GUI.LABEL:
+            IF PVALUE = "" THEN
+              CRT @(X_L,Y_L):" ":
+            END ELSE
+              CRT @(X_L,Y_L):PVALUE:
+            END
+            CRT GUI.END:
+          CASE ETX.EMBED
+            CRT @(X_L,Y_L) : PVALUE F_L :
+          CASE 1
+            CRT @(X_L,Y_L) :ETX.DIN: PVALUE F_L :ETX.DIN.OFF:
+        END CASE
+      END
+    CASE 1
+      M_L = FIELD(F_L,"#",2)
+      BEGIN CASE
+        CASE X_L > SCN_X
+          X_L = X_L - X_ADJ<SCNO>
+          IF X_L + M_L > 53 THEN
+            M_L = 53 - X_L
+            PVALUE = (PVALUE F_L)[1,M_L]
+            F_L = FIELD(F_L,"#",1):"#":M_L
+          END
+          BEGIN CASE
+            CASE GUIFORM
+              CRT GUI.LABEL:
+              IF PVALUE = "" THEN
+                CRT @(X_L,Y_L):" ":
+              END ELSE
+                CRT @(X_L,Y_L):PVALUE:
+              END
+              CRT GUI.END:
+            CASE ETX.EMBED
+              CRT @(X_L,Y_L) : PVALUE F_L :
+            CASE 1
+              CRT @(X_L,Y_L) :ETX.DIN: PVALUE F_L :ETX.DIN.OFF:
+          END CASE
+        CASE X_L + M_L > 80
+          M_L = M_L + X_L - 80
+          PVALUE = (PVALUE F_L)[81 - X_L,M_L]
+          F_L = FIELD(F_L,"#",1):"#":M_L
+          BEGIN CASE
+            CASE GUIFORM
+              CRT GUI.LABEL:
+              IF PVALUE = "" THEN
+                CRT @(0,Y_L):" ":
+              END ELSE
+                CRT @(0,Y_L):PVALUE:
+              END
+              CRT GUI.END:
+            CASE ETX.EMBED
+              CRT @(0,Y_L) : PVALUE F_L :
+            CASE 1
+              CRT @(0,Y_L) :ETX.DIN: PVALUE F_L :ETX.DIN.OFF:
+          END CASE
+      END CASE
+  END CASE
+  RETURN
+3310*
+  LN_PG = FLD_LINES<FNO>; LN_SPC = FLD_LNSPC<FNO>
+  LN_Y = FLD_Y<FNO>
+  LN_FST = 1 + INT((LNO-1)/LN_PG) * LN_PG
+  LN_LST = LN_FST + LN_PG - 1
+  IF LN_LST > LN_CNT THEN LN_LST = LN_CNT
+  RETURN
+3320*
+  IF FLD_LCNT<FNO> THEN
+    FOR LN_NO = LN_CNTR TO LN_PG
+      Y_L = LN_Y + LN_SPC * MOD(LN_NO-1,LN_PG)
+      PVALUE = ""; GOSUB 3300
+      SAVE_FNO = FNO; LCNT = FLD_LCNT<FNO>
+      FOR CLN = 1 TO LCNT
+        FNO = FLD_LPTR<SAVE_FNO,CLN>
+        PVALUE = ""; GOSUB 3300
+      NEXT CLN
+      FNO = SAVE_FNO
+    NEXT LN_NO
+  END ELSE
+    FOR LN_NO = LN_CNTR TO LN_PG
+      Y_L = LN_Y + LN_SPC * MOD(LN_NO-1,LN_PG)
+      PVALUE = ""; GOSUB 3300
+    NEXT LN_NO
+  END
+  RETURN
+3500*
+  FOR I = 1 TO FLDCNT
+    FNO = I + 1
+    GOSUB 3510
+  NEXT I
+  RETURN
+3510*
+  BEGIN CASE
+    CASE FLD_HIDE<FNO> = 1
+    CASE FLD_SMVNO<FNO> < 1 AND FLD_MVNO<FNO> < 1
+      GOSUB 3550
+    CASE FLD_SMVNO<FNO> < 1
+      MVNO = FLD_MVNO<FNO>
+      LN_PG = FLD_LINES<FNO>; LN_SPC = FLD_LNSPC<FNO>
+      LN_Y = FLD_Y<FNO>
+      GOSUB 3520
+    CASE FLD_MVNO<FNO> < 1
+      SMVNO = FLD_SMVNO<FNO>
+      LN_PG = FLD_LINES<FNO>; LN_SPC = FLD_LNSPC<FNO>
+      LN_Y = FLD_Y<FNO>
+      GOSUB 3520
+    CASE FLD_LCHR<FNO> # ""
+      MVNO = FLD_MVNO<FNO>; SMVNO = FLD_SMVNO<FNO>
+      LN_PG = FLD_LINES<FNO>; LN_SPC = FLD_LNSPC<FNO>
+      LN_Y = FLD_Y<FNO>
+      GOSUB 3520
+    CASE 1
+      GOSUB 3550
+  END CASE
+  RETURN
+3520*
+  LCNT = FLD_LCNT<FNO>
+  IF LCNT THEN
+    FOR LN_NO = 1 TO LN_PG
+      Y_L = LN_Y + LN_SPC * MOD(LN_NO-1,LN_PG)
+      GOSUB 3570
+      SAVE_FNO = FNO
+      FOR CLN = 1 TO LCNT
+        FNO = FLD_LPTR<SAVE_FNO,CLN>
+        GOSUB 3570
+      NEXT CLN
+      FNO = SAVE_FNO
+    NEXT LN_NO
+  END ELSE
+    FOR LN_NO = 1 TO LN_PG
+      Y_L = LN_Y + LN_SPC * MOD(LN_NO-1,LN_PG)
+      GOSUB 3570
+    NEXT LN_NO
+  END
+  RETURN
+3550*
+  Y_L = FLD_Y<FNO>
+  GOSUB 3570
+  RETURN
+3570*
+  X_L = FLD_X<FNO>
+  F_L = FLD_FMT<FNO>
+  IF SCNO = 1 THEN
+    M_L = FIELD(F_L,"#",2)
+    IF X_L <= SCN_X THEN
+      IF X_L + M_L > 80 THEN
+        M_L = 80 - X_L
+      END
+      IF ETX.EMBED THEN
+        IF (X_L > 0) AND (X_L + M_L < 80) THEN
+          CRT @(X_L-1,Y_L):ETX.DIN.OFF:SPACE(M_L):ETX.DIN.OFF:
+          CRT @(X_L-1,Y_L):ETX.DIN:
+        END ELSE
+          CRT @(X_L,Y_L):SPACE(M_L):
+        END
+      END ELSE
+        CRT @(X_L,Y_L):ETX.DIN:SPACE(M_L):ETX.DIN.OFF:
+      END
+    END
+  END ELSE
+    M_L = FIELD(F_L,"#",2)
+    BEGIN CASE
+      CASE X_L > SCN_X
+        X_L = X_L - X_ADJ<SCNO>
+        IF X_L + M_L > 53 THEN
+          M_L = 53 - X_L
+        END
+        IF ETX.EMBED THEN
+          IF X_L > 0 THEN
+            CRT @(X_L-1,Y_L):ETX.DIN.OFF:SPACE(M_L):ETX.DIN.OFF:
+            CRT @(X_L-1,Y_L):ETX.DIN:
+          END ELSE
+            CRT @(X_L,Y_L):SPACE(M_L):
+          END
+        END ELSE
+          CRT @(X_L,Y_L):ETX.DIN:SPACE(M_L):ETX.DIN.OFF:
+        END
+      CASE X_L + M_L > 80
+        M_L = M_L + X_L - 80
+        IF ETX.EMBED THEN
+          CRT @(0,Y_L):SPACE(M_L):
+        END ELSE
+          CRT @(0,Y_L):ETX.DIN:SPACE(M_L):ETX.DIN.OFF:
+        END
+    END CASE
+  END
+  RETURN
+4010*
+  OLD_FNO = FNO
+  TTR = TBL_TO_READ<1>
+  TBL_READ<-1> = TTR
+  TBL_TO_READ = DELETE(TBL_TO_READ,1,0,0)
+  IDNO = 0; TBL_KEY(TTR) = ""
+  ICNT = DCOUNT(TBL_ID(TTR),VM)
+  FOR IL = 1 TO ICNT
+    BEGIN CASE
+      CASE TBL_ID(TTR)<1,IL> = "CO"
+        TBL_KEY(TTR) = TBL_KEY(TTR):CONO
+      CASE TBL_ID_TYPE(TTR)<1,IL> = "T"
+        TBL_KEY(TTR) = TBL_KEY(TTR):TBL_ID(TTR)<1,IL>
+      CASE 1
+        IDNO = IDNO + 1
+        FNO = TBL_ID_FNO(TTR)<IL>
+*
+*---- Multiple Multi & Sub multi values are not supported for Item IDs
+*---- Also, MVNO & SMVNO cannot reference a different ID.
+*
+        IF NOT(NUM(FLD_MVNO<FNO>)) THEN
+          LOCATE FNO IN MVNO_REF,1 SETTING III THEN
+            RNO = MVNO_RPTR<III>
+            GOSUB 4030
+          END ELSE
+            FLD_MVNO<FNO> = 9999
+          END
+        END
+        IF NOT(NUM(FLD_SMVNO<FNO>)) THEN
+          LOCATE FNO IN SMVNO_REF,1 SETTING III THEN
+            RNO = SMVNO_RPTR<III>
+            GOSUB 4050
+          END ELSE
+            FLD_SMVNO<FNO> = 9999
+          END
+        END
+        BEGIN CASE
+          CASE FLD_SMVNO<FNO> < 1
+            IF IL = ICNT THEN
+              MVKEY = FLD_MVNO<FNO>; SMVKEY = 0
+              KEYCNT = DCOUNT(DREC(FNO)<1,MVKEY>,SVM)
+              IDVALUE = CHANGE(DREC(FNO)<1,MVKEY>,SVM,AM)
+            END ELSE
+              IDVALUE = DREC(FNO)<1,FLD_MVNO<FNO>,1>
+            END
+          CASE FLD_MVNO<FNO> < 1
+            IF IL = ICNT THEN
+              MVKEY = 0; SMVKEY = FLD_SMVNO<FNO>
+              KEYCNT = DCOUNT(DREC(FNO),VM)
+              IDVALUE = DREC(FNO)<1,1,SMVKEY>
+              FOR V = 2 TO KEYCNT
+                IDVALUE<V> = DREC(FNO)<1,V,SMVKEY>
+              NEXT V
+            END ELSE
+              IDVALUE = DREC(FNO)<1,1,FLD_SMVNO<FNO>>
+            END
+          CASE 1
+            IDVALUE = DREC(FNO)<1,FLD_MVNO<FNO>,FLD_SMVNO<FNO>>
+        END CASE
+        IF KEYCNT = 1 THEN
+          TBL_KEY(TTR) = TBL_KEY(TTR):IDVALUE
+        END ELSE
+          TBLKEY = TBL_KEY(TTR)
+          TBL_KEY(TTR) = TBLKEY:IDVALUE
+          FOR V = 2 TO KEYCNT
+            TBL_KEY(TTR)<V> = TBLKEY:IDVALUE<V>
+          NEXT V
+        END
+    END CASE
+  NEXT IL
+  READ TBL_REC(TTR) FROM FILE.VARS(TBL_LOC<TTR>), TBL_KEY(TTR)<1> ELSE
+    TBL_REC(TTR) = ""
+    BEGIN CASE
+      CASE DREC(FNO)<1,FLD_MVNO<FNO>,FLD_SMVNO<FNO>> = ""
+      CASE IOFLG = 1
+        ERRMSG = "Cannot locate (":TBL_IDX<TTR>:") record # ":DREC(FNO)<1,MVNO,SMVNO>
+        GOSUB 91000
+      CASE IOFLG = 2
+        ERRMSG = "Cannot locate (":TBL_IDX<TTR>:") record # ":DREC(FNO)<1,MVNO,SMVNO>
+        GOSUB 91000; GOTO 4019
+    END CASE
+  END
+  CNT = DCOUNT(TBL_FLD_LOC<TTR>,VM)
+  IF IOFLG THEN
+    ILCNT = DCOUNT(TBL_S_ID<TTR>,VM)
+    FOR IL = 1 TO ILCNT
+      LOCATE TBL_S_ID<TTR,IL> IN TBL_READ,1 SETTING RLOC ELSE
+        LOCATE TBL_S_ID<TTR,IL> IN TBL_TO_READ SETTING RLOC ELSE
+          TBL_TO_READ<RLOC> = TBL_S_ID<TTR,IL>
+        END
+      END
+    NEXT IL
+    FOR IL = 1 TO CNT
+      FNO = TBL_FLD_LOC<TTR,IL>
+      DREC(FNO) = TBL_REC(TTR)<FLD_LOC<FNO>>
+      IF FLD_IPTR<FNO> > 0 THEN
+        LOCATE FLD_IPTR<FNO> IN TBL_TO_READ,1 SETTING RLOC ELSE
+          TBL_TO_READ<RLOC> = FLD_IPTR<FNO>
+        END
+      END
+    NEXT IL
+    GOSUB 4070
+    IF UPDMODE THEN GOTO 4015
+    FOR IL = 1 TO CNT
+      FNO = TBL_FLD_LOC<TTR,IL>
+      BEGIN CASE
+        CASE MVNO_RCNT AND SMVNO_RCNT
+          LOCATE FNO IN MVNO_REF,1 SETTING IR THEN
+            RNO = MVNO_RPTR<IR>
+            GOSUB 4030
+          END
+          LOCATE FNO IN SMVNO_REF,1 SETTING IR THEN
+            RNO = SMVNO_RPTR<IR>
+            GOSUB 4050
+          END
+        CASE MVNO_RCNT
+          LOCATE FNO IN MVNO_REF,1 SETTING IR THEN
+            RNO = MVNO_RPTR<IR>
+            GOSUB 4030
+          END
+        CASE SMVNO_RCNT
+          LOCATE FNO IN SMVNO_REF,1 SETTING IR THEN
+            RNO = SMVNO_RPTR<IR>
+            GOSUB 4050
+          END
+      END CASE
+      DSP_FNO<-1> = FNO
+      GOSUB 3110
+    NEXT IL
+4015*
+  END ELSE
+    FOR IL = 1 TO CNT
+      FNO = TBL_FLD_LOC<TTR,IL>
+      DREC(FNO) = TBL_REC(TTR)<FLD_LOC<FNO>>
+    NEXT IL
+    GOSUB 4070
+  END
+  IOFLG = 1
+4019*
+  KEYCNT = 1
+  FNO = OLD_FNO
+  RETURN
+*
+4030*
+  IF MVNO_SMV<FNO> = 0 THEN
+    IF SCN_CMPS<1,SCN_LOC> THEN
+      XNO = SCN_CMPS<1,SCN_LOC> ; * causes non-numeric (= "Y")
+    END ELSE
+      XNO = 1
+    END
+  END ELSE
+    XNO = MVNO_SMV<FNO>
+  END
+  BEGIN CASE
+    CASE DREC(RNO) = "ALL"
+      BEGIN CASE
+        CASE SCN_FLDS<RNO> # "ESTJ_COMP"
+          FLD_MVNO<FNO> = 1
+        CASE MVNO_SMV<FNO> > 1
+          FLD_MVNO<FNO> = MVNO_SMV<FNO>
+        CASE XNO > 1
+          FLD_MVNO<FNO> = XNO
+        CASE MVNO_MV<FNO> > 1
+          FLD_MVNO<FNO> = MVNO_MV<FNO>
+        CASE 1
+          FLD_MVNO<FNO> = 1
+      END CASE
+    CASE NUM(DREC(RNO)<1,MVNO_MV<FNO>,XNO>)
+      FLD_MVNO<FNO> = DREC(RNO)<1,MVNO_MV<FNO>,XNO> + 0
+      IF FLD_MVNO<FNO> < 1 THEN FLD_MVNO<FNO> = 9999
+    CASE 1
+      FLD_MVNO<FNO> = 1
+  END CASE
+  RETURN
+*
+4050*
+  IF SMVNO_SMV<FNO> = 0 THEN
+    IF SCN_CMPS<1,SCN_LOC> THEN
+      XNO = SCN_CMPS<1,SCN_LOC> ; * causes nonnumeric (= "Y")
+    END ELSE
+      XNO = 1
+    END
+  END ELSE
+    XNO = SMVNO_SMV<FNO>
+  END
+  BEGIN CASE
+    CASE DREC(RNO) = "ALL"
+      BEGIN CASE
+        CASE SCN_FLDS<RNO> # "ESTJ_COMP"
+          FLD_SMVNO<FNO> = 1
+        CASE SMVNO_SMV<FNO> > 1
+          FLD_SMVNO<FNO> = SMVNO_SMV<FNO>
+        CASE XNO > 1
+          FLD_SMVNO<FNO> = XNO
+        CASE SMVNO_MV<FNO> > 1
+          FLD_SMVNO<FNO> = SMVNO_MV<FNO>
+        CASE 1
+          FLD_SMVNO<FNO> = 1
+      END CASE
+    CASE NUM(DREC(RNO)<1,SMVNO_MV<FNO>,XNO>)
+      FLD_SMVNO<FNO> = DREC(RNO)<1,SMVNO_MV<FNO>,XNO> + 0
+      IF FLD_SMVNO<FNO> < 1 THEN FLD_SMVNO<FNO> = 9999
+    CASE 1
+      FLD_SMVNO<FNO> = 1
+  END CASE
+  RETURN
+*
+4070*
+  BEGIN CASE
+    CASE KEYCNT = 1
+    CASE SMVKEY
+      FOR V = 2 TO KEYCNT
+        READ TBL_REC(TTR) FROM FILE.VARS(TBL_LOC<TTR>), TBL_KEY(TTR)<V> THEN
+          FOR IL = 1 TO CNT
+            FNO = TBL_FLD_LOC<TTR,IL>
+            DREC(FNO)<1,V> = TBL_REC(TTR)<FLD_LOC<FNO>,1>
+          NEXT IL
+        END
+      NEXT V
+    CASE MVKEY
+      FOR V = 2 TO KEYCNT
+        READ TBL_REC(TTR) FROM FILE.VARS(TBL_LOC<TTR>), TBL_KEY(TTR)<V> THEN
+          FOR IL = 1 TO CNT
+            FNO = TBL_FLD_LOC<TTR,IL>
+            DREC(FNO)<1,MVKEY,V> = TBL_REC(TTR)<FLD_LOC<FNO>,1,1>
+          NEXT IL
+        END
+      NEXT V
+  END CASE
+  RETURN
+*
+4090*
+  IF SCN_LOC = 1 THEN
+*---- Establish ESTJ_COMP if any ----*
+    SCN_CMPS = ORIG_CMPS
+    LOCATE "Y" IN SCN_CMPS<1>,1 SETTING TTTR ELSE
+      SCN_CMPS = ""
+      LOCATE "Y" IN PRT_CMPS<1>,1 SETTING TTTR ELSE
+        PRT_CMPS = ""; GOTO 4095
+      END
+    END
+    LOCATE "ESTIMATE.JOB" IN TBL_IDX,1 SETTING TTTR ELSE
+      SCN_CMPS = ""; PRT_CMPS = ""
+      GOTO 4095
+    END
+    COMP_NOS = TBL_REC(TTTR)<2>
+    IF COMP_NOS = "ALL" THEN
+      LOCATE "ESTIMATE" IN TBL_IDX,1 SETTING TTTR THEN
+        SSCN_CNT = TBL_REC(TTTR)<51>
+        COMP_NOS = 1
+        FOR ITTR = 2 TO SSCN_CNT
+          COMP_NOS<1,1,ITTR> = ITTR
+        NEXT ITTR
+      END ELSE
+        SSCN_CNT = 1
+        COMP_NOS = 1
+      END
+    END ELSE
+      SSCN_CNT = DCOUNT(COMP_NOS,SVM)
+    END
+*---- If only one component ----*
+    IF SSCN_CNT = 1 THEN
+      LOOP
+        LOCATE "Y" IN SCN_CMPS<1>,1 SETTING TTTR ELSE TTTR = 0
+      WHILE TTTR DO
+*        SCN_CMPS<1,TTTR> = COMP_NOS<1,1,1>
+        SCN_CMPS<1,TTTR> = 1
+      REPEAT
+      LOOP
+        LOCATE "Y" IN PRT_CMPS<1>,1 SETTING TTTR ELSE TTTR = 0
+      WHILE TTTR DO
+*        PRT_CMPS<1,TTTR> = COMP_NOS<1,1,1>
+        PRT_CMPS<1,TTTR> = 1
+      REPEAT
+      GOTO 4095
+    END
+*---- Duplicate the multi component screen with the # of components ----*
+*---- The # updated is the SMV # in the ESTIMATE.JOB file ----*
+*---- While the COMP_NOS is the MV # in the ESTIMATE file ----*
+    SCN_NAMES = FIELD(ORG_SCN_NAMES,",",1)
+    SSCN = SCN_NAMES
+    IF ORG_SCN_CMPS<1,1> = "Y" THEN
+*     SCN_CMPS = COMP_NOS<1,1,1>
+      SCN_CMPS = 1
+      FOR ITTR = 2 TO SSCN_CNT
+        SCN_NAMES = SCN_NAMES : "," : SSCN
+*        SCN_CMPS<1,ITTR> = COMP_NOS<1,1,ITTR>
+        SCN_CMPS<1,ITTR> = ITTR
+      NEXT ITTR
+    END ELSE
+      SCN_CMPS = 0
+    END
+    TTTR = 2
+    LOOP
+      SSCN = FIELD(ORG_SCN_NAMES,",",TTTR)
+    WHILE SSCN DO
+      IF ORG_SCN_CMPS<1,TTTR> = "Y" THEN
+        FOR ITTR = 1 TO SSCN_CNT
+          SCN_NAMES = SCN_NAMES : "," : SSCN
+*           SCN_CMPS<1,ITTR> = COMP_NOS<1,1,ITTR>
+          SCN_CMPS<1,-1> = ITTR
+        NEXT ITTR
+      END ELSE
+        SCN_NAMES = SCN_NAMES : "," : SSCN
+        SCN_CMPS<1,-1> = 0
+      END
+      TTTR = TTTR + 1
+    REPEAT
+    PRT_NAMES = FIELD(ORG_PRT_NAMES,",",1)
+    BLNPRT = ORG_BLNPRT<1,1>; ELNPRT = ORG_ELNPRT<1,1>
+    IF ORG_PRT_CMPS<1,1> = "Y" THEN
+*     PRT_CMPS = COMP_NOS<1,1,1>
+      PRT_CMPS = 1
+      SSCN = PRT_NAMES
+      SBPRT = ORG_BLNPRT<1,1>; SEPRT = ORG_ELNPRT<1,1>
+      FOR ITTR = 2 TO SSCN_CNT
+        PRT_NAMES = PRT_NAMES : "," : SSCN
+        BLNPRT<1,-1> = SBPRT; ELNPRT<1,-1> = SEPRT
+*        PRT_CMPS<1,ITTR> = COMP_NOS<1,1,ITTR>
+        PRT_CMPS<1,ITTR> = ITTR
+      NEXT ITTR
+    END ELSE
+      PRT_CMPS = 0
+    END
+    TTTR = 2
+    LOOP
+      SSCN = FIELD(ORG_PRT_NAMES,",",TTTR)
+      SBPRT = ORG_BLNPRT<1,TTTR>; SEPRT = ORG_ELNPRT<1,TTTR>
+    WHILE SSCN DO
+      IF ORG_PRT_CMPS<1,TTTR> = "Y" THEN
+        FOR ITTR = 1 TO SSCN_CNT
+          PRT_NAMES = PRT_NAMES : "," : SSCN
+          BLNPRT<1,-1> = SBPRT; ELNPRT<1,-1> = SEPRT
+*           PRT_CMPS<1,ITTR> = COMP_NOS<1,1,ITTR>
+          PRT_CMPS<1,-1> = ITTR
+        NEXT ITTR
+      END ELSE
+        PRT_NAMES = PRT_NAMES : "," : SSCN
+        BLNPRT<1,-1> = SBPRT; ELNPRT<1,-1> = SEPRT
+        PRT_CMPS<1,-1> = 0
+      END
+      TTTR = TTTR + 1
+    REPEAT
+4095*
+*CRT @(0,23):CL:SCN_NAMES:"|":SCN_CMPS:"|":; INPUT XOXO:
+*CRT @(0,23):CL:PRT_NAMES:"|":PRT_CMPS:"|":; INPUT XOXO:
+  END
+  RETURN
+*
+*---- Get Table Fields
+7000*
+  ERRMSG = ""
+  MATREAD DFD.REC FROM SYS_FIELDS, FLD_NAME THEN
+    BEGIN CASE
+      CASE DFD_LVL = "V"
+        IF FLD_MVNO<FNO> < 1 THEN
+          ERRMSG = "A specific Multi Value location is required for field - ":FLD_NAME
+          GOTO 7099
+        END
+      CASE DFD_LVL = "M"
+        IF FLD_SMVNO<FNO> < 1 THEN
+          ERRMSG = "A specific Sub Multi Value location is required for field - ":FLD_NAME
+          GOTO 7099
+        END
+      CASE FLD_MVNO<FNO> = 1
+      CASE FLD_SMVNO<FNO> = 1
+      CASE FLD_LINES<FNO> = 1
+      CASE FLD_LNSPC<FNO> = 1
+      CASE 1
+        ERRMSG = "An MV,SMV,LINES, or LNSPC value is not setup properly for field - ":FLD_NAME
+        GOTO 7099
+    END CASE
+  END ELSE
+    ERRMSG = "Cannot locate field (":FLD_NAME:") Definition"
+    GOTO 7099
+  END
+  RETURN
+*
+*---- Setup EDIT.SUB
+7100*
+  LOCATE DFD_TYPE IN TYPE_INI,1 SETTING TLOC ELSE TLOC = 1
+  TYP = OTYP_INI<TLOC>; SCALER = DFD_DEC
+*     MAXL = DFD_LEN; MINL = DFD_MINL
+  MAXL = FIELD(FLD_FMT<FNO>,"#",2); MINL = DFD_MINL
+  IF FLD_X<FNO> < SCN_X THEN
+    IF FLD_X<FNO> + MAXL > 80 THEN
+      MAXL = 80 - FLD_X<FNO>
+    END
+  END
+  MAXV = DFD_MAXV; MINV = DFD_MINV
+*     JUSTIFY = DFD_JUSTIFY; FILL.CHR = DFD_FILL
+  JUSTIFY = FIELD(FLD_FMT<FNO>,"#",1); FILL.CHR = DFD_FILL
+  O.R = DFD_O_R; DEFAULT = DFD_DEFAULT
+  PATRN = DFD_PATRN
+  INVALCHR = FIELD(DFD_INVALCHR,",",1)
+  CNT = DCOUNT(DFD_INVALCHR,",")
+  FOR I = 2 TO CNT
+    INVALCHR<1,I> = FIELD(DFD_INVALCHR,",",I)
+  NEXT I
+  ORVATDAT = DFD_ORVALDAT; VALDAT = DFD_VALDAT
+  READ HMSG_REC FROM SYS_FLD_HMSG, FLD_NAME ELSE
+    HMSG_REC = ""
+  END
+  HMSG = HMSG_REC<1>
+  CNT = DCOUNT(HMSG_REC,AM)
+  FOR I = 2 TO CNT
+    HMSG<1,I> = HMSG_REC<I>
+  NEXT I
+7099*
+  RETURN
+*
+*---- PROCESS ALL FORMULAE
+70000*
+  IF SSD_FLD_EXPR = "" THEN RETURN
+  IF SSD_FLD_EXPR = STR(VM,LEN(SSD_FLD_EXPR)) THEN RETURN
+  SAVE.FNO = FNO
+  FOR FPTR = 1 TO FLDCNT
+    FNO = FLD_FNO<FPTR>
+    BEGIN CASE
+      CASE FLD_EXPR<FNO> = SUBRFLG
+        I_FNAME = FLD_FNAME<FNO>
+        I_VNAME = FLD_VNAME<FNO>
+        GOSUB 71000
+        IF FMODE = "C" AND VALUE # DREC(FNO) THEN
+          DREC(FNO) = VALUE
+          GOSUB 3110
+        END ELSE
+          DREC(FNO) = VALUE
+        END
+      CASE FLD_EXPR<FNO> # ""
+        ESTACK = FLD_ESTK<FNO>
+        TSTACK = FLD_TSTK<FNO>
+        GOSUB 72000
+        IF FMODE = "C" AND VALUE # DREC(FNO) THEN
+          DREC(FNO) = VALUE
+          GOSUB 3110
+        END ELSE
+          DREC(FNO) = VALUE
+        END
+    END CASE
+  NEXT FPTR
+  FNO = SAVE.FNO
+  RETURN
+*
+*---- Call Subroutines
+71000*
+  SUBRNAME = FLD_SUBR<FNO>
+  I_FNAME = CHANGE(FLD_FNAME<FNO>,SM,AM)
+  I_FPTR = CHANGE(FLD_SBR_FPTR<FNO>,VM,AM)
+  I_VNAME = CHANGE(FLD_VNAME<FNO>,SM,AM)
+  I_SNAME = CHANGE(FLD_SBR_VID<FNO>,SM,AM)
+  I_SREC = CHANGE(FLD_SBR_VVALUE<FNO>,SM,AM)
+  I_VREC = ""
+  CNT = DCOUNT(FLD_SBR_VPTR<FNO>,VM)
+  FOR V = 1 TO CNT
+    VNO = FLD_SBR_VPTR<FNO,V>
+    VNAME = I_VNAME<V>
+    BEGIN CASE
+      CASE VNO < 1
+        I_VREC<V> = FIELD(VNAME,"^",2)
+      CASE VNAME = "ESTJ_COMP" AND DREC(VNO) = "ALL"
+*           I_VREC<V> = COMP_NOS<1,1>
+        I_VREC<V> = 1
+        FOR VV = 2 TO 32
+          I_VREC<V,1,VV> = VV
+        NEXT VV
+      CASE 1
+        I_VREC<V> = DREC(VNO)
+    END CASE
+  NEXT V
+* T23593 v If componet number is 909 then pass "current component"
+  LOCATE "COMP" IN I_SNAME SETTING CMPPOS THEN
+    IF I_SREC<CMPPOS> = "909" THEN I_SREC<CMPPOS> = SCN_CMPS<1,SCN_LOC>
+  END
+* T23593 ^
+  CALL @SUBRNAME(CONO,ERRMSG,I_FNAME,I_FPTR,I_VNAME,I_VREC,I_SNAME,I_SREC,VALUE)
+  IF ERRMSG # "" THEN
+    ERRMSG = ERRMSG : " (":SCN_FLDS<FNO>:")"
+    GOSUB 91000
+  END
+  RETURN
+*
+*---- Derive the Subroutine FIeld value
+71100*
+  VERROR = 1
+  LOCATE FLDNAME IN SCN_FLDS,1 SETTING DPTR ELSE RETURN
+* ??? The MVNO and the SMVNO are not utilized from the formula ???
+  VALUE = DREC(DPTR)
+  IF FLDNAME = "ESTJ_COMP" AND VALUE = "ALL" THEN
+*        VALUE = COMP_NOS<1,1>
+    VALUE = 1
+    FOR V = 2 TO 32
+      VALUE<1,1,V> = V
+    NEXT V
+  END
+  CNV = FLD_CNV<DPTR>
+  BEGIN CASE
+    CASE CNV[1,2] # "MD"
+    CASE CNV = "MD0"
+    CASE 1
+      CNV = CHANGE(CNV,",","")
+      CNV = CHANGE(CNV,"$","")
+      CNV = CHANGE(CNV,"-","")
+      IF CNV # "MD0" THEN
+        MVCNT = DCOUNT(VALUE,VM)
+        FOR IMV = 1 TO MVCNT
+          SMVCNT = DCOUNT(VALUE<1,IMV>,SVM)
+          FOR ISMV = 1 TO SMVCNT
+            VALUE<1,IMV,ISMV> = OCONV(VALUE<1,IMV,ISMV>,CNV)
+          NEXT ISMV
+        NEXT IMV
+      END
+  END CASE
+  VERROR = 0
+  RETURN
+*----T22268
+*
+*---- Print Bar Code
+*
+80000 *
+  IF OPTION = 'M' THEN RETURN ;* T26856
+  ELN_PRT = BCROW - 1
+  FOR I = BLN_PRT TO ELN_PRT
+    PRINT TRIMB(SCN_HDR_PRT<I>)
+  NEXT I
+*      PRINT SCN_HDR_PRT<BCROW>[1,BCCOL-1] :
+  PRINT SPACE(BCCOL-1):
+  BEGIN CASE
+    CASE BCLPTR = "KYOCERA"
+      PRINT "!R! UNIT D;BARC 19,Y,'": ;* AETNA
+      PRINT M_REC<1> :
+      PRINT "',100,100,5,10,10,10,5,10,10,10;UNIT I;EXIT;" ;* AETNA
+    CASE BCLPTR = "DECLA324"  ;* SHEPPARD POORMAN
+      PRINT CHAR(27):"% 0":M_REC<1>:CHAR(27):"%@"
+    CASE BCLPTR = "HPLJIIIP"
+      PRINT BARCODE.ON:"*":M_REC<1>:"*":BARCODE.OFF
+      PRINT SCN_HDR_PRT<BCROW>[1,BCCOL - 1]:
+      PRINT BARCODE.ON:"*":M_REC<1>:"*":BARCODE.OFF
+    CASE BCLPTR = "OKI395"
+      LEN.OF.CODE = LEN(M_REC<1>)
+      PRINT CHAR(27):CHAR(16):"A":CHAR(8):CHAR(2):CHAR(0):CHAR(0):CHAR(4):CHAR(1):CHAR(1):CHAR(1):CHAR(0):CHAR(27):CHAR(16):"B":CHAR(LEN.OF.CODE):M_REC<1>
+    CASE 1
+      PRINT "|BC ON| ": ;* VSI test mode
+      PRINT M_REC<1> :
+      PRINT " |BC OFF|" ;* VSI test mode
+  END CASE
+  RETURN
+*----^
+*
+*---- PROCESS FORMULA
+72000*
+  ESTACK = CHANGE(ESTACK,SM,AM)
+  TSTACK = CHANGE(TSTACK,SM,AM)
+  ERRMSG = ""
+  ECNT = DCOUNT(TSTACK,AM)
+  FOR EPTR = 1 TO ECNT WHILE ERRMSG = ""
+* T23593 The following case statement used to be an IF statement. It
+*        was changed for the 909 logic for component dependent forms
+    BEGIN CASE
+      CASE TSTACK<EPTR> = "V"
+        EXPVAR = ESTACK<EPTR>
+        BEGIN CASE
+          CASE EXPVAR = "CO"
+            ESTACK<EPTR> = CONO
+            TSTACK<EPTR> = "X"
+          CASE EXPVAR = "@CONO"
+            ESTACK<EPTR> = CONO
+            TSTACK<EPTR> = "X"
+          CASE EXPVAR = "@DATE"
+            ESTACK<EPTR> = DATE()
+            TSTACK<EPTR> = "X"
+          CASE EXPVAR = "@TIME"
+            ESTACK<EPTR> = TIME()
+            TSTACK<EPTR> = "X"
+          CASE 1
+            FLDNAME = ESTACK<EPTR>
+            GOSUB 72100
+            IF VERROR THEN
+              ERRMSG = "INVALID CALCULATION VARIABLE - ":FLDNAME
+            END ELSE
+              ESTACK<EPTR> = VALUE
+              TSTACK<EPTR> = "N"
+            END
+        END CASE
+* T23593 v Added 909 to represent "current component" in formulas & subrs
+      CASE ESTACK<EPTR> = "909"
+        ESTACK<EPTR> = SCN_CMPS<1,SCN_LOC>
+* T23593 ^
+    END CASE
+  NEXT EPTR
+  IF ERRMSG = "" THEN
+*
+*---- For EXPFNAME & EXPFPTR utilize the logic for I_FNAME & I_FPTR
+*---- in calling subroutines @SUBRNAME
+*
+    CALL SCREEN_CALC(ESTACK,TSTACK,AM,EXPFNAME,EXPFPTR,VALUE,ERRMSG)
+    IF ERRMSG # "" THEN
+      ERRMSG = ERRMSG : " (":SCN_FLDS<FNO>:")"
+      GOSUB 91000
+    END
+  END ELSE
+    GOSUB 91000
+  END
+  RETURN
+*
+*---- DERIVE FORMULA NAME VALUE
+72100*
+  VERROR = 1
+  LOCATE FLDNAME IN SCN_FLDS,1 SETTING DPTR ELSE RETURN
+* ??? The MVNO and the SMVNO are not utilized from the formula ???
+  VALUE = DREC(DPTR)
+  IF FLDNAME = "ESTJ_COMP" AND VALUE = "ALL" THEN
+*        VALUE = COMP_NOS<1,1>
+    VALUE = 1
+    FOR V = 2 TO 32
+      VALUE<1,1,V> = V
+    NEXT V
+  END
+  CNV = FLD_CNV<DPTR>
+  BEGIN CASE
+    CASE CNV[1,2] # "MD"
+    CASE CNV = "MD0"
+    CASE 1
+      CNV = CHANGE(CNV,",","")
+      CNV = CHANGE(CNV,"$","")
+      CNV = CHANGE(CNV,"-","")
+      IF CNV # "MD0" THEN
+        MVCNT = DCOUNT(VALUE,VM)
+        FOR IMV = 1 TO MVCNT
+          SMVCNT = DCOUNT(VALUE<1,IMV>,SVM)
+          FOR ISMV = 1 TO SMVCNT
+            VALUE<1,IMV,ISMV> = OCONV(VALUE<1,IMV,ISMV>,CNV)
+          NEXT ISMV
+        NEXT IMV
+      END
+  END CASE
+  VERROR = 0
+  RETURN
+*
+*---- Create JKT_NOTIFY items
+*
+85000*
+  READU FNAMES FROM CONTROL, CONO:"JKT.NOTIFY.FILES" THEN
+    RELEASE CONTROL, CONO:"JKT.NOTIFY.FILES"
+  END ELSE
+    FNAMES = ""
+    FNAMES<-1> = "JOB"
+    FNAMES<-1> = "JOB.ADD.INFO"
+    FNAMES<-1> = "CUSTOMER"
+    FNAMES<-1> = "ESTIMATE"
+    FNAMES<-1> = "ESTIMETE.DEPT"
+    WRITE FNAMES ON CONTROL, CONO:"JKT.NOTIFY.FILES"
+  END
+  JKTID = ID_VARS<1>
+  FCNT = DCOUNT(FNAMES,AM)
+  FOR FPTR = 1 TO FCNT
+    FNAME = FNAMES<FPTR>
+    MATREAD SFR.REC FROM SYS_FILES, FNAME THEN
+      FID = ""
+      KCNT = DCOUNT(SFR.ID,VM)
+      FOR KPTR = 1 TO KCNT
+        KSEG = TRIM(SFR.ID<1,KPTR>)
+        KTYP = SFR.ID.TYPE<1,KPTR>
+        BEGIN CASE
+          CASE KSEG = "CO"
+          CASE KTYP = "T"
+            FID = FID:KSEG
+          CASE KSEG # ""
+            LOCATE KSEG IN SSD_FLD_PFX<1>,1 SETTING KP THEN
+              KFIELD = SSD_FIELDS<1,KP>
+              LOCATE KFIELD IN SCN_FLDS,1 SETTING P THEN
+                FID = FID:DREC(P)
+              END
+            END
+        END CASE
+      NEXT KPTR
+      IF FID # "" THEN
+        MATREADU SSJN.REC FROM JKT_NOTIFY, CONO:FNAME:"!":FID ELSE MAT SSJN.REC = ""
+        JKTBASE = FIELD(JKTID,"-",1)
+        JCNT = DCOUNT(SSJN_TICKET,VM)
+        TPTR = JCNT + 1
+        FOR JPTR = 1 TO JCNT UNTIL TPTR <= JCNT
+          TKTBASE = FIELD(SSJN_TICKET<1,JPTR>,"-",1)
+          BEGIN CASE
+            CASE TKTBASE = JKTBASE
+              TPTR = JPTR
+            CASE TKTBASE > JKTBASE
+              TPTR = JPTR
+              SSJN_TICKET = INSERT(SSJN_TICKET,1,TPTR,0,"")
+              SSJN_TKTDEF = INSERT(SSJN_TKTDEF,1,TPTR,0,"")
+              SSJN_SCREEN = INSERT(SSJN_SCREEN,1,TPTR,0,"")
+          END CASE
+        NEXT JPTR
+        SSJN_TICKET<1,TPTR> = JKTID
+        SSJN_TKTDEF<1,TPTR> = TKTDEF
+        SSJN_SCREEN<1,TPTR> = ""
+        SCNT = DCOUNT(SCN_NAMES,",")
+        FOR SPTR = 1 TO SCNT
+          SNAME = TRIM(FIELD(SCN_NAMES,",",SPTR))
+          LOCATE SNAME IN SSJN_SCREEN<1,TPTR>,1 SETTING P ELSE
+            SSJN_SCREEN<1,TPTR,P> = SNAME
+          END
+        NEXT SPTR
+        IF SSJN_SCREEN<1,TPTR> = "" THEN
+          SSJN_TICKET = DELETE(SSJN_TICKET,1,TPTR,0)
+          SSJN_TKTDEF = DELETE(SSJN_TKTDEF,1,TPTR,0)
+          SSJN_SCREEN = DELETE(SSJN_SCREEN,1,TPTR,0)
+        END
+        IF SSJN_TICKET = "" THEN
+          RELEASE JKT_NOTIFY, CONO:FNAME:"!":FID
+        END ELSE
+          MATWRITE SSJN.REC ON JKT_NOTIFY, CONO:FNAME:"!":FID
+        END
+      END
+    END
+  NEXT FPTR
+  RETURN
+*
+*---- Create ticket image file
+*
+86000*
+  FCNT = DCOUNT(SSD_FIELDS,VM)
+  FOR FPTR = 1 TO FCNT
+    FLDNAME = SSD_FIELDS<1,FPTR>
+    LOCATE FLDNAME IN IMGDEF,1 SETTING IP THEN
+      LOCATE FLDNAME IN SCN_FLDS,1 SETTING SP THEN
+        IMGREC(IP) = DREC(SP)
+      END
+    END
+  NEXT FPTR
+  RETURN
+*
+*---- SEND NOTIFICATION MESSAGES
+*
+87000*
+  NEW_JKTID = ID_VARS<1>
+  IMGKEY = OLD_JKTID:"!1"
+  READU IREC FROM JOB_JKT_IMG, CONO:IMGKEY THEN
+    CALL JKT_NOTIFY_SUB("1",CONO,"JOB_JKT_IMG",IMGKEY,TKTDEF,IMGSIZE,MAT IMGREC,JOB_JKT_IMG,ISTATUS)
+    DELETE JOB_JKT_IMG, IMGKEY
+  END ELSE
+    RELEASE JOB_JKT_IMG, IMGKEY
+    IMGKEY = OLD_JKTID
+    READ IREC FROM JOB_JKT_IMG, CONO:IMGKEY THEN
+      CALL JKT_NOTIFY_SUB("1",CONO,"JOB_JKT_IMG",IMGKEY,TKTDEF,IMGSIZE,MAT IMGREC,JOB_JKT_IMG,ISTATUS)
+    END
+  END
+  MATWRITE IMGREC ON JOB_JKT_IMG, CONO:JKTID
+  RETURN
+*
+*---- Error routines
+91000*
+  BEGIN CASE
+******************************************
+*CASE PC.PORT.TYPE = "termIte"
+*   CALL PIX_GUI_STATUS_LINE(ERRMSG,"")
+******************************************
+    CASE TRANSMODE
+      P_X = 0; P_Y = 23; P_VALUE = ERRMSG[1,77]; P_OPT = ""
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      RQM; RQM; RQM
+    CASE 1
+      ERR.TYPE = 1; CALL SYSCOM(MAT SYSCOM.REC)
+      P_X = 0; P_Y = 22; P_VALUE = ""; P_OPT = "CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+  END CASE
+  RETURN
+93000*
+  ERRFLG = SCN_LOC
+  BEGIN CASE
+******************************************
+*CASE PC.PORT.TYPE = "termIte"
+*   CALL PIX_GUI_STATUS_LINE(ERRMSG,"")
+******************************************
+    CASE TRANSMODE
+      P_X = 0; P_Y = 23; P_VALUE = ERRMSG[1,77]; P_OPT = ""
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      RQM; RQM; RQM
+    CASE 1
+      ERR.TYPE = 3; CALL SYSCOM(MAT SYSCOM.REC)
+  END CASE
+99999*
+  PASS_VARS<6> = CHGMODE
+  PASS_VARS<9> = ERRFLG
+  PASS_VARS<11> = RTNFLG
+  RETURN
+END

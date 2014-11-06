@@ -1,0 +1,204 @@
+SUBROUTINE CALC_PRS_TIME_WS(TTYPE, ST.TIME, EN.TIME, PTIME, ESTAT, PRSFLAG)
+*********************************************************************
+* REVISION - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM   - PRIMAC
+* SOURCE   - JCSBP
+* PROGRAM  - CALC.PRS.TIME
+* AUTHOR   - WALID YAMOUT, COMPUTER BUSINESS ASSOCIATES
+* DATE     - 01/07/87
+* DESCRIPTION
+* This subroutine calculates the amount of PRS time for each time
+* entry.
+*T28248/28270 lross 10/06/2004 * Base bug found at Courier.
+********************************************
+* MODIFICATIONS - BY SFC, FEB 1990, FOR EPS
+*               - Calculate Payroll Time for Lunch and Idle time Trans
+********************************************
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+$INCLUDE CPYLIB CHAR
+*
+*---- INITIALIZATION
+*
+      PTIME = ""
+      ESTAT = ""
+      TIMEX = ""
+      TIMEV = ""
+      STIME = ""
+      ETIME = ""
+      LUNCH = 0
+*
+*---- MAKE ALL TIME ENTRIES RELATIVE TO START TIME
+*
+      STIME = ST.TIME
+      ETIME = EN.TIME
+      OVERLAP = 0
+      CNT = DCOUNT(TTYPE,VM)
+      ET = STIME<1,1>
+      FOR TP = 1 TO CNT
+         S = STIME<1,TP>
+         IF PRSFLAG # "E" THEN
+            BEGIN CASE
+            CASE TTYPE<1,TP> = "L" OR TTYPE<1,TP> = "I"
+               LOCATE "T" IN TTYPE<1>,TP+1 SETTING PTR THEN
+                  E = ETIME<1,TP>
+                  IF E < S THEN E = E + 2400
+*T28270 v
+                  ST = S
+                  IF ST < ET AND (PET-ST) > 1600 THEN
+                    ST += 2400
+                    STIME<1,TP> = ST
+                  END
+                  IF ST < PET THEN OVERLAP = 1
+                  ET = E
+                  IF ET < ST THEN
+                    ET += 2400
+                    ETIME<1,TP> = ET
+                  END
+*                 LAP.TIME = (INT(E/100)*60+MOD(E,100)) - (INT(S/100)*60+MOD(S,100))
+                  LAP.TIME = (INT(ET/100)*60+MOD(ET,100)) - (INT(ST/100)*60+MOD(ST,100))
+*T28270 ^
+                  LUNCH = LUNCH + INT(LAP.TIME*100/60+0.5)
+               END
+               GOTO 40
+            CASE S = "" OR TTYPE<1,TP> = "M"
+               GOTO 40
+            END CASE
+            GO 10
+         END
+         IF PRSFLAG = "E" THEN
+            IF S = "" OR TTYPE<1,TP> = "M" THEN GOTO 40
+         END
+10 *
+         ST = STIME<1,TP>
+         PET = ET
+         IF ST < ET AND (PET-ST) > 1600 THEN
+            ST = ST + 2400
+            STIME<1,TP> = ST
+         END
+         IF ST < PET THEN OVERLAP = 1
+         ET = ETIME<1,TP>
+         IF ET < ST THEN
+            ET = ET + 2400
+            ETIME<1,TP> = ET
+         END
+         LAP.TIME = (INT(ET/100)*60+MOD(ET,100)) - (INT(ST/100)*60+MOD(ST,100))
+         PTIME<1,TP> = INT(LAP.TIME*100/60+0.5)
+* TO CORRECT PROBLEM ON UNIDATA USING LOCATE - LMR 9/24/93
+         STX=ST+1
+         STX=STR('0',4-LEN(STX)):STX
+*        LOCATE (ST+1) IN TIMEX,1 BY "AR" SETTING P ELSE NULL
+         LOCATE STX IN TIMEX,1 BY "AR" SETTING P ELSE NULL
+         ST=STR('0',4-LEN(ST)):ST
+***
+         TIMEX = INSERT(TIMEX,P,0,0,ST)
+         TIMEV = INSERT(TIMEV,P,0,0,TP)
+* TO CORRECT PROBLEM ON UNIDATA USING LOCATE - LMR 9/24/93
+         ETX=ET+1
+         ETX=STR('0',4-LEN(ETX)):ETX
+*        LOCATE (ET+1) IN TIMEX,1 BY "AR" SETTING P ELSE NULL
+         LOCATE ETX IN TIMEX,1 BY "AR" SETTING P ELSE NULL
+         ET=STR('0',4-LEN(ET)):ET
+***
+         TIMEX = INSERT(TIMEX,P,0,0,ET)
+         TIMEV = INSERT(TIMEV,P,0,0,TP)
+40 *
+      NEXT TP
+*
+*---- MAIN PROCESSING
+*
+      HSTIME = STIME
+      HETIME = ETIME
+      TCNT = DCOUNT(TIMEX,AM)
+      STIME = TIMEX<1>; ETIME = ""
+      IF NOT(OVERLAP) THEN
+         ETIME<TCNT> = TIMEX<TCNT>
+         GOTO 2000
+      END
+      MAST.NO = TIMEV<1>; CNC.NO = MAST.NO
+      FOR I = 2 TO TCNT
+         TNO = TIMEV<I>
+         NEW = 0
+         LOCATE TNO IN MAST.NO<1>,1 SETTING MFND ELSE
+            MAST.NO<1,MFND> = TNO
+            NEW = 1
+         END
+         IF NOT(NEW) THEN MAST.NO = DELETE(MAST.NO,1,MFND,0)
+         CNC.NO<I> = MAST.NO
+         ETIME<I-1> = TIMEX<I>
+         STIME<I> = TIMEX<I>
+      NEXT I
+      ETIME<TCNT> = TIMEX<TCNT>
+      PTIME = ""
+      FOR I = 1 TO TCNT
+         IF STIME<I> = ETIME<I> THEN GOTO 1999
+         IF CNC.NO<I> = "" THEN GOTO 1999
+         LAP.TIME = (INT(ETIME<I>/100)*60+MOD(ETIME<I>,100)) - (INT(STIME<I>/100)*60+MOD(STIME<I>,100))
+*        T.H = INT(LAP.TIME*100/60+.5)
+*        PTIME<1,CNC.NO<I,1>> = PTIME<1,CNC.NO<I,1>> + T.H
+         PTIME<1,CNC.NO<I,1>> = PTIME<1,CNC.NO<I,1>> + LAP.TIME
+1999 *
+      NEXT I
+      PCNT = DCOUNT(PTIME,VM)
+      FOR I = 1 TO PCNT
+         PTIME<1,I> = INT(PTIME<1,I>*100/60+.5)
+         IF PTIME<1,I> + 0 = 0 THEN PTIME<1,I> = ""
+      NEXT I
+*
+*---- ADJUST ROUNDING ERROR
+*
+2000 *
+      TEMP = PTIME
+      LAP.TIME = (INT(ETIME<TCNT>/100)*60+MOD(ETIME<TCNT>,100)) - (INT(STIME<1>/100)*60+MOD(STIME<1>,100))
+*CSF 26075 v
+      IDLE=0
+      STIME = HSTIME
+      ETIME = HETIME
+      IF NOT(OVERLAP) THEN
+        IF CNT > 1 THEN
+          FOR I = CNT TO 1 STEP -1
+            IF STIME<1,I> = "" OR TTYPE<1,I> = "M" THEN
+              DEL STIME<1,I>
+              DEL ETIME<1,I>
+              CNT = CNT -1
+            END
+          NEXT I
+        END
+        IF CNT > 1 THEN
+*         FOR I = 2 TO CNT
+*           IF STIME<1,I> < ETIME<1,I-1> THEN
+*             FOR II = I TO CNT
+*               STIME<1,I> = STIME<1,I> + 2400
+*               ETIME<1,I> = ETIME<1,I> + 2400
+*             NEXT II
+*           END
+*         NEXT I
+          FOR I = 2 TO CNT
+            IF STIME<1,I> > ETIME<1,I-1> THEN
+              IDLE = IDLE + (INT(STIME<1,I>/100)*60+MOD(STIME<1,I>,100)) - (INT(ETIME<1,I-1>/100)*60+MOD(ETIME<1,I-1>,100))
+            END
+          NEXT I
+        END
+        IF IDLE # 0 THEN IDLE = INT((IDLE*100/60)+.5)
+      END
+*     DIFF = INT(LAP.TIME*100/60+0.5) - (SUM(PTIME<1>) + LUNCH)
+      DIFF = INT(LAP.TIME*100/60+0.5) - (SUM(PTIME<1>) + LUNCH) - IDLE
+*CSF 26075 ^
+      IF DIFF > 0 THEN ADJ = 1 ELSE ADJ = (-1)
+      FOR I = 1 TO ABS(DIFF) UNTIL SUM(TEMP) = 0
+         LOCATE MAXIMUM(TEMP) IN PTIME<1>,1 SETTING POS ELSE NULL
+         IF (PTIME<1,POS> + ADJ) > 0 THEN
+            PTIME<1,POS> = PTIME<1,POS> + ADJ
+            NULL
+         END
+         TEMP<1,POS> = 0
+      NEXT I
+*
+*---- RETURN TO CALLING PROGRAM
+*
+99999 *
+      RETURN
+      END

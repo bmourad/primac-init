@@ -1,0 +1,170 @@
+SUBROUTINE SetInvSalesDate
+********************************************************************************
+*   Program name :- SetInvSalesDate
+*   Created:- 10/30/2002
+*   By:- Abdullah Jibaly
+*   See:- PMCBP SALES.DATES
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+* ID, Division, CurrPeriod, Mon, Qtr, EndDate, Wks
+*
+* Out Properties:
+* ---------------
+* None
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE PMC.CPYLIB COMPANY
+$INCLUDE PMC.CPYLIB SALESDATES
+$INCLUDE PMC.CPYLIB FISCAL
+
+* Insert method code here
+ERRMSG = ''
+
+* Open files
+OPEN 'CONTROL' TO CONTROL ELSE ERRMSG = 'CONTROL'
+OPEN 'COMPANY' TO COMPANY ELSE ERRMSG = 'COMPANY'
+IF ERRMSG # '' THEN
+  ERRMSG = 'Cannot open the ' : ERRMSG : ' file.'
+  CALL RBO_ERROR_SUB(ERRMSG); RETURN
+END
+
+* Get all properties
+CHK.STATUS.PROPERTY = 'ID'
+STATUS = RBO.getProperty('','ID',ID); GOSUB CHK.STATUS
+CHK.STATUS.PROPERTY = 'Division'
+STATUS = RBO.getProperty('','Division',DIV.CODE); GOSUB CHK.STATUS
+CHK.STATUS.PROPERTY = 'CurrPeriod'
+STATUS = RBO.getProperty('','CurrPeriod',CurrPeriod); GOSUB CHK.STATUS
+CHK.STATUS.PROPERTY = 'Mon'
+STATUS = RBO.getProperty('','Mon',Mon); GOSUB CHK.STATUS
+CHK.STATUS.PROPERTY = 'Qtr'
+STATUS = RBO.getProperty('','Qtr',Qtr); GOSUB CHK.STATUS
+CHK.STATUS.PROPERTY = 'EndDate'
+STATUS = RBO.getProperty('','EndDate',EndDate); GOSUB CHK.STATUS
+CHK.STATUS.PROPERTY = 'Wks'
+STATUS = RBO.getProperty('','Wks',Wks); GOSUB CHK.STATUS
+IF CHK.STATUS.ERROR THEN
+  ERRMSG = CHK.STATUS.ERROR
+  CALL RBO_ERROR_SUB(ERRMSG); RETURN
+END
+
+* Perform Date Conversion
+DATE.CNT = DCOUNT(EndDate,@VM)
+FOR DATE.IDX = 1 TO DATE.CNT
+  EndDate<1,DATE.IDX> = ICONV(EndDate<1,DATE.IDX>,'D')
+NEXT DATE.IDX
+
+* Get CONO
+CONO = ID[1,3]
+MATREAD COMP.REC FROM COMPANY, CONO ELSE
+  ERRMSG = 'Invalid Company ID (':CONO:').'
+  CALL RBO_ERROR_SUB(ERRMSG); RETURN
+END
+
+* Read number of accounting periods
+READ PERIOD.REC FROM CONTROL, CONO:'ACCT.PERIODS' ELSE
+  PERIOD.REC = 12
+END
+MATREAD FISCAL.REC FROM CONTROL, CONO:'JCFISCAL' ELSE
+  ERRMSG = 'Cannot locate JCS fiscal period.'
+  CALL RBO_ERROR_SUB(ERRMSG); RETURN
+END
+
+* Get division
+IF DIV.CODE = '' THEN
+  ERRMSG = 'Invalid division.'
+  CALL RBO_ERROR_SUB(ERRMSG); RETURN
+END
+POS = 1
+IF DIV.CODE # 'ALL' THEN
+  READ DIVISION.REC FROM CONTROL, CONO:'DIVISIONS' ELSE
+    ERRMSG = 'Cannot locate CONTROL, DIVISIONS.'
+    CALL RBO_ERROR_SUB(ERRMSG); RETURN
+  END
+  LOCATE DIV.CODE IN DIVISION.REC<1>,1 SETTING POS ELSE
+    ERRMSG = 'Division ' : DIV.CODE
+    ERRMSG:= ' not found on Control File DIVISIONS Record.'
+    CALL RBO_ERROR_SUB(ERRMSG); RETURN
+  END
+END
+
+* Get period
+CURR = FR.CURR.PER<1,POS>[5,2]
+YEAR = FR.CURR.PER<1,POS>[1,4]
+IF CURR < 1 OR CURR > PERIOD.REC<1> THEN
+  ERRMSG = 'Error in JCS fiscal period.'
+  CALL RBO_ERROR_SUB(ERRMSG); RETURN
+END
+
+* Read main record
+MATREADU SALESDATES.REC FROM CONTROL, CONO:'SALESDATES' LOCKED
+  ERRMSG = 'SALES & INVENTORY DATE record is locked by user - '
+  ERRMSG:= GETUSERNAME(STATUS()) : '.'
+  CALL RBO_ERROR_SUB(ERRMSG); RETURN
+END ELSE
+  MAT SALESDATES.REC = ''
+END
+
+* Validate passed in data
+FOR IDX = 1 TO PERIOD.REC<1>
+  ;* Validate Month
+  SALESDATES.REC(IDX+1)<1,2> = Mon<1,IDX>
+  ;* Validate Quarter
+  SALESDATES.REC(IDX+1)<1,3> = Qtr<1,IDX>
+  ;* Validate End Date
+  IF IDX > 1 THEN
+    IF EndDate<1,IDX> < SALESDATES.REC(IDX-1)<1,1> THEN
+      ERRMSG = 'Date is less than last period date on line ' : IDX : '.'
+      CALL RBO_ERROR_SUB(ERRMSG); RETURN
+    END
+    IF EndDate<1,IDX> > EndDate<1,IDX+1> AND EndDate<1,IDX+1> # '' THEN
+      ERRMSG = 'Date is greater than next period date on line ' : IDX : '.'
+      CALL RBO_ERROR_SUB(ERRMSG); RETURN
+    END
+  END ELSE
+    IF EndDate<1,IDX> > EndDate<1,IDX+1> AND EndDate<1,IDX+1> # '' THEN
+      ERRMSG = 'Period 1 date is greater than next period date.'
+      CALL RBO_ERROR_SUB(ERRMSG); RETURN
+    END
+    SALESDATES.REC(1)<1,2> = EndDate<1,IDX>
+  END
+  CHK.YR = OCONV(EndDate<1,IDX>,'D')[8,4]
+  IF YEAR <= CHK.YR + 1 AND YEAR >= CHK.YR - 1 THEN
+    SALESDATES.REC(IDX+1)<1,1> = EndDate<1,IDX>
+  END ELSE
+    ERRMSG = 'Invalid year on line ' : IDX : '.'
+    CALL RBO_ERROR_SUB(ERRMSG); RETURN
+  END
+  IF CURR = IDX THEN
+    SALESDATES.REC(1)<1,2> = SALESDATES.REC(IDX+1)<1,1>
+    SALESDATES.REC(1)<1,4> = SALESDATES.REC(IDX+1)<1,3>
+    SALESDATES.REC(1)<1,3> = SALESDATES.REC(IDX+1)<1,2>
+  END
+  ;* Validate number of production weeks
+  SALESDATES.REC(IDX+1)<1,4> = Wks<1,IDX>
+NEXT IDX
+
+* Write record
+PROD.WEEK = 0
+FOR IDX = 2 TO 53
+  PROD.WEEK = PROD.WEEK + SALESDATES.REC(IDX)<1,4>
+NEXT IDX
+IF PROD.WEEK > 53  OR PROD.WEEK < 52 THEN
+  ERRMSG = 'Production Weeks greater than 53 or less than 52.'
+  CALL RBO_ERROR_SUB(ERRMSG); RETURN
+END ELSE
+  MATWRITE SALESDATES.REC ON CONTROL, CONO:'SALESDATES'
+END
+
+* End of method code
+RETURN
+
+CHK.STATUS:
+  CHK.STATUS.ERROR = ''
+  IF STATUS # RBO.NO.ERROR THEN
+    CHK.STATUS.ERROR = 'Cannot get ' : CHK.STATUS.PROPERTY : ' property.'
+  END
+RETURN

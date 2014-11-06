@@ -1,0 +1,180 @@
+SUBROUTINE APS_CHECK_PRCS_CHK
+********************************************************************************
+*   Program name :- APS_CHECK_PRCS_CHK
+*   Created:- 6/2/2003
+*------------------------------------------------------------------------------*
+* AUTHOR : ABED ALI
+* In Properties:
+* --------------
+* Cono, TYPE, DIVISION 
+*
+* Out Properties:
+* ---------------
+*  
+*T27358  * Do not allow for ALL and division specific.
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE PMC.CPYLIB DIVISION
+$INCLUDE CPYLIB CHAR
+* Insert method code here
+ERRMSG = ""
+OPEN '','CONTROL' TO CONTROL ELSE
+	ERRMSG<1,-1> = 'CANNOT LOCATE CONTROL FILE'
+      	GOTO 99999
+END
+OPEN '','SECURITY' TO SECURITY ELSE
+	ERRMSG<1,-1> = 'CANNOT LOCATE SECURITY FILE'
+      	GOTO 99999
+END
+OPEN '','DIVISION' TO DIVISION ELSE
+      	ERRMSG<1,-1> = 'CANNOT LOCATE DIVISION FILE'
+      	GOTO 99999
+END
+
+GFR_TST=""
+INBUFF = ""
+STATUS = RBO.getProperty('','Cono',CONO)
+STATUS = RBO.getProperty('','TYPE',TYPE) ;* this is S - at the starting and C at end of program 
+* this TYPE is used to add and delete from CONTROL file the division entry for not giving the chance to others to access that division
+STATUS = RBO.getProperty('','DIV_CODE',DIV)
+STATUS = RBO.getProperty('','USER_ID',USER.ID)
+USER.ID = OCONV(USER.ID,"MCU")
+INBUFF<1> = CONO
+INBUFF<3> = TYPE
+INBUFF<6> = DIV
+
+IF TYPE # "R" AND TYPE # "U" AND TYPE # "P" AND TYPE # "C" AND TYPE # "F" AND TYPE # "S" THEN
+      ERRMSG<1,-1> = "INVALID PARAMETER PASSED"
+      GOSUB 99999
+END
+
+PORT = 'TTY'
+CALL SYSVARS.SUB(PORT)
+*READV USER.ID FROM SECURITY, 'R.':PORT,2 ELSE USER.ID = ''
+PORT = USER.ID
+ACCT = @WHO
+*PORT.ACCT = PORT:" ":ACCT
+
+READU ITEM FROM CONTROL, CONO : "APS.CHECK.PRCS.CHK" ELSE ITEM = ""
+*UFND = 0
+*DFND = -1
+
+LOCATE PORT IN ITEM<2>,1 SETTING UFND ELSE NULL
+* PORT IS THE LOGIN ID OF THE USER
+*STATUS = RBO.setProperty('','DivPos',PORT)
+*RETURN
+IF DIV = "" THEN DIV = ITEM<4,UFND>
+*T27358 v
+   IF TYPE = "S" THEN ITEM<4,UFND> = DIV ; * CM
+   ERR = 0
+   DCNT = DCOUNT(ITEM<4>,VM)
+   IF DIV = "ALL" THEN
+      FOR D = 1 TO DCNT
+         IF NUM(ITEM<4,D>) THEN
+            ERR = 1
+         END
+      NEXT D
+   END ELSE
+      LOCATE "ALL" IN ITEM<4>,1 SETTING PND ELSE PND = 0
+      IF PND THEN 
+         ERR = 1
+      END
+   END
+   IF ERR = 1 THEN 
+      ERRMSG<1,-1> = "You Cannot Run Checks by Division and All at the same time"
+      RELEASE CONTROL, CONO:"APS.CHECK.PRCS.CHK"
+      GOTO 99999
+   END
+*T27358 ^
+   LOCATE DIV IN ITEM<4>,1 SETTING DFND THEN
+	IF UFND # DFND THEN
+		ERRMSG<1,-1> = 'USER (':ITEM<2,DFND>:') IS RUNNING CHECKS FOR DIVISION :':DIV
+	       RELEASE CONTROL, CONO:"APS.CHECK.PRCS.CHK"
+       	GOTO 99999
+	END
+   END ELSE
+	ITEM<4,UFND> = DIV
+   END
+   BEGIN CASE
+	CASE ITEM<2,UFND> # "" AND ITEM<2,UFND> # PORT
+       	BEGIN CASE
+            		CASE ITEM<3,UFND> = "R"
+               		ERRMSG<1,-1> = 'YOU NEED TO WAIT FOR USER (':ITEM<2,UFND>:') TO FINISH PRINTING CHECK REGISTER'
+ 		       CASE ITEM<3,UFND> = "P"
+		               ERRMSG<1,-1> = 'YOU NEED TO WAIT FOR USER (':ITEM<2,UFND>:') TO FINISH PRINTING CHECKS'
+		       CASE ITEM<3,UFND> = "U"
+		               ERRMSG<1,-1> = 'YOU NEED TO WAIT FOR USER (':ITEM<2,UFND>:') TO FINISH CHECK UPDATE'
+		       CASE 1
+		               ERRMSG<1,-1> = 'YOU NEED TO WAIT FOR USER (':ITEM<2,UFND>:') TO FINISH CHECK SCHEDULE'
+	       END CASE
+		RELEASE CONTROL, CONO : "APS.CHECK.PRCS.CHK"
+	CASE TYPE = "C"
+         	ITEM = DELETE(ITEM,3,UFND,0)
+         	IF ITEM<1,UFND> = "" OR ITEM<1,UFND> = "S" THEN	  
+	       	ITEM = DELETE(ITEM,1,UFND,0)
+            		ITEM = DELETE(ITEM,2,UFND,0)
+            		ITEM = DELETE(ITEM,4,UFND,0)
+         	END
+         	WRITE ITEM ON CONTROL, CONO : "APS.CHECK.PRCS.CHK"
+     	CASE TYPE = "F"
+         	IF ITEM<3,UFND> = "R" THEN
+            		FOR XXX = 1 TO 4
+               		ITEM = DELETE(ITEM,XXX,UFND,0)
+	            	NEXT XXX
+       	     	WRITE ITEM ON CONTROL, CONO : "APS.CHECK.PRCS.CHK"
+         	END ELSE
+	            ITEM<1,UFND> = ITEM<3,UFND>
+       	     ITEM<3,UFND> = ""
+	            WRITE ITEM ON CONTROL, CONO : "APS.CHECK.PRCS.CHK"
+       	END
+	CASE TYPE = "R" AND ITEM<1,UFND> # "P"
+         	ERRMSG<1,-1> = "YOU MUST PRINT CHECKS BEFORE THIS MENU OPTION"
+	       RELEASE CONTROL, CONO : "APS.CHECK.PRCS.CHK"
+	       GOSUB 99999
+	CASE TYPE = "P" AND ITEM<1,UFND> # "U"
+         	BEGIN CASE
+	       	CASE ITEM<1,UFND> = "S"
+               		ERRMSG<1,-1> = "YOU MUST START CHECK PROCESS BEFORE THIS MENU OPTION"
+            		CASE ITEM<1,UFND> = "R" OR ITEM<1,UFND> = "P"
+               		ERRMSG<1,-1> = "YOU MUST UPDATE CHECKS BEFORE THIS MENU OPTION"
+            		CASE 1
+               		ERRMSG<1,-1> = "YOU MUST START CHECK PROCESS BEFORE THIS MENU OPTION"
+         	END CASE
+         	RELEASE CONTROL, CONO : "APS.CHECK.PRCS.CHK"
+         	GOSUB 99999
+    	CASE TYPE = "U" AND (ITEM<1,UFND> = "P" OR ITEM<1,UFND> = "R")
+         	ERRMSG<1,-1> = "YOU MUST FINISH CHECK PROCESS BEFORE THIS MENU OPTION"
+         	RELEASE CONTROL, CONO : "APS.CHECK.PRCS.CHK"
+         	GOSUB 99999
+      	CASE TYPE = "S" AND (ITEM<1,UFND> = "P" OR ITEM<1,UFND> = "R")
+         	ERRMSG<1,-1> = "YOU MUST FINISH CHECK PROCESS BEFORE THIS MENU OPTION"
+         	RELEASE CONTROL, CONO : "APS.CHECK.PRCS.CHK"
+         	GOSUB 99999
+      	CASE 1
+         	ITEM<3,UFND> = TYPE;ITEM<2,UFND> = PORT
+         	WRITE ITEM ON CONTROL, CONO : "APS.CHECK.PRCS.CHK"
+         	BEGIN CASE
+            		CASE TYPE = "S" OR TYPE = "P"
+               		INBUFF<6> = ITEM<4,UFND>
+            		CASE TYPE = "R"
+               		INBUFF<4> = ITEM<4,UFND>
+            		CASE TYPE = "U"
+               		INBUFF<6> = ITEM<4,UFND>
+1500 *
+        	END CASE
+         	INBUFF<3> = ''
+     END CASE
+     INBUFF = LOWER(INBUFF)
+     STATUS = RBO.setProperty('','INPUT_BUFF',INBUFF)
+
+* End of method code
+99999
+  IF (TRIM(ERRMSG) # "") THEN
+       STATUS = RBO.setProperty('','ServerStatus','E')
+       STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+  END ELSE
+       STATUS = RBO.setProperty('','ServerStatus','')
+       STATUS = RBO.setProperty('','ServerMessage','')
+  END 
+RETURN
+

@@ -1,0 +1,308 @@
+   SUBROUTINE DOC.PRINT.MAIL(HOLD.FILE,DOC.IDS,PM.LIST,MAT COMP.REC,DOC.TYPE)
+********************************************************************
+* REVISION - [12.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM   - PRIMAC
+* SOURCE   - PMCBP
+* PROGRAM  - DOC.PRINT.MAIL
+* BY       - Abdullah Jibaly, COMPUTER BUSINESS ASSOCIATES
+* DATE     - 06/27/02
+*
+* DESCRIPTION
+*
+* Prints and/or mails multiple documents.
+*
+* ARGUMENTS
+*
+*   HOLD.FILE  : File handle for file that contains the captured docs
+*   DOC.IDS    : IDs of the docs that are contained in HOLD.FILE
+*   PM.LIST    : Print/Mail info for each DOC.IDS item
+*                Format: PRINT.FLAG @SVM MAIL.FLAG
+*                    @VM BACKGROUND.IMAGE
+*                    @VM EMAIL.TO
+*   COMP.REC   : Company record
+*   DOC.TYPE   : Type of document:
+*                PO, OPO, MPO, JCSIVC, OPSIVC, ARSIVC, or STMT
+*
+*********************************************************************
+*
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+*
+   ;*
+   ;* Initialization
+   ;*
+   DEFFUN PMC_SEND_MAIL(ADDRESS.LIST,SUBJECT,TEXT,ATTACH)
+   DEFFUN GET_FILE_NAME(FILE_HANDLE)
+   LINEFEED = CHAR(10)
+   PAGEFEED = CHAR(12)
+   PRINTER ON
+   ;*
+   ;* Setup system error messages
+   ;*
+   SYS.TYPE = 1
+   CALL SYSCOM(MAT SYSCOM.REC)
+   ;*
+   ;* Retreive HOLD file name
+   ;*
+   HOLD.FILE.NAME = GET_FILE_NAME(HOLD.FILE)
+   ;*
+   ;* Get USERNO: Unique id for current user
+   ;*
+   USERNO = "USERNO"
+   CALL SYSVARS.SUB(USERNO)
+   ;*
+   ;* Determine DOC.TYPE specific values
+   ;*
+   BEGIN CASE
+      CASE DOC.TYPE = 'PO' OR DOC.TYPE = 'OPO' OR DOC.TYPE = 'MPO'
+         DOC.PREFIX  = 'PO'
+         DOC.DESC    = 'Purchase Order'
+         TOP.MARGIN  = 1.9    ;* inches, top of page to address line
+         BOT.MARGIN  = 1.35
+         LEFT.MARGIN = 0.5
+      CASE DOC.TYPE[4,3] = 'IVC'
+         DOC.PREFIX  = 'IVC'
+         DOC.DESC    = 'Invoice'
+         TOP.MARGIN  = 1.2
+         BOT.MARGIN  = 0.5
+         IF DOC.TYPE = 'JCSIVC' THEN
+            LEFT.MARGIN = 0.65
+         END ELSE IF DOC.TYPE = 'ARSIVC' THEN
+            LEFT.MARGIN = 0.7
+         END ELSE
+            LEFT.MARGIN = 0.5
+         END
+      CASE DOC.TYPE = 'STMT'
+         DOC.PREFIX  = 'STMT'
+         DOC.DESC    = 'Statement'
+         TOP.MARGIN  = 0.5
+         BOT.MARGIN  = 3.0 : @VM : 0.5
+         LEFT.MARGIN = 0.5
+      CASE 1
+         DOC.PREFIX  = 'DOC'
+         DOC.DESC    = 'Document'
+         ;* Margin from the top, in inches
+         TOP.MARGIN  = 0.5
+         ;* Margin from the bottom, in inches (offset by +0.5, so really 1.0)
+         BOT.MARGIN  = 0.5
+         LEFT.MARGIN = 0.5
+   END CASE
+   ;*
+   ;* Process all documents saved in the HOLD file
+   ;*
+   MAIL.TXT = ''
+   DOC.CNT = DCOUNT(DOC.IDS,AM)
+   FOR DOC.IDX = 1 TO DOC.CNT
+      DOC.ID = DOC.IDS<DOC.IDX>
+      DOC.HOLD.ID = DOC.PREFIX : "-" : USERNO : "-" : DOC.ID
+      ;*
+      ;* Print all docs marked for printing
+      ;*
+      IF PM.LIST<DOC.IDX,1,1> = 'Y' OR PM.LIST<DOC.IDX,1,1> = 'C' THEN
+         READ REC FROM HOLD.FILE, DOC.HOLD.ID THEN
+            FOR REC.IDX = 1 TO DCOUNT(REC,AM)
+               PRINT REC<REC.IDX>
+            NEXT REC.IDX
+         END
+      END
+      ;*
+      ;* Mail all docs marked for mailing and have an email
+      ;*
+      MAIL.IS.SETUP = 0
+      IF PM.LIST<DOC.IDX,1,2> = 'Y' OR PM.LIST<DOC.IDX,1,2> = 'C' THEN
+         DOC.EMAIL.TO = PM.LIST<DOC.IDX,3>
+         IF DOC.EMAIL.TO # '' THEN
+            MAIL.IS.SETUP = 1
+         END
+      END
+      IF NOT(MAIL.IS.SETUP) THEN CONTINUE
+      DOC.BACKGROUND.IMG = PM.LIST<DOC.IDX,2>
+      ;* Setup the mail text description one time
+      IF MAIL.TXT = '' THEN
+         GOSUB SETUP.MAIL.TXT
+      END
+      ;*
+      ;* Read record and organize pagefeeds/whitespace
+      ;*
+      READ REC FROM HOLD.FILE, DOC.HOLD.ID ELSE CONTINUE
+      LINES.PER.PAGE = ''
+      IF DOC.PREFIX = 'PO' OR DOC.PREFIX = 'IVC' THEN
+         GOSUB REMOVE.WHITESPACE
+      END ELSE
+         REC.IDX = 1
+         LOOP
+            BEGIN CASE
+               CASE INDEX(REC<REC.IDX>,PAGEFEED,1) = 0
+               CASE REC<REC.IDX>[1,1] = PAGEFEED
+                  REC<REC.IDX> = CHANGE(REC<REC.IDX>,PAGEFEED,PAGEFEED:AM)
+               CASE REC<REC.IDX>[LEN(REC<REC.IDX>),1] = PAGEFEED
+                  REC<REC.IDX> = CHANGE(REC<REC.IDX>,PAGEFEED,AM:PAGEFEED)
+               CASE 1
+                  REC<REC.IDX> = CHANGE(REC<REC.IDX>,PAGEFEED,AM:PAGEFEED:AM)
+            END CASE
+            REC.IDX = REC.IDX + 1
+         UNTIL REC.IDX > DCOUNT(REC,AM) DO REPEAT
+         LOOP
+            REC.IDX = DCOUNT(REC,AM)
+            IF TRIM(REC<REC.IDX>) = '' OR TRIM(REC<REC.IDX>) = PAGEFEED THEN
+               DEL REC<REC.IDX>
+            END ELSE EXIT
+         REPEAT
+         IF REC<1> = PAGEFEED THEN DEL REC<1>
+         FIND PAGEFEED IN REC SETTING LINES.PER.PAGE ELSE
+            LINES.PER.PAGE = DCOUNT(REC,AM)
+         END
+      END
+      ;*
+      ;* Calculate format params based on address location
+      ;* (POs and Invoices)
+      ;*
+      ADDR.LN = 0
+      IF DOC.PREFIX = 'PO' OR DOC.PREFIX = 'IVC' THEN
+         REC.CNT = DCOUNT(REC,AM)
+         FOR REC.IDX = 1 TO REC.CNT
+            REC.LINE = CHANGE(REC<REC.IDX>[1,10],PAGEFEED,'')
+            IF TRIM(REC.LINE) # '' THEN
+               ADDR.LN = REC.IDX
+               EXIT
+            END
+         NEXT REC.IDX
+      END ELSE
+         ADDR.LN = 1
+      END
+      BOT.MARGIN.IDX = 1
+      IF DCOUNT(BOT.MARGIN,VM) = 2 THEN
+         ;* If there is only one page then the first page
+         ;* uses the same bottom margin as the last page
+         FIND PAGEFEED IN REC SETTING F ELSE BOT.MARGIN.IDX = 2
+      END
+      THIS.TOP.MARGIN  = TOP.MARGIN * 72  ;* Convert to points
+      THIS.BOT.MARGIN  = BOT.MARGIN<1,BOT.MARGIN.IDX> * 72
+      PAGE.HEIGHT = 11.0 * 72
+      LINE.HEIGHT = PAGE.HEIGHT - THIS.TOP.MARGIN - THIS.BOT.MARGIN
+      LINE.HEIGHT = LINE.HEIGHT / ( LINES.PER.PAGE - ADDR.LN + 1 )
+      THIS.TOP.MARGIN  = THIS.TOP.MARGIN - ((ADDR.LN-1)*LINE.HEIGHT)
+      THIS.TOP.MARGIN  = THIS.TOP.MARGIN / 72  ;* Convert back to inches
+      ;*
+      ;* Setup formatting string
+      ;*
+      FORMATSTR = ''
+      FORMATSTR<1,-1> = "TOP-MARGIN"
+      FORMATSTR<2,-1> = THIS.TOP.MARGIN
+      FORMATSTR<1,-1> = "LINE-HEIGHT"
+      FORMATSTR<2,-1> = LINE.HEIGHT
+      FORMATSTR<1,-1> = "LEFT-MARGIN"
+      FORMATSTR<2,-1> = LEFT.MARGIN
+      FORMATSTR<1,-1> = "REMOVE-EMPTY-PAGES"
+      FORMATSTR<2,-1> = "YES"
+      FORMATSTR<1,-1> = "IMAGE-FILE-PATH"
+      FORMATSTR<2,-1> = DOC.BACKGROUND.IMG
+      FORMATSTR<1,-1> = "PAGE-FORMAT"
+      FORMATSTR<2,-1> = "PORTRAIT"
+      FORMATSTR<1,-1> = "FONT-SIZE"
+      FORMATSTR<2,-1> = 11
+      ;*
+      ;* Convert to postscript then to PDF
+      ;*
+      WRITE REC ON HOLD.FILE, DOC.HOLD.ID
+      CALL CONVERT.TO.PDF(HOLD.FILE.NAME,DOC.HOLD.ID,FORMATSTR)
+      PDF.PATH = HOLD.FILE.NAME:"/":DOC.HOLD.ID:".pdf"
+      ;*
+      ;* Setup mail setting and send PDF file
+      ;* Delete PDF file
+      ;*
+      MAIL.ADDR = DOC.EMAIL.TO
+      MAIL.SUBJ = CO.NAME : " " : DOC.DESC : " #" : DOC.ID[4,99]
+      MAIL.FILE = "BIN"
+      MAIL.FILE<-1> = PDF.PATH
+      STATUS = PMC_SEND_MAIL(MAIL.ADDR, MAIL.SUBJ, MAIL.TXT, MAIL.FILE)
+      DELETE HOLD.FILE, DOC.HOLD.ID:".pdf"
+      ;*
+      ;* Delete captured report file
+      ;*
+      DELETE HOLD.FILE, DOC.HOLD.ID
+   NEXT DOC.IDX
+   ;* De-setup mail text description
+   IF MAIL.IS.SETUP THEN GOSUB SETUP.MAIL.TXT
+   PRINTER CLOSE
+   PRINTER OFF
+   RETURN
+*
+SETUP.MAIL.TXT: 
+   IF MAIL.TXT # '' THEN
+      DELETE HOLD.FILE, DOC.PREFIX : "-MAIL-" : USERNO
+      MAIL.TXT = ''
+      RETURN
+   END
+   DESC = "This email from " : CO.NAME : " contains a(n) "
+   DESC:= DOC.DESC : " attachment in Adobe PDF (Portable Document Format). "
+   DESC:= "To open it you must have Adobe Acrobat Reader, "
+   DESC:= "which you can download at http://www.acrobat.com."
+   DESC:= LINEFEED : LINEFEED
+   DESC:= "Solutions by PRIMAC -- http://www.primacsystems.com"
+   MAIL.TXT = HOLD.FILE.NAME : "/" : DOC.PREFIX : "-MAIL-" : USERNO
+   OSWRITE DESC ON MAIL.TXT
+   RETURN
+*
+REMOVE.WHITESPACE: 
+   ;*
+   ;* Remove any extra lines and pagefeeds before or after text
+   ;*
+   LOOP
+      IF TRIM(REC<1>) = '' THEN
+         DEL REC<1>
+      END ELSE IF TRIM(REC<1>) = PAGEFEED THEN
+         DEL REC<1>
+      END ELSE
+         EXIT
+      END
+   REPEAT
+   LOOP
+      REC.IDX = DCOUNT(REC,AM)
+      IF TRIM(REC<REC.IDX>) = '' THEN
+         DEL REC<REC.IDX>
+      END ELSE IF TRIM(REC<REC.IDX>) = PAGEFEED THEN
+         DEL REC<REC.IDX>
+      END ELSE
+         REC<REC.IDX> = CHANGE(REC<REC.IDX>,PAGEFEED,'')
+         EXIT
+      END
+   REPEAT
+   ;*
+   ;* Find the number of lines per page
+   ;* Find the extra whitespace
+   ;*
+   KEEP.BLANK.LINES = 1
+   DEL.LINES = ''
+   REC.CNT = DCOUNT(REC,AM)
+   FOR REC.IDX = 1 TO REC.CNT
+      BEGIN CASE
+         CASE TRIM(REC<REC.IDX>) = PAGEFEED
+            KEEP.BLANK.LINES = 0
+            IF LINES.PER.PAGE = '' THEN LINES.PER.PAGE = REC.IDX - 1
+         CASE TRIM(REC<REC.IDX>) # ''
+            KEEP.BLANK.LINES = 1
+      END CASE
+      IF KEEP.BLANK.LINES THEN CONTINUE
+      IF TRIM(REC<REC.IDX>) = '' THEN DEL.LINES<-1> = REC.IDX
+   NEXT REC.IDX
+   ;*
+   ;* Delete the extra whitespace
+   ;*
+   DEL.CNT = DCOUNT(DEL.LINES,AM)
+   FOR DEL.IDX = DEL.CNT TO 1 STEP -1
+      DEL REC<DEL.LINES<DEL.IDX>>
+   NEXT DEL.IDX
+   IF LINES.PER.PAGE = '' THEN LINES.PER.PAGE = DCOUNT(REC,AM)
+   RETURN
+*
+* Call error routine
+*
+91000 
+   ERR.TYPE = 1
+   CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+*
+END

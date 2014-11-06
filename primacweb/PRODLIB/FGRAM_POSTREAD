@@ -1,0 +1,305 @@
+SUBROUTINE FGRAM_POSTREAD
+*********************************************************************
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - EPRIMAC
+* PROGRAM     - FGRAM_POSTREAD
+* BY          - KHAJA ZIAUDDIN
+* DATE        - 07/14/2003  (mm/dd/yyyy)
+* DESCRIPTION   
+*		   
+*ENDDOC
+*************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE ICS.CPYLIB WAREHOUSE
+$INCLUDE ICS.CPYLIB INV_RECEIPTS
+$INCLUDE ICS.CPYLIB INV_RECP_WHSE
+$INCLUDE OPS.CPYLIB JOB.FNGD.STATS
+$INCLUDE JCS.CPYLIB JOB
+$INCLUDE PMC.CPYLIB CUSTOMER
+$INCLUDE ICS.CPYLIB INV_SERIAL
+$INCLUDE ICS.CPYLIB INV_AUDIT_HIST
+$INCLUDE ICS.CPYLIB INV.CNV
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE PMC.CPYLIB SHIP.TO
+$INCLUDE OPS.CPYLIB ORDER
+$INCLUDE OPS.CPYLIB ORDER.DETAIL
+
+DEFFUN CALC_STK_QTY(COST.QTY,MAT INV.CNV.REC,ROND,LN)
+
+OPEN "","WAREHOUSE" TO WAREHOUSE ELSE ERRMSG = "WAREHOUSE FILE IS MISSING"; GOTO 93000
+
+OPEN "","CUSTOMER" TO CUSTOMER ELSE ERRMSG = "CUSTOMER FILE IS MISSING"; GOTO 93000
+OPEN "","INV_RECP_WHSE" TO INV_RECP_WHSE ELSE ERRMSG="INV_RECP_WHSE FILE IS MISSING" ; GOTO 93000
+OPEN "","INV_SERIAL" TO INV_SERIAL ELSE ERRMSG="INV_SERIAL FILE IS MISSING" ; GOTO 93000
+OPEN "","JOB" TO JOB ELSE ERRMSG = "JOB FILE IS MISSING"; GOTO 93000
+OPEN "","JOB.FNGD.STATS" TO JOB.FNGD.STATS ELSE ERRMSG = "JOB.FNGD.STATS FILE IS MISSING"; GOTO 93000
+OPEN "","INV_RECEIPTS" TO INV_RECEIPTS ELSE ERRMSG="INV_RECEIPTS FILE IS MISSING" ; GOTO 93000
+OPEN "","INVENTORY" TO INVENTORY ELSE ERRMSG="INVENTORY FILE IS MISSING" ; GOTO 93000
+OPEN "","SHIP.TO" TO SHIP.TO ELSE ERRMSG="SHIP.TO FILE IS MISSING" ; GOTO 93000
+OPEN "","ORDER" TO ORDER ELSE ERRMSG = "ORDER"; GOTO 93000
+OPEN "","ORDER.DETAIL" TO ORDER.DETAIL ELSE ERRMSG = "ORDER.DETAIL FILE IS MISSING"; GOTO 93000
+OPEN "","CONTROL" TO CONTROL ELSE STOP
+
+GEN.CCTR = "000"
+GEN.DEPT = "00" 
+GEN.DIV  = "00" 
+SHPNAME = ''
+ShipTo = ''
+DEPL_QTY = ''
+STATUS = RBO.getProperty('','new_item',NEW_ITEM)
+IF NEW_ITEM = 1 THEN RETURN
+STATUS = RBO.getProperty('','ID',ID)
+*STATUS = RBO.getDBVals('@ID',ID)
+*STATUS = RBO.getDBVals("INVR_ORG_QTY",ORGQTY)	;* ORIGINAL COST QTY
+*STATUS = RBO.getDBVals("INVR_DEPL_QTY", DEPLQTY)
+*STATUS = RBO.setDBVals("INVR_DEPL_QTY", OCONV(DEPLQTY,"MD0")/1000)
+*STATUS = RBO.setProperty('','ServerMessage','DETAILS - ' : NEW_ITEM :'~':ID:'~':ORGQTY:'~':ShipTo:'~':DEPLQTY:'~') 
+*RETURN
+*0~001136300570~7000~0~7000~
+
+CONO = ID[1,3]
+RCPTNO = ID[4,99]
+ORGSQTY = ''			;* ORIGINAL STOCK QTY
+CustName = ''
+JFS.A.QTY = ''
+JFS.M.QTY = ''
+JFS.F.QTY = ''
+Allocated_Qty = ''
+Manuf_Qty = ''
+Finish_Qty = ''
+MAT INVR.REC = ''
+DEPLQTY = ""
+ERRMSG = ''
+TEMP.SHPNM = ""
+TEMP.ALLOC = ""
+IF NEW_ITEM = 0 THEN				;* RECORD EXISTS
+    INVR.ID = ID
+    MATREADU INVR.REC FROM INV_RECEIPTS,INVR.ID LOCKED
+      ERRMSG = 'RECEIPT record is locked by user - '		;*   :GETUSERNAME(STATUS())			
+      GOTO 93000 
+    END THEN
+	ORGQTY = INVR.ORG.QTY
+	DEPLQTY = INVR.DEPL.QTY
+
+*	IF DEPLQTY # "" THEN DEPL_QTY = OCONV(DEPLQTY,"MD0")/1000;* COMMENTED BY SUHAIL TO GET THE DEPLQTY IN PROPER FORMAT;REPLACED IT IN THE END
+*	STATUS = RBO.setDBVals("INVR_DEPL_QTY", DEPL_QTY);*       ^^^^^^^
+
+	FOR X = 1 TO DCOUNT(INVR.ORDER,@VM)
+         ORDNO = ''
+         SHPNO = ''
+         ORD.ID = ""
+         ORDNO = INVR.ORDER<1,X>
+	  IF INVR.ORDER<1,X> # "*FNGD*" THEN
+	      ORD.ID = CONO:INVR.ORDER<1,X>
+             SHPNO = INVR.SHIP.TO<1,X>
+             MATREAD ORD.REC FROM ORDER,ORD.ID THEN
+                SHP.ID=CONO:ORD.CUST:"!":SHPNO
+                MATREAD SPT.REC FROM SHIP.TO,SHP.ID THEN
+                  OSD.ID=CONO:ORDNO:"!":SHPNO
+                  MATREAD ORD.DET.REC FROM ORDER.DETAIL,OSD.ID ELSE
+                     ERRMSG = "Cannot locate order detail # ":ORDNO:"!":SHPNO
+                     GOTO 93000
+                  END
+                END ELSE
+                   MAT SPT.REC = ""
+                   IF SHPNO = "000" THEN
+                      SPT.NAME = "GENERAL SHIPTO"
+                   END ELSE
+                      ERRMSG = "Cannot locate ship-to ":SHPNO:" for order # ":ORDNO
+                      GOTO 93000
+                   END
+                END
+             END ELSE
+                ERRMSG = "Cannot locate order # ":ORDNO
+                GOTO 93000
+             END
+             IF ERRMSG='' THEN
+                PCNT = DCOUNT(OSD.PROD,@VM)
+                PP = 0
+                FOR PPTR = 1 TO PCNT UNTIL PP > 0
+                   BEGIN CASE
+                      CASE OSD.PROD<1,PPTR> # INVR.PROD
+                      CASE OSD.WHSE<1,PPTR> # INVR.ORG.WHSE
+                         IF SUM(OSD.A.QTY<1,PPTR> + OSD.R.QTY<1,PPTR>) = 0 THEN PP = PPTR
+                      CASE 1
+                         PP = PPTR 
+                  END CASE
+                NEXT PPTR
+                IF PP = 0 THEN
+                   ERRMSG = "Cannot locate product ":INVR.PROD:" on order detail # ":ORDNO:"!":SHPNO
+                   GOTO 93000
+                END ELSE
+                   TEMP.SHPNM<1,X> = SPT.NAME
+                   TEMP.ALLOC<1,X> = OSD.A.QTY<1,PP>
+                END
+             END                    
+          END 
+       NEXT
+*****
+      MATREAD WHSE.REC FROM WAREHOUSE, CONO:INVR.ORG.WHSE ELSE MAT WHSE.REC = ''
+      DIV.CODE = WHS.DIV; USER.ID = UPCASE(@LOGNAME); ERRMSG = ''
+      *CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+      IF ERRMSG='' THEN
+        IF INVR.JOB="INIT" THEN
+          ERRMSG = "Cannot adjust an initial receipt"
+          GOTO 93000
+        END ELSE
+          CMD="COUNT INV_RECP_WHSE WITH RECP_NO=":'"':RCPTNO:'"'
+          UDTEXECUTE CMD CAPTURING MSG
+          IF MSG<1>[1,1]=0 THEN
+            ERRMSG="INV_RECP_WHSE record is missing for receipt ":RCPTNO
+            GOTO 93000
+          END ELSE
+            IF MSG<1>[1,1]>1 THEN
+              ERRMSG="Receipt has been transfered and cannot be adjusted."
+              GOTO 93000
+            END
+          END
+        END
+      END ELSE
+        GOTO 93000
+      END
+      IF ERRMSG='' THEN
+        IRW.ID=CONO:RCPTNO:"!":INVR.ORG.WHSE
+        MATREADU IRW.REC FROM INV_RECP_WHSE,IRW.ID THEN
+          SCNT=DCOUNT(IRW.SERIAL.NO,@VM)
+          IF SCNT=1 THEN
+            ISTK.ID = CONO:IRW.SERIAL.NO
+            MATREADU ISTK.REC FROM INV_SERIAL,ISTK.ID ELSE
+              ERRMSG="Tracking record for receipt ":RCPTNO:" is missing."
+              GOTO 93000
+            END
+          END ELSE
+            ERRMSG = "Cannot adjust a receipt that has been transferred "
+            GOTO 93000
+          END
+        END ELSE
+          ERRMSG="INV_RECP_WHSE record is missing for receipt ":RCPTNO
+          GOTO 93000
+        END
+      END
+      IF ERRMSG='' THEN
+        TOT.AVL = 0
+        JOB.ID=CONO:INVR.JOB
+        MATREAD JOB.REC FROM JOB,JOB.ID THEN
+          IF INVR.CUST # JOB.CUST THEN
+            ERRMSG="Job ":INVR.JOB:" belongs to customer ":JOB.CUST
+            ERRMSG:=" while Receipt belongs to # ":INVR.CUST
+            GOTO 93000
+          END ELSE
+            CUST.ID=CONO:INVR.CUST
+            MATREAD CUST.REC FROM CUSTOMER,CUST.ID THEN
+		CustName = CUST.NAME
+              JFS.ID=CONO:INVR.JOB
+              MATREAD JFS.REC FROM JOB.FNGD.STATS,JFS.ID THEN
+
+                GOSUB GET.DETAIL.DATA
+		    MATREAD INV.REC FROM INVENTORY, CONO:JFS.PROD<1,JPPTR> ELSE MAT INV.REC = ''
+		    $INCLUDE ICSBP INV.UM.CNV
+		    ORGSQTY =  CALC_STK_QTY(ORGQTY, MAT INV.CNV.REC,'.5','')
+	
+                IF ERRMSG='' THEN
+                  MAT INAH.REC=''
+                  INAH.PROD=INVR.PROD ; INAH.WHSE=INVR.ORG.WHSE
+                  INAH.DV.DP.CC = WHS.DIV:GEN.DEPT:GEN.CCTR  
+                  EOR=1
+                END ELSE
+                   EOR=1 ; ERR=1
+                END
+              END ELSE
+                ERRMSG = "Job (":INVR.JOB:") is not producing any Finished Goods for Receipt # ":RCPTNO
+                GOTO 93000
+              END
+            END ELSE
+              ERRMSG = "Cannot locate Customer (":INVR.CUST:") for Receipt # ":RCPTNO
+              GOTO 93000
+            END
+          END
+        END ELSE
+          ERRMSG = "Cannot locate Job (":INVR.JOB:") for Receipt # ":RCPTNO
+          GOTO 93000
+        END
+      END
+    END
+  END
+*IF JFS.A.QTY # "" THEN Allocated_Qty = JFS.A.QTY/1000
+*IF JFS.M.QTY # "" THEN Manuf_Qty = JFS.M.QTY/1000
+*IF JFS.F.QTY # "" THEN Finish_Qty = JFS.F.QTY/1000
+
+*vvv ADDED BY SUHAIL
+IF JFS.M.QTY # "" THEN Manuf_Qty = JFS.M.QTY
+IF JFS.F.QTY # "" THEN Finish_Qty = JFS.F.QTY
+
+Manuf_Qty = CALC_STK_QTY(Manuf_Qty, MAT INV.CNV.REC,'.5','')
+Manuf_Qty = OCONV(Manuf_Qty,ICR.CNV1)"R#10"
+
+Finish_Qty = CALC_STK_QTY(Finish_Qty, MAT INV.CNV.REC,'.5','')
+Finish_Qty = OCONV(Finish_Qty,ICR.CNV1)"R#10"
+
+DEPL_QTY = CALC_STK_QTY(DEPLQTY,MAT INV.CNV.REC,'.5','')
+DEPL_QTY = OCONV(DEPL_QTY,ICR.CNV1)"R#10"
+STATUS = RBO.setDBVals("INVR_DEPL_QTY", DEPL_QTY)
+
+FOR M = 1 TO DCOUNT(TEMP.ALLOC,@VM)
+   PQTY = ''
+   PQTY=CALC_STK_QTY(TEMP.ALLOC<1,M>,MAT INV.CNV.REC,'.5','')
+   Allocated_Qty<1,M>  =  OCONV(PQTY,ICR.CNV1) "R#10"
+NEXT M
+SHPNAME = TEMP.SHPNM
+
+STATUS = RBO.getDBVals("INVR_ORD_QTY",ORDSQTY)
+FOR X = 1 TO DCOUNT(ORDSQTY,@VM)
+   ORDSQTY<1,X> = CALC_STK_QTY(ORDSQTY<1,X>,MAT INV.CNV.REC,'.5','')
+   ORDSQTY<1,X> = OCONV(ORDSQTY<1,X>,ICR.CNV1)"R#10"
+NEXT X
+STATUS = RBO.setDBVals("INVR_ORD_SQTY",ORDSQTY)
+*^^^ 
+
+
+STATUS = RBO.setProperty('','CustName',CustName)
+STATUS = RBO.setProperty('','AllocatedQty',Allocated_Qty)
+STATUS = RBO.setProperty('','ManufQty',Manuf_Qty)
+STATUS = RBO.setProperty('','FinishQty',Finish_Qty)
+*STATUS = RBO.setProperty('','OrgSQty',ORGSQTY)
+STATUS = RBO.setProperty('','OrgSQty',ORGSQTY)
+STATUS = RBO.setProperty('','SHPNM',SHPNAME)
+RETURN
+
+
+****************
+GET.DETAIL.DATA: 
+****************
+*
+PDNOS = ""; WHNOS = ""; REFNOS = ""
+FLINES = DCOUNT(JFS.PROD,@VM)
+IF FLINES < 1 THEN
+  ERRMSG = "Cannot locate any Finished Goods for Job # ":INVR.JOB
+  GOTO 93000
+END ELSE
+  PTR = 1
+  LOOP
+    LOCATE INVR.PROD IN JFS.PROD<1>,PTR SETTING PLOC THEN
+      IF INVR.ORG.WHSE = JFS.WHSE<1,PLOC> THEN
+        PTR = 0
+      END
+    END ELSE
+      PTR = 0; PLOC = 0
+    END
+  WHILE PTR DO
+    PTR = PLOC + 1
+  REPEAT
+  IF NOT(PLOC) THEN
+    ERRMSG = "Cannot associate Product / Whse (":INVR.PROD:" / ":INVR.ORG.WHSE:") with Job # ":INVR.JOB
+    GOTO 93000
+  END ELSE
+    JPPTR = PLOC
+  END
+END
+RETURN
+*
+
+93000
+STATUS = RBO.setProperty('','ServerStatus',1)
+STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+RETURN
+

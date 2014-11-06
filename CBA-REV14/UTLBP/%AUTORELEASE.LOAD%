@@ -1,0 +1,492 @@
+*
+*T21762 diane 03/27/1997 * REV11 UPGRADE
+* SET UP VARIABLES
+*
+OPEN "VOC" TO VOC ELSE PRINT "Unable to open VOC file" ; STOP
+OPEN "AUTORELEASE" TO AUTORELEASE ELSE
+  PRINT 'Unable to open AUTORELEASE file '
+  STOP
+END
+*
+*
+TRUE=1 ; FALSE=0
+EQU VM TO CHAR(253)
+EQU AM TO CHAR(254)
+ERRARRAY=''
+CBAHOMEPATH=@PATH
+*
+DONE=FALSE
+* the line below will need to be updated with mv list of release numbers
+* as they become available
+VALID.RELEASE="REV10A":@VM:"REV10B":@VM:"REV11"
+LOOP
+UNTIL DONE DO
+  PRINT 'Enter Version number of RELEASE (eg REV10A) or "X"'
+  INPUT VERSION
+  IF VERSION = 'X' THEN
+    DONE=1
+  END ELSE
+    LOCATE VERSION IN VALID.RELEASE<1>,1 SETTING POS THEN
+      DONE=TRUE
+    END ELSE
+      PRINT "Invalid response"
+    END
+  END
+REPEAT
+IF VERSION = 'X' THEN STOP
+PRINT
+PRINT
+DONE=FALSE
+LOOP
+UNTIL DONE DO
+  PRINT 'Enter the path of the home account (eg /usr/ud/primac/rev10/basea/REV10A)'
+  INPUT HOMEPATH
+  PRINT "Is this correct :":HOMEPATH:" (Y/N/X) ":
+  INPUT RESP
+  IF RESP = 'Y' OR RESP = 'X' THEN
+    DONE=TRUE
+  END
+REPEAT
+IF RESP = 'X' THEN STOP
+PRINT
+PRINT
+DONE=FALSE
+LOOP
+UNTIL DONE DO
+  PRINT 'Enter the path of the dest account (eg /vsi/cust/aetna/AETNA)'
+  INPUT DESTPATH
+  PRINT "Is this correct :":DESTPATH:" (Y/N/X) ":
+  INPUT RESP
+  IF RESP = 'Y' OR RESP = 'X' THEN
+    DONE=TRUE
+  END
+REPEAT
+IF RESP = 'X' THEN STOP
+*
+PRINT
+PRINT
+DONE=FALSE
+LOOP
+UNTIL DONE DO
+  PRINT 'Overlay PQN Voc items? (Y/N/X)'
+  INPUT OVERLAY.OPT
+  IF OVERLAY.OPT = 'Y' OR OVERLAY.OPT = 'N' THEN
+    DONE = 1
+    IF OVERLAY.OPT = 'Y' THEN
+      OVERLAY.OPT=TRUE
+    END ELSE
+      OVERLAY.OPT=FALSE
+    END
+  END
+  IF OVERLAY.OPT = 'X' THEN DONE=1
+REPEAT
+IF OVERLAY.OPT = 'X' THEN STOP
+PRINT
+PRINT
+*
+DONE=FALSE
+LOOP
+UNTIL DONE DO
+  PRINT 'Include Customer files (<cust>.SCREENS, <cust>PROCS, BP, CPYLIB)'
+  PRINT '  in the setup of ptrs? (Y/N/X)'
+  INPUT CUST.OPT
+  IF CUST.OPT = 'Y' OR CUST.OPT = 'N' THEN
+    DONE = 1
+    IF CUST.OPT = 'Y' THEN
+      CUST.OPT=TRUE
+    END ELSE
+      CUST.OPT=FALSE
+    END   
+  END
+  IF CUST.OPT THEN
+    PRINT
+    PRINT "Carefully enter the Client Base Name :":
+    INPUT CUSTBASENAME
+  END
+  IF CUST.OPT = 'X' THEN DONE=1
+REPEAT
+IF CUST.OPT = 'X' THEN STOP
+VAL.RESP = 0
+LOOP
+UNTIL VAL.RESP DO
+  PRINT "Is this pgm being run at Vercom (Y/N/X) :":
+  INPUT RESP
+  VAL.RESP=1
+  BEGIN CASE
+    CASE RESP = 'Y'
+    CASE RESP = 'N'
+    CASE RESP = 'X'
+    CASE 1
+      VAL.RESP=0
+  END CASE
+REPEAT
+IF RESP = 'X' THEN STOP
+IF RESP = 'Y' THEN
+  LOC.ENTRY = "VERCOM"
+END ELSE
+  LOC.ENTRY = "CUSTSITE"
+END
+* set up list of accounts
+*
+ACCTLIST = "":VM:"APS":VM:"ARS":VM:"FAS":VM:"GLS":VM:"ICS":VM:"JCS":VM:"JES"
+ACCTLIST = ACCTLIST:VM:"OPS":VM:"POS":VM:"PRS":VM:"PSS":VM:"SAS"
+*
+PASSTYPES="BEFORE":VM:"":VM:"AFTER"
+*
+NUMPASSTYPES=DCOUNT(PASSTYPES,VM)
+*
+NUM.SLASH=DCOUNT(DESTPATH,"/")
+BASEDESTPATH=''
+BASEDESTNAME=FIELD(DESTPATH,"/",NUM.SLASH)
+FOR I = 1 TO NUM.SLASH-1
+  BASEDESTPATH=BASEDESTPATH:FIELD(DESTPATH,"/",I):"/"
+NEXT I
+CUSTNAME = FIELD(DESTPATH,"/",NUM.SLASH)
+NUM.SLASH=DCOUNT(HOMEPATH,"/")
+BASEHOMEPATH=''
+BASEHOMENAME=FIELD(HOMEPATH,"/",NUM.SLASH)
+FOR I = 1 TO NUM.SLASH-1
+  BASEHOMEPATH=BASEHOMEPATH:FIELD(HOMEPATH,"/",I):"/"
+NEXT I
+BASECBAPATH = BASEHOMEPATH:"CBA-":BASEHOMENAME
+*
+NUM.ACCT = DCOUNT(ACCTLIST,VM)
+FOR APTR = 1 TO NUM.ACCT
+  BCURRACCT = ACCTLIST<1,APTR>
+  IF BCURRACCT #'' THEN
+    CURRACCT="-":BCURRACCT
+  END ELSE
+    CURRACCT = BCURRACCT
+  END
+  PRINT "Processing    ":CURRACCT
+  DELETE VOC, "SOURCEQPTR"
+  DELETE VOC, "DESTQPTR"
+  VERBA = "SETFILE ":HOMEPATH:CURRACCT:"/VOC SOURCEQPTR OVERWRITING"
+  VERBB = "SETFILE ":DESTPATH:CURRACCT:"/VOC DESTQPTR OVERWRITING"
+  UDTEXECUTE VERBA CAPTURING JUNK
+  UDTEXECUTE VERBB CAPTURING JUNK
+  OPEN "SOURCEQPTR" TO SOURCEVOC THEN
+    OPEN "DESTQPTR" TO DESTVOC THEN
+      * have both vocs open  process the list
+      *
+      PASSPTR=1
+      LOOP
+      UNTIL PASSPTR > NUMPASSTYPES DO 
+        SUFFIX=PASSTYPES<1,PASSPTR>              
+        IF SUFFIX # "" THEN SUFFIX="-":SUFFIX
+        GOSUB 500 ;* Process the lists
+        PASSPTR=PASSPTR+1
+      REPEAT
+    END
+  END
+NEXT APTR
+*
+IF ERRARRAY # "" THEN
+  WRITE ERRARRAY ON AUTORELEASE,VERSION:".ERRLIST"
+  PRINT "THERE ARE ERRORS SEE AUTORELEASE :":VERSION:".ERRLIST"
+  INPUT RESP
+END
+*
+STOP
+*
+500 * Process the lists
+*
+IF SUFFIX = "" THEN
+  PSUFFIX = "MAIN"
+END ELSE
+  PSUFFIX = SUFFIX
+END
+PRINT "    Processing Pass ":PSUFFIX
+
+READ LIST1 FROM AUTORELEASE,VERSION:"-":BCURRACCT:"-":"LIST1":SUFFIX THEN
+  * process the base pointers
+  * line format is MDfilename vm REALfilename vm "D" or "F"
+  * --- EASY.MENUS]PRIMAC.MENUS]F
+  BASE.OR.RELATIVE='B'; PASS=1
+  CURRLIST=LIST1
+  PRINT "        Processing List 1"
+  GOSUB 1000
+END 
+READ LIST2 FROM AUTORELEASE,VERSION:"-":BCURRACCT:"-":"LIST2":SUFFIX THEN
+  * process the relative pointers
+  * line format is MDfilename vm REALfilename vm "D" or "F"
+  * --- EASY.MENUS]PRIMAC.MENUS]F
+  BASE.OR.RELATIVE='R'; PASS=2
+  CURRLIST=LIST2
+  PRINT "       Processing List 2"
+  GOSUB 1000
+END
+READ LIST3 FROM AUTORELEASE,VERSION:"-":BCURRACCT:"-":"LIST3":SUFFIX THEN
+  * process the PQN ITEMS
+  * line format is VOCitemname vm "O" or ""
+  * --- LIST.CUST.RPT]O   or LIST.CUST.RPT <-- will result in copy
+  *     ^will copy with overlay                w/o overlay
+  PASS=3
+  PRINT "        Processing List 3"
+  GOSUB 3000
+END
+READ LIST4 FROM AUTORELEASE,VERSION:"-":BCURRACCT:"-":"LIST4":SUFFIX THEN
+  * process create newfiles ITEMS
+  * line format is FILENAME vm type vm dictsize vm datasize vm copydict
+  * --- CUSTOMER]F]3]101]Y -- CREATE-FILE CUSTOMER 2 101 .. yes copydict 
+  * or  LOCALBP]D]]]N      -- CREATE-FILE DIR LOCALBP    .. no copy dict
+  * or  CUSTOMER]F]3]101]  -- CREATE-FILE CUSTOMER 3 101 .. no copy dict
+  PASS = 4
+  PRINT "        Processing List 4"
+  GOSUB 4000
+END
+READ LIST5 FROM AUTORELEASE,VERSION:"-":BCURRACCT:"-":"LIST5":SUFFIX THEN
+  * process list of executes while logged into the acct
+  * format of file is as you would type a command at TCL
+  PASS = 5
+  PRINT "        Processing List 5"
+  GOSUB 5000
+END
+*
+RETURN
+*
+1000 * process base ptrs
+*
+NUM.LINES = DCOUNT(CURRLIST,AM)
+FOR LPTR = 1 TO NUM.LINES
+  IF CURRLIST<LPTR>[1,1]='*' THEN
+    * this is a comment line do not process
+  END ELSE
+    FINAME = CURRLIST<LPTR,1> ;* Actual MD file name in mv1
+    PTNAME = CURRLIST<LPTR,2> ;* Pointer name for path in mv2
+    D.OR.F = CURRLIST<LPTR,3> ;* is this ptr an "F" or "D"
+    IF D.OR.F = "D" THEN D.OR.F = "DIR"
+    MODNAME= CURRLIST<LPTR,4> ;* module name for ptr
+    IF FINAME='' OR PTNAME='' OR D.OR.F = '' THEN
+      ERRARRAY<-1>=BCURRACCT:VM:PASS:VM:FINAME:VM:" missing part on line ":LPTR
+    END ELSE
+      IF BASE.OR.RELATIVE = 'B' THEN
+        TPATH = BASECBAPATH:"/":PTNAME
+        TDPATH = BASECBAPATH:"/D_":PTNAME
+      END ELSE
+        IF MODNAME # "" THEN MODNAME="-":MODNAME
+        TPATH = "../":BASEDESTNAME:MODNAME:"/":PTNAME
+        TDPATH = "../":BASEDESTNAME:MODNAME:"/D_":PTNAME
+      END
+      READ VOCENTRY FROM DESTVOC,FINAME THEN
+        * item already exist in dest voc check for errors
+        IF TPATH = VOCENTRY<2> AND TDPATH = VOCENTRY<3> THEN
+          * this entry is ok matches what would be built
+        END ELSE
+          ERRARRAY<-1>=BCURRACCT:VM:PASS:VM:FINAME:VM:" built path missmatch"
+        END
+      END ELSE
+        VOCENTRY=D.OR.F
+        VOCENTRY<2> = TPATH
+        VOCENTRY<3> = TDPATH      
+        WRITE VOCENTRY ON DESTVOC,FINAME
+*
+      END
+    END
+  END
+NEXT LPTR
+*
+IF PASS=1 AND CUST.OPT THEN
+*  this part will add the ptrs to the cust files (CPYLIB, BP, SCREENS, PROCS)
+*  as absolute ptrs
+    TLIST = CUSTBASENAME:"BP":VM:CUSTBASENAME:"BP":VM:"D":VM:"CBA-":CUSTBASENAME
+    TLIST<2>=CUSTBASENAME:"PROCS":VM:CUSTBASENAME:"PROCS":VM:"F":VM:"CBA-":CUSTBASENAME
+    TLIST<3>=CUSTBASENAME:".CPYLIB":VM:CUSTBASENAME:".CPYLIB":VM:"D":VM:"CBA-":CUSTBASENAME
+    TLIST<4>=CUSTBASENAME:".SCREENS":VM:CUSTBASENAME:".SCREENS":VM:"F":VM:"CBA-":CUSTBASENAME
+    FOR KK = 1 TO 4
+      FINAME = TLIST<KK,1> ;* Actual MD file name in mv1
+      PTNAME = TLIST<KK,2> ;* Pointer name for path in mv2
+      D.OR.F = TLIST<KK,3> ;* is this ptr an "F" or "D"
+      IF D.OR.F = "D" THEN D.OR.F = "DIR"
+      MODNAME= TLIST<KK,4> ;* module name for ptr
+      IF FINAME='' OR PTNAME='' OR D.OR.F = '' THEN
+        ERRARRAY<-1>=BCURRACCT:VM:PASS:VM:FINAME:VM:" missing part on line ":LPTR
+      END ELSE
+        IF LOC.ENTRY = "VERCOM" THEN
+          TPATH = BASEDESTPATH:"CBA-":CUSTNAME:"/":PTNAME
+          TDPATH = BASEDESTPATH:"CBA-":CUSTNAME:"/D_":PTNAME
+        END ELSE
+          TPATH = BASECBAPATH:"/":PTNAME
+          TDPATH = BASECBAPATH:"/":"D_":PTNAME
+        END
+        READ VOCENTRY FROM DESTVOC,FINAME THEN
+          * item already exist in dest voc check for errors
+          IF TPATH = VOCENTRY<2> AND TDPATH = VOCENTRY<3> THEN
+            * this entry is ok matches what would be built
+          END ELSE
+            VOCENTRY=D.OR.F
+            VOCENTRY<2> = TPATH
+            VOCENTRY<3> = TDPATH      
+            WRITE VOCENTRY ON DESTVOC,FINAME
+          END
+        END ELSE
+          VOCENTRY=D.OR.F
+          VOCENTRY<2> = TPATH
+          VOCENTRY<3> = TDPATH      
+          WRITE VOCENTRY ON DESTVOC,FINAME
+        END
+      END
+    NEXT KK
+END
+RETURN
+*
+3000 * process pqn items
+*
+NUM.LINES = DCOUNT(LIST3,AM)
+FOR LPTR = 1 TO NUM.LINES
+  IF LIST3<LPTR>[1,1] = "*" THEN
+    * this is a comment line skip
+  END ELSE
+    ITMNAME = LIST3<LPTR,1>
+    FORCEIT = LIST3<LPTR,2> ;* WILL BE "O" FOR OVERLAY
+    READ TREC FROM SOURCEVOC,ITMNAME THEN
+      READ DUMMY FROM DESTVOC,ITMNAME THEN
+        IF FORCEIT = 'O' OR OVERLAY.OPT THEN
+          WRITE TREC ON DESTVOC,ITMNAME
+        END
+      END ELSE
+        WRITE TREC ON DESTVOC,ITMNAME
+      END
+    END
+  END
+NEXT LPTR
+*
+RETURN
+*
+4000 * process create new files
+*
+*  for each account first set ptr to new acct voc
+*  set logbackto location from where currently are baseacct
+*  read login from acct
+*  put dummy login in acct voc
+*  logto acct
+*  open localvoc 
+*  copy orig login back to localvoc
+*  for each line in the array
+*    check if localvoc entry already exists
+*    if no
+*      build create-file stmt
+*      udtexecute stmt
+*    end
+*    if copydict is 'Y' then 
+*      build Qptr to orig file in module in base 
+*             ( /usr/ud/primac/REV10A-POS/MISC.PO  )
+*      copy from dict Qptr to DICT filename ALL
+*    end
+*  end for loop
+*  logto baseacct
+*
+READ ORIGLOGIN FROM DESTVOC,"LOGIN" THEN
+  *  this is where we start the logic above
+  *
+  DLOGIN="PQN"
+  DLOGIN<2>="X"
+  WRITE DLOGIN ON DESTVOC,"LOGIN"
+  VERB = "LOGTO ":DESTPATH:CURRACCT
+  UDTEXECUTE VERB CAPTURING JUNK
+PRINT VERB
+  OPEN "VOC" TO LOCALVOC THEN
+    NUM.LINES = DCOUNT(LIST4,AM)
+    FOR LPTR = 1 TO NUM.LINES
+      * process the lines
+      IF LIST4<LPTR>[1,1] = "*" THEN
+        * this line is a comment do not process
+      END ELSE
+        FNAME=LIST4<LPTR,1>
+        D.OR.F=LIST4<LPTR,2>
+        IF D.OR.F = "D" THEN D.OR.F = "DIR"
+        DICTSIZE=LIST4<LPTR,3>
+        DATASIZE=LIST4<LPTR,4>
+        CPYDICT=LIST4<LPTR,5>
+        IF CPYDICT='Y' THEN
+          CPYDICT=TRUE
+        END ELSE
+          CPYDICT=FALSE
+        END
+        ISAFILE=FALSE
+        READ TREC FROM LOCALVOC,FNAME THEN
+          * this item is on file in this voc
+          IF TREC<1>[1,1]='F' OR TREC<1>[1,1]='D' THEN
+            ISAFILE=TRUE
+          END 
+        END ELSE
+          IF FNAME = '' OR D.OR.F = '' THEN
+            *  this is not a processable file
+            ERRARRAY<-1>=BCURRACCT:VM:PASS:VM:FNAME:VM:"Missing filename or ptrtype"
+          END ELSE
+            IF D.OR.F = 'F' THEN
+              IF DICTSIZE = '' OR DATASIZE = '' THEN
+                * this rec has no create sizes
+                ERRARRAY<-1>=BCURRACCT:VM:PASS:VM:FNAME:VM:"Missing dict or data size"
+              END ELSE
+                * create an fptr type file
+                VERB = "CREATE-FILE ":FNAME:" ":DICTSIZE:" ":DATASIZE
+                UDTEXECUTE VERB CAPTURING DUMMY
+PRINT VERB
+                ISAFILE=TRUE
+              END
+            END ELSE
+              * create an dptr type file
+              VERB = "CREATE-FILE DIR ":FNAME
+              UDTEXECUTE VERB CAPTURING DUMMY
+              ISAFILE=TRUE
+            END
+          END
+        END
+        IF ISAFILE THEN
+          * attempt to open it
+          OPEN "DICT",FNAME TO TEMPF THEN
+            * set ptr back to base and copy in dict
+            VERB = "SETFILE ":HOMEPATH:CURRACCT:"/":FNAME:" LOCQ OVERWRITING"
+            UDTEXECUTE VERB CAPTURING JUNK
+PRINT VERB
+            VERB = "COPY FROM DICT LOCQ TO DICT ":FNAME:" ALL"
+            UDTEXECUTE VERB CAPTURING JUNK
+PRINT VERB
+          END ELSE 
+            ERRARRAY<-1>=BCURRACCT:VM:PASS:VM:FNAME:VM:"Unable to open DICT"
+          END
+        END
+      END
+    NEXT LPTR      
+  END ELSE
+    ERRARRAY<-1>=BCURRACCT:VM:PASS:VM:VM:"unable to open localvoc"
+  END
+  VERB = "LOGTO ":CBAHOMEPATH
+  UDTEXECUTE VERB CAPTURING JUNK
+PRINT VERB
+  WRITE ORIGLOGIN ON DESTVOC,"LOGIN"
+END ELSE
+  ERRARRAY<-1>=BCURRACCT:VM:PASS:VM:VM:" no login in voc"
+END
+RETURN
+*
+5000 * Process the executes
+READ ORIGLOGIN FROM DESTVOC,"LOGIN" THEN
+  *
+  DLOGIN="PQN"
+  DLOGIN<2>="X"
+  WRITE DLOGIN ON DESTVOC,"LOGIN"
+  VERB = "LOGTO ":DESTPATH:CURRACCT
+  UDTEXECUTE VERB CAPTURING JUNK
+  OPEN "VOC" TO LOCALVOC THEN
+    NUM.LINES = DCOUNT(LIST5,AM)
+    FOR LPTR = 1 TO NUM.LINES
+      * process the lines
+      IF LIST5<LPTR>[1,1] = "*" THEN
+        * this line is a comment do not process
+      END ELSE
+        VERB = LIST5<LPTR,1>
+        UDTEXECUTE VERB CAPTURING DUMMY
+      END
+    NEXT LPTR      
+  END ELSE
+    ERRARRAY<-1>=BCURRACCT:VM:PASS:VM:VM:"unable to open localvoc"
+  END
+  VERB = "LOGTO ":CBAHOMEPATH
+  UDTEXECUTE VERB CAPTURING JUNK
+  WRITE ORIGLOGIN ON DESTVOC,"LOGIN"
+END ELSE
+  ERRARRAY<-1>=BCURRACCT:VM:PASS:VM:VM:" no login in voc"
+END
+RETURN

@@ -1,0 +1,943 @@
+      SUBROUTINE JOB.SCHED.REV.SUB (CONO,JOB.NUM,TODAY,LOADING.FLG,PROC.TYPE)
+*********************************************************************
+* REVISION    - [08.1]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* PROGRAM  - JOB.SCHED.REV.SUB
+* AUTHOR   - NICK AMENDOLA, COMPUTER BUSINESS ASSOCIATES
+* DATE     - 10/31/88
+* MODIFIED - 02/21/96, NA, TASK 19938, DISPLAY COST CENTER DESCRIPTION
+* MODIFIED - 02/21/96, NA, TASK 19940, RELEASE SCHED HRS ON CCTR COMPLETE
+* DESCRIPTION
+* This subroutine is called by the GEN.JOB.SCHED.DRIVER program when
+* a job cannot be scheduled in the given window.  The portion of the
+* job scheduled may be analyzed and changes may be made to attempt
+* to fit the job.
+*T22102 renee 07/25/1997 * Making CPI's modification in the REV10b base
+*                          package. In this screen, adding component
+*                          field and "PI" option to see the paper and
+*                          ink screen.
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>CPYLIB>SCOMMON1
+*COPY>PSS.CPYLIB>COM.PSS.FILE.VARS
+*COPY>PSS.CPYLIB>COM.CCTR.SCHED
+*COPY>PSS.CPYLIB>COM.JOB.SCHED
+*COPY>PMC.CPYLIB>COM.COMPANY
+*COPY>PMC.CPYLIB>COM.DIVISION
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PSS.CPYLIB>PSS.FILE.VARS
+*COPY>PSS.CPYLIB>JOB.SCHED
+*COPY>PSS.CPYLIB>CCTR.AVAIL
+*COPY>PMC.CPYLIB>COST.CNTR
+*COPY>PMC.CPYLIB>DIVISION
+*COPY>PMC.CPYLIB>DEPARTMENT
+*COPY>JCS.CPYLIB>OPERATION
+*COPY>CPYLIB>SCREEN.COM
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+      MAT SYSCOM.REC =  ""; SYS.TYPE = 2
+*
+*---- TEMP OPER DIM
+*
+      DIM ALL.REC(9)
+      EQU ALL.OPER     TO ALL.REC(1)
+      EQU ALL.STATUS   TO ALL.REC(2)
+      EQU ALL.SCH.DATE TO ALL.REC(3)
+      EQU ALL.EXP.DATE TO ALL.REC(4)
+      EQU ALL.REV.DATE TO ALL.REC(5)
+      EQU ALL.SCH.HRS  TO ALL.REC(6)
+      EQU ALL.ACT.DATE TO ALL.REC(7)
+      EQU ALL.ACT.HRS  TO ALL.REC(8)
+      EQU ALL.ACT.TIME TO ALL.REC(9)
+*
+*---- INITIALIZATION
+*
+      OPEN "","PSS.SCREENS" TO M.SCREENS ELSE
+         ERRMSG = "CANNOT OPEN PSS.SCREENS FILE"
+         GOSUB 90000
+         RETURN
+      END
+      SCREEN DEFINE;JOB.SCHED.REV.SUB
+      SCREEN FORMAT
+      SCREEN COUNT;;2
+      DEPT.COUNT = S$LCNT
+      LINE.SPACE = S$LSPC
+      CURR.REF = ""
+      SCREEN COUNT;;15
+      OPER.COUNT = S$LCNT
+      CURR.SREF = ""
+      S$DATA(40)<S$SCR> = ""
+      S$DATA(14)<S$SCR> = ""
+*
+*----- MAIN PROCESSING
+*
+100*
+      S$DATA(32)<S$SCR> = TODAY
+      SCREEN DISPLAY;;32
+      S$DATA(1)<S$SCR> = JOB.NUM
+      SCREEN DISPLAY;;1
+      S$DATA(60)<S$SCR> = JBS.DUE.DATE
+      SCREEN DISPLAY;;60
+120*
+      CR.CNT = DCOUNT(JBS.CRTCL.REF,VM)
+      DEPT.CNT = DCOUNT(JBS.DEPT,VM)
+      GOSUB 80000
+      REF = 1
+      CURR.REF = ""
+      GOSUB 50000
+*
+*---- GET OPERATOR REQUEST
+*
+500*
+      BEGIN CASE
+      CASE PROC.TYPE = "M"
+         SCREEN FIELD;;20
+         SCREEN INPUT;;20
+      CASE 1
+         SCREEN FIELD;;29
+         SCREEN INPUT;;29
+      END CASE
+      OPTION = S$VALUE
+      BEGIN CASE
+      CASE OPTION = "" OR OPTION = "END"
+         GOTO 999999
+      CASE OPTION = "A" AND DEPT.CNT < 99
+         DONE = 0
+         FOR REF = DEPT.CNT+1 TO 99 UNTIL DONE
+            GOSUB 800
+            GOSUB 50000
+            MAT ALL.REC = ""
+            GOSUB 10000
+            IF S$VALUE = "END" THEN
+               DONE = 1
+               GOSUB 700
+            END ELSE
+               DEPT.CNT = DEPT.CNT + 1
+            END
+            S$DATA(40)<S$SCR> = ""
+            SCREEN DISPLAY;;40
+            S$DATA(14)<S$SCR> = ""
+            SCREEN DISPLAY;;14
+            MAT ALL.REC = ""
+            OPER.CNT = 0
+            GOSUB 82000
+         NEXT REF
+         REF = DEPT.CNT
+         IF REF < 1 THEN REF = 1
+      CASE OPTION = "C" AND DEPT.CNT > 0
+         GOSUB 650
+         BEGIN CASE
+         CASE S$VALUE = "" OR S$VALUE = "END"
+            GOTO 500
+         CASE S$VALUE = "ALL"
+            ST.PTR = 1
+            EN.PTR = DEPT.CNT
+*        CASE S$DATA(13)<S$SCR,S$VALUE> # ""
+*           ERRMSG = "Line can't be changed, because of status"
+*           GOSUB 90000
+*           GOTO 500
+         CASE 1
+            ST.PTR = S$VALUE
+            EN.PTR = S$VALUE
+         END CASE
+         FOR REF = ST.PTR TO EN.PTR UNTIL S$VALUE = "END"
+*           IF S$DATA(13)<S$SCR,REF> = "" THEN
+               GOSUB 50000
+               S$VAL = REF
+               S$DATA(25)<S$SCR,REF> = "*"
+               SCREEN DISPLAY;;25
+               CCTR = JBS.CCTR<1,REF>
+               MATREAD CCTR.REC FROM COST.CNTR, CONO:CCTR ELSE
+                  MAT CCTR.REC = ""
+                  CCTR.DESC = "NOT ON FILE"
+               END
+               S$DATA(40)<S$SCR> = "Cost Center: ":CCTR.DESC
+               SCREEN DISPLAY;;40
+               S$DATA(14)<S$SCR> = "Comment : ":JBS.HOLD.COMMENT<1,REF>
+               SCREEN DISPLAY;;14
+               OPER.CNT = DCOUNT(JBS.OPER<1,REF>,SVM)
+               MAT ALL.REC = ""
+               ALL.OPER<1,1> = JBS.OPER<1,REF>
+               ALL.STATUS<1,1> = JBS.OPER.STATUS<1,REF>
+               ALL.SCH.DATE<1,1> = JBS.OPER.SCH.DATE<1,REF>
+               ALL.EXP.DATE<1,1> = JBS.OPER.EXP.DATE<1,REF>
+               ALL.REV.DATE<1,1> = JBS.OPER.REV.DATE<1,REF>
+               ALL.SCH.HRS<1,1> = JBS.OPER.SCH.HRS<1,REF>
+               ALL.ACT.DATE<1,1> = JBS.OPER.ACT.DATE<1,REF>
+               ALL.ACT.HRS<1,1> = JBS.OPER.ACT.HRS<1,REF>
+               ALL.ACT.TIME<1,1> = JBS.OPER.ACT.TIME<1,REF>
+               GOSUB 80100
+               SREF = 1
+               CURR.SREF = ""
+               GOSUB 50100
+               DEPT = JBS.DEPT<1,REF>
+               GOSUB 10025
+               MAT ALL.REC = ""
+               S$VAL = REF
+               S$DATA(25)<S$SCR,REF> = ""
+               SCREEN DISPLAY;;25
+               S$DATA(40)<S$SCR> = ""
+               SCREEN DISPLAY;;40
+               S$DATA(14)<S$SCR> = ""
+               SCREEN DISPLAY;;14
+*           END
+         NEXT REF
+         REF = REF - 1
+         IF REF < ST.PTR THEN REF = ST.PTR
+      CASE OPTION = "D" AND DEPT.CNT > 0
+         GOSUB 600
+         BEGIN CASE
+         CASE S$VALUE = "" OR S$VALUE = "END"
+         CASE S$DATA(27)<S$SCR,S$VALUE> # ""
+            ERRMSG = "Line can't be deleted, because of status"
+            GOSUB 90000
+         CASE 1
+            PTR = S$VALUE + 1
+            LOCATE S$VALUE IN JBS.HOLD.DP.CC<1>,PTR SETTING SBLK ELSE SBLK = 0
+            IF SBLK THEN
+               ERRMSG = "Line can't be deleted, because of hold codes"
+               GOSUB 90000
+            END ELSE
+               LOCATE S$VALUE IN JBS.CRTCL.REF<1>,1 SETTING SBLK ELSE SBLK = 0
+               IF SBLK THEN
+                  ERRMSG = "Line can't be deleted, because of critical dates"
+                  GOSUB 90000
+               END ELSE
+                  REF = S$VALUE
+                  GOSUB 700
+                  DEPT.CNT = DEPT.CNT - 1
+                  IF REF > DEPT.CNT THEN REF = REF - 1
+                  IF REF < 1 THEN REF = 1
+                  CURR.REF = ""
+               END
+            END
+         END CASE
+      CASE OPTION = "I" AND DEPT.CNT > 0
+         GOSUB 600
+         IF S$VALUE # "" AND S$VALUE # "END" THEN
+            REF = S$VALUE
+            GOSUB 800
+            MAT ALL.REC = ""
+            DEPT.CNT = DEPT.CNT + 1
+            CURR.REF = ""
+            GOSUB 50000
+            GOSUB 10000
+            IF S$VALUE = "END" THEN
+               GOSUB 700
+               DEPT.CNT = DEPT.CNT - 1
+            END
+            MAT ALL.REC = ""
+         END
+      CASE OPTION = "R" AND DEPT.CNT > 0
+         IF DEPT.CNT = 1 THEN
+            S$VALUE = 1
+         END ELSE
+            GOSUB 600
+         END
+         IF S$VALUE # "" AND S$VALUE # "END" THEN
+            REF = S$VALUE
+            S$VAL = REF
+            S$DATA(25)<S$SCR,REF> = "*"
+            SCREEN DISPLAY;;25
+            CCTR = JBS.CCTR<1,REF>
+            MATREAD CCTR.REC FROM COST.CNTR, CONO:CCTR ELSE
+               MAT CCTR.REC = ""
+               CCTR.DESC = "NOT ON FILE"
+            END
+            S$DATA(40)<S$SCR> = "Cost Center: ":CCTR.DESC
+            SCREEN DISPLAY;;40
+            S$DATA(14)<S$SCR> = "Comment : ":JBS.HOLD.COMMENT<1,REF>
+            SCREEN DISPLAY;;14
+            OPER.CNT = DCOUNT(JBS.OPER<1,REF>,SVM)
+            MAT ALL.REC = ""
+            ALL.OPER<1,1> = JBS.OPER<1,REF>
+            ALL.STATUS<1,1> = JBS.OPER.STATUS<1,REF>
+            ALL.SCH.DATE<1,1> = JBS.OPER.SCH.DATE<1,REF>
+            ALL.EXP.DATE<1,1> = JBS.OPER.EXP.DATE<1,REF>
+            ALL.REV.DATE<1,1> = JBS.OPER.REV.DATE<1,REF>
+            ALL.SCH.HRS<1,1> = JBS.OPER.SCH.HRS<1,REF>
+            ALL.ACT.DATE<1,1> = JBS.OPER.ACT.DATE<1,REF>
+            ALL.ACT.HRS<1,1> = JBS.OPER.ACT.HRS<1,REF>
+            ALL.ACT.TIME<1,1> = JBS.OPER.ACT.TIME<1,REF>
+            GOSUB 80100
+            SREF = 1
+            CURR.SREF = ""
+            GOSUB 50100
+            GOSUB 1000
+            MAT ALL.REC = ""
+            S$VAL = REF
+            S$DATA(25)<S$SCR,REF> = ""
+            SCREEN DISPLAY;;25
+            S$DATA(40)<S$SCR> = ""
+            SCREEN DISPLAY;;40
+            S$DATA(14)<S$SCR> = ""
+            SCREEN DISPLAY;;14
+         END
+      CASE OPTION = "S" OR OPTION = "SF"
+         REF = CURR.REF + DEPT.COUNT
+         IF REF > DEPT.CNT THEN REF = 1
+* T22102 v
+      CASE OPTION = "PI"
+         GOSUB 600          ;* Get line number
+         IF S$VALUE # "END" AND S$VALUE # "" THEN
+           TCOMP = S$DATA(51)<S$SCR,S$VALUE>
+           TDEPT = S$DATA(3)<S$SCR,S$VALUE>
+           TCCTR = S$DATA(4)<S$SCR,S$VALUE>
+           CURR.VAL = S$VAL
+           S$SCR = S$SCR + 1
+           CALL PAPER.AND.INK.DISPLAY(JOB.NUM, TDEPT, TCCTR, TCOMP, CONO)
+           S$SCR = S$SCR - 1
+           GOSUB 550
+           CURR.REF = ""
+         END
+* T22102 ^
+      CASE OPTION = "ST"
+         REF = 1
+      CASE OPTION = "SB"
+         REF = DEPT.CNT
+         IF REF < 1 THEN REF = 1
+      CASE OPTION = "SR"
+         REF = CURR.REF - DEPT.COUNT
+         IF REF < 1 THEN REF = 1
+      CASE OPTION = "CD" AND DEPT.CNT > 0
+         S$SCR = S$SCR + 1
+         CALL JOB.SCHED.DET.DATE (CONO,JOB.NUM,TODAY,LOADING.FLG,PROC.TYPE)
+         SCREEN CLOSE
+         S$SCR = S$SCR - 1
+         GOSUB 550
+         CURR.REF = ""
+      CASE 1
+         ERRMSG = "Invalid Selection"
+         GOSUB 90000
+      END CASE
+      GOSUB 50000
+      S$DATA(40)<S$SCR> = ""
+      SCREEN DISPLAY;;40
+      S$DATA(14)<S$SCR> = ""
+      SCREEN DISPLAY;;14
+      OPER.CNT = 0
+      GOSUB 82000
+      GOTO 500
+*-----------------------*
+*---   SUBROUTINES   ---*
+*-----------------------*
+*
+*---- FORMAT SCREEN AND REPRINT DATA
+*
+550*
+      SCREEN FORMAT
+      SCREEN DISPLAY;;ALL
+      RETURN
+*
+*---- GET LINE REFERENCE NUMBER (DEPT)
+*
+600*
+      SCREEN FIELD;;22
+      S$MINV = CURR.REF
+      S$MAXV = S$MINV + DEPT.COUNT - 1
+      IF S$MAXV > DEPT.CNT THEN S$MAXV = DEPT.CNT
+      SCREEN INPUT;;22
+      RETURN
+*
+*---- GET COMPLETE LINE REFERENCE NUMBER (DEPT)
+*
+650*
+      SCREEN FIELD;;21
+      SCREEN INPUT;;21;RETURN
+      BEGIN CASE
+      CASE S$VALUE = "ALL"
+      CASE S$VALUE = ""
+      CASE NOT(NUM(S$VALUE))
+         ERRMSG = "INVALID REPLY"
+         GOSUB 90000
+         GOTO 650
+      CASE S$VALUE < CURR.REF
+         ERRMSG = "OUT OF RANGE"
+         GOSUB 90000
+         GOTO 650
+      CASE S$VALUE > DEPT.CNT
+         ERRMSG = "OUT OF RANGE"
+         GOSUB 90000
+         GOTO 650
+      CASE S$VALUE > CURR.REF + DEPT.COUNT - 1
+         ERRMSG = "OUT OF RANGE"
+         GOSUB 90000
+         GOTO 650
+      END CASE
+      RETURN
+*
+*---- DELETE MULTI-LINE DATA (DEPT)
+*
+700*
+      FOR STS = REF + 1 TO DEPT.CNT
+         IF JBS.HOLD.DP.CC<1,STS> > REF THEN
+            JBS.HOLD.DP.CC<1,STS> = JBS.HOLD.DP.CC<1,STS> - 1
+            S$DATA(12)<S$SCR,STS> = JBS.HOLD.DP.CC<1,STS>
+         END
+      NEXT STS
+      FOR STS = 1 TO CR.CNT
+         IF JBS.CRTCL.REF<1,STS> > REF THEN
+            JBS.CRTCL.REF<1,STS> = JBS.CRTCL.REF<1,STS> - 1
+         END
+      NEXT STS
+      AC = DCOUNT(JBS.A1,",")
+      FOR AP = 1 TO AC
+         AA = FIELD(JBS.A1,",",AP)
+         AA1 = FIELD(AA,"-",1)
+         AA2 = FIELD(AA,"-",2)
+         IF AA2 = "" THEN AA2 = AA1
+         FOR AAP = AA1 TO AA2
+            JBS.REC(AAP) = DELETE(JBS.REC(AAP),1,REF,0)
+            PJBS.REC(AAP) = DELETE(PJBS.REC(AAP),1,REF,0)
+         NEXT AAP
+      NEXT AP
+      S$DATA(3) = DELETE(S$DATA(3),S$SCR,REF,0)
+      S$DATA(4) = DELETE(S$DATA(4),S$SCR,REF,0)
+      S$DATA(5) = DELETE(S$DATA(5),S$SCR,REF,0)
+      S$DATA(6) = DELETE(S$DATA(6),S$SCR,REF,0)
+      S$DATA(7) = DELETE(S$DATA(7),S$SCR,REF,0)
+      S$DATA(8) = DELETE(S$DATA(8),S$SCR,REF,0)
+      S$DATA(9) = DELETE(S$DATA(9),S$SCR,REF,0)
+      S$DATA(10) = DELETE(S$DATA(10),S$SCR,REF,0)
+      S$DATA(11) = DELETE(S$DATA(11),S$SCR,REF,0)
+      S$DATA(12) = DELETE(S$DATA(12),S$SCR,REF,0)
+      S$DATA(13) = DELETE(S$DATA(13),S$SCR,REF,0)
+      S$DATA(27) = DELETE(S$DATA(27),S$SCR,REF,0)
+      S$DATA(28) = DELETE(S$DATA(28),S$SCR,REF,0)
+      S$DATA(30) = DELETE(S$DATA(30),S$SCR,REF,0)
+      S$DATA(31) = DELETE(S$DATA(31),S$SCR,REF,0)
+      RETURN
+*
+*---- INSERT MULTI-LINE DATA (DEPT)
+*
+800*
+      FOR STS = REF + 1 TO DEPT.CNT
+         IF JBS.HOLD.DP.CC<1,STS> >= REF THEN
+            JBS.HOLD.DP.CC<1,STS> = JBS.HOLD.DP.CC<1,STS> + 1
+            S$DATA(12)<S$SCR,STS> = JBS.HOLD.DP.CC<1,STS>
+         END
+      NEXT STS
+      FOR STS = 1 TO CR.CNT
+         IF JBS.CRTCL.REF<1,STS> >= REF THEN
+            JBS.CRTCL.REF<1,STS> = JBS.CRTCL.REF<1,STS> + 1
+         END
+      NEXT STS
+      AC = DCOUNT(JBS.A1,",")
+      FOR AP = 1 TO AC
+         AA = FIELD(JBS.A1,",",AP)
+         AA1 = FIELD(AA,"-",1)
+         AA2 = FIELD(AA,"-",2)
+         IF AA2 = "" THEN AA2 = AA1
+         FOR AAP = AA1 TO AA2
+            JBS.REC(AAP) = INSERT(JBS.REC(AAP),1,REF,0,"")
+            PJBS.REC(AAP) = INSERT(PJBS.REC(AAP),1,REF,0,"")
+         NEXT AAP
+      NEXT AP
+      S$DATA(3) = INSERT(S$DATA(3),S$SCR,REF,0,"")
+      S$DATA(4) = INSERT(S$DATA(4),S$SCR,REF,0,"")
+      S$DATA(5) = INSERT(S$DATA(5),S$SCR,REF,0,"")
+      S$DATA(6) = INSERT(S$DATA(6),S$SCR,REF,0,"")
+      S$DATA(7) = INSERT(S$DATA(7),S$SCR,REF,0,"")
+      S$DATA(8) = INSERT(S$DATA(8),S$SCR,REF,0,"")
+      S$DATA(9) = INSERT(S$DATA(9),S$SCR,REF,0,"")
+      S$DATA(10) = INSERT(S$DATA(10),S$SCR,REF,0,"")
+      S$DATA(11) = INSERT(S$DATA(11),S$SCR,REF,0,"")
+      S$DATA(12) = INSERT(S$DATA(12),S$SCR,REF,0,"")
+      S$DATA(13) = INSERT(S$DATA(13),S$SCR,REF,0,"")
+      S$DATA(27) = INSERT(S$DATA(27),S$SCR,REF,0,"")
+      S$DATA(28) = INSERT(S$DATA(28),S$SCR,REF,0,"")
+      S$DATA(30) = INSERT(S$DATA(30),S$SCR,REF,0,"")
+      S$DATA(31) = INSERT(S$DATA(31),S$SCR,REF,0,"")
+      RETURN
+*
+*---- PROCESS OPER DATA
+*
+1000*
+      BEGIN CASE
+      CASE OPTION = "R"
+         SCREEN FIELD;;23
+         SCREEN INPUT;;23
+      CASE OPT2 = "A"
+         S$VALUE = "A"
+      CASE 1
+         SCREEN FIELD;;24
+         SCREEN INPUT;;24
+      END CASE
+      OPT2 = S$VALUE
+      BEGIN CASE
+      CASE OPT2 = "" OR OPT2 = "END"
+         S$VALUE = ""
+         GOTO 1099
+      CASE OPT2 = "A" AND OPER.CNT < 99
+         IF ALL.OPER<1,1> = "ALL" THEN
+            ERRMSG = "Can't add more Operations when 'ALL' is entered"
+            GOSUB 90000
+         END ELSE
+            DONE1 = 0
+            FOR SREF = OPER.CNT+1 TO 99 UNTIL DONE1
+               GOSUB 50100
+               GOSUB 20000
+               IF S$VALUE = "END" THEN
+                  DONE1 = 1
+                  GOSUB 1700
+               END ELSE
+                  OPER.CNT = OPER.CNT + 1
+               END
+               S$VAL = REF
+               REQ.HRS=SUM(ALL.SCH.HRS<1,1>)
+               GOSUB 85000                  ;* ROUND CCTR HOURS
+               S$DATA(5)<S$SCR,REF> = REQ.HRS
+               SCREEN DISPLAY;;5
+            NEXT SREF
+            SREF = OPER.CNT
+            CURR.SREF = ""
+            GOSUB 50100
+         END
+         OPT2 = ""
+      CASE OPT2 = "C" AND OPER.CNT > 0
+         GOSUB 1600
+         IF S$VALUE # "" AND S$VALUE # "END" THEN
+            SREF = S$VALUE
+            GOSUB 20000
+            IF S$VALUE = "END" THEN
+               CURR.SREF = ""
+               GOSUB 50100
+            END
+         END
+      CASE OPT2 = "D" AND OPER.CNT > 0
+         GOSUB 1600
+         IF S$VALUE # "" AND S$VALUE # "END" THEN
+            SREF = S$VALUE
+            GOSUB 1700
+            OPER.CNT = OPER.CNT - 1
+            IF SREF > OPER.CNT THEN SREF = SREF - 1
+            CURR.SREF = ""
+            GOSUB 50100
+         END
+      CASE OPT2 = "I" AND OPER.CNT > 0
+         IF ALL.OPER<1,1> = "ALL" THEN
+            ERRMSG = "Can't add more Operations when 'ALL' is entered"
+            GOSUB 90000
+         END ELSE
+            GOSUB 1600
+            IF S$VALUE # "" AND S$VALUE # "END" THEN
+               SREF = S$VALUE
+               GOSUB 1800
+               OPER.CNT = OPER.CNT + 1
+               CURR.SREF = ""
+               GOSUB 50100
+               GOSUB 20000
+               IF S$VALUE = "END" THEN
+                  GOSUB 1700
+                  OPER.CNT = OPER.CNT - 1
+                  CURR.SREF = ""
+                  GOSUB 50100
+               END
+            END
+         END
+      CASE OPT2 = "S" OR OPT2 = "SF"
+         SREF = CURR.SREF + OPER.COUNT
+         IF SREF > OPER.CNT THEN SREF = 1
+         GOSUB 50100
+      CASE OPT2 = "ST"
+         SREF = 1
+         GOSUB 50100
+      CASE OPT2 = "SB"
+         SREF = OPER.CNT
+         GOSUB 50100
+      CASE OPT2 = "SR"
+         SREF = CURR.SREF - OPER.COUNT
+         IF SREF < 1 THEN SREF = 1
+         GOSUB 50100
+      CASE 1
+         ERRMSG = "Invalid Selection"
+         GOSUB 90000
+      END CASE
+      IF OPT2 = "I" OR OPT2 = "D" OR OPT2 = "C" THEN
+         S$VAL = REF
+         REQ.HRS=SUM(ALL.SCH.HRS<1,1>)
+         GOSUB 85000                        ;* ROUND CCTR HOURS
+         S$DATA(5)<S$SCR,REF> = REQ.HRS
+         SCREEN DISPLAY;;5
+      END
+      GOTO 1000
+1099*
+      RETURN
+*
+*---- GET LINE REFERENCE NUMBER (OPER)
+*
+1600*
+      SCREEN FIELD;;22
+      S$MINV = CURR.SREF
+      S$MAXV = S$MINV + OPER.COUNT - 1
+      IF S$MAXV > OPER.CNT THEN S$MAXV = OPER.CNT
+      SCREEN INPUT;;22
+      RETURN
+*
+*---- DELETE MULTI-LINE DATA (OPER)
+*
+1700*
+      FOR AAP = 1 TO 9
+         ALL.REC(AAP) = DELETE(ALL.REC(AAP),1,1,SREF)
+      NEXT AAP
+      S$DATA(16) = DELETE(S$DATA(16),S$SCR,SREF,0)
+      S$DATA(17) = DELETE(S$DATA(17),S$SCR,SREF,0)
+      S$DATA(18) = DELETE(S$DATA(18),S$SCR,SREF,0)
+      RETURN
+*
+*---- INSERT MULTI-LINE DATA (OPER)
+*
+1800*
+      FOR AAP = 1 TO 9
+         ALL.REC(AAP) = INSERT(ALL.REC(AAP),1,1,SREF,"")
+      NEXT AAP
+      S$DATA(16) = INSERT(S$DATA(16),S$SCR,SREF,0,"")
+      S$DATA(17) = INSERT(S$DATA(17),S$SCR,SREF,0,"")
+      S$DATA(18) = INSERT(S$DATA(18),S$SCR,SREF,0,"")
+      RETURN
+*
+*---- GET MULTI-LINE DATA (DEPT)
+*
+10000*
+      S$VAL = REF
+      SCREEN DISPLAY;;2
+10020*
+      S$DATA(4)<S$SCR,REF> = JBS.CCTR<1,REF>
+      S$VAL = REF
+      SCREEN FIELD;;4
+      SCREEN INPUT;;4;GOTO 10950
+      MATREAD CCTR.REC FROM COST.CNTR,CONO:S$VALUE ELSE
+         ERRMSG = "Cost Center (":S$VALUE:") is not on file"
+         GOSUB 90000;GOTO 10020
+      END
+      IF CCTR.SCHED.FLAG = "N" THEN
+         ERRMSG = "Cost Center may not be scheduled"
+         GOSUB 90000;GOTO 10020
+      END
+      IF CCTR.MASTER # "" THEN
+         IF CCTR.MASTER # S$VALUE THEN
+            ERRMSG = "Must enter master Cost Center"
+            GOSUB 90000;GOTO 10020
+         END
+      END
+      DEPT = CCTR.DEPT
+      S$DATA(3)<S$SCR,REF> = DEPT
+      S$VAL = REF
+      SCREEN DISPLAY;;3
+      LOCATE DEPT IN DIV.DEPT<1>,1 SETTING FND ELSE
+         ERRMSG = "Cost Center (":S$VALUE:") is not in Division (":JBS.DIV:")"
+         GOSUB 90000;GOTO 10020
+      END
+      MATREAD DEPT.REC FROM DEPARTMENT,CONO:DEPT ELSE
+         ERRMSG = "Department (":DEPT:") is not on file"
+         GOSUB 90000;GOTO 10020
+      END
+      CCTR = S$VALUE
+*---- DISPLAY CCTR DESC
+10025*
+      S$DATA(40)<S$SCR> = "Cost Center: ":CCTR.DESC
+      SCREEN DISPLAY;;40
+      MATREAD CCTR.AVAIL.REC FROM CCTR.AVAIL, CONO:DEPT:"*":CCTR ELSE
+         MATREAD CCTR.AVAIL.REC FROM CCTR.AVAIL, CONO:DEPT ELSE
+            MAT CCTR.AVAIL.REC = ""
+         END
+      END
+*---- GET REQ HOURS AND OPERATIONS
+10027*
+      OPER.CNT = DCOUNT(ALL.OPER<1,1>,SVM)
+      BEGIN CASE
+      CASE CO.PSS.OPER.LVL # "Y"
+         ALL.OPER<1,1> = "ALL"
+         S$DATA(16)<S$SCR> = "ALL"
+         S$DATA(17)<S$SCR> = "ALL"
+         S$DATA(18)<S$SCR> = ""
+         OPER.CNT = 1
+         SREF = 1
+         CURR.SREF = ""
+         GOSUB 50100
+      CASE OPER.CNT < 1
+         OPT2 = "A"
+         GOSUB 1000
+      CASE 1
+         OPT2 = ""
+         GOSUB 1000
+      END CASE
+      IF OPER.CNT < 1 AND OPTION = "C" THEN
+         ERRMSG = "Must use delete option if you need to delete all operations"
+         GOSUB 90000
+         S$VALUE = "END"
+         GOTO 10950
+      END
+      IF OPER.CNT < 1 THEN GOTO 10020
+10030*
+      S$VAL = REF
+      IF CO.PSS.OPER.LVL = "Y" THEN
+         REQ.HRS=SUM(ALL.SCH.HRS<1,1>)
+         GOSUB 85000                        ;* ROUND CCTR HOURS
+         S$DATA(5)<S$SCR,REF> = REQ.HRS
+         SCREEN DISPLAY;;5
+      END ELSE
+         SCREEN FIELD;;5
+         SCREEN INPUT;;5;GOTO 10950
+         REQ.HRS = S$VALUE
+         ALL.SCH.HRS<1,1> = REQ.HRS
+         S$VAL = 1
+         S$DATA(18)<S$SCR> = REQ.HRS
+         SCREEN DISPLAY;;18
+      END
+10035*
+*     S$VAL = REF
+*     SCREEN FIELD;;27
+*     SCREEN INPUT;;27;GOTO 10950
+*     IF S$VALUE # "" THEN S$VALUE = S$VALUE * 100
+*     REQ.IMP = S$VALUE
+10040*
+      BEGIN CASE
+      CASE JBS.CONT.SCH<1,REF> # ""
+         S$DATA(30)<S$SCR,REF> = JBS.CONT.SCH<1,REF>
+      CASE 1
+         S$DATA(30)<S$SCR,REF> = CCA.CONT.SCHD
+      END CASE
+      S$VAL = REF
+      SCREEN FIELD;;30
+      SCREEN INPUT;;30;GOTO 10950
+      CONT.SCH = S$VALUE
+10045*
+      BEGIN CASE
+      CASE JBS.SAME.EQUIP<1,REF> # ""
+         S$DATA(31)<S$SCR,REF> = JBS.SAME.EQUIP<1,REF>
+      CASE 1
+         S$DATA(31)<S$SCR,REF> = CCA.SAME.EQP
+      END CASE
+      S$VAL = REF
+      SCREEN FIELD;;31
+      SCREEN INPUT;;31;GOTO 10950
+      SAME.EQUIP = S$VALUE
+10100*
+      CALL JOB.SCHED.REV.HOLD (CONO,JOB.NUM,TODAY,LOADING.FLG,PROC.TYPE,REF,DEPT,CCTR)
+      IF S$VALUE = "END" THEN GOTO 10950
+      IF JBS.OVER.LOAD<1,REF> = "Y" AND CONT.SCH # "Y" THEN
+         CONT.SCH = "Y"
+         S$DATA(30)<S$SCR,REF> = CONT.SCH
+         S$VAL = REF
+         SCREEN DISPLAY;;30
+      END
+      IF JBS.EQUIP<1,REF> # "" AND SAME.EQUIP # "Y" THEN
+         SAME.EQUIP = "Y"
+         S$DATA(31)<S$SCR,REF> = SAME.EQUIP
+         S$VAL = REF
+         SCREEN DISPLAY;;31
+      END
+*---- STORE INPUT DATA
+10900*
+      JBS.DEPT<1,REF> = DEPT
+      JBS.CCTR<1,REF> = CCTR
+      JBS.SCH.HRS<1,REF> = REQ.HRS
+*     JBS.SCH.IMP<1,REF> = REQ.IMP
+      JBS.CONT.SCH<1,REF> = CONT.SCH
+      JBS.SAME.EQUIP<1,REF> = SAME.EQUIP
+      JBS.OPER<1,REF> = ALL.OPER<1,1>
+      JBS.OPER.STATUS<1,REF> = ALL.STATUS<1,1>
+      JBS.OPER.SCH.DATE<1,REF> = ALL.SCH.DATE<1,1>
+      JBS.OPER.EXP.DATE<1,REF> = ALL.EXP.DATE<1,1>
+      JBS.OPER.REV.DATE<1,REF> = ALL.REV.DATE<1,1>
+      JBS.OPER.SCH.HRS<1,REF> = ALL.SCH.HRS<1,1>
+      JBS.OPER.ACT.DATE<1,REF> = ALL.ACT.DATE<1,1>
+      JBS.OPER.ACT.HRS<1,REF> = ALL.ACT.HRS<1,1>
+      JBS.OPER.ACT.TIME<1,REF> = ALL.ACT.TIME<1,1>
+      GOTO 10999
+10950*
+      S$DATA(3)<S$SCR,REF> = JBS.DEPT<1,REF>
+      S$DATA(4)<S$SCR,REF> = JBS.CCTR<1,REF>
+      S$DATA(5)<S$SCR,REF> = JBS.SCH.HRS<1,REF>
+      IF JBS.SCH.DATE<1,REF> = "" THEN
+         S$DATA(27)<S$SCR,REF> = ""
+         S$DATA(13)<S$SCR,REF> = ""
+      END ELSE
+         S$DATA(27)<S$SCR,REF> = OCONV(JBS.SCH.DATE<1,REF>,"D2-")[1,5]:" ":JBS.SCH.SHIFT<1,REF>
+         S$DATA(13)<S$SCR,REF> = OCONV(JBS.EXP.DATE<1,REF>,"D2-")[1,5]:" ":JBS.EXP.SHIFT<1,REF>
+      END
+      S$DATA(30)<S$SCR,REF> = JBS.CONT.SCH<1,REF>
+      S$DATA(31)<S$SCR,REF> = JBS.SAME.EQUIP<1,REF>
+      CURR.REF = ""
+10999*
+      DEPT = ""
+      CCTR = ""
+      REQ.HRS = ""
+*     REQ.IMP = ""
+      CONT.SCH = ""
+      SAME.EQUIP = ""
+      RETURN
+*
+*---- GET MULTI-LINE DATA (OPER)
+*
+20000*
+      S$VAL = SREF
+      SCREEN DISPLAY;;15
+      DESC = S$DATA(17)<S$SCR,SREF>
+20010*
+      S$VAL = SREF
+      SCREEN FIELD;;16
+      SCREEN INPUT;;16;GOTO 20950
+      IF S$VALUE # "ALL" THEN
+         LOCATE S$VALUE IN CCTR.OPER<1>,1 SETTING FND ELSE
+            ERRMSG = "Invalid operation for specified cost center."
+            GOSUB 90000; GOTO 20010
+         END
+         MATREAD OPER.REC FROM OPERATION, CONO:S$VALUE ELSE
+            ERRMSG = "Operation (":S$VALUE:") is not on file"
+            GOSUB 90000; GOTO 20010
+         END
+         IF OPER.SCHED # "" AND OPER.SCHED # S$VALUE THEN
+            ERRMSG = "Must use operation ":OPER.SCHED:" for scheduling purposes"
+            GOSUB 90000; GOTO 20010
+         END
+      END ELSE
+         IF SREF # 1 THEN
+            ERRMSG = "'ALL' must be first entery"
+            GOSUB 90000; GOTO 20010
+         END
+         MAT OPER.REC = ""
+         OPER.DESC = "ALL"
+         DONE1 = 1
+      END
+      OPER = S$VALUE
+      S$DATA(17)<S$SCR,SREF> = OPER.DESC
+      S$VAL = SREF
+      SCREEN DISPLAY;;17
+20020*
+      S$VAL = SREF
+      SCREEN FIELD;;18
+      SCREEN INPUT;;18;GOTO 20950
+      OREQ.HRS = S$VALUE
+*---- STORE INPUT DATA
+20900*
+      ALL.OPER<1,1,SREF> = OPER
+      ALL.SCH.HRS<1,1,SREF> = OREQ.HRS
+      GOTO 20999
+20950*
+      S$DATA(16)<S$SCR,SREF> = ALL.OPER<1,1,SREF>
+      S$DATA(17)<S$SCR,SREF> = DESC
+      S$DATA(18)<S$SCR,SREF> = ALL.SCH.HRS<1,1,SREF>
+20999*
+      RETURN
+*
+*---- DISPLAY MULTI-VALUE DATA (DEPT)
+*
+50000*
+      START.REF = 1 + INT((REF-1)/DEPT.COUNT)*DEPT.COUNT
+      IF START.REF = CURR.REF THEN RETURN
+      CURR.REF = START.REF
+      S$VAL = START.REF
+      S$CNT = DEPT.CNT
+* T22102 (on line below, added 51 to end of line)
+      SCREEN MULTI;;C;2;3;4;5;30;31;6;7;8;9;10;28;11;12;27;13;51
+      RETURN
+*
+*---- DISPLAY MULTI-VALUE DATA (OPER)
+*
+50100*
+      START.REF = 1 + INT((SREF-1)/OPER.COUNT)*OPER.COUNT
+      IF START.REF = CURR.SREF THEN RETURN
+      CURR.SREF = START.REF
+      S$VAL = START.REF
+      S$CNT = OPER.CNT
+      SCREEN MULTI;;C;15;16;17;18
+      RETURN
+*
+*---- LOAD MULTI-LINE DATA (DEPT)
+*
+80000*
+      S$DATA(3)<S$SCR> = JBS.DEPT
+      S$DATA(4)<S$SCR> = JBS.CCTR
+* 
+* T22102 v
+      COMP.LIST = ""
+      FOR XX = 1 TO DCOUNT(JBS.COMP.NO, @VM)
+        COMP.LIST<1,XX> = JBS.COMP.NO<1,XX,1>
+      NEXT XX
+      S$DATA(51)<S$SCR> = COMP.LIST
+* T22102 ^
+*
+      S$DATA(5)<S$SCR> = JBS.SCH.HRS
+      S$DATA(6)<S$SCR> = JBS.HOLD.CODE
+      S$DATA(7)<S$SCR> = JBS.SHIFT
+      S$DATA(8)<S$SCR> = JBS.EQUIP
+      S$DATA(9)<S$SCR> = JBS.OVER.LOAD
+      S$DATA(10)<S$SCR> = JBS.HOLD.DATE
+      S$DATA(11)<S$SCR> = JBS.HOLD.PO
+      S$DATA(12)<S$SCR> = JBS.HOLD.DP.CC
+      S$DATA(28)<S$SCR> = JBS.HOLD.DAYS
+      S$DATA(30)<S$SCR> = JBS.CONT.SCH
+      S$DATA(31)<S$SCR> = JBS.SAME.EQUIP
+      FOR STS = 1 TO DEPT.CNT
+         IF JBS.SCH.DATE<1,STS> = "" THEN
+            S$DATA(27)<S$SCR,STS> = ""
+            S$DATA(13)<S$SCR,STS> = ""
+         END ELSE
+            S$DATA(27)<S$SCR,STS> = OCONV(JBS.SCH.DATE<1,STS>,"D2-")[1,5]:" ":JBS.SCH.SHIFT<1,STS>
+            S$DATA(13)<S$SCR,STS> = OCONV(JBS.EXP.DATE<1,STS>,"D2-")[1,5]:" ":JBS.EXP.SHIFT<1,STS>
+         END
+      NEXT STS
+      RETURN
+*
+*---- LOAD MULTI-LINE DATA (OPER)
+*
+80100*
+      FOR STS = 1 TO OPER.CNT
+         IF ALL.OPER<1,1,STS> = "ALL" THEN
+            MAT OPER.REC = ""
+            OPER.DESC = "ALL"
+         END ELSE
+            MATREAD OPER.REC FROM OPERATION,CONO:ALL.OPER<1,1,STS> ELSE
+               MAT OPER.REC = ""
+               OPER.DESC = "NOT ON FILE"
+            END
+         END
+         S$DATA(16)<S$SCR,STS> = ALL.OPER<1,1,STS>
+         S$DATA(17)<S$SCR,STS> = OPER.DESC
+         S$DATA(18)<S$SCR,STS> = ALL.SCH.HRS<1,1,STS>
+      NEXT STS
+      RETURN
+*
+*----CLEAR OPER DISPLAY
+*
+82000*
+      S$DATA(16)<S$SCR> = ""
+      S$DATA(17)<S$SCR> = ""
+      S$DATA(18)<S$SCR> = ""
+      SREF = 1
+      CURR.SREF = ""
+      GOSUB 50100
+      RETURN
+*
+*---- ROUND HOURS UP BASED ON DEPARTMENT SPEC
+*
+85000 *
+      MATREAD CCTR.AVAIL.REC FROM CCTR.AVAIL,CONO:JBS.DEPT<1,REF> THEN
+         RVAL = CCA.ROUND.HRS+0
+         IF RVAL > 0 THEN
+            REQ.HRS = INT((REQ.HRS-1+RVAL)/RVAL)*RVAL
+         END
+      END
+      RETURN
+*
+*---- ERROR ROUTINE
+*
+90000 ERR.TYPE=1;CALL SI_SYSCOM(MAT SYSCOM.REC);RETURN
+* 90000*
+*       PRINT @(0,23):@(-4):ERRMSG:
+*       INPUT REPLY:
+*       PRINT @(0,23):@(-4):
+*       RETURN
+*
+*---- END OF PROGRAM
+*
+*
+999999*
+      SCREEN CLEAR;;D
+      RETURN
+   END

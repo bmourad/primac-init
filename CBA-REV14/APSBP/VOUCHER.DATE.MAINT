@@ -1,0 +1,791 @@
+*COPY>CPYLIB>COM1
+***************************************************
+* REVISION      - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM        - PRIMAC
+* SOURCE        - APSBP
+* PROGRAM       - VOUCHER.DATE.MAINT
+* BY            - JIHAD YAMOUT , C.B.A
+* DATE          - 06/07/84
+* DESCRIPTION   -
+* 10/14/94 CLW Task 17919 - Accrual accounting
+* T19149 RKB 05/01/95 add support for ap div,dept, cctr
+* T19406 Bob Sherer 10/11/95 - Display owning division
+*T21240 cls 11/19/1996 * DONT DISPLAY DATA BEFORE ERRMSG 'MUST RUN HAND
+*                        CHECK REGISTER FIRST'
+*T22288 rick 10/15/1997 * Year 2000 compliance. Make sure date calcs use
+*                         4 digit years.
+*T22353 lanny 11/07/1997 * Write to APCHECK file if CO.CHK.RECON not 'N'
+*T23278 markt 12/18/1998 * Add check for divisional security.
+*T23725 markt 09/16/1999 * When writing to APCHECK file, need a value
+*                          in the APCK.DIV attribute.
+*                          Also, Compile time error on JOS.JOB
+*T23156 markt 12/20/1999 * Allow user to change DISC AMT before changing
+*                          Code Field to PAID and retain the new DISC
+*                          AMT Field value.
+*T25759 edwin 04/19/20001 * Added remittance comments.
+*T26441 cmykleb 02/14/2002 * When voucher is paid manually the due date
+*                            changes to the invoice date.
+*T26126 adelgado 02/25/2002 * Implement the LOCKED clause for READU.
+*T26556 cmykleb 05/16/2002 * Use screen for prompts.
+*T27944 thompson 02/10/2004 * Change code to not allow a user to file a
+*                             voucher with out Acct/Check/Date
+*T28977 lross 09/13/2006 * Toggle Vendor/Sub-vendor - allow 55 char
+*                          name.
+*T29032 cmyklebu 01/01/2007 * Move pgm from rev12 to rev14.
+*ENDDOC
+***************************************************
+**** INSERT FILES EQUETES
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>GLTABLE
+*COPY>APS.CPYLIB>OAP
+*COPY>APS.CPYLIB>CKP
+*COPY>APS.CPYLIB>SQV
+*COPY>APS.CPYLIB>HDCH
+*COPY>APS.CPYLIB>VOUCHERS
+*COPY>APS.CPYLIB>APCHECK
+*COPY>PMC.CPYLIB>VEND
+*COPY>PMC.CPYLIB>COA
+*COPY>POS.CPYLIB>OUTSIDE.PO
+*COPY>JCS.CPYLIB>JOB.OSP
+*COPY>JCS.CPYLIB>JOB
+*COPY>CPYLIB>GEN.XREF
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>CHAR
+   DIM SVEND.REC(50)
+   EQU SVEND.DESC TO SVEND.REC(1)
+   EQU SVEND.ADDR1 TO SVEND.REC(2)
+   EQU SVEND.CT.ST TO SVEND.REC(4)
+   EQU SVEND.ZIP TO SVEND.REC(5)
+   EQU SVEND.TERMS TO SVEND.REC(6)
+   EQU SVEND.PD.M.T.D TO SVEND.REC(7)
+   EQU SVEND.PD.Y.T.D TO SVEND.REC(8)
+   EQU SVEND.DATE.PD TO SVEND.REC(10)
+   EQU SVEND.PA.AMT TO SVEND.REC(11)
+   EQU SVEND.CK.NO.PD TO SVEND.REC(12)
+   EQU SVEND.OP.BAL TO SVEND.REC(13)
+   DIM L.VOU(2)
+   EQU VOU.NO TO L.VOU(1)
+   EQU VOU.DATE TO L.VOU(2)
+*T28977 v
+MST.VNUM=''
+MST.VNAME=''
+MST.VADDR=''
+MST.VCSZ=''
+*T28977 ^
+**** SETUP FOR SYSTEM ERRMSGS
+   SYS.TYPE = 1
+   CALL SYSCOM(MAT SYSCOM.REC)
+**** OPEN FILES
+   OPEN '','COMPANY' TO COMPANY ELSE ERRMSG = 'COMPANY FILE MISSING' ; GOTO 93000
+   OPEN '','CONTROL' TO CONTROL ELSE ERRMSG = 'CONTROL FILE MISSING' ; GOTO 93000
+   OPEN '','INV.XREF' TO INV.XREF ELSE ERRMSG = 'INV.XREF FILE MISSING' ; GOTO 93000
+   OPEN '','OAP' TO OAP ELSE ERRMSG = "OAP FILE IS MISSING" ; GOTO 93000
+   OPEN '','CKP' TO CKP ELSE ERRMSG = "CKP FILE IS MISSING" ; GOTO 93000
+   OPEN '','SQV' TO SQV ELSE ERRMSG = "SQV FILE IS MISSING" ; GOTO 93000
+   OPEN '','HDCH' TO HDCH ELSE ERRMSG = "HDCH FILE IS MISSING" ; GOTO 93000
+   OPEN '','VOUCHERS' TO VOUCHERS ELSE ERRMSG = "VOUCHERS FILE IS MISSING" ; GOTO 93000
+   OPEN '','VEND' TO VEND ELSE ERRMSG = 'VEND FILE MISSING' ; GOTO 93000
+   OPEN '','APCHECK' TO APCHECK ELSE ERRMSG = 'APCHECK FILE MISSING' ; GOTO 93000
+*T29032 v
+   OPEN '','APS.SCREENS' TO M.SCREENS ELSE ERRMSG = 'APS.SCREENS FILE MISSING' ; GOTO 93000
+*  OPEN '','REV12A.SCREENS' TO M.SCREENS ELSE ERRMSG = 'REV12A.SCREENS FILE MISSING' ; GOTO 93000
+* T29032 ^
+   OPEN '','PREFIX' TO PREFIX ELSE ERRMSG = 'PREFIX FILE MISSING' ; GOTO 93000
+   OPEN '','COA' TO COA ELSE  ERRMSG = 'COA FILE IS MISSING';GOTO 93000
+***** GET COMPANY NAME
+   MAT COMP.REC = ''
+   CONO = ''
+   CALL GET.CONO(CONO,MAT COMP.REC)
+   IF CONO = 'END' THEN GOTO 99999
+   IN.ACCT.LEN = LEN(CO.ACCT.PIC)
+   IF CO.JCS = "Y" AND CO.VOU.PO.FLG = 'Y' THEN
+      OPEN '','JOB' TO JOB ELSE ERRMSG = "JOB FILE IS MISSING" ; GOTO 93000
+      OPEN '','JOB.OSP' TO JOB.OSP ELSE ERRMSG = "JOB.OSP FILE IS MISSING" ; GOTO 93000
+   END
+   MATREAD GLTABLE.REC FROM CONTROL ,CONO:"GLTABLE" ELSE
+      ERRMSG = "GLTABLE IS MISSING FROM CONTROL FILE" ; GOTO 93000
+   END
+   IF CO.POS = "Y" THEN
+      OPEN '','OUTSIDE.PO' TO OUTSIDE.PO ELSE ERRMSG = 'OUTSIDE.PO FILE IS MISSING';GOTO 93000
+      OPEN '','OPOAPS.XREF' TO OPOAPS.XREF ELSE ERRMSG = 'OPOAPS.XREF FILE IS MISSING';GOTO 93000
+   END
+***** MAIN PROCESSING
+   MAT EDIT.COM.DRIVER = '' ; MAT GEN.XREF.REC = ''
+*  MAT EDIT.COM = ''
+*  TYP = 0 ;CALL EDIT.SUB
+   FILL = "#"
+   ECD.SCRN.CNT = 1
+   ECD.SCRN.NAME<1> = 'VOUCHER.DATE.MAINT'
+   ECD.ACTION=1;CALL SCRN.EDIT
+**** PRINT SCREEN
+1*
+   MAT OAP.REC = '' ;MAT HDCK.REC = '' ;MAT SQV.REC = '' ; MAT APCK.REC = '' ; MAT OPO.REC = '' ; MAT JOB.REC = ''
+   MAT JOS.REC = ""
+   ECD.SCRN.NO = 1
+   MAT SCV.REC = ""
+   ECD.ACTION=6;CALL SCRN.EDIT
+***** ENTER VOUCHER NUMBER
+5*
+   PAY.FLG = 0;JOB.NUMBER = '';OAP.INV.FLG = '' ; SQV.FLG = 0
+   NEW.DISB.ACCT = '';NEW.CHK.NO = '';NEW.PAID.DATE = '';PP.FLG = 0
+   HFILE.FLG = "1";OFILE.FLG = "1"
+   RELEASE
+   ECD.NUM = 5
+   ECD.ACTION=4;CALL SCRN.EDIT
+   V.CODE = ECD.RET.VALUE
+   BEGIN CASE
+      CASE ECD.RET.VALUE = 'END'
+         GOTO 99999
+      CASE ECD.RET.VALUE # ''
+      * T26126 v
+         MATREADU OAP.REC FROM OAP, CONO:V.CODE LOCKED
+            ERRMSG = 'VOUCHER record is locked by user - ':GETUSERNAME(STATUS())
+            GOSUB 91000;GOTO 5 
+         END ELSE
+            OFILE.FLG = 0 ; MAT OAP.REC = ""
+         END
+         MATREADU HDCK.REC FROM HDCH , CONO:V.CODE LOCKED
+            ERRMSG = 'VOUCHER record is locked by user - ':GETUSERNAME(STATUS())
+            GOSUB 91000;GOTO 5 
+         END ELSE
+            HFILE.FLG = 0
+         END
+      * T26126 ^
+         IF HFILE.FLG THEN PAY.FLG = 1
+         BEGIN CASE
+            CASE OFILE.FLG = "1" AND HFILE.FLG = "1"
+               GOSUB 1000
+*CSF21629, TASK 21240 v
+*        ECD.ACTION=3;CALL SCRN.EDIT
+*CSF21629, TASK 21240 ^
+               ERRMSG = "Must run Handcheck Register first. "
+               GOSUB 91000;GOTO 1
+            CASE OFILE.FLG = "0" AND HFILE.FLG = "0"
+               ERRMSG = "VOUCHER NUMBER (":V.CODE:") NOT ON FILE"
+               GOSUB 91000;GOTO 5
+            CASE OFILE.FLG = "1" AND HFILE.FLG = "0"
+            CASE OFILE.FLG = "0" AND HFILE.FLG = "1"
+               FOR VV = 1 TO 24
+                  IF VV # "17" AND VV # "18" AND VV # "19" THEN
+                     OAP.REC(VV) = HDCK.REC(VV)
+                  END
+               NEXT VV
+               OAP.MON = HDCK.MON
+         END CASE
+         SCH.FLG = 0
+         MATREAD CKP.REC FROM CKP , CONO:V.CODE ELSE SCH.FLG = 1
+         IF SCH.FLG = 0 THEN
+            ERRMSG = "THIS VOUCHER IS SELECTED TO BE PAID CAN'T CHANGE" ; GOSUB 91000 ; GOTO 5
+         END
+         IF OAP.DUE.DATE = "ADVANCE" THEN
+            MATREADU OAP.REC FROM HDCH , CONO:V.CODE ELSE
+               ERRMSG = "VOUCHER NUMBER (":V.CODE:") NOT ON FILE";GOSUB 91000;GOTO 5
+            END
+         END
+         IF PAY.FLG = 0 THEN
+        * T26126 v
+            MATREADU SQV.REC FROM SQV , CONO:V.CODE LOCKED
+               ERRMSG = 'VOUCHER record is locked by user - ':GETUSERNAME(STATUS())
+               GOSUB 91000;GOTO 5 
+            END ELSE
+        * T26126 ^
+               SQV.FLG = 1
+            END
+         END 
+         GOSUB 1000
+         ECD.ACTION=3;CALL SCRN.EDIT
+      CASE ECD.RET.VALUE = ''
+         GOSUB 10
+         IF ECD.RET.VALUE = '' OR ECD.RET.VALUE = "END" THEN GOTO 1
+      * T26126 v
+         MATREADU OAP.REC FROM OAP, CONO:V.CODE LOCKED
+            ERRMSG = 'VOUCHER record is locked by user - ':GETUSERNAME(STATUS())
+            GOSUB 91000;GOTO 5 
+         END ELSE
+            OFILE.FLG = 0 ; MAT OAP.REC = ""
+         END
+         MATREADU HDCK.REC FROM HDCH , CONO:V.CODE LOCKED
+            ERRMSG = 'VOUCHER record is locked by user - ':GETUSERNAME(STATUS())
+            GOSUB 91000;GOTO 5 
+         END ELSE
+            HFILE.FLG = 0
+         END
+      * T26126 ^
+         IF HFILE.FLG THEN PAY.FLG = 1
+         BEGIN CASE
+            CASE OFILE.FLG = "1" AND HFILE.FLG = "1"
+               ERRMSG = "Must run Handcheck Register first. "
+               GOSUB 91000;GOTO 5
+            CASE OFILE.FLG = "0" AND HFILE.FLG = "0"
+               ERRMSG = "VOUCHER NUMBER (":V.CODE:") NOT ON FILE"
+               GOSUB 91000;GOTO 5
+            CASE OFILE.FLG = "1" AND HFILE.FLG = "0"
+            CASE OFILE.FLG = "0" AND HFILE.FLG = "1"
+               FOR VV = 1 TO 24
+                  IF VV # "17" AND VV # "18" AND VV # "19" THEN
+                     OAP.REC(VV) = HDCK.REC(VV)
+                  END
+               NEXT VV
+               OAP.MON = HDCK.MON
+         END CASE
+         SCH.FLG = 0
+         MATREAD CKP.REC FROM CKP , CONO:V.CODE ELSE SCH.FLG = 1
+         IF SCH.FLG = 1 THEN
+            ERRMSG = "THIS VOUCHER IS SELECTED TO BE PAID CAN'T CHANGE" ; GOSUB 91000 ; GOTO 5
+         END
+         IF OAP.DUE.DATE = "ADVANCE" THEN
+            MATREADU OAP.REC FROM HDCH , CONO:V.CODE ELSE
+               ERRMSG = "VOUCHER NUMBER (":V.CODE:") NOT ON FILE";GOSUB 91000;GOTO 5
+            END
+         END
+         IF PAY.FLG = 0 THEN
+        * T26126 v
+            MATREADU SQV.REC FROM SQV , CONO:V.CODE LOCKED
+               ERRMSG = 'VOUCHER record is locked by user - ':GETUSERNAME(STATUS())
+               GOSUB 91000;GOTO 5 
+            END ELSE
+        * T26126 ^
+               SQV.FLG = 1
+            END
+         END 
+         GOSUB 1000
+         ECD.ACTION=3;CALL SCRN.EDIT
+   END CASE
+   GOSUB 60000
+   GOTO 1
+*** ENTER JOB.NUMBER
+10*
+   IF CO.JCS = "Y" AND CO.VOU.PO.FLG = "Y" THEN
+      ECD.NUM = 6 ; ECD.ACTION = 4 ; CALL SCRN.EDIT
+      IF ECD.RET.VALUE # 'END' THEN
+         MATREAD JOB.REC FROM JOB , CONO:ECD.RET.VALUE ELSE
+            ERRMSG = "JOB NUMBER (":ECD.RET.VALUE:") NOT ON FILE" ; GOSUB 91000;GOTO 10
+         END
+         JOB.NUMBER = ECD.RET.VALUE
+         GXR.XREF = OPOAPS.XREF
+         GXR.FILE = OAP
+         GXR.CO = CONO
+         GXR.TOP.LINE = "VOUCHER XREF SEARCH"
+         GXR.HEADING<1,1> = "VOUCHER NO" ; GXR.HEADING<1,2> = "VENDOR # "
+         GXR.HEADING<1,3> = "DATE ENT" ; GXR.HEADING<1,4> = "PO NUMBER "
+         GXR.ATT<1,1> = 0;GXR.ATT<1,2>= 1;GXR.ATT<1,3> = 3;GXR.ATT<1,4> = 14
+         GXR.LEN<1,2> = 9 ; GXR.LEN<1,1> = 9 ;GXR.LEN<1,3> = 8 ; GXR.LEN<1,4> = 10
+         GXR.OCONV<1,3> = 'D2/' ; GXR.ID = ''
+         GXR.LOC = 1 ; GXR.SRCH.ID = JOB.NUMBER
+         CALL GEN.XREF(MAT GEN.XREF.REC,PREFIX)
+         V.CODE = GXR.ID
+         ECD.ACTION = 2 ; CALL SCRN.EDIT
+      END
+   END ELSE
+      ECD.RET.VALUE = ''
+   END
+   RETURN
+*** ENTER INVOICE NUMBER
+50*
+   IF OAP.INV.FLG = "" AND OAP.INV = "" THEN
+      OAP.INV.FLG = "1"
+   END
+* IF JOB.NUMBER # "" AND OAP.INV.FLG # "" THEN
+   IF OAP.INV.FLG # "" THEN
+      IF PP.FLG = "1" AND OAP.INV # "" THEN GOTO 59
+      ECD.NUM = 14
+      ECD.ACTION=4;CALL SCRN.EDIT
+      IF ECD.RET.VALUE # 'END' THEN
+         MATREAD L.VOU FROM INV.XREF ,CONO:STR("0",10-LEN(ECD.RET.VALUE)):ECD.RET.VALUE:OAP.VEND<1,1> ELSE MAT L.VOU = ''
+         IF VOU.NO # "" THEN
+            ERRMSG = "A VOUCHER (":VOU.NO[1,2]:"-":VOU.NO[3,4]:") HAS ALREADY BEEN ENTERED FOR INVOICE (":ECD.RET.VALUE:")"
+            GOSUB 91000;GOTO 50
+         END
+         OAP.INV = ECD.RET.VALUE
+      END
+   END
+59*
+   RETURN
+*** CALCULATE DUE DATE 
+70*
+*T22288 v on next two lines use 4 digit year
+   DATE.INV = OCONV(OAP.INV.DATE, "D4/")
+   MM = DATE.INV[1,2] ; DD = DATE.INV[4,2] ; YY = DATE.INV[7,4]
+*T22288 ^   
+   TRM.DAYS = OAP.TERMS<1,2>
+   DISC = OAP.TERMS<1,1>
+   IF TRM.DAYS[1,1] = 'P' THEN
+      IF DD > CO.PROX.CUTOFF THEN
+         NMM = MM + 2
+      END ELSE
+         NMM = MM + 1
+      END
+      IF NMM > 12 THEN
+         NMM = NMM - 12
+         YY = YY + 1
+      END
+*T22288 v on next two lines use 4 digit year
+      NMM=STR('0',2-LEN(NMM)):NMM:"/":TRM.DAYS[2,2]:"/":STR("0",4-LEN(YY)):YY
+      OAP.DUE.DATE = ICONV(NMM, "D4/")
+*T22288 ^      
+   END ELSE
+      IF DISC[5,2] + 0 = 0 THEN
+         OAP.DUE.DATE = OAP.INV.DATE + TRM.DAYS[2,2]
+      END ELSE
+         OAP.DUE.DATE = OAP.INV.DATE + (DISC[5,2]*1)
+      END
+   END
+   ECD.NUM = 18
+   SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ''
+   ECD.DEFAULT = OCONV(OAP.DUE.DATE , "D2/")
+   ECD.ACTION=4;CALL SCRN.EDIT
+   IF ECD.RET.VALUE # 'END' THEN
+      IF PP.FLG = "1" AND ECD.RET.VALUE = "PAID" THEN
+         ERRMSG = "DUE DATE SHOULD BE A CALCULATED DATE OR (HOLD) FOR A PARTIAL PAYMENT "
+         GOSUB 91000
+         GOTO 70
+      END
+      IF NOT(ECD.RET.VALUE MATCH "2N/2N/2N") AND ECD.RET.VALUE # "HOLD" AND ECD.RET.VALUE # "PAID" THEN
+         ERRMSG = "DUE DATE SHOULD BE CALCULATED DATE OR (HOLD) OR (PAID) " ; GOSUB 91000 ; GOTO 70
+      END
+      IF NOT(ECD.RET.VALUE MATCH "2N/2N/2N") THEN
+         OAP.DUE.DATE = ECD.RET.VALUE
+         IF OAP.DUE.DATE = "PAID" THEN
+            NEW.GRS = OAP.GRS.AMT
+* T23156 v
+*           NEW.DSC = OAP.DSC.AMT
+*           NEW.NET = OAP.GRS.AMT - OAP.DSC.AMT
+            NEW.NET = NEW.GRS - NEW.DSC
+* T23156 ^
+            SCV.REC(55)<ECD.SCRN.NO> = NEW.GRS
+            ECD.NUM = 55;ECD.ACTION=5;CALL SCRN.EDIT
+            SCV.REC(56)<ECD.SCRN.NO> = NEW.DSC
+            ECD.NUM = 56;ECD.ACTION=5;CALL SCRN.EDIT
+            SCV.REC(57)<ECD.SCRN.NO> = NEW.NET
+            ECD.NUM = 57;ECD.ACTION=5;CALL SCRN.EDIT
+         END
+         IF OAP.DUE.DATE = "HOLD" THEN
+            REM.AMT = (OAP.GRS.AMT - OAP.DSC.AMT) - OAP.PAID.AMT
+            NEW.DISB.AMT = '';NEW.CHK.NO = '';NEW.PAID.DATE = ''
+            NEW.GRS = '';NEW.DSC = '';NEW.NET = ''
+            SCV.REC(50)<ECD.SCRN.NO> = ''
+            ECD.NUM=50;ECD.ACTION=5;CALL SCRN.EDIT
+            SCV.REC(51)<ECD.SCRN.NO> = ''
+            ECD.NUM=51;ECD.ACTION=5;CALL SCRN.EDIT
+            SCV.REC(52)<ECD.SCRN.NO> = ''
+            ECD.NUM=52;ECD.ACTION=5;CALL SCRN.EDIT
+            SCV.REC(54)<ECD.SCRN.NO> = REM.AMT
+            ECD.NUM=54;ECD.ACTION=5;CALL SCRN.EDIT
+            SCV.REC(55)<ECD.SCRN.NO> = ''
+            ECD.NUM=55;ECD.ACTION=5;CALL SCRN.EDIT
+            SCV.REC(56)<ECD.SCRN.NO> = ''
+            ECD.NUM=56;ECD.ACTION=5;CALL SCRN.EDIT
+            SCV.REC(57)<ECD.SCRN.NO> = ''
+            ECD.NUM=57;ECD.ACTION=5;CALL SCRN.EDIT
+         END
+      END ELSE
+         OAP.DUE.DATE = ICONV(ECD.RET.VALUE, "D")
+      END
+   END
+   IF OPTION # "" AND PP.FLG = "0" THEN
+      FOR XX = 1 TO 3
+         ON XX GOSUB 120,130,140
+         IF ECD.RET.VALUE = "END" THEN GOTO 70
+      NEXT XX
+   END
+   RETURN
+**** ENTER GL ACCT FOR HAND CHECK
+120*
+   IF OAP.DUE.DATE = "HOLD" THEN GOTO 129
+   IF OAP.DUE.DATE = "PAID" OR PP.FLG = "1" THEN
+      ECD.NUM = 50
+      ECD.DEFAULT = GLTB.CASH
+      SCV.REC(ECD.NUM)<1> = ''; ECD.ACTION=5;CALL SCRN.EDIT
+      ECD.MAXL = IN.ACCT.LEN ; ECD.MINL = IN.ACCT.LEN
+      ECD.VALDAT.CODE = '2'; ECD.VALDAT.FILE = COA; ECD.PREFIX.ID = CONO
+      SCV.REC(ECD.NUM)<1> = NEW.DISB.ACCT
+      ECD.PATRN = CO.ACCT.MATCH
+      ECD.ACTION=4;CALL SCRN.EDIT
+      IF ECD.RET.VALUE # 'END' THEN
+         NEW.DISB.ACCT = ECD.RET.VALUE
+         SCV.REC(ECD.NUM)<1> = NEW.DISB.ACCT CO.ACCT.MASK ; ECD.ACTION=5;CALL SCRN.EDIT
+      END
+   END ELSE
+      NEW.DISB.ACCT = ''
+      ECD.NUM = 50 ; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = '' ; ECD.ACTION = 5 ; CALL SCRN.EDIT
+   END
+129*
+   RETURN
+**** ENTER CHECK NUMBER
+130*
+   IF OAP.DUE.DATE = "HOLD" THEN GOTO 139
+   IF OAP.DUE.DATE = "PAID" OR PP.FLG = "1" THEN
+      ECD.NUM = 51
+      ECD.ACTION = 4 ; CALL SCRN.EDIT
+      IF ECD.RET.VALUE # "END" THEN
+         NEW.CHK.NO = STR('0',6-LEN(ECD.RET.VALUE)):ECD.RET.VALUE
+         SCV.REC(51)<ECD.SCRN.NO> = NEW.CHK.NO
+         ECD.NUM = 51;ECD.ACTION = 5;CALL SCRN.EDIT
+         APCK.FND = 1
+         MATREAD APCK.REC FROM APCHECK , CONO:NEW.DISB.ACCT:NEW.CHK.NO ELSE
+            MAT APCK.REC = ''
+            APCK.VEND = OAP.VEND
+*          APCK.DATE = OAP.PAID.DATE
+            APCK.CODE = 'P'
+            APCK.FND = 0
+         END
+         IF APCK.FND = 1 THEN
+            BEGIN CASE
+               CASE APCK.CODE # "P" 
+                  ERRMSG = "THIS CHECK IS NOT A HAND CHECK OR IT WAS CANCELLED" ; GOSUB 91000 ; GOTO 130
+               CASE APCK.VEND<1,1> # OAP.VEND<1,1>
+                  ERRMSG = "THIS CHECK WAS ASSIGNED TO DIFFERENT VENDOR CAN'T USE" ; GOSUB 91000 ; GOTO 130
+               CASE 1
+                  X = 0 ; Y = 23 ; PMSG = "CHECK # (":NEW.CHK.NO:") HAS BEEN ASSIGED OK TO USE (Y/N)" ; TYP = 18
+                  CALL EDIT.SUB
+                  IF VALUE = "END" OR VALUE = "N" THEN GOTO 130
+            END CASE
+         END
+      END
+   END ELSE
+      NEW.CHK.NO = ''
+      ECD.NUM = 51 ; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = '' ; ECD.ACTION = 5 ; CALL SCRN.EDIT
+   END
+139*
+   RETURN
+**** ENTER CHECK DATE
+140*
+   IF OAP.DUE.DATE = "HOLD" THEN GOTO 149
+   IF OAP.DUE.DATE = "PAID" OR PP.FLG = "1" THEN
+      IF APCK.DATE = "" THEN
+         ECD.NUM = 52
+         ECD.ACTION = 4 ; CALL SCRN.EDIT
+         IF ECD.RET.VALUE # "END" THEN
+            NEW.PAID.DATE = ECD.RET.VALUE
+         END
+      END ELSE
+         NEW.PAID.DATE = APCK.DATE
+         ECD.NUM = 52;SCV.REC(ECD.NUM)<ECD.SCRN.NO> = NEW.PAID.DATE;ECD.ACTION = 5;CALL SCRN.EDIT
+      END
+   END ELSE
+      NEW.PAID.DATE = ''
+      ECD.NUM = 52 ; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = '' ; ECD.ACTION = 5 ; CALL SCRN.EDIT
+   END
+   IF OAP.DUE.DATE = "ADVANCE" THEN
+      OAP.ACCT = GLTB.AP
+      OAP.DIST.AMT = NEW.GRS
+   END
+149*
+   RETURN
+***** ENTER NEW GROSS AMOUNT
+150*
+   IF OAP.DUE.DATE # "PAID" AND OAP.DUE.DATE # "HOLD" THEN
+      ECD.NUM = 55
+      ECD.MAXV = OAP.GRS.AMT - OAP.PAID.AMT - OAP.DSC.PAID
+      ECD.ACTION = 4;CALL SCRN.EDIT
+      IF ECD.RET.VALUE # "END" THEN
+         NEW.GRS = ECD.RET.VALUE
+         NEW.NET = NEW.GRS - NEW.DSC
+         SCV.REC(57)<ECD.SCRN.NO> = NEW.NET
+         ECD.NUM = 57;ECD.ACTION = 5;CALL SCRN.EDIT
+      END
+   END
+   RETURN
+***** ENTER NEW DISCOUNT AMOUNT
+160*
+   IF OAP.DUE.DATE # "PAID" AND OAP.DUE.DATE # "HOLD" THEN
+      ECD.NUM = 56
+      ECD.MAXV = OAP.DSC.AMT - OAP.DSC.PAID
+      ECD.ACTION = 4;CALL SCRN.EDIT
+      IF ECD.RET.VALUE # "END" THEN
+         NEW.DSC = ECD.RET.VALUE
+         NEW.NET = NEW.GRS - NEW.DSC
+         SCV.REC(57)<ECD.SCRN.NO> = NEW.NET
+         ECD.NUM = 57;ECD.ACTION = 5;CALL SCRN.EDIT
+      END
+   END
+   RETURN
+*T25759 v
+***** ENTER REMIT COMMENTS
+170*
+   ECD.NUM = 2 ; ECD.ACTION = 4
+   IF OAP.REM.COMM # '' THEN ECD.DEFAULT = OAP.REM.COMM
+   CALL SCRN.EDIT
+   IF ECD.RET.VALUE # 'END' THEN
+      OAP.REM.COMM = ECD.RET.VALUE
+      SCV.REC(2)<ECD.SCRN.NO> = OAP.REM.COMM
+   END
+   RETURN
+*25759 ^
+***** GET ALL VALUES FROM FILE
+1000*
+   MATREAD VEND.REC FROM VEND , CONO:OAP.VEND<1,1> ELSE
+      MAT VEND.REC = "????????????"
+   END
+   IF COUNT(OAP.VEND, VM) + (OAP.VEND # "") # 1 THEN
+      VEND.DESC = OAP.VEND<1,2>
+      VEND.ADDR1 = OAP.VEND<1,3>
+      VEND.CT.ST = OAP.VEND<1,4>
+      VEND.ZIP = OAP.VEND<1,5>
+   END
+*** TASK 19406 ***
+   SCV.REC(60)<ECD.SCRN.NO> = SQV.DIV.OWNER
+*** **** ***** ***
+   SCV.REC(10)<ECD.SCRN.NO> = OAP.VEND<1,1>
+   SCV.REC(11)<ECD.SCRN.NO> = VEND.DESC
+   SCV.REC(13)<ECD.SCRN.NO> = VEND.ADDR1
+   SCV.REC(16)<ECD.SCRN.NO> = VEND.CT.ST[1,19]
+   SCV.REC(53)<ECD.SCRN.NO> = VEND.ZIP
+*T28977 v
+*  IF OAP.VEND<1,1>[6,1] = "-" THEN GOSUB 1200
+   IF OAP.VEND<1,1>[6,1] = "-" THEN GOSUB 1200 ELSE SCV.REC(3)<ECD.SCRN.NO> = 'Vendor'
+   SCV.REC(17)<ECD.SCRN.NO> = OAP.TERMS<1,2>
+   SCV.REC(47)<ECD.SCRN.NO> = OAP.TERMS<1,1>[1,4]
+   SCV.REC(48)<ECD.SCRN.NO> = OAP.TERMS<1,1>[5,2]
+   SCV.REC(12)<ECD.SCRN.NO> = OAP.PO
+   SCV.REC(14)<ECD.SCRN.NO> = OAP.INV
+   SCV.REC(15)<ECD.SCRN.NO> = OAP.INV.DATE
+   SCV.REC(18)<ECD.SCRN.NO> = OCONV(OAP.DUE.DATE, "D2/")
+   SCV.REC(23)<ECD.SCRN.NO> = OAP.GRS.AMT
+   SCV.REC(46)<ECD.SCRN.NO> = OAP.MER.AMT
+   SCV.REC(24)<ECD.SCRN.NO> = OAP.DSC.AMT
+   SCV.REC(25)<ECD.SCRN.NO> = OAP.GRS.AMT - OAP.DSC.AMT
+*  NEW.DISB.ACCT = OAP.DISB.ACCT
+*  NEW.CHK.NO = OAP.CHK.NO
+*  NEW.PAID.DATE = OAP.PAID.DATE
+   SCV.REC(50)<ECD.SCRN.NO> = OAP.DISB.ACCT CO.ACCT.MASK
+   SCV.REC(51)<ECD.SCRN.NO> = OAP.CHK.NO
+   SCV.REC(52)<ECD.SCRN.NO> = OAP.PAID.DATE
+   REM.AMT = OAP.GRS.AMT - OAP.DSC.AMT - OAP.PAID.AMT - OAP.DSC.PAID
+   IF REM.AMT < 0 AND OAP.GRS.AMT > 0 THEN REM.AMT = 0
+   IF REM.AMT > 0 AND OAP.GRS.AMT < 0 THEN REM.AMT = 0
+   SCV.REC(54)<ECD.SCRN.NO> = REM.AMT
+   NEW.GRS = OAP.GRS.AMT - OAP.PAID.AMT - OAP.DSC.PAID
+   NEW.DSC = OAP.DSC.AMT - OAP.DSC.PAID
+*  IF NEW.DSC < 0 AND OAP.DSC.AMT > 0 THEN NEW.DSC = 0
+   IF NEW.DSC < 0 AND OAP.DSC.AMT >= 0 THEN NEW.DSC = 0
+*  IF NEW.DSC > 0 AND OAP.DSC.AMT < 0 THEN NEW.DSC = 0
+   IF NEW.DSC > 0 AND OAP.DSC.AMT <= 0 THEN NEW.DSC = 0
+   NEW.NET = NEW.GRS - NEW.DSC
+   SCV.REC(55)<ECD.SCRN.NO> = NEW.GRS
+   SCV.REC(56)<ECD.SCRN.NO> = NEW.DSC
+   SCV.REC(57)<ECD.SCRN.NO> = NEW.NET
+   SCV.REC(2)<ECD.SCRN.NO> = OAP.REM.COMM ; *T25759
+   SAVE.DUE.DATE = OAP.DUE.DATE
+   SAVE.INV = OAP.INV
+   SAVE.CHK.NO = OAP.CHK.NO
+   SAVE.REM.COMM = OAP.REM.COMM ;*T25759
+   RETURN
+**** PRINT MAIN VEND IF SUB VEND WAS INPUT
+1200*
+   MATREAD SVEND.REC FROM VEND , CONO:OAP.VEND<1,1>[1,5] ELSE
+      MAT SVEND.REC = "??????????????"
+   END
+*T28977 v
+*  SCV.REC(41)<ECD.SCRN.NO> = OAP.VEND<1,1>[1,5]
+*  SCV.REC(42)<ECD.SCRN.NO> = SVEND.DESC
+*  SCV.REC(43)<ECD.SCRN.NO> = SVEND.ADDR1
+*  SCV.REC(44)<ECD.SCRN.NO> = SVEND.CT.ST[1,19]:" ":SVEND.ZIP
+   MST.VNUM = OAP.VEND<1,1>[1,5]
+   MST.VNAME = SVEND.DESC
+   MST.VADDR = SVEND.ADDR1
+   MST.VCSZ = SVEND.CT.ST'L#19':' ':SVEND.ZIP
+   SCV.REC(3)<ECD.SCRN.NO> = 'SubVend'
+*T28977 ^
+   RETURN
+***** ENTER OPTIONS
+60000*
+   MORE = 1
+   LOOP
+      BEGIN CASE
+         CASE REM.AMT > 0 AND REM.AMT < (OAP.GRS.AMT - OAP.DSC.AMT)
+            PP.FLG = 1
+            ECD.NUM = 59
+         CASE REM.AMT = OAP.GRS.AMT - OAP.DSC.AMT
+            ECD.NUM = 40
+*T26556 v
+*       ECD.VALDAT = "1,2,3,4,5,6,7,8,PP,F,E"   ; * 25759
+*       ECD.PMSG = "ENTER # TO CHANGE, (PP) , (F) OR (E) "
+*       ECD.HMSG = "(PP) = Partial Payment ; (F)ile ; (E)xit"
+*T26556 ^
+         CASE 1
+            ECD.NUM = 1
+      END CASE
+      ECD.ACTION=4;CALL SCRN.EDIT
+      OPTION = ECD.RET.VALUE
+      BEGIN CASE
+         CASE OPTION = '' OR OPTION = 'END' OR OPTION = 'E'
+            MORE = 1
+         CASE NUM(OPTION)
+            ON OPTION GOSUB 50,70,170,120,130,140,150,160   ; * 25759
+            MORE = 0
+         CASE OPTION = "PP" AND OAP.DUE.DATE # "HOLD" AND OAP.DUE.DATE # "PAID"
+            PP.FLG = 1
+            MORE = 0
+            FOR BB = 1 TO 5 UNTIL ECD.RET.VALUE = "END"
+               ON BB GOSUB 120,130,140,150,160
+            NEXT BB
+            IF ECD.RET.VALUE = "END" THEN GOTO 69999
+         CASE OPTION = 'F'
+            IF OAP.DUE.DATE = "PAID" OR NEW.CHK.NO # "" THEN
+*T27944
+               IF NEW.CHK.NO # "" AND NEW.DISB.ACCT # "" AND NEW.PAID.DATE # "" THEN
+                  NULL
+               END ELSE
+                  ERRMSG = "Cannot Pay Voucher Acct/Check/Paid Date Information Missing"
+                  GOSUB 91000
+                  GOTO 69999
+               END
+*T27944
+               HDCK.VEND = OAP.VEND
+               HDCK.INV = OAP.INV
+               HDCK.INV.DATE = OAP.INV.DATE
+               HDCK.DUE.DATE = "PAIDC"
+               HDCK.GRS.AMT = NEW.GRS
+               HDCK.MER.AMT = OAP.MER.AMT
+               HDCK.DSC.AMT = NEW.DSC
+               HDCK.CTR = OAP.CTR
+               HDCK.ACCT = OAP.ACCT
+               HDCK.DIST.AMT = OAP.DIST.AMT
+               HDCK.PAID.AMT = NEW.GRS - NEW.DSC
+               HDCK.PAID.DATE = NEW.PAID.DATE
+               HDCK.JOB = OAP.JOB
+               HDCK.PO = OAP.PO
+               HDCK.DISB.ACCT = NEW.DISB.ACCT
+               HDCK.NUM = NEW.CHK.NO
+               HDCK.MON = OAP.MON
+               HDCK.DATE = NEW.PAID.DATE
+               HDCK.TERMS = OAP.TERMS
+               HDCK.DIV = OAP.DIV
+               HDCK.DEPT = OAP.DEPT
+               HDCK.CCTR = OAP.CCTR
+               HDCK.AP.ACCT = OAP.AP.ACCT    ;* TASK 17919
+               HDCK.AP.AMT = OAP.AP.AMT
+*T19149 v
+               HDCK.AP.DIV = OAP.AP.DIV
+               HDCK.AP.DEPT = OAP.AP.DEPT
+               HDCK.AP.CCTR = OAP.AP.CCTR
+*T19149 ^           
+               MATWRITE HDCK.REC ON HDCH , CONO:V.CODE
+               IF SQV.FLG = 0 THEN
+                  P.CNT = COUNT(SQV.PAID.AMT, VM) + (SQV.PAID.AMT # "") + 1
+*T26441 v
+*                 SQV.DUE.DATE = OAP.INV.DATE
+                  SQV.DUE.DATE = OAP.DUE.DATE
+*T26441 ^
+                  SQV.INV = OAP.INV
+                  SQV.PAID.AMT<1,P.CNT> = NEW.GRS - NEW.DSC
+                  SQV.PAID.DATE<1,P.CNT> = NEW.PAID.DATE
+                  SQV.CHK.NO<1,P.CNT> = NEW.CHK.NO
+                  SQV.DISB.ACCT<1,P.CNT> = NEW.DISB.ACCT
+                  SQV.DSC.PAID<1,P.CNT> = NEW.DSC
+                  MATWRITE SQV.REC ON SQV , CONO:V.CODE
+               END
+*T22353 v
+               IF CO.CHK.RECON # 'N' THEN
+                  LOCATE V.CODE IN APCK.VOUCH<1>,1 SETTING VPTR ELSE
+                     APCK.VOUCH<1,VPTR> = V.CODE
+                  END
+                  APCK.AMT = APCK.AMT + (NEW.GRS - NEW.DSC)
+                  APCK.DATE = NEW.PAID.DATE
+                  APCK.DIV  = OAP.DIV ;* T23725
+                  APCK.DEPT = OAP.DEPT
+                  APCK.CCTR = OAP.CCTR
+                  MATWRITE APCK.REC ON APCHECK , CONO:NEW.DISB.ACCT:NEW.CHK.NO
+               END
+*T22353 ^
+               IF COUNT(OAP.VEND,VM) + (OAP.VEND # "") = 1 THEN
+                  IF LEN(OAP.VEND<1,1>) = 8 THEN
+                     SVEND.PD.M.T.D = SVEND.PD.M.T.D + (NEW.GRS - NEW.DSC)
+                     SVEND.PD.Y.T.D = SVEND.PD.Y.T.D + (NEW.GRS - NEW.DSC)
+                     SVEND.DATE.PD = NEW.PAID.DATE
+                     SVEND.PA.AMT = NEW.GRS - NEW.DSC
+                     SVEND.OP.BAL = SVEND.OP.BAL - NEW.GRS
+                     SVEND.CK.NO.PD = NEW.CHK.NO
+                     MATWRITE SVEND.REC ON VEND , CONO:OAP.VEND<1,1>[1,5]
+                  END ELSE
+                     VEND.PD.M.T.D = VEND.PD.M.T.D + (NEW.GRS - NEW.DSC)
+                     VEND.PD.Y.T.D = VEND.PD.Y.T.D + (NEW.GRS - NEW.DSC)
+                     VEND.DATE.PD = NEW.PAID.DATE
+                     VEND.PA.AMT = NEW.GRS - NEW.DSC
+                     VEND.OP.BAL = VEND.OP.BAL - NEW.GRS
+                     VEND.CK.NO.PD = NEW.CHK.NO
+                     MATWRITE VEND.REC ON VEND , CONO:OAP.VEND<1,1>
+                  END
+               END ELSE
+                  FOR CV = 1 TO 6
+                     VEND.REC(CV)= ''
+                  NEXT VEND
+                  VEND.OP.BAL = VEND.OP.BAL - NEW.GRS
+                  MATWRITE VEND.REC ON VEND , CONO:OAP.VEND<1,1>
+               END
+               OAP.PAID.AMT = OAP.PAID.AMT + NEW.NET
+               OAP.PAID.DATE = NEW.PAID.DATE
+               OAP.DISB.ACCT = NEW.DISB.ACCT
+               OAP.CHK.NO = NEW.CHK.NO
+               OAP.DSC.PAID = OAP.DSC.PAID + NEW.DSC
+               IF OAP.DUE.DATE = "PAID" THEN OAP.DSC.AMT = NEW.DSC ;* T23156
+               MATWRITE OAP.REC ON OAP , CONO:V.CODE
+            END ELSE
+               MATWRITE OAP.REC ON OAP , CONO:V.CODE
+               IF SQV.FLG = 0 THEN
+                  SQV.DUE.DATE = OAP.DUE.DATE
+                  SQV.INV = OAP.INV
+                  MATWRITE SQV.REC ON SQV , CONO:V.CODE
+               END
+            END
+            IF OAP.INV # SAVE.INV THEN
+               DELETE INV.XREF , CONO:STR('0',10-LEN(SAVE.INV)):SAVE.INV:OAP.VEND<1,1>
+               VOU.NO = V.CODE ; VOU.DATE = DATE()
+               MATWRITE L.VOU ON INV.XREF , CONO:STR('0',10-LEN(OAP.INV)):OAP.INV:OAP.VEND<1,1>
+               IF CO.POS = "Y" THEN
+                  MATREAD OPO.REC FROM OUTSIDE.PO ,CONO:OAP.PO ELSE MAT OPO.REC = ""  
+                  IF OPO.DATE # "" THEN
+                     OPO.INV.NO = OAP.INV
+                     MATWRITE OPO.REC ON OUTSIDE.PO, CONO:OAP.PO
+                  END  
+               END  
+               IF CO.JCS = "Y" AND CO.VOU.PO.FLG = "Y" THEN
+                  MATREAD JOS.REC FROM JOB.OSP , OAP.JCS.TRANS ELSE MAT JOS.REC = ""  
+                  JOS.JOB = FIELD(OAP.JCS.TRANS,"!",1)[4,99] ;* T23725
+                  IF JOS.JOB # "" THEN
+                     JOS.INV = OAP.INV
+                     MATWRITE JOS.REC ON JOB.OSP , OAP.JCS.TRANS 
+                  END  
+               END
+            END
+            MORE = 1
+*T28977 v
+         CASE OPTION = 'T'
+           IF OAP.VEND<1,1>[6,1] = '-' THEN
+             IF SCV.REC(3)<ECD.SCRN.NO> # 'Vendor' THEN
+               SCV.REC(10)<ECD.SCRN.NO> = MST.VNUM
+               SCV.REC(11)<ECD.SCRN.NO> = MST.VNAME
+               SCV.REC(13)<ECD.SCRN.NO> = MST.VADDR
+               SCV.REC(16)<ECD.SCRN.NO> = MST.VCSZ[1,19]
+               SCV.REC(53)<ECD.SCRN.NO> = MST.VCSZ[21,10]
+               SCV.REC(3)<ECD.SCRN.NO> = "Vendor"
+             END ELSE
+               SCV.REC(3)<ECD.SCRN.NO> = "SubVend"
+               SCV.REC(10)<ECD.SCRN.NO> = OAP.VEND<1,1>
+               SCV.REC(11)<ECD.SCRN.NO> = VEND.DESC
+               SCV.REC(13)<ECD.SCRN.NO> = VEND.ADDR1
+               SCV.REC(16)<ECD.SCRN.NO> = VEND.CT.ST[1,19]
+               SCV.REC(53)<ECD.SCRN.NO> = VEND.ZIP
+             END
+             ECD.ACTION=3; CALL SCRN.EDIT
+           END
+           MORE = 0
+*T28977 ^
+      END CASE
+69999*
+   WHILE MORE = 0 DO REPEAT
+   RETURN
+**** CALLS FOR SYSCOM
+91000 ERR.TYPE = 1; CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+92000 ERR.TYPE = 2; CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+93000 ERR.TYPE = 3; CALL SYSCOM(MAT SYSCOM.REC)
+99999 * PRINT * @(-1)
+   END
+

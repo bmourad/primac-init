@@ -1,0 +1,396 @@
+*COPY>CPYLIB>COM1
+*COPY>FAS.CPYLIB>COM.ASSETS
+*********************************************************************
+* REVISION    - [08.1]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - FASBP
+* PROGRAM     - OPTIMUM.DEPR.RPT
+* BY          - Ziad Yamout, Vercom Software, Inc.
+* DATE        - 02/15/89
+* DESCRIPTION - Optimum depreciation analysis screen and report.
+*               Compares the results of three different depreciation
+*               methods for an asset.
+*
+* TASK
+*    18573 LLH 7/95 1-52 WEEK ACCOUNTING
+*
+*T21177 diane 01/23/1997 * REV11 UPG ADD CLOSE
+*********************************************************************
+*
+*--- Data structure libraries
+*
+*COPY>PMC.CPYLIB>SALESDATES
+*COPY>PMC.CPYLIB>FISCAL
+*COPY>FAS.CPYLIB>ASSETS
+*COPY>FAS.CPYLIB>ASSETS.DEPR
+*COPY>FAS.CPYLIB>DEP.MAST
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>CHAR
+*
+      DIM METHOD(2,3)
+      DIM O.D.REC(30,3)
+      DIM YR.TOT(200,3)
+      DIM G.TOT(6)
+      DIM ERR.MSG(3)
+      DIM OPT.YRS(3)
+*
+*--- Setup SYSCOM subroutine
+*
+      SYS.TYPE = 1
+      CALL SYSCOM(MAT SYSCOM.REC)
+*
+*--- Get buffer
+*
+      PROCREAD BUFFER ELSE
+         ERRMSG = "Must be executed from a PROC"
+         GOSUB 91000; GOTO 99999
+      END
+      CONO = BUFFER<1>
+      HD = BUFFER<2>
+*
+*--- Open files
+*
+      MAT FILE.VARS = ""
+      OPEN "FAS.SCREENS" TO M.SCREENS ELSE
+         ERRMSG = "Cannot locate FAS.SCREENS file"; GOTO 93000
+      END
+      OPEN "ASSETS" TO ASSETS ELSE
+         ERRMSG = "Cannot locate ASSETS file"; GOTO 93000
+      END
+      OPEN "ASSETS.DEPR" TO ASSETS.DEPR ELSE
+         ERRMSG = "Cannot locate ASSETS.DEPR file"; GOTO 93000
+      END
+      OPEN "DEP.MAST" TO DEP.MAST ELSE
+         ERRMSG = "Cannot locate DEP.MAST file"; GOTO 93000
+      END
+      OPEN "CONTROL" TO CONTROL ELSE
+         ERRMSG = "Cannot locate CONTROL file"; GOTO 93000
+      END
+*
+*--- Initialization
+*
+      READNEXT AST.ID ELSE
+         ERRMSG = "No items selected"
+         GOSUB 91000; GOTO 99999
+      END
+      IF CONO # AST.ID[1,3] THEN
+         ERRMSG = "Company selection mismatch"
+         GOSUB 91000; GOTO 99999
+      END
+*
+      MATREAD SALESDATES.REC FROM CONTROL, CONO:"SALESDATES" ELSE
+         ERRMSG = "Need to setup sales dates table"
+         GOSUB 91000; GOTO 99999
+      END
+      MATREAD FISCAL.REC FROM CONTROL, CONO:"FAFISCAL" ELSE
+         ERRMSG = "Cannot locate Fixed Assets period"
+         GOSUB 91000; GOTO 99999
+      END
+      READ PERIOD.REC FROM CONTROL, CONO:"ACCT.PERIODS" ELSE
+         PERIOD.REC = ""; PERIOD.REC<1> = 12
+      END
+      NUM.PERIODS = PERIOD.REC<1>
+*
+      M.D.Y = ""; E.O.M = ""
+      FOR I = 1 TO NUM.PERIODS
+         CALC.DATE = OCONV(SALESDATES.REC(I+1)<1,1>,"D/")
+         M.D.Y<I,1> = CALC.DATE[1,2]
+         M.D.Y<I,2> = CALC.DATE[4,2]
+         M.D.Y<I,3> = CALC.DATE[7,4]
+         E.O.M<I> =  OCONV(SALESDATES.REC(I+1)<1,1>+1,"D/")[1,2]
+      NEXT I
+      B.T = "B"; B.T<2> = "T"
+      BT = 1
+*
+*--- Setup subroutine SCRN.EDIT
+*
+      MAT EDIT.COM.DRIVER = ""
+      ECD.SCRN.CNT = 1
+      ECD.SCRN.NAME<1> = "OPTIMUM.DEPR.RPT"
+      ECD.ACTION = 1; CALL SCRN.EDIT
+*
+      ECD.SCRN.NO = 1
+      ECD.ACTION = 2; CALL SCRN.EDIT
+*
+*--- Prompt for all values
+*
+      MAT SCV.REC = ""; ECD.ACTION = 6; CALL SCRN.EDIT
+      FOR OPTION = 1 TO 4 WHILE ECD.RET.VALUE # "END"
+         ON OPTION GOSUB 5000,5000,5000,6000
+      NEXT OPTION
+      IF ECD.RET.VALUE = "END" THEN
+         ECD.ACTION = 99 ; CALL SCRN.EDIT
+         GOTO 99999
+      END
+*
+*--- Prompt line
+*
+      LOOP
+         ECD.NUM = 11; SCV.REC(ECD.NUM) = ""
+         ECD.ACTION = 4; CALL SCRN.EDIT
+         OPTION = ECD.RET.VALUE
+         BEGIN CASE
+            CASE OPTION = "END" OR OPTION = "E" OR OPTION = ""
+               OPTION = "END"
+            CASE OPTION = "F"
+            CASE NOT(NUM(OPTION))
+               ERRMSG = "*** Invalid selection ***"; GOSUB 91000
+               OPTION = 0
+            CASE OPTION > 0 AND OPTION < 5
+               ON OPTION GOSUB 5000,5000,5000,6000
+            CASE 1
+               ERRMSG = "*** Out of range ***"; GOSUB 91000
+               OPTION = 0
+         END CASE
+      WHILE NUM(OPTION) DO REPEAT
+      IF OPTION = "END" THEN
+         ECD.ACTION = 99 ; CALL SCRN.EDIT
+         GOTO 99999
+      END
+*
+*--- Pocess selected assets
+2000*
+      SP = SPACE(1)
+      HD.1 = "Asset & Description  : "
+      HD.2 = "Tax Percent          : "
+      HD.3 = "Life years           : "
+      HD4 = "      < ":METHOD(2,1):" > < ":METHOD(2,2):" > < ":METHOD(2,3):" >"
+      HD5 = "Year  <  Depreciation    Tax Reduction > <  Depreciation    Tax Reduction > <  Depreciation    Tax Reduction >"
+      HD6 = "----    --------------  --------------     --------------  --------------     --------------  --------------"
+      PRINTER ON
+      DATA = 1
+      LOOP
+         MATREAD AST.REC FROM ASSETS, AST.ID ELSE GOTO 2099
+         AST.FISCAL.MON = "";AST.LAST.POST = ""
+         AST.NUM = AST.ID[4,99]
+         HD1 = HD.1:AST.NUM "L#17":"&   ":AST.DESC "L#30"
+         HD2 = HD.2:OCONV(TAX.PCT,"MD2")
+         HD3 = HD.3:AST.YEARS<1,BT>[1,2] + 0 "R#2":SPACE(15):"&   ":AST.YEARS<1,BT>[3,2] + 0 "R#2":"   /   ":NUM.PERIODS"R#2"
+         HEADING HD:" 'LL'":HD1:" 'L'":HD2:" 'L'":HD3:" 'LL'":HD4:" 'L'":HD5:" 'L'":HD6:" 'L'"
+         MAT G.TOT = 0; MAT ERR.MSG = ""
+         O.AST.YEARS = AST.YEARS
+         MAT OPT.YRS = 0; MAX.YRS = 0
+         FOR OPT = 1 TO 3
+            MAT ERR.FLG = 0; MAT DSP.YRS = 0
+            AST.DEPR.METHOD<1,BT> = METHOD(1,OPT)
+            FOR I = 1 TO 30
+               DEPR.REC(I) = O.D.REC(I,OPT)
+            NEXT I
+            IF DEPR.MAX.YRS + DEPR.MAX.PER > 0 THEN
+               AST.YEARS<1,BT> = (DEPR.MAX.YRS "R%2") : (DEPR.MAX.PER "R%2")
+            END ELSE
+               AST.YEARS = O.AST.YEARS
+            END
+            IF AST.YEARS<1,BT> < 1 THEN
+               ERR.MSG(OPT) = "Life years for this asset are not available"
+               GOTO 2019
+            END
+*
+*--- Break out depr. date
+*
+            ODATE = OCONV(AST.DEPR.DATE<1,BT>,"D/")
+            FST.MN = ODATE[1,2]
+            FST.DATE(1,BT) = ODATE[4,2]
+            FST.YR = ODATE[7,4]
+            FST.DATE(2,BT) = 31
+            LOOP WHILE FST.MN # OCONV(ICONV(FST.MN:"/":FST.DATE(2,BT):"/":FST.YR,"D/"),"D/")[1,2] DO
+               FST.DATE(2,BT) = FST.DATE(2,BT) - 1
+            REPEAT
+*
+*--- Get first period
+*
+            FST.MON = 0; PTR = NUM.PERIODS
+            FOR I = 1 TO NUM.PERIODS WHILE FST.MON = 0
+               IF M.D.Y<PTR,1> GT M.D.Y<I,1> THEN
+                  PRIORXX = M.D.Y<I,1> - 1
+               END ELSE
+                  PRIORXX = M.D.Y<PTR,1>
+               END
+               IF FST.MN > PRIORXX AND FST.MN <= M.D.Y<I,1> THEN
+                  FST.MON = I
+               END
+               PTR = I
+            NEXT I
+            IF FST.MON = 0 THEN
+               ERR.MSG(OPT) = "Cannot locate the depreciation month in sales dates"
+               GOTO 2019
+            END
+            DIF.YRS = FST.YR - M.D.Y<FST.MON,3>
+            FST.MON = 0; FYR.DATES = ""
+*
+*--- NOTE : Dates in the salesdates should be in ascending order
+*
+            FOR I = 1 TO NUM.PERIODS WHILE FST.MON = 0
+               IF E.O.M<I> > M.D.Y<I,1> THEN
+                  FYR.DATES<I> = ICONV((M.D.Y<I,1>+1):"/1/":(M.D.Y<I,3> + DIF.YRS),"D/") - 1
+               END ELSE
+                  FYR.DATES<I> = ICONV(M.D.Y<I,1>:"/":M.D.Y<I,2>:"/":(M.D.Y<I,3> + DIF.YRS),"D/")
+               END
+               IF AST.DEPR.DATE<1,BT> <= FYR.DATES<I> THEN
+                  FST.MON = I
+               END
+            NEXT I
+            IF FST.MON = 0 THEN
+               ERR.MSG(OPT) = "Cannot determine the period of the depreciation month"
+               GOTO 2019
+            END
+            BEGIN CASE
+               CASE NOT(NUM(DEPR.ACQ.MON))
+               CASE DEPR.ACQ.MON >= 0 AND FST.DATE(2,BT) >= DEPR.ACQ.MON
+               CASE DEPR.ACQ.MON < 0 AND FST.DATE(2,BT) < ABS(DEPR.ACQ.MON)
+               CASE 1
+                  FST.MON = FST.MON + 1
+                  IF FST.MON > NUM.PERIODS THEN
+                     FST.MON = 1
+                     DIF.YRS = DIF.YRS + 1
+                  END
+            END CASE
+            BEGIN CASE
+               CASE DEPR.ACQ.FYR = "Y" AND DEPR.ACQ.YR < 1
+                  FST.MON = 1
+                  DIF.YRS = DIF.YRS + 1
+               CASE DEPR.ACQ.FYR = "Y"
+                  FST.MON = 1
+               CASE DEPR.ACQ.YR < 1
+                  DIF.YRS = DIF.YRS + 1
+               CASE DEPR.ACQ.YR < NUM.PERIODS
+                  FST.MON = 13 - DEPR.ACQ.YR
+            END CASE
+            AST.FST.PER<1,BT> = (FR.CURR.PER[1,4]+DIF.YRS):STR("0",2-LEN(FST.MON)):FST.MON
+*
+*--- Get last period
+*
+            LST.YR = AST.FST.PER<1,BT>[1,4] + AST.YEARS<1,BT>[1,2] + 0
+            LST.MON = AST.FST.PER<1,BT>[5,2] - 1
+            IF LST.MON < 1 THEN
+               LST.MON = NUM.PERIODS
+               LST.YR = LST.YR - 1
+            END
+            LST.MON = LST.MON + AST.YEARS<1,BT>[3,4] + 0
+            IF LST.MON > NUM.PERIODS THEN
+               LST.YR = LST.YR + 1
+               LST.MON = LST.MON - NUM.PERIODS
+            END
+            AST.LST.PER<1,BT> = LST.YR:STR("0",2-LEN(LST.MON)):LST.MON
+            CALL ASSETS.DEPR.SUB
+            IF LEN(ERR.FLG(BT)) > 1 THEN
+               ERR.MSG(OPT) = ERR.FLG(BT)
+               GOTO 2019
+            END
+            FOR YR = 1 TO DSP.YRS(BT)
+               YR.TOT(YR,OPT) = 0
+               FOR MN = 1 TO NUM.PERIODS
+                  YR.TOT(YR,OPT) = YR.TOT(YR,OPT) + D.REC(YR,BT)<MN>
+               NEXT MN
+               G.TOT(OPT) = G.TOT(OPT) + YR.TOT(YR,OPT)
+            NEXT YR
+            OPT.YRS(OPT) = DSP.YRS(BT)
+            IF DSP.YRS(BT) > MAX.YRS THEN MAX.YRS = DSP.YRS(BT)
+2019*
+         NEXT OPT
+         FOR OPT = 1 TO 3
+            IF MAX.YRS > OPT.YRS(OPT) THEN
+               LIMIT = OPT.YRS(OPT) + 1
+               FOR YR = LIMIT TO MAX.YRS
+                  YR.TOT(YR,OPT) = 0
+               NEXT YR
+            END
+         NEXT OPT
+*
+*--- Print the calculated depreciation
+*
+         FST.YR = AST.FST.PER<1,BT>[1,4] - 1
+         FOR YR = 1 TO MAX.YRS
+            PLINE = (FST.YR+YR) "R#4":SPACE(4)
+            PLINE = PLINE:OCONV(YR.TOT(YR,1),"MD2Z,") "R#14":SPACE(2)
+            PLINE = PLINE:OCONV(INT(YR.TOT(YR,1) / 100 * TAX.PCT / 100 + .5),"MD2Z,") "R#14":SPACE(5)
+            PLINE = PLINE:OCONV(YR.TOT(YR,2),"MD2Z,") "R#14":SPACE(2)
+            PLINE = PLINE:OCONV(INT(YR.TOT(YR,2) / 100 * TAX.PCT / 100 + .5),"MD2Z,") "R#14":SPACE(5)
+            PLINE = PLINE:OCONV(YR.TOT(YR,3),"MD2Z,") "R#14":SPACE(2)
+            PLINE = PLINE:OCONV(INT(YR.TOT(YR,3) / 100 * TAX.PCT / 100 + .5),"MD2Z,") "R#14"
+            PRINT PLINE
+         NEXT YR
+
+*
+*--- Print assets totals
+2050*
+         PRINT HD6
+         PLINE = "Total : ":OCONV(G.TOT(1),"MD2,") "R#14":SPACE(2)
+         PLINE = PLINE:OCONV(INT(G.TOT(1) / 100 * TAX.PCT / 100 + .5),"MD2,") "R#14":SPACE(5)
+         PLINE = PLINE:OCONV(G.TOT(2),"MD2,") "R#14":SPACE(2)
+         PLINE = PLINE:OCONV(INT(G.TOT(2) / 100 * TAX.PCT / 100 + .5),"MD2,") "R#14":SPACE(5)
+         PLINE = PLINE:OCONV(G.TOT(3),"MD2,") "R#14":SPACE(2)
+         PLINE = PLINE:OCONV(INT(G.TOT(3) / 100 * TAX.PCT / 100 + .5),"MD2,") "R#14"
+         PRINT PLINE
+         FOR OPT = 1 TO 3
+            IF ERR.MSG(OPT) # "" THEN
+               PRINT
+               PRINT "Error message for method : ":TRIM(METHOD(2,OPT))
+               PRINT "--------------------------"
+               PRINT ERR.MSG(OPT)
+            END
+         NEXT OPT
+2099*
+         READNEXT AST.ID ELSE DATA = 0
+      WHILE DATA DO REPEAT
+*      WHILE READNEXT AST.ID DO REPEAT
+      PRINTER CLOSE
+      PRINTER OFF
+      ECD.ACTION = 99 ; CALL SCRN.EDIT
+      GOTO 99999
+*
+*--- Depreciation methods prompt
+5000*
+      ECD.NUM = OPTION * 2 - 1; ECD.ACTION = 4; CALL SCRN.EDIT
+      BEGIN CASE
+         CASE ECD.RET.VALUE = "END"
+            GOTO 5099
+         CASE ECD.RET.VALUE = ""
+            GOTO 5000
+         CASE ECD.RET.VALUE = "M"
+            ERRMSG = "Manual depreciation is invalid for the analysis"
+            GOSUB 91000; GOTO 5000
+         CASE ECD.RET.VALUE[1,1] = "U"
+            ERRMSG = "Units of Production depreciation is invalid for the analysis"
+            GOSUB 91000; GOTO 5000
+      END CASE
+      MATREAD DEPR.REC FROM DEP.MAST,CONO:ECD.RET.VALUE ELSE
+         ERRMSG = "Cannot locate depreciation method - ":ECD.RET.VALUE
+         GOSUB 91000; GOTO 5000
+      END
+      METHOD(1,OPTION) = ECD.RET.VALUE
+      METHOD(2,OPTION) = SPACE(INT((30-LEN(DEPR.DESC))/2)):DEPR.DESC
+      METHOD(2,OPTION) = METHOD(2,OPTION):SPACE(30-LEN(METHOD(2,OPTION)))
+      FOR I = 1 TO 30
+         O.D.REC(I,OPTION) = DEPR.REC(I)
+      NEXT I
+      ECD.NUM = ECD.NUM + 1
+      SCV.REC(ECD.NUM) = DEPR.DESC
+      ECD.ACTION = 5; CALL SCRN.EDIT
+5099*
+      RETURN
+*
+*--- Tax percent
+6000*
+      ECD.NUM = 7; ECD.ACTION = 4; CALL SCRN.EDIT
+      IF ECD.RET.VALUE # "END" THEN
+         TAX.PCT = ECD.RET.VALUE
+      END
+      RETURN
+*
+*
+*--- Error message routine
+91000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+* 91000*
+*       PRINT @(0,23) : ERRMSG : CL :
+*       INPUT REPLY :
+*       PRINT @(0,23) : CL :
+*       RETURN
+93000 ERR.TYPE=3;CALL SYSCOM(MAT SYSCOM.REC)
+* 93000*
+*       ERR.TYPE = 3; CALL SYSCOM(MAT SYSCOM.REC)
+99999*
+   END

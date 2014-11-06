@@ -1,0 +1,140 @@
+SUBROUTINE POSPOM_POSTREAD 
+*
+*COPY>CPYLIB>COM1            
+*COPY>POS.CPYLIB>COM.PO      
+*COPY>POS.CPYLIB>COM.PO.INTRF
+*
+**********************************************
+* SYSTEM      - EPRIMAC
+* PROGRAM     - POSPOM_POSTREAD
+* BY          - Khaja Ziauddin
+* DATE        - 08/07/2003
+* DESCRIPTION -
+*
+*ENDDOC
+**********************************************
+$INCLUDE PMC.CPYLIB PO       
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE CPYLIB CHAR  
+$INCLUDE ICS.CPYLIB INV.CNV
+$INCLUDE WWINSERT RBO.H
+*
+OPEN '','INVENTORY' TO INVENTORY ELSE ERRMSG = 'INVENTORY FILE IS MISSING';  GOTO 93000
+
+STATUS = RBO.getDBVals('PO_PROD_NUM',PO.PROD.NUM)
+STATUS = RBO.getDBVals('PO_TOT_ONORD',PO.TOT.ONORD)
+STATUS = RBO.getDBVals('PO_TOT_CANCEL',PO.TOT.CANCEL)
+STATUS = RBO.getDBVals('PO_GROS_PRICE',PO.GROS.PRICE)
+STATUS = RBO.getDBVals('PO_DISCOUNT',PO.DISCOUNT)
+ERRMSG = RBO.getDBVals('TEMP_DATE',TDATE) 
+
+STATUS = RBO.getProperty('','PMCProperty',PMCPROPERTY)
+CONO = PMCPROPERTY<1,4>
+CNT = ""
+TDATE = ""
+PROD.CNT = ""
+CNT = DCOUNT(TDATE,"ý")
+
+STATUS = RBO.setProperty('','NewID', CNT)
+
+	FOR I=1 TO CNT
+		TDATE<1,I> = OCONV(TDATE<1,I>,"D4/") : " "
+	NEXT I
+RETURN
+
+ERRMSG = RBO.setDBVals('TEMP_DATE',TDATE)
+
+*
+   PROD.CNT = DCOUNT(PO.PROD.NUM,VM)
+
+*
+   TOT.ORD.AMT = 0
+   TOT.QTY = 0
+   MAT INV.CNV.REC = ""
+   DIFF.UM = ""
+   PO.SHIP.WHSE = ""
+   PO.WHSE = ""
+   SAV.INV.COST.WT = 100
+   GOSUB GET.CONVERSIONS
+*
+*
+   FOR LN = 1 TO PROD.CNT
+      PO.TOT.ONORD<1,LN> -= PO.TOT.CANCEL<1,LN>
+      IF DIFF.UM<LN> = "Y" THEN
+         IF ICR.CNV<LN> = "MD0" THEN
+            TEMP = INT(((PO.TOT.ONORD<1,LN>/ICR.DV1<LN>)*ICR.MT1<LN>)/ICR.DV2<LN> + .5)
+            TEMP1 = INT(PO.TOT.ONORD<1,LN>/10)
+         END ELSE
+            TEMP = INT((PO.TOT.ONORD<1,LN>/10)/ICR.DV1<LN>)
+            TEMP1 = TEMP
+         END
+      END ELSE
+         IF ICR.CNV<LN> = "MD0" THEN
+            TEMP = INT(((PO.TOT.ONORD<1,LN>/ICR.DV1<LN>)*ICR.MT1<LN>)/ICR.DV2<LN> + .5)
+            TEMP1 = INT(PO.TOT.ONORD<1,LN>/10)
+         END ELSE
+            TEMP = INT(PO.TOT.ONORD<1,LN>/10)
+            TEMP1 = INT(PO.TOT.ONORD<1,LN>/10)
+         END
+      END
+      PO.TOT.ONORD<1,LN> += PO.TOT.CANCEL<1,LN>
+      IF PO.DISCOUNT<1,LN>+0#0 THEN
+         NET=OCONV(PO.GROS.PRICE<1,LN>,"MD4")*OCONV(PO.DISCOUNT<1,LN>,"MD4")
+         NET=OCONV(PO.GROS.PRICE<1,LN>,"MD4")-NET
+      END ELSE NET=OCONV(PO.GROS.PRICE<1,LN>,"MD4")
+      NET=ICONV(NET,"MD4")
+      EXT = OCONV(NET, "MD4") * (OCONV(TEMP1, "MD2") / OCONV(SAV.INV.COST.WT<LN>, "MD2"))
+      TOT.ORD.AMT = TOT.ORD.AMT + EXT
+   NEXT LN
+   PO.TOT.AMOUNT = ICONV(TOT.ORD.AMT,"MD2") 
+***TOT.ORD.AMT = TOT.ORD.AMT * 100
+TOT.ORD.AMT = INT((TOT.ORD.AMT + 0.005)* 100)/100
+
+STATUS = RBO.setProperty('','TotOrdAmt', TOT.ORD.AMT)
+RETURN
+****************************
+   GOTO 99999
+*
+*
+*
+**********************
+GET.CONVERSIONS: 
+**********************
+*
+   FOR LN = 1 TO PROD.CNT
+      MATREAD INV.REC FROM INVENTORY, CONO:PO.PROD.NUM<1,LN> THEN 
+         IF INV.COST.WT + 0 = 0 THEN INV.COST.WT = 100
+         IF INV.SBR + 0 = 0 THEN INV.SBR = 1
+         SAV.INV.COST.WT<LN> = INV.COST.WT
+         BEGIN CASE
+            CASE PO.UNIT.FLG<1,LN> = "SHT" AND INV.UNIT<1,3> = "LBS"
+               ICR.CNV<LN> = "MD0"; ICR.DV2<LN> = 1
+               ICR.DV1<LN> = INV.M.WT; ICR.MT1<LN> = 1
+            CASE PO.UNIT.FLG<1,LN> = "PC" AND INV.UNIT<1,3> = "MSI"
+               ICR.CNV<LN> = "MD0"; ICR.DV2<LN> = 1
+               ICR.DV1<LN> = INV.PAP.WIDTH/100; ICR.MT1<LN> = 10
+            CASE PO.UNIT.FLG<1,LN> = "FT" AND INV.UNIT<1,3> = "MSI"
+               ICR.CNV<LN> = "MD0"; ICR.DV2<LN> = 12
+               ICR.DV1<LN> = INV.PAP.WIDTH/100; ICR.MT1<LN> = 100
+            CASE 1
+               ICR.CNV<LN> = "MD2"; ICR.DV2<LN> = 1
+               ICR.DV1<LN> = INV.SBR; ICR.MT1<LN> = 1
+         END CASE
+         IF PO.UNIT.FLG<1,LN> # INV.UNIT<1,2> THEN DIFF.UM<LN> = "Y" ELSE DIFF.UM<LN> = "N"
+      END
+   NEXT LN
+
+   RETURN
+*
+91000 
+99999 
+
+93000
+
+STATUS = RBO.setProperty('','ServerStatus',1)
+STATUS = RBO.setProperty('','ServerMessage', ERRMSG)
+
+
+END
+
+

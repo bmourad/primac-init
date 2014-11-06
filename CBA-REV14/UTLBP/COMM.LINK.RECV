@@ -1,0 +1,191 @@
+*********************************************************************
+*
+* PROGRAM  - COMM.LINK.RECV
+*
+* AUTHOR   - NICK AMENDOLA, COMPUTER BUSINESS ASSOCIATES
+*
+* DATE     - 04/24/92
+*
+* DESCRIPTION
+*
+* This program is used to receive data from CBA's host computer.
+* Programs, screens, dictionaries etc may be transmitted from CBA
+* and stored in the specified file.
+*
+*   Message formats
+*
+*     c\FD\acct,dict,file
+*     c\ID\item ID
+*     c\n,s\ddddddddddddddd
+*     c\n,s,C\eeeeeeeeeeee
+*
+*   where c  = checksum for data error checking
+*         FD = data is file definition
+*         ID = data is item ID
+*         n  = attribute number
+*         s  = segment number
+*         d  = transmitted data
+*         C  = compressed data follows
+*         e  = compressed data
+*
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>CPYLIB>CHAR
+*
+*---- OPEN ALL FILES
+*
+      OPEN "","VOC" TO VOC ELSE
+         PRINT "CANNOT OPEN VOC FILE"
+         STOP
+      END
+*
+*---- INITIALIZATION
+*
+      PROMPT ""
+      QREC = ""
+      PORT = @TTY
+      IND.POS = INDEX(PORT,'/',1)
+      IF IND.POS = 0 THEN
+         PORT = PORT[4,(LEN(PORT)-3)]
+      END ELSE
+         PORT = PORT[4,IND.POS-4]
+      END
+      QFILE = "QFILE":PORT
+      REC = ""
+      PREV.LN = ""
+      PREV.SG = ""
+      ECHO OFF
+      PRINT "READY - Switch to Host Computer and Execute COMM.LINK"
+*
+*---- MAIN PROCESSING
+*
+100 *
+      INPUT MSG:
+      LOOP
+      WHILE MSG # "" AND SEQ(MSG[1,1]) = 0 DO
+         MSG = MSG[2,999]
+      REPEAT
+      IF MSG = "" THEN GOTO 100
+      IF MSG = CHAR(27) THEN GOTO 99990
+      P1 = INDEX(MSG,"\",1)
+      IF P1 = 0 THEN PRINT "E1"; GOTO 100
+      L2 = LEN(MSG)
+      CSUM = CHECKSUM(MSG[P1,L2-P1+1])
+      IF CSUM # MSG[1,P1-1] THEN PRINT "E1"; GOTO 100
+      P2 = INDEX(MSG,"\",2)
+      IF P2 = 0 THEN PRINT "E1"; GOTO 100
+      GOSUB 200
+      GOTO 100
+*
+*---- Process Valid Message
+*
+200 *
+      DIR = MSG[P1+1,P2-P1-1]
+      ERRMSG = ""
+      BEGIN CASE
+      CASE DIR = "FD"
+         DEF = MSG[P2+1,999]
+         RACCT = FIELD(DEF,",",1)
+         RDICT = FIELD(DEF,",",2)
+         IF RDICT # "" THEN RDICT = "DICT"
+         RFILE = FIELD(DEF,",",3)
+         BEGIN CASE
+         CASE LEN(RFILE) >= 2 AND RFILE[LEN(RFILE)-1,2] = "BP"
+            QREC = "DIR"
+         CASE LEN(RFILE) >= 6 AND RFILE[LEN(RFILE)-5,6] = "CPYLIB"
+            QREC = "DIR"
+         CASE 1
+            QREC = "F"
+         END CASE
+         QREC<2> = RACCT:"/":RFILE
+         QREC<3> = RACCT:"/D_":RFILE
+         WRITE QREC ON VOC, QFILE
+         OPEN RDICT,QFILE TO FNAME ELSE
+            DELETE VOC,QFILE
+            PRINT "E2"
+            GOTO 290
+         END
+         REC = ""
+         PREV.LN = ""
+         PREV.SG = ""
+         PRINT DIR
+      CASE DIR = "ID"
+         RITEM = MSG[P2+1,999]
+         IF REC # "" THEN
+            WRITE REC ON FNAME,RITEM
+            DELETE VOC,QFILE
+            REC = ""
+         END
+         PRINT DIR
+      CASE DIR = "MSG"
+         GOTO 290
+      CASE NUM(DIR[1,1])
+         LN = FIELD(DIR,",",1)
+         SG = FIELD(DIR,",",2)
+         TP = FIELD(DIR,",",3)
+         BEGIN CASE
+         CASE LN = 1 AND SG = 1
+            REC = ""
+         CASE LN # PREV.LN AND SG # 1
+            PRINT "E1"
+            GOTO 290
+         CASE LN = PREV.LN AND SG = PREV.SG
+            PRINT DIR
+            GOTO 290
+         CASE LN = PREV.LN AND SG # PREV.SG+1
+            PRINT "E1"
+            GOTO 290
+         END CASE
+*
+         PRINT DIR
+         TEXT = MSG[P2+1,999]
+         BEGIN CASE
+         CASE TP = ""
+            REC<LN> = REC<LN> : TEXT
+         CASE 1
+            TL = LEN(TEXT)
+            P = 0
+            LOOP
+               P = P + 1
+            UNTIL P > TL DO
+               CHR = TEXT[P,1]
+               BEGIN CASE
+               CASE CHR = "a"
+                  P = P + 1
+                  CHR = TEXT[P,1]
+                  CHR = CHAR(SEQ(CHR)-32)
+               CASE CHR = "b"
+                  P = P + 1
+                  CHR = TEXT[P,1]
+                  CHR = CHAR(SEQ(CHR)+64)
+               CASE CHR = "c"
+                  P = P + 1
+                  CHR = TEXT[P,1]
+                  CHR = CHAR(SEQ(CHR)+96)
+               CASE CHR = "d"
+                  P = P + 1
+                  CHR = TEXT[P,1]
+                  CHR = CHAR(SEQ(CHR)+160)
+               CASE CHR = "e"
+                  CHR = ""
+               END CASE
+               REC<LN> = REC<LN> : CHR
+            REPEAT
+         END CASE
+         PREV.LN = LN
+         PREV.SG = SG
+      CASE 1
+         PRINT "E1"
+      END CASE
+290 *
+      RETURN
+*
+*---- END OF PROGRAM
+*
+99990 *
+      ECHO ON
+      PRINT @(-1):
+      STOP
+   END

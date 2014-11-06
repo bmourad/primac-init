@@ -1,0 +1,508 @@
+*COPY>CPYLIB>COM1
+*COPY>ICS.CPYLIB>COM.INV.MAIN  
+*COPY>ICS.CPYLIB>COM.INV.SERIAL
+*COPY>ICS.CPYLIB>COM.INV.LINK  
+*********************************************************************
+* REVISION    - [08.1]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* AUTHOR      - W.R. MCKENZIE, Computer Business Associates
+* SOURCE      - ICSBP
+* PROGRAM     - PHY.INV.POST
+* DATE        - 03/20/85
+* REVISED     - 02/13/91 - Added Barcode Inventory Support
+*               10/11/94 - Added OPS Finished Goods Support
+* DESCRIPTION - This program process all inventory paper adjustments
+* T21574 lanny 02/07/1997 * Include update to IAH.ADJ.QTY.
+* T22154 stefanie 08/19/1997 * Fix Rev10B - Rev11 match problems.
+*T23278 markt 11/17/1998 * Enable division level EOP posting and
+*                          daily assignemnt of various costs.
+*T25740 edvard 07/23/2001 * Added CATG.TRK.LVL    
+*T26126 lanny 09/07/2001 * If "New" bucket created and FNGD item no TAG
+*                          record is created.
+*T25740 epitka 11/26/2001 * REV12
+*T26497 adelgado 04/04/2002 * Add validation rule for Inter-Divisional
+*                             Whse.
+*T26556 adelgado 05/09/2002 * Mods to skip serial that have been
+*                             transferred.
+*T26767 epitka 07/24/2002 * CHANGE OF ARGUMENTS FOR INV.AVG.COST.MAINT
+*T27144 epitka 12/20/2002 * ACTIVATE DELETED SERIAL IF QTY > 0
+*T27801 lross 11/21/2003 * FNGD adjust problem in PHY.INV file when
+*                          doing a positive adj.
+*T27990 lross 03/10/2004 * Mods for call to ICS.IWH.SUB (ERRMSG).
+*T28571 lross 06/02/2005 * Write PHY.INV record after each product
+*                          processed.
+*T28893 lross 05/01/2006 * Do not check PHYSI.PREV.QTY to original
+*                          on-hand. This was added to REV12 - not in 11.
+*********************************************************************
+*
+*COPY>PMC.CPYLIB>FISCAL
+*COPY>PMC.CPYLIB>COMPANY       ;* T26497
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>PMC.CPYLIB>CURR.CODE
+*COPY>ICS.CPYLIB>PHY.INV
+*COPY>ICS.CPYLIB>INV_AUDIT_HIST
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>ICS.CPYLIB>INV.HIST
+*COPY>ICS.CPYLIB>INV.WHSE.LOC
+*COPY>ICS.CPYLIB>WAREHOUSE
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>ICS.CPYLIB>CATEGORY
+*COPY>ICS.CPYLIB>INV_SERIAL
+*COPY>PMC.CPYLIB>PO ;*T27801
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+*                                                           
+   DEFFUN DIVISION.POSITION(CONO,CONTROL.FILE,DIV.CODE)        
+   DEFFUN CURRENT.PERIOD(CONO,CONTROL.FILE,DIV.POS,FISCAL.FLAG)
+*                                                           
+   MAT SYSCOM.REC =  ""; SYS.TYPE = 2
+   MAT ORG.IWH.REC=''
+   MAT PO.REC = '' ;*T27801
+*
+   OPEN '','INVENTORY' TO INVENTORY ELSE
+      ERRMSG = 'INVENTORY FILE IS MISSING'; GOTO 93000
+   END
+   OPEN '','INV.WHSE' TO INV.WHSE ELSE
+      ERRMSG = 'INV.WHSE FILE IS MISSING'; GOTO 93000
+   END
+   OPEN '','INV.WHSE.LOC' TO INV.WHSE.LOC ELSE
+      ERRMSG = 'INV.WHSE.LOC FILE IS MISSING'; GOTO 93000
+   END
+   OPEN '','INV.WHSE.LOC.TEMP' TO INV.WHSE.LOC.TEMP ELSE
+      ERRMSG = 'INV.WHSE.LOC.TEMP FILE IS MISSING'; GOTO 93000
+   END
+   OPEN '','PHY.INV' TO PHY.INV ELSE
+      ERRMSG = 'PHY.INV FILE IS MISSING'; GOTO 93000
+   END
+   OPEN '','CATEGORY' TO CATEGORY ELSE
+      ERRMSG='CATEGORY FILE IS MISSING';GOTO 93000
+   END
+   OPEN '','INV_AUDIT_HIST' TO INV_AUDIT_HIST ELSE
+      ERRMSG = 'INV_AUDIT_HIST FILE IS MISSING'; GOTO 93000
+   END
+   OPEN '','INV_AUDIT_TAG' TO INV_AUDIT_TAG ELSE
+      ERRMSG = 'INV_AUDIT_TAG FILE IS MISSING'; GOTO 93000
+   END
+   OPEN '','FNGD_AUDIT_TAG' TO FNGD_AUDIT_TAG ELSE
+      ERRMSG = 'FNGD_AUDIT_TAG FILE IS MISSING'; GOTO 93000
+   END
+   OPEN '','COMPANY' TO COMPANY ELSE
+      ERRMSG = 'COMPANY FILE IS MISSING';GOTO 93000
+   END
+   OPEN '','CONTROL' TO CONTROL ELSE
+      ERRMSG = 'CONTROL FILE IS MISSING';GOTO 93000
+   END
+   OPEN '','WAREHOUSE' TO WAREHOUSE ELSE
+      ERRMSG = 'WAREHOUSE FILE IS MISSING';GOTO 93000
+   END
+   OPEN '','INV.HIST' TO INV.HIST ELSE
+      ERRMSG = 'INV.HIST FILE IS MISSING';GOTO 93000
+   END
+   OPEN '','INV_SERIAL' TO SERIAL ELSE
+      ERRMSG = 'SERIAL FILE IS MISSING';GOTO 93000
+   END
+   OPEN '','INV_SERIAL_TEMP' TO INV_SERIAL_TEMP ELSE
+      ERRMSG = 'INV_SERIAL_TEMP FILE IS MISSING';GOTO 93000
+   END
+   OPEN '','INV_SERIAL_DELETED' TO INV_SERIAL_DELETED ELSE
+      ERRMSG = 'INV_SERIAL_DELETED FILE IS MISSING';GOTO 93000
+   END
+   OPEN '','CUSTOMER' TO CUSTOMER ELSE
+      ERRMSG = 'CUSTOMER FILE IS MISSING';GOTO 93000
+   END
+   OPEN '','CURR.CODE' TO CURR.CODE ELSE
+      ERRMSG = 'CURR.CODE FILE IS MISSING';GOTO 93000
+   END
+*
+   OPEN.FLAG=1
+   ERRMSG=""
+   PROCREAD LINE ELSE ERRMSG = 'MUST RUN FROM A PROC'; GOTO 93000
+   CONO = LINE<1>
+*CO.NAME = LINE<2>
+   IF CONO = 'END' THEN GOTO 99999
+   MATREAD FISCAL.REC FROM CONTROL, CONO:"ICFISCAL" ELSE
+      ERRMSG = "Cannot locate Inventory Control Fiscal Period !!"
+      GOSUB 93000
+   END
+   READ DIVISION.REC FROM CONTROL, CONO:"DIVISIONS" ELSE
+      ERRMSG = "DIVISIONS CONTROL FILE RECORD IS MISSING"
+      GOTO 93000
+   END
+   READ SECURITY.REC FROM CONTROL, CONO:"DIV.SECURITY" ELSE
+      ERRMSG = "DIV.SECURITY CONTROL FILE RECORD IS MISSING"
+      GOTO 93000
+   END
+   MATREAD COMP.REC FROM COMPANY,CONO ELSE MAT COMP.REC = ''     ;* T26497
+   GEN.DIV = '00';GEN.DEPT = '00';GEN.CCTR = '000' 
+   DONE=0
+   LOOP
+      READNEXT ID ELSE DONE=1
+   UNTIL (DONE) DO
+      MATREADU PHYSI.REC FROM PHY.INV,ID THEN
+         PHYSI.POST.ERROR=''
+         WHSE.ID=CONO:PHYSI.WHSE
+         MATREAD WHSE.REC FROM WAREHOUSE,WHSE.ID ELSE MAT WHSE.REC=''
+         IF WHS.DIV='' THEN WHS.DIV=GEN.DIV
+         DIV.POS=DIVISION.POSITION(CONO,CONTROL,WHS.DIV)       
+         IF DIV.POS<1,1>='' THEN                               
+            DIV.POS=DIV.POS<1,2>                                
+            CUR.PERIOD=CURRENT.PERIOD(CONO,CONTROL,DIV.POS,"IC")
+            IF CUR.PERIOD<1,1>='' THEN                          
+               CUR.PERIOD=CUR.PERIOD<1,2>                        
+            END ELSE                                            
+               IF CUR.PERIOD<1,2>='-2' THEN                      
+                  PHYSI.POST.ERROR=CUR.PERIOD<1,2>                          
+               END                                               
+            END                                                 
+         END ELSE                                              
+            IF DIV.POS<1,1>='-2' OR DIV.POS<1,1>='-1' THEN                           
+               PHYSI.POST.ERROR=DIV.POS<1,2>                               
+            END                                                 
+         END  
+         ;* T26497 v
+         IF CO.INTR.WHSE # '' AND WHSE.ID = CO.INTR.WHSE THEN
+            PHYSI.POST.ERROR = 'CAN NOT APPLY, USING AN INTER-DIVISIONAL WHSE ':WHSE.ID
+         END
+         ;* T26497 ^
+         IF PHYSI.POST.ERROR='' THEN
+            PYSCNT = DCOUNT(PHYSI.PRODUCT,VM)
+            FOR PP = PYSCNT TO 1 STEP -1
+               IF PHYSI.TRAN.TO<1,PP> # '' THEN PHYSI.STATUS<1,PP> = 'POST'
+               IF PHYSI.STATUS<1,PP>='POST' THEN CONTINUE
+               DIFF.QTY = PHYSI.CURR.QTY<1,PP>-PHYSI.PREV.QTY<1,PP>
+               IF DIFF.QTY # 0 THEN
+                  ISTK.ID=''
+                  NEW.SERIAL = 0
+                  NEW.RECEIPT = 0
+                  INV.ID=CONO:PHYSI.PRODUCT<1,PP>
+                  MATREAD INV.REC FROM INVENTORY,INV.ID THEN
+                     CATG.ID = CONO:INV.LINE
+                     MATREAD CATG.REC FROM CATEGORY,CATG.ID THEN
+                        IF CATG.COST.TYPE = 'AC' THEN
+                           DEPL.METHOD='AC'           
+                        END ELSE                     
+                           DEPL.METHOD='FI'           
+                        END                          
+*COPY>ICSBP>INV.UM.CNV
+                        IWH.ID=CONO:PHYSI.PRODUCT<1,PP>:"!":PHYSI.WHSE
+                        MATREADU IWH.REC FROM INV.WHSE,IWH.ID THEN
+                           MAT INAH.REC=''
+                           INAH.PROD = PHYSI.PRODUCT<1,PP>
+                           INAH.WHSE = PHYSI.WHSE
+                           INAH.LOC = PHYSI.LOC
+                           INAH.ACCT=CATG.INV
+                           INAH.ADJ.ACCT=CATG.ADJ 
+                           INAH.OPER.ID = PHYSI.OPER.ID<1,PP>
+                           INAH.ADJ.CODE="PHY"
+                           INAH.SRC="IA"
+                           INAH.DATE=PHYSI.MAINT.DATE
+                           INAH.PERIOD=PHYSI.PERIOD
+                           INAH.DV.DP.CC=WHS.DIV:GEN.DEPT:GEN.CCTR
+                           INAH.CUR.QTY=PHYSI.PREV.QTY<1,PP>
+                           INAH.NEW.QTY=PHYSI.CURR.QTY<1,PP>
+                           INAH.QTY=INAH.NEW.QTY-INAH.CUR.QTY
+                           INAH.CUR.DIAM=PHYSI.PREV.DIA<1,PP>
+                           INAH.NEW.DIAM=PHYSI.CURR.DIA<1,PP>
+                           PRICE = PHYSI.UNIT.COST<1,PP>
+                           INAH.CUR.STK.QTY =PHYSI.PREV.SQTY<1,PP>
+                           INAH.NEW.STK.QTY =PHYSI.CURR.SQTY<1,PP>
+                           PHYSI.POST.ERROR<1,PP> = ""
+                           SERIAL = PHYSI.SERIAL<1,PP>
+                           PO.VEND.NO = PHYSI.OPER.ID<1,PP>
+                           IF INV.M.LINE='FNGD' THEN
+                              PO.CODE=PHYSI.JOB<1,PP>
+                              PO.VEND.NO=PHYSI.VENDOR<1,PP> ;*T27801
+                           END ELSE
+                              PO.CODE = "PHY"
+                           END
+                           IF CATG.TRK.LVL="S" THEN
+                              INAH.SERIAL=PHYSI.SERIAL<1,PP>
+                           END
+                           ACTION=1; * build INV.WHSE fifo buckets 
+                           TMP.CNT='' ; LAST='' ; TMP.ARR='' 
+                           PERIOD=PHYSI.PERIOD
+                           MAT ORG.IWH.REC=MAT IWH.REC 
+                           ;* T26556 v
+                           IF PHYSI.RECP.NO<1,PP>[1,4]="NEW-" THEN
+                              RECP.NO=PHYSI.RECP.NO<1,PP>[5,99]
+                           END ELSE
+                              RECP.NO=PHYSI.RECP.NO<1,PP>
+                           END
+                           INAH.RECP.NO = RECP.NO
+                           ;* T26556 ^
+*T27990         CALL ICS.IWH.SUB (CONO,PERIOD,TMP.ARR,TMP.CNT,LAST,ACTION,OPEN.FLAG)
+                           CALL ICS.IWH.SUB (CONO,PERIOD,TMP.ARR,TMP.CNT,LAST,ACTION,OPEN.FLAG,ERRMSG)
+                           LOCATE INAH.LOC IN IWH.LOC<1>,1 SETTING LLOC ELSE
+                              LLOC=DCOUNT(IWH.LOC,VM)+1
+                              IWH.LOC<1,LLOC> = INAH.LOC
+                           END
+                           IWLO.ID=IWH.ID:"!":INAH.LOC
+                           IF   RECORDLOCKED (INV.WHSE.LOC.TEMP,IWLO.ID)=0 THEN
+                              DELETE INV.WHSE.LOC.TEMP,IWLO.ID                  
+                           END                                                 
+                           READ CHECK.REC FROM INV.WHSE.LOC.TEMP,IWLO.ID ELSE
+                              MATREADU IWLO.REC FROM INV.WHSE.LOC,IWLO.ID ELSE
+                                 MAT IWLO.REC = ""
+                                 IWLO.LOC.ON.HAND = 0
+                              END
+                           END
+                           BEGIN CASE
+                              CASE CATG.TRK.LVL='G'
+*T28893 v
+*                                IF IWLO.LOC.ON.HAND+0 # INAH.CUR.QTY+0 THEN           
+*                                   GOSUB RELEASE.SUB
+*                                   PHYSI.POST.ERROR<1,PP>='ON HAND DOES NOT MATCH PHYSICAL'
+*                                   CONTINUE                                            
+*                                END                                                   
+                              CASE CATG.TRK.LVL='S'
+                                 ISTK.ID=CONO:SERIAL
+                                 IF RECORDLOCKED(INV_SERIAL_TEMP,ISTK.ID)=0 THEN
+                                    DELETE INV_SERIAL_TEMP,ISTK.ID
+                                 END
+                                 READU CHECK.REC FROM INV_SERIAL_TEMP,ISTK.ID ELSE
+                                    MATREADU ISTK.REC FROM INV_SERIAL,ISTK.ID THEN
+                                       IF ISTK.WHSE#PHYSI.WHSE OR ISTK.LOC#PHYSI.LOC THEN
+                                          PHYSI.POST.ERROR<1,PP>='SERIAL EXISTS IN ANOTHER WAREHOUSE AND LOCATION'
+                                          GOSUB RELEASE.SUB
+                                          RELEASE INV_SERIAL,ISTK.ID
+                                          CONTINUE
+                                       END
+*                                      IF INAH.CUR.QTY+0 <> ISTK.CUR.QTY+0 THEN
+*                                         PHYSI.POST.ERROR<1,PP>='SERIAL QTY DOES NOT MATCH PHYSICAL'
+*                                         CONTINUE
+*                                      END
+*T28893 ^
+                                       IF ISTK.RECP.PERIOD>INAH.PERIOD THEN
+                                          PHYSI.POST.ERROR<1,PP>='SERIAL RECEIVED IN PERIOD ':ISTK.RECP.PERIOD:' CANNOT BE ADJUSTED IN PERIOD ':INAH.PERIOD
+                                          CONTINUE
+                                       END
+                                       IF INAH.NEW.QTY<ISTK.CUR.QTY-ISTK.RSVB.QTY THEN
+                                          PHYSI.POST.ERROR<1,PP>='Cannot adjust below reserved qty. '
+                                          CONTINUE
+                                       END
+                                    END ELSE
+                                       ;*27144 v
+                                       MATREADU ISTK.REC FROM INV_SERIAL_DELETED,ISTK.ID THEN
+                                          ERR.MSG='' ; ERR.FLG=0 
+                                          ALOC=INAH.LOC 
+                                          AWHSE=INAH.WHSE
+                                          CALL ACTIVATE.DELETED.SERIAL (ISTK.ID,ERR.MSG,ERR.FLG,AWHSE,ALOC)
+                                          IF ERR.FLG='-1' THEN 
+                                             PHYSI.POST.ERROR<1,PP>='CANNOT ACTIVATE DELETED SERIAL.'
+                                             PHYSI.POST.ERROR<1,PP>:=' SOME SUPPORTING RECORDS ARE MISSING'
+                                             RELEASE INV_SERIAL,ISTK.ID
+                                             RELEASE INV_SERIAL_TEMP,ISTK.ID
+                                             RELEASE INV_SERIAL_DELETED,ISTK.ID
+                                             CONTINUE
+                                          END ELSE 
+                                             MATREADU ISTK.REC FROM INV_SERIAL_TEMP,ISTK.ID ELSE
+                                                MATREADU ISTK.REC FROM INV_SERIAL,ISTK.ID THEN 
+                                                   MATREADU IWLO.REC FROM INV.WHSE.LOC.TEMP,IWLO.ID ELSE
+                                                      MATREADU IWLO.REC FROM INV.WHSE.LOC,IWLO.ID ELSE 
+                                                         MAT IWLO.REC=''
+                                                         IWLO.LOC.ON.HAND=0
+                                                      END
+                                                   END
+                                                END
+                                             END
+                                          END
+                                       END ELSE
+                                          ;*27144 ^
+                                          NEW.SERIAL=1
+                                          MAT ISTK.REC=''
+                                       END ;* 27144
+                                    END
+                                 END
+                              CASE CATG.TRK.LVL='R' AND INV.M.LINE='FNGD'
+                                 IF PHYSI.JOB<1,PP>='INIT' THEN INAH.GLA.DATE='X'
+                           END CASE
+****
+                           ERR='' ; RET.ARR=''
+                           TYPE="A"
+*T27801 v
+                           IF DIFF.QTY > 0 THEN
+                              BEGIN CASE
+                                 CASE INV.M.LINE # 'FNGD'
+                                    IF RECP.NO # '' THEN
+                                       LOCATE RECP.NO IN IWH.RECP.NO<1>,1 SETTING RPOS THEN
+                                          IF IWH.RECP.PERIOD<1,RPOS> < PERIOD THEN TYPE = 'R'
+                                       END ELSE TYPE = 'R'
+                                    END ELSE
+                                       TYPE = 'R'
+                                    END
+                                 CASE 1
+                                    IF PHYSI.RECP.NO<1,PP>[1,4]='NEW-' THEN TYPE = 'R'
+                              END CASE
+                           END
+*T27801 ^
+                           CALL QTY.CHANGE.SUB(CONO,PO.CODE,MAT IWH.REC,MAT INV.REC,MAT PO.REC,DEPL.METHOD,RECP.NO,PHYSI.MAINT.DATE,PERIOD,DIFF.QTY,PRICE,TYPE,ERRMSG,RET.ARR)
+                           IF ERRMSG = "" THEN
+                              IF PHYSI.POST.ERROR<1,PP>='' THEN
+                                 IWH.ON.HAND = IWH.ON.HAND + DIFF.QTY
+                                 IF INAH.PERIOD=CUR.PERIOD THEN
+                                    CALL INV.AVG.COST.MAINT(MAT IWH.REC,INV.COST.WT,CUR.PERIOD)
+                                 END
+                                 GOSUB SET.IH.REC
+                                 BEGIN CASE 
+                                    CASE CATG.TRK.LVL="G"
+                                       TMP.CNT=1       
+                                       TMP.ARR=INAH.LOC
+                                       LAST="Y"        
+                                    CASE CATG.TRK.LVL="R"
+                                       IF PHYSI.RECP.NO<1,PP>[1,4]="NEW-" THEN
+                                          SERIAL="R":PHYSI.RECP.NO<1,PP>[5,99]:"!"
+                                          SERIAL :=PHYSI.WHSE:"!":PHYSI.LOC
+                                          NEW.SERIAL=1 ; NEW.RECEIPT=1
+                                       END ELSE
+                                          SERIAL="R":PHYSI.RECP.NO<1,PP>:"!":PHYSI.WHSE:"!":PHYSI.LOC
+                                       END
+                                       IF NEW.SERIAL THEN 
+                                          ISTK.ID=CONO:SERIAL
+                                          GOSUB CREATE.SERIAL
+                                       END
+                                       TMP.ARR=SERIAL
+                                       TMP.CNT='' ; LAST=''
+                                    CASE CATG.TRK.LVL='S'
+                                       IF NEW.SERIAL THEN
+                                          ISTK.ID=CONO:PHYSI.SERIAL<1,PP>
+                                          GOSUB CREATE.SERIAL
+                                       END
+                                       TMP.ARR=SERIAL
+                                       TMP.CNT='' ; LAST=''
+                                 END CASE
+                                 IF NEW.SERIAL OR NEW.RECEIPT THEN
+                                    INAH.TYPE='R'
+                                 END ELSE
+                                    INAH.TYPE='A'
+                                 END
+                                 ACTION=4
+*T27990 v           CALL ICS.IWH.SUB (CONO,PERIOD,TMP.ARR,TMP.CNT,LAST,ACTION,OPEN.FLAG)
+                                 ERRMSG=''
+                                 CALL ICS.IWH.SUB (CONO,PERIOD,TMP.ARR,TMP.CNT,LAST,ACTION,OPEN.FLAG,ERRMSG)
+                                 IF ERRMSG # '' THEN
+                                    PHYSI.POST.ERROR<1,PP>=ERRMSG
+                                    ACTION=9
+                                    CALL ICS.IWH.SUB (CONO,PERIOD,TMP.ARR,TMP.CNT,LAST,ACTION,OPEN.FLAG,ERRMSG)
+                                    CONTINUE
+                                 END
+*T27990 ^
+                                 PHYSI.STATUS<1,PP>='POST'
+                                 PHYSI.POST.DATE=DATE()
+                              END
+                              MATWRITE IH.REC ON INV.HIST,IH.ID
+                           END ELSE
+                              PHYSI.POST.ERROR<1,PP> = ERRMSG
+                              GOSUB RELEASE.SUB
+                              RELEASE INV.HIST, IH.ID
+                           END
+                        END ELSE
+                           PHYSI.POST.ERROR<1,PP> = "INV.WHSE # ":IWH.ID:" IS NOT ON FILE "
+                        END
+                     END ELSE
+                        PHYSI.POST.ERROR<1,PP>="CATEGORY RECORD ":CATG.ID:" IS MISSING."
+                     END
+                  END ELSE
+                     PHYSI.POST.ERROR<1,PP> = "INVENTORY # ":CONO:INAH.PROD:" IS NOT ON FILE"
+                  END
+               END ELSE
+                  GOSUB DELETE.PHYSI.LINE
+               END
+*T28571 v
+               MATWRITEU PHYSI.REC ON PHY.INV,ID
+            NEXT PP
+         END
+         IF PHYSI.PRODUCT = "" THEN
+            DELETE PHY.INV,ID
+         END ELSE
+            ;* delete PHY.INV after all lines have been posted.
+            KEEP=0
+            PYSCNT = DCOUNT(PHYSI.PRODUCT,VM)
+            FOR PP=1 TO PYSCNT UNTIL KEEP
+               IF PHYSI.STATUS<1,PP>#'POST' THEN KEEP=1
+            NEXT PP
+            IF KEEP THEN
+               MATWRITE PHYSI.REC ON PHY.INV,ID
+            END ELSE
+               DELETE PHY.INV,ID
+            END
+         END
+      END
+   REPEAT
+   GOTO 99999
+*
+**************************************************************************
+**** S U B R O U T I N E S ***********************************************
+**************************************************************************
+*
+***************
+CREATE.SERIAL: 
+***************
+*
+   SERIAL.ON = 0
+   IF CATG.TRK.LVL='S' OR CATG.TRK.LVL='R' THEN
+      MATREADU ISTK.REC FROM INV_SERIAL,ISTK.ID ELSE
+         MAT ISTK.REC=''
+      END
+      ISTK.PROD = PHYSI.PRODUCT<1,PP>
+      ISTK.PO.NO = "P":ID[4,99]
+      ISTK.PO.LINE = 1
+      ISTK.WHSE = PHYSI.WHSE
+      ISTK.UNIT.COST = PRICE
+*  ISTK.UOM = INV.UNIT<1,3>
+      MATWRITEU ISTK.REC ON INV_SERIAL,ISTK.ID
+   END
+   RETURN
+*
+*****************
+DELETE.PHYSI.LINE: 
+*****************
+*
+   FOR ATT=1 TO PHYSI.REC.SIZE
+      PHYSI.REC(ATT)=DELETE(PHYSI.REC(ATT),1,PP,0)
+   NEXT ATT
+   RETURN
+*
+******************
+RELEASE.SUB: 
+******************
+*
+   RELEASE INV.WHSE,IWH.ID
+   RELEASE INV.WHSE.LOC,IWLO.ID
+   IF ISTK.ID#"" THEN
+      RELEASE INV_SERIAL,ISTK.ID
+   END
+   RETURN
+*
+************
+SET.IH.REC: 
+************
+*
+   IH.ID = CONO:INAH.PROD
+   MATREADU IH.REC FROM INV.HIST,IH.ID ELSE
+      MAT IH.REC = ""
+   END
+   IH.CNT = DCOUNT(IH.DATE,VM)
+   IDATE = PHYSI.MAINT.DATE
+   LOCATE IDATE IN IH.DATE<1> SETTING IDATE.POS ELSE NULL
+   BEGIN CASE
+      CASE IDATE.POS = IH.CNT
+         IH.AMOUNT<1,IDATE.POS> = IH.AMOUNT<1,IDATE.POS> + DIFF.QTY
+      CASE IDATE.POS > IH.CNT
+         IH.AMOUNT<1,IDATE.POS> = IH.AMOUNT<1,IDATE.POS> + DIFF.QTY
+         IH.DATE<1,IDATE.POS> = IDATE
+      CASE 1
+         IH.AMOUNT<1,IDATE.POS> = IH.AMOUNT<1,IDATE.POS> + DIFF.QTY
+   END CASE
+   RETURN
+*
+*---- ERROR ROUTINE
+*
+90000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+93000 ERR.TYPE=3;CALL SYSCOM(MAT SYSCOM.REC)
+*---- END OF PROGRAM
+*
+99999 *
+END

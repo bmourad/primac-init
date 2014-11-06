@@ -1,0 +1,265 @@
+SUBROUTINE JCSJTME_VALIDATE_SERIAL
+********************************************************************************
+*   Program name :- JCSJTME_VALIDATE_SERIAL
+*   Created:- 9/13/2005
+*   By :- S.Zahoor Ahmed
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE ICS.CPYLIB WAREHOUSE
+$INCLUDE JCS.CPYLIB JOB
+$INCLUDE PMC.CPYLIB COMPANY
+
+$INCLUDE ICS.CPYLIB INV_SERIAL
+$INCLUDE ICS.CPYLIB INV.WHSE.LOC
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB CATEGORY
+$INCLUDE ICS.CPYLIB INV.WHSE
+$INCLUDE JCS.CPYLIB OPERATION
+$INCLUDE PMC.CPYLIB COST.CNTR
+$INCLUDE CPYLIB CHAR
+*---- INITIALIZATION
+*
+   ESTAT=""
+*
+  OPEN "","INV_SERIAL" TO INV_SERIAL ELSE ERRMSG="INV_SERIAL FILE IS MISSING";GOTO 93000
+  OPEN "","CONTROL" TO CONTROL ELSE ERRMSG="INV_SERIAL FILE IS MISSING";GOTO 93000 
+  OPEN "","INV.WHSE.LOC" TO INV.WHSE.LOC ELSE ERRMSG="INV.WHSE.LOC FILE IS MISSING";GOTO 93000
+  OPEN "","INVENTORY" TO INVENTORY ELSE ERRMSG="INVENTORY FILE IS MISSING";GOTO 93000
+  OPEN "","INV.WHSE" TO INV.WHSE ELSE ERRMSG="INV.WHSE FILE IS MISSING";GOTO 93000
+  OPEN "JOB" TO JOB ELSE ERRMSG = "CANNOT OPEN JOB FILE"; GOTO 93000
+  OPEN "","COMPANY" TO COMPANY ELSE ERRMSG="CANNOT OPEN COMPANY FILE";GOTO 93000
+  OPEN "","WAREHOUSE" TO WAREHOUSE ELSE ERRMSG="CANNOT OPEN WAREHOUSE FILE";GOTO 93000
+  OPEN "","CATEGORY" TO CATEGORY ELSE ERRMSG="CATEGORY FILE IS MISSING";GOTO 93000
+
+  OPEN "","OPERATION" TO OPERATION ELSE ERRMSG="CANNOT OPEN OPERATION FILE";GOTO 93000
+  OPEN '','COST.CNTR' TO COST.CNTR ELSE ERRMSG='COST.CNTR FILE IS MISSING'; GOTO 93000
+
+*Initialisation
+  PROD_ID=""
+  SERIAL_ID=""
+  WHSE_ID = ""
+  LOCAT_ID = ""  
+  WARMSG = ""
+  MAT INV.REC = '' 
+  MAT ISTK.REC = ""
+  MAT IWLO.REC = ""
+  MAT JOB.REC = ""
+  MAT INV.REC = ""
+  MAT CATG.REC = ""
+  STATUS=RBO.getProperty('','PMCProperty',PMCProperty)
+  STATUS=RBO.getProperty('','PROD',PROD_ID)
+  CONO   = PMCProperty<1,4>
+  STATUS=RBO.getProperty('','SERIAL_ID',SERIAL_ID)
+  STATUS=RBO.getProperty('','WHSE_ID',WHSE_ID)
+  STATUS=RBO.getProperty('','LOCAT_ID',LOCAT_ID)
+  STATUS=RBO.getProperty('','JOB_ID',JOB_ID)
+  STATUS=RBO.getProperty('','OPER_ID',OPER_ID)
+SHEET.OK = 1
+
+*
+*---- GET MATERIAL ID
+*
+
+
+  MATREAD COMP.REC FROM COMPANY, CONO ELSE MAT COMP.REC = "" 
+  
+	MATREAD ISTK.REC FROM INV_SERIAL,CONO:SERIAL_ID THEN
+         IF ISTK.POST.DATE="" THEN
+            ERRMSG="Serial has not been received"
+            GOTO 93000
+         END
+         IF CO.INTR.WHSE # '' AND CO.INTR.WHSE = ISTK.WHSE THEN
+            ERRMSG = 'Cannot use, Serial is in Inter-Divisional Warehouse'
+            GOTO 93000
+         END
+         MATREAD JOB.REC FROM JOB,CONO:JOB_ID ELSE
+            MAT JOB.REC=''
+         END
+         MATREAD WHSE.REC FROM WAREHOUSE,CONO:ISTK.WHSE ELSE MAT WHSE.REC=''
+         IF WHS.DIV # JOB.DIV AND WHS.DIV # "00" THEN
+            ERRMSG="Serial Warehouse Div.":WHS.DIV:" does not match Job Div.":JOB.DIV
+            GOTO 93000
+         END
+         PROD_ID=ISTK.PROD
+         WHSE_ID=ISTK.WHSE
+         LOCAT_ID=ISTK.LOC
+      END ELSE
+         *IF PROD_ID = "" THEN
+            ERRMSG="Invalid Serial ID"
+            GOTO 93000
+         *END
+     END
+     MATREAD IWLO.REC FROM INV.WHSE.LOC,CONO:PROD_ID:"!":WHSE_ID:"!":LOCAT_ID ELSE MAT IWLO.REC=""
+	
+	MATREAD OPER.REC FROM OPERATION,CONO:OPER_ID ELSE
+		MAT OPER.REC = ''
+	END
+************************
+IF PROD_ID # "" THEN
+ 	  MATREAD INV.REC FROM INVENTORY,CONO:PROD_ID ELSE
+            ERRMSG="Invalid product ID. Try again! "
+            GOTO 93000
+         END
+         IF INV.CUST # "" THEN
+            IF "X":INV.CUST # "X":JOB.CUST THEN
+               ERRMSG="CUSTOMER ":INV.CUST:" OWNS THIS INVENTORY"
+               GOTO 93000
+            END
+         END
+         BEGIN CASE
+            CASE INV.PAP.TYPE="REGULAR"
+            CASE INV.PAP.TYPE="SHEET" AND SHEET.OK
+            CASE INV.PAP.TYPE="ROLL"
+            CASE INV.PAP.TYPE="PCOAT" AND SHEET.OK
+            CASE INV.PAP.TYPE="LROLL" AND SHEET.OK
+            CASE 1
+               ERRMSG="Invalid product type. Try again! "
+               GOTO 93000
+         END CASE
+         IF INV.M.LINE="FNGD" THEN
+            ERRMSG="Product is part of finished goods inventory. Try again! "
+            GOTO 93000
+         END
+         IF OPER.MATL.REQ="Y" AND OPER.PLINE # "" THEN
+            LOCATE INV.LINE IN OPER.PLINE<1>,1 SETTING PL ELSE PL=0
+            IF PL=0 THEN
+               ERRMSG="Invalid product for this operation. Try again! "
+               GOTO 93000
+            END
+         END
+         MATREAD CATG.REC FROM CATEGORY,CONO:INV.LINE ELSE
+            ERRMSG="Cannot locate product line. Try again! "
+            GOTO 93000
+         END
+         IF CATG.TRACK.QOH # "Y" AND (CATG.COST.TYPE="FI" OR CATG.COST.TYPE="LC") THEN
+            ERRMSG=CATG.COST.TYPE:" is not a valid costing method when PLINE does not track QOH"
+            GOTO 93000
+         END
+         IF CATG.RSV.SERIAL='Y' AND SERIAL_ID#'' THEN
+            LOCATE JOB_ID IN ISTK.JOB<1> SETTING JUNK ELSE
+               WARMSG='WARNING, This serial has not been reserved for this job.'
+               *GOTO 93000
+            END
+         END
+END
+
+   IF SHEET.OK THEN
+      READ DEPT.WHSE FROM CONTROL,CONO:"DEPT.WHSE" ELSE
+         DEPT.WHSE=""
+      END
+   END ELSE
+      DEPT.WHSE=""
+   END
+  IF WHSE_ID="" THEN
+            MATREAD JOB.REC FROM JOB,CONO:JOB_ID ELSE
+               MAT JOB.REC=''
+            END
+            WH.CNT=COUNT(INV.WHSE.CODE,VM)+(INV.WHSE.CODE # "")
+            BEGIN CASE
+               CASE WH.CNT=1
+                  WHSE_ID=INV.WHSE.CODE
+               CASE INV.PAP.TYPE="SHEET" AND SHEET.OK AND DEPT.WHSE # ""
+                  LOCATE CCTR.DEPT IN DEPT.WHSE<1>,1 SETTING W ELSE
+                     ERRMSG="Cannot locate warehouse for specified department. Try again! "
+                     GOTO 93000
+                  END
+                  WHSE_ID=DEPT.WHSE<2,W>
+               CASE INV.PAP.TYPE="PCOAT" AND SHEET.OK AND DEPT.WHSE # ""
+                  LOCATE CCTR.DEPT IN DEPT.WHSE<1>,1 SETTING W ELSE
+                     ERRMSG="Cannot locate warehouse for specified department. Try again! "
+                     GOTO 93000
+                  END
+                  WHSE_ID=DEPT.WHSE<2,W>
+               CASE INV.PAP.TYPE="LROLL" AND SHEET.OK AND DEPT.WHSE # ""
+                  LOCATE CCTR.DEPT IN DEPT.WHSE<1>,1 SETTING W ELSE
+                     ERRMSG="Cannot locate warehouse for specified department. Try again! "
+                     GOTO 93000
+                  END
+                  WHSE_ID=DEPT.WHSE<2,W>
+               CASE 1
+		    WHSE_ID = ""
+            END CASE
+ END
+IF WHSE_ID # "" THEN
+            IF CO.INTR.WHSE # "" AND CO.INTR.WHSE = WHSE_ID THEN
+               ERRMSG = 'Cannot use an Inter-Divisional Warehouse'
+               GOTO 93000
+            END
+            MATREAD WHSE.REC FROM WAREHOUSE,CONO:WHSE_ID ELSE
+               MAT WHSE.REC = ""
+            END
+            IF WHS.DIV # JOB.DIV AND WHS.DIV # "00" THEN
+               ERRMSG="Warehouse Div ":WHS.DIV:" does not match Job Div ":JOB.DIV
+               GOTO 93000
+            END
+*         END
+         MATREAD IWH.REC FROM INV.WHSE,CONO:PROD_ID:"!":WHSE_ID ELSE
+            MAT IWH.REC=""
+            ERRMSG="Cannot locate warehouse item. Try again! "
+            WHSE_ID=""
+            LOCAT_ID=""
+            GOTO 93000
+         END
+
+         IF IWH.ON.HAND+0=0 AND CATG.TRACK.QOH="Y" THEN
+            ERRMSG="Quantity on-hand is zero. Try again! "
+            GOTO 93000
+         END
+         IF CATG.TRACK.QOH="N" THEN
+            IF IWH.LOC="" THEN
+               IWH.LOC=WHS.LOC<1,1>
+            END
+         END
+   END
+	IF LOCAT_ID="" THEN
+            LO.CNT=COUNT(IWH.LOC,VM)+(IWH.LOC # "")
+            BEGIN CASE
+               CASE LO.CNT=1
+                  LOCAT_ID=IWH.LOC
+	     	  CASE 1
+		    LOCAT_ID=""
+            END CASE
+      END
+**************************
+ 
+STATUS=RBO.setProperty('','PROD',PROD_ID)
+STATUS=RBO.setProperty('','INV_FULL_DESC',INV.FULL.DESC)
+STATUS=RBO.setProperty('','WHSE_ID',WHSE_ID)
+STATUS=RBO.setProperty('','IWH_LOC',IWH.LOC)
+STATUS=RBO.setProperty('','LOC_ID',LOCAT_ID)
+STATUS=RBO.setProperty('','JOB_RESV_MATL',JOB.RESV.MATL)
+STATUS=RBO.setProperty('','JOB_RESV_QTY',JOB.RESV.QTY)
+STATUS=RBO.setProperty('','JOB_RESV_AMT',JOB.RESV.AMT)
+STATUS=RBO.setProperty('','JOB_RESV_WHSE',JOB.RESV.WHSE)
+STATUS=RBO.setProperty('','WARMSG',WARMSG)
+
+STATUS=RBO.setProperty('','INV_PAP_TYPE',INV.PAP.TYPE)
+STATUS=RBO.setProperty('','INV_UNIT',INV.UNIT)
+
+
+STATUS=RBO.setProperty('','CATG_RSV_SERIAL',CATG.RSV.SERIAL)
+STATUS=RBO.setProperty('','ISTK_CUR_QTY',ISTK.CUR.QTY)
+STATUS=RBO.setProperty('','ISTK_JOB',ISTK.JOB)
+STATUS=RBO.setProperty('','IWLO_LOC_ON_HAND',IWLO.LOC.ON.HAND)
+STATUS=RBO.setProperty('','IWLO_LOC',IWLO.LOC)
+STATUS=RBO.setProperty('','ISTK_RSVB_QTY',ISTK.RSVB.QTY)
+STATUS=RBO.setProperty('','ISTK_JRSVD_QTY',ISTK.JRSVD.QTY)
+RETURN
+
+93000*
+STATUS = RBO.setProperty('','ServerStatus',1)
+STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+
+RETURN 
+
+

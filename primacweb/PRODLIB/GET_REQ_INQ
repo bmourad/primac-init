@@ -1,0 +1,169 @@
+SUBROUTINE GET_REQ_INQ
+********************************************************************************
+*   Program name :- GET_REQ_INQ
+*   Created:- 12/20/2002
+*------------------------------------------------------------------------------
+*
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+
+* Insert method code here
+$INCLUDE PMC.CPYLIB COMPANY
+$INCLUDE POS.CPYLIB APP.REQ
+$INCLUDE PMC.CPYLIB PO
+$INCLUDE POS.CPYLIB OUTSIDE.PO
+$INCLUDE POS.CPYLIB MISC.PO
+$INCLUDE PMC.CPYLIB VEND
+$INCLUDE CPYLIB CHAR
+
+* Initialize variables
+ERRMSG = ''
+ReqList = ''
+ReqTypeList = ''
+WrittenByList = ''
+ApproverList = ''
+EntryDateList = ''
+StatusList = ''
+VendorList = ''
+VendorNamesList = ''
+CNT = 1
+
+* Open files
+OPEN 'COMPANY' TO COMPANY ELSE 
+  ERRMSG  = 'COMPANY FILE IS MISSING'
+END
+OPEN 'CONTROL' TO CONTROL ELSE
+  ERRMSG = 'CONTROL FILE IS MISSING'
+END 
+OPEN 'DIVISION' TO DIVISION ELSE
+  ERRMSG = 'DIVISION FILE IS MISSING'
+END
+OPEN 'REG.REQ' TO REG.REQ ELSE
+  ERRMSG = 'REG.REQ FILE IS MISSING'
+END
+OPEN 'OUT.REQ' TO OUT.REQ ELSE
+  ERRMSG = 'OUT.REQ FILE IS MISSING'
+END
+OPEN 'MISC.REQ' TO MISC.REQ ELSE
+  ERRMSG = 'MISC.REQ FILE IS MISSING'
+END
+OPEN 'VEND' TO VEND ELSE
+  ERRMSG = 'VENDOR FILE IS MISSING'
+END
+IF ERRMSG THEN
+  CALL RBO_ERROR_SUB(ERRMSG)
+  RETURN
+END
+
+* Get properties
+STATUS = RBO.getProperty('','ID',ID)
+STATUS = RBO.getProperty('','Division',Division)
+STATUS = RBO.getProperty('','StartingDate',StartingDate)
+STATUS = RBO.getProperty('','EndingDate',EndingDate)
+STATUS = RBO.getProperty('','WrittenBy',WrittenBy)
+STATUS = RBO.getProperty('','Approver',Approver)
+STATUS = RBO.getProperty('','Vendor',Vendor)
+STATUS = RBO.getProperty('','ReqType',ReqType)
+
+* Get CONO
+CONO = ID[1,3]
+MATREAD COMP.REC FROM COMPANY, CONO ELSE
+  ERRMSG = 'Invalid Company ID (':CONO:').'
+  CALL RBO_ERROR_SUB(ERRMSG); RETURN
+END
+
+* Prepare select statement
+STMT = " WITH CONO = '" : CONO : "' AND WITH LEVEL # 'C'"
+IF Division     # 'ALL' THEN STMT := " AND WITH DIV.OWNER = '":Division :"'"
+IF StartingDate # 'ALL' THEN STMT := " AND WITH DATE >= '": StartingDate:"'"
+IF EndingDate   # 'ALL' THEN STMT := " AND WITH DATE <= '": EndingDate:"'"
+IF WrittenBy    # 'ALL' THEN STMT := " AND WITH WRIT.BY = '": WrittenBy:"'"
+IF Approver     # 'ALL' THEN STMT := " AND WITH APPROVER = '": Approver:"'"
+IF Vendor       # 'ALL' THEN STMT := " AND WITH VEND.NO = '":Vendor:"'"
+
+* Select records
+IF ReqType = 'ALL' THEN
+  ReqType = 'R'; GOSUB SELECT.RECORDS
+  ReqType = 'O'; GOSUB SELECT.RECORDS
+  ReqType = 'M'; GOSUB SELECT.RECORDS
+  ReqType = 'ALL'
+END ELSE
+  GOSUB SELECT.RECORDS
+END
+
+* Set output properties
+STATUS = RBO.setProperty('','ReqList',ReqList)
+STATUS = RBO.setProperty('','ReqTypeList',ReqTypeList)
+STATUS = RBO.setProperty('','WrittenByList',WrittenByList)
+STATUS = RBO.setProperty('','ApproverList',ApproverList)
+STATUS = RBO.setProperty('','EntryDateList',EntryDateList)
+STATUS = RBO.setProperty('','StatusList',StatusList)
+STATUS = RBO.setProperty('','VendorList',VendorList)
+STATUS = RBO.setProperty('','VendorNamesList',VendorNamesList)
+
+* End of method code
+RETURN
+
+SELECT.RECORDS:
+  BEGIN CASE
+    CASE ReqType = 'R'
+      UDTEXECUTE "SSELECT REG.REQ" : STMT CAPTURING CAP RETURNING RET 
+      LOOP
+        READNEXT RECID ELSE EXIT
+        MATREAD PO.REC FROM REG.REQ, RECID ELSE MAT PO.REC = ''
+        ReqList<1,CNT>       = RECID[4,LEN(RECID)-3]
+        ReqTypeList<1,CNT>   = ReqType
+        WrittenByList<1,CNT> = PO.WRIT.BY
+        ApproverList<1,CNT>  = PO.APPROVER
+        EntryDateList<1,CNT> = OCONV(PO.DATE,'D4/')
+        LAST.POS             = DCOUNT(PO.STATUS,VM)
+        StatusList<1,CNT>    = PO.STATUS<1,LAST.POS>
+        VendorList<1,CNT>    = PO.VEND.NO
+        MATREAD VEND.REC FROM VEND, CONO : PO.VEND.NO ELSE MAT VEND.REC = ''
+        VendorNamesList<1,CNT> = VEND.PO.DESC[1,14]
+        CNT = CNT + 1
+      REPEAT
+    CASE ReqType = 'O'
+      UDTEXECUTE "SSELECT OUT.REQ" : STMT CAPTURING CAP RETURNING RET
+      LOOP
+        READNEXT RECID ELSE EXIT
+        MATREAD OPO.REC FROM OUT.REQ, RECID ELSE MAT OPO.REC = ''
+        ReqList<1,CNT>       = RECID[4,LEN(RECID)-3]
+        ReqTypeList<1,CNT>   = ReqType
+        WrittenByList<1,CNT> = OPO.ORD.BY
+        ApproverList<1,CNT>  = OPO.APPROVER
+        EntryDateList<1,CNT> = OCONV(OPO.DATE,'D4/')
+        LAST.POS             = DCOUNT(OPO.STAT,VM)
+        StatusList<1,CNT>    = OPO.STAT<1,LAST.POS>
+        VendorList<1,CNT>    = OPO.VEND.NO
+        MATREAD VEND.REC FROM VEND, CONO : OPO.VEND.NO ELSE MAT VEND.REC = ''
+        VendorNamesList<1,CNT> = VEND.PO.DESC[1,14]
+        CNT = CNT + 1
+      REPEAT
+    CASE ReqType = 'M'
+      UDTEXECUTE "SSELECT MISC.REQ" : STMT CAPTURING CAP RETURNING RET
+      LOOP
+        READNEXT RECID ELSE EXIT
+        MATREAD MPO.REC FROM MISC.REQ, RECID ELSE MAT MPO.REC = ''
+        ReqList<1,CNT>       = RECID[4,LEN(RECID)-3]
+        ReqTypeList<1,CNT>   = ReqType
+        WrittenByList<1,CNT> = MPO.WRIT.BY
+        ApproverList<1,CNT>  = MPO.APPROVER
+        EntryDateList<1,CNT> = OCONV(MPO.DATE,'D4/')
+        LAST.POS             = DCOUNT(MPO.STATUS,VM)
+        StatusList<1,CNT>    = MPO.STATUS<1,LAST.POS>
+        VendorList<1,CNT>    = MPO.VEND.NO
+        MATREAD VEND.REC FROM VEND, CONO : MPO.VEND.NO ELSE MAT VEND.REC = ''
+        VendorNamesList<1,CNT> = VEND.PO.DESC[1,14]
+        CNT = CNT + 1
+      REPEAT
+  END CASE
+  RETURN
+

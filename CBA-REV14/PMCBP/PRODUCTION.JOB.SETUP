@@ -1,0 +1,509 @@
+   SUBROUTINE PRODUCTION.JOB.SETUP(CONO,PRODUCTION.REC,CPROD.REC, NPROD.REC)
+*COPY>CPYLIB>COM1
+**************************************************************************
+* REVISION    - [10A.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - PMCBP
+* PROGRAM     - PRODUCTION.JOB.SETUP
+* BY
+* DATE        - 5/95
+* DESCRIPTION -
+* TASK
+*     18573 04/17/95 LLH ACCOUTING PERIODS
+*      19612 11/16/95 LLH ADD DIVISION
+*
+*T20979 llh 09/12/1996 * CREATE AN OVERRIDE TO CREATE NEXT YEARS X JOBS
+*T20979 llh 01/07/1997 * FIX PRODUCTION DATE
+*T22049 llh 06/27/1997 * CHANGE THE WAY XJOBS ARE ORIGINALLY CREATED
+*T22395 lanny 12/02/1997 * Period Loop max at 12 - S/B no of periods.
+*C30420 gat 02/13/1998 * Fix production Week setup.
+*T22468 lanny 12/16/1998 * Create XJOBS for 2 years (current & next
+*                          year)
+*T23278 lanny 10/25/1999 * Add Divsion security check.
+*T25005 lanny 03/14/2000 * Correct method of gen XJOBS
+*T27991 lross 11/29/2004 * Donot allow 'F'ile without CUST/SLSMN/CATG/COLOR
+***********************************************************************
+*ENDDOC
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>ICS.CPYLIB>CATEGORY
+*COPY>PMC.CPYLIB>DIVISION
+*COPY>CPYLIB>GEN.XREF.SUB
+*COPY>PMC.CPYLIB>FISCAL
+*COPY>JCS.CPYLIB>JOB
+*COPY>PMC.CPYLIB>SALESMAN
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+*
+*--- SET UP ERROR ROUTINE
+*
+   SYS.TYPE = 1
+   CALL SYSCOM(MAT SYSCOM.REC)
+*
+*--- INITIALIZE
+*
+   MAT GEN.XREF.REC = ""
+   GXR.CO = CONO
+   ECD.SCRN.NO = 2
+   ESN         = 2
+   REF.CNT = 0
+   REF.NO = ""
+   CURR.REF.NO = ""
+   LINE.COUNT = 10
+   USER.ID = UPCASE(@LOGNAME)  ;*T23278
+   ECD.ACTION  = 6; CALL SCRN.EDIT
+   GOSUB 9000
+   ECD.ACTION = 3; CALL SCRN.EDIT
+   NUM.PRODUCTION.WEEKS = DCOUNT(PRODUCTION.REC<1>,VM)
+   READ TEMP.REC FROM CONTROL, CONO:"DIVISIONS" ELSE
+      TEMP.REC = ""
+   END
+   READ DIV.SEC.REC FROM CONTROL, CONO:"DIV.SECURITY" ELSE
+      DIV.SEC.REC='N'
+      DIV.SEC.REC<2>='N'
+   END
+   READ JC.REC FROM CONTROL, CONO:"JCFISCAL" ELSE
+      JC.REC = ""
+   END
+   NUM.DIVISIONS = DCOUNT(TEMP.REC,VM)
+   IF NUM.DIVISIONS = 0 THEN NUM.DIVISIONS = 99
+   IF NUM.PRODUCTION.WEEKS = 0 THEN NUM.PRODUCTION.WEEKS = 53
+   OLD.CUST = PRODUCTION.REC<3>
+   IF PRODUCTION.REC<3> = "" THEN
+      FOR P = 1 TO 4
+         ON P GOSUB 1000,2000,3000,4000
+         IF ECD.RET.VALUE = "E" OR ECD.RET.VALUE = "END" THEN
+            P = 5
+         END
+      NEXT P
+      OPTION = "A"
+      GOTO 101
+   END
+*
+*
+100 *
+*
+   ECD.NUM = 21; ECD.ACTION = 4; CALL SCRN.EDIT
+   OPTION = ECD.RET.VALUE
+*
+101 *
+*
+   BEGIN CASE
+      CASE OPTION = "A"
+         MODE = "A"
+         DONE = 0
+         FOR REF.NO = REF.CNT + 1 TO NUM.DIVISIONS  UNTIL DONE
+            IF REF.CNT > 0 THEN GOSUB 10000
+            GOSUB 6000
+            IF ECD.RET.VALUE="END" THEN 
+               DEL SCV.REC(10)<ESN,REF.NO,0>
+               REF.CNT=REF.NO-1
+               DONE = 1
+            END ELSE
+               REF.CNT = REF.NO
+            END
+         NEXT REF.NO
+         REF.NO = REF.CNT
+         CURR.REF.NO = ""
+         GOSUB 10000
+      CASE OPTION = "D" AND REF.CNT > 0
+         GOSUB 500
+         IF NUM(ECD.RET.VALUE) AND ECD.RET.VALUE # "" THEN
+            REF.NO=ECD.RET.VALUE
+            IF DIV.SEC.REC<2> = 'Y' THEN
+               LOCATE PRODUCTION.REC<7,REF.NO> IN TEMP.REC<1>,1 SETTING POS ELSE POS = 1
+            END ELSE POS = 1
+            NYR=JC.REC<1,POS>[1,4]+1
+            NYR=NYR[3,2]
+            XJBKEY = CONO:"X":NYR:"01":PRODUCTION.REC<7,REF.NO>:"1"
+            READ JREC FROM JOB, XJBKEY THEN
+               ERRMSG='XJOBS already created for Div ':PRODUCTION.REC<7,REF.NO>:' - Cannot Delete'
+               GOSUB 91000
+            END ELSE
+               DIV.CODE = PRODUCTION.REC<7,REF.NO>
+               GOSUB 11000
+               IF ERRMSG = '' THEN
+                  PRODUCTION.REC = DELETE(PRODUCTION.REC,7,REF.NO,0)
+                  PRODUCTION.REC = DELETE(PRODUCTION.REC,8,REF.NO,0)
+                  SCV.REC(10) = DELETE(SCV.REC(10),ESN,REF.NO,0)
+                  SCV.REC(11) = DELETE(SCV.REC(11),ESN,REF.NO,0)
+                  REF.CNT=REF.CNT - 1
+                  IF REF.NO > 1 THEN REF.NO=REF.NO - 1
+                  CURR.REF.NO=""
+                  GOSUB 10000
+               END
+            END
+         END
+      CASE OPTION = "E" OR OPTION = "END"
+         GOTO 999999
+      CASE OPTION = "F"
+*T27991 v
+         BEGIN CASE
+         CASE PRODUCTION.REC<3> = ''
+           ERRMSG='Cannot File without a valid Customer ID'
+         CASE PRODUCTION.REC<4> = ''
+           ERRMSG='Cannot File without a Salesrep ID'
+         CASE PRODUCTION.REC<5> = ''
+           ERRMSG='Cannot File without a Job Category'
+         CASE PRODUCTION.REC<6> = ''
+           ERRMSG='Cannot File without a Color Code'
+         END CASE
+         IF ERRMSG # '' THEN
+           GOSUB 91000
+           GOTO 100
+         END
+         CPROD.REC<3>=PRODUCTION.REC<3>
+         CPROD.REC<4>=PRODUCTION.REC<4>
+         CPROD.REC<5>=PRODUCTION.REC<5>
+         CPROD.REC<6>=PRODUCTION.REC<6>
+         NPROD.REC<3>=PRODUCTION.REC<3>
+         NPROD.REC<4>=PRODUCTION.REC<4>
+         NPROD.REC<5>=PRODUCTION.REC<5>
+         NPROD.REC<6>=PRODUCTION.REC<6>
+         CPROD.REC<7> = PRODUCTION.REC<7>
+         CPROD.REC<8> = PRODUCTION.REC<8>
+*T27991 ^
+         ECD.NUM = 15; ECD.ACTION = 4; CALL SCRN.EDIT
+         IF ECD.RET.VALUE = "Y" THEN
+            PRODUCTION.REC<8> = ""
+*T27991     CPROD.REC<7> = PRODUCTION.REC<7>
+*T27991     CPROD.REC<8> = PRODUCTION.REC<8>
+            NPROD.REC<7> = PRODUCTION.REC<7>
+            NPROD.REC<8> = PRODUCTION.REC<8>
+         END
+         NUM.DIV = DCOUNT(PRODUCTION.REC<7>,VM)
+         NUM.PRODUCTION = DCOUNT(PRODUCTION.REC<1>,VM)
+         PDATE     = OCONV(PRODUCTION.REC<1,1>,"D2-")
+         FOR D = 1 TO NUM.DIV
+            DIV.NUM = PRODUCTION.REC<7,D>
+            IF DIV.SEC.REC<2> = 'Y' THEN
+               LOCATE DIV.NUM IN TEMP.REC<1>,1 SETTING POS ELSE GOTO 199
+            END ELSE POS = 1
+            DIV.CODE = DIV.NUM
+            GOSUB 11000
+            IF ERRMSG # "" THEN GOTO 199
+            CYEAR = JC.REC<1,POS>[1,4]
+            NYEAR = CYEAR + 1
+            FOR Y = 2 TO 1 STEP -1     ;*C35807
+               IF Y = 1 THEN     ;*C35807
+                  YEAR.BUILD = CYEAR[LEN(CYEAR)-1,2]     ;*C35807
+                  YEAR.BUILD = STR('0',2-LEN(YEAR.BUILD)):YEAR.BUILD
+*T27991 v
+*                 PRODUCTION.REC = CPROD.REC
+                  PRODUCTION.REC<1> = CPROD.REC<1>
+                  PRODUCTION.REC<2> = CPROD.REC<2>
+*T27991 ^
+                  NUM.PRODUCTION = DCOUNT(PRODUCTION.REC<1>,VM)
+                  PRODUCTION.REC<8,D> = DATE()
+                  CPROD.REC = PRODUCTION.REC     ;*C35807
+               END ELSE
+*T27991 v
+                 IF ECD.RET.VALUE = 'Y' AND NPROD.REC<1> # '' THEN
+                   YEAR.BUILD = NYEAR[LEN(NYEAR)-1,2]     ;*C35807
+                   YEAR.BUILD = STR('0',2-LEN(YEAR.BUILD)):YEAR.BUILD
+*T27991 v
+*                  PRODUCTION.REC = NPROD.REC
+                   PRODUCTION.REC<1> = NPROD.REC<1>
+                   PRODUCTION.REC<2> = NPROD.REC<2>
+*T27991 ^
+                   NUM.PRODUCTION = DCOUNT(PRODUCTION.REC<1>,VM)
+                   PRODUCTION.REC<8,D> = DATE()
+                   NPROD.REC = PRODUCTION.REC     ;*C35807
+                 END ELSE NUM.PRODUCTION = 0
+*T27991 ^
+               END
+               FOR P = 1 TO NUM.PRODUCTION
+                  LOCATE PRODUCTION.REC<2,P> IN PRODUCTION.REC<2>,1 BY "AR" SETTING STRT ELSE STRT = P
+                  W = P - STRT + 1
+                  IF W > 5 THEN W = 5
+                  P.SEQ = W
+                  JOB.KEY = CONO:"X":YEAR.BUILD:PRODUCTION.REC<2,P>"R%2":DIV.NUM:P.SEQ
+                  MAT JOB.REC = ""
+                  MATREAD JOB.REC FROM JOB, JOB.KEY ELSE
+                     MAT JOB.REC = ""
+*T27991 v
+                  END ;*T27991
+                  JOB.MASTER = JOB.KEY[4,8]
+                  JOB.CUST   = PRODUCTION.REC<3>
+                  JOB.SLSMN  = PRODUCTION.REC<4>
+                  JOB.DIV    = DIV.NUM
+                  JOB.COLORS = PRODUCTION.REC<6>
+                  JOB.CATG   = PRODUCTION.REC<5>
+                  JOB.TRACK.DATE<1,1> = PRODUCTION.REC<1,P>
+                  JOB.TRACK.DATE<1,2> = PRODUCTION.REC<1,P>
+                  JOB.TRACK.DATE<1,3> = PRODUCTION.REC<1,P>
+                  JOB.TYPE            = "N"
+                  MATWRITE JOB.REC ON JOB, JOB.KEY
+                  CFND = 1
+                  IF PRODUCTION.REC<3> # OLD.CUST THEN
+                     MATREADU CUST.REC FROM CUSTOMER, CONO:OLD.CUST ELSE CFND = 0
+                     IF CFND = 1 THEN
+                        LOCATE JOB.KEY[4,8] IN CUST.JOB<1>,1 SETTING JFND THEN
+                           CUST.JOB.BAL = DELETE(CUST.JOB.BAL,1,JFND,0)
+                           CUST.JOB     = DELETE(CUST.JOB,1,JFND,0)
+                        END
+                        MATWRITE CUST.REC ON CUSTOMER, CONO:OLD.CUST
+*                    END
+                     END ELSE RELEASE CUSTOMER,CONO:OLD.CUST ;*T27991
+                  END
+                  CFND = 1
+                  MATREADU CUST.REC FROM CUSTOMER,CONO:JOB.CUST ELSE CFND = 0
+                  IF CFND THEN
+                     LOCATE JOB.KEY[4,8] IN CUST.JOB<1>,1 SETTING JFND ELSE NULL
+                     CUST.JOB.BAL<1,JFND> = JOB.CONF.AMT
+                     CUST.JOB<1,JFND> = JOB.KEY[4,8]
+                     MATWRITE CUST.REC ON CUSTOMER,CONO:JOB.CUST
+*                 END
+                  END ELSE RELEASE CUSTOMER,CONO:JOB.CUST ;*T27991
+*T27991 ^
+               NEXT P
+            NEXT Y
+199 *
+         NEXT D
+         GOSUB 9000
+         ECD.ACTION = 3; CALL SCRN.EDIT
+      CASE OPTION="S" AND REF.CNT > 0
+         REF.NO=CURR.REF.NO + LINE.COUNT
+         IF REF.NO > REF.CNT THEN REF.NO=1
+         GOSUB 10000
+      CASE OPTION="SF" AND REF.CNT > 0
+         REF.NO=CURR.REF.NO + LINE.COUNT
+         IF REF.NO > REF.CNT THEN REF.NO=1
+         GOSUB 10000
+      CASE OPTION="ST" AND REF.CNT > 0
+         REF.NO=1
+         GOSUB 10000
+      CASE OPTION="SR" AND REF.CNT > 0
+         REF.NO=CURR.REF.NO - LINE.COUNT
+         IF REF.NO < 1 THEN REF.NO=1
+         GOSUB 10000
+      CASE OPTION="SB" AND REF.CNT > 0
+         REF.NO=REF.CNT
+         GOSUB 10000
+      CASE NOT(NUM(OPTION))
+         ERRMSG = "Invalid option"
+         GOSUB 91000
+      CASE OPTION > 4
+         ERRMSG = "Invalid option"
+         GOSUB 91000
+      CASE OPTION > 0 AND OPTION < 5
+         ON OPTION GOSUB 1000,2000,3000,4000
+      CASE 1
+   END CASE
+   GOTO 100
+*
+* LINE NUMBER TO DELETE A DIVISION
+*
+500*
+   SCV.REC(20)<ECD.SCRN.NO>=""
+   ECD.MINV=CURR.REF.NO; ECD.MAXV=CURR.REF.NO + LINE.COUNT - 1
+   IF ECD.MAXV > REF.CNT THEN ECD.MAXV=REF.CNT
+   ECD.NUM=20;ECD.ACTION=4;CALL SCRN.EDIT
+   IF ECD.RET.VALUE="END" THEN RETURN
+   RETURN
+*
+* CUSTOMER
+*
+1000 *
+   OLD.CUST = PRODUCTION.REC<3>
+   ECD.NUM = 1
+   ECD.VALDAT.CODE = 2; ECD.VALDAT.FILE = CUSTOMER; ECD.PREFIX.ID = CONO
+   ECD.ACTION = 4; CALL SCRN.EDIT
+   BEGIN CASE
+      CASE ECD.RET.VALUE = "END"
+         RETURN
+      CASE ECD.RET.VALUE = ""
+         ECD.NUM = 2; ECD.ACTION = 4; CALL SCRN.EDIT
+         IF ECD.RET.VALUE = "" OR ECD.RET.VALUE = "END" THEN RETURN
+         GXR.NAME = "CUSTOMER"
+         GXR.XREF = CUSTOMER.XREF
+         GXR.FILE = CUSTOMER
+         GXR.SRCH.ID = ECD.RET.VALUE
+         CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+         ECD.ACTION = 2; CALL SCRN.EDIT
+         IF GXR.ID = "" THEN
+            SCV.REC(2)<ESN> = ""; ECD.ACTION = 3; CALL SCRN.EDIT; GOTO 1000
+         END ELSE
+            MATREAD CUST.REC FROM CUSTOMER, CONO:GXR.ID ELSE
+               ERRMSG = "CUSTOMER ":GXR.ID:" IS MISSING"; GOSUB 91000
+               SCV.REC(2)<ESN> = ""; ECD.ACTION = 3; CALL SCRN.EDIT; GOTO 1000
+            END
+            SCV.REC(1)<ESN> = GXR.ID
+            SCV.REC(2)<ESN> = CUST.NAME
+            IF CUST.TYPE = "F" THEN
+               ERRMSG = "Customer Type is Frozen - Cannot Enter Job"
+               GOSUB 91000
+               ECD.RET.VALUE = "END"
+               RETURN
+            END
+            ECD.ACTION = 3; CALL SCRN.EDIT
+         END
+      CASE 1
+         IF ECD.RET.VALUE # "END" THEN
+            GXR.ID = ECD.RET.VALUE
+            FOR I = 1 TO CUST.REC.SIZE; CUST.REC(I) = ECD.VALDAT.ITEM<I>; NEXT I
+            ECD.NUM = 2; SCV.REC(ECD.NUM)<ESN> = CUST.NAME
+            ECD.ACTION = 5; CALL SCRN.EDIT
+            IF CUST.TYPE = "F" THEN
+               ERRMSG = "Customer Type is Frozen - Cannot Enter Job"
+               GOSUB 91000
+               ECD.RET.VALUE = "END"
+               RETURN
+            END
+            IF CUST.CREDIT = "DEL" THEN
+               ERRMSG = 'This customer has credit code "DEL", cannot enter a Job for this customer.'
+               GOSUB 91000
+               ECD.RET.VALUE = "END"
+               RETURN
+            END
+         END
+   END CASE
+   IF CUST.CREDIT = "N" THEN
+      ERRMSG = "THERE IS NO CREDIT FOR THIS CUSTOMER"
+      GOSUB 91000; GOTO 1000
+   END
+   PRODUCTION.REC<3> = GXR.ID
+   RETURN
+*
+* SALESMAN
+*
+2000 *
+   ECD.NUM = 3
+   IF PRODUCTION.REC<4> = "" THEN SCV.REC(3)<ESN> = CUST.SALESMAN
+   ECD.ACTION = 4; CALL SCRN.EDIT
+   IF ECD.RET.VALUE = "???" THEN
+      GXR.NAME = "GEN.CODE"
+      GXR.SORT.FILE = "SALESMAN"; GXR.FILE = SALESMAN
+      CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+      ECD.ACTION = 2; CALL SCRN.EDIT
+      SCV.REC(ECD.NUM)<ESN> = GXR.ID
+      ECD.ACTION = 3; CALL SCRN.EDIT
+      IF GXR.ID = "" THEN GOTO 2000
+      ECD.RET.VALUE = GXR.ID
+   END
+   IF ECD.RET.VALUE # "END" THEN
+      MATREAD SALESMAN.REC FROM SALESMAN, CONO:ECD.RET.VALUE ELSE
+         ERRMSG = "Cannot locate salesman # ":ECD.RET.VALUE
+         GOSUB 91000; GOTO 2000
+      END
+      PRODUCTION.REC<4> = ECD.RET.VALUE
+      ECD.NUM = 4; SCV.REC(ECD.NUM)<ESN> = SALS.NAME
+      ECD.ACTION = 5; CALL SCRN.EDIT
+   END
+   RETURN
+*
+* CATEGORY
+*
+3000 *
+   ECD.NUM = 5;  ECD.ACTION = 4; CALL SCRN.EDIT
+   IF ECD.RET.VALUE = "???" THEN
+      GXR.NAME = "GEN.CODE"
+      GXR.SORT.FILE = "JOB.CATEGORY"; GXR.FILE = JOB.CATEGORY
+      CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+      ECD.ACTION = 2; CALL SCRN.EDIT
+      SCV.REC(ECD.NUM)<ESN> = GXR.ID
+      ECD.ACTION = 3; CALL SCRN.EDIT
+      IF GXR.ID = "" THEN GOTO 3000
+      ECD.RET.VALUE = GXR.ID
+   END
+   IF ECD.RET.VALUE # "END" THEN
+      REC = ""
+      READ REC FROM JOB.CATEGORY, CONO:ECD.RET.VALUE ELSE
+         ERRMSG = "JOB CATEGORY CODE ":ECD.RET.VALUE:" IS NOT ON FILE"; GOSUB 91000; GOTO 3000
+      END
+      PRODUCTION.REC<5> = ECD.RET.VALUE
+      ECD.NUM = 6; SCV.REC(ECD.NUM)<ESN> = REC; ECD.ACTION = 5; CALL SCRN.EDIT
+   END
+   RETURN
+*
+* COLORS
+*
+4000 *
+   ECD.NUM = 7; ECD.ACTION = 4; CALL SCRN.EDIT
+   IF ECD.RET.VALUE # "END" THEN
+      PRODUCTION.REC<6> = ECD.RET.VALUE
+   END
+   RETURN
+*
+6000*
+*
+   ECD.NUM = 10; ECD.SUB.NUM=REF.NO
+   ECD.ACTION = 4; CALL SCRN.EDIT
+   IF ECD.RET.VALUE = "END" THEN RETURN
+   IF ECD.RET.VALUE # "" THEN
+      MATREAD DIV.REC FROM DIVISION, CONO:ECD.RET.VALUE ELSE
+         ERRMSG = "Invalid Division Number "
+         GOSUB 91000
+         GOTO 6000
+      END
+*T23278 v
+      DIV.CODE = ECD.RET.VALUE
+      GOSUB 11000
+      IF ERRMSG # "" THEN GOTO 6000
+*T23278 ^
+      PRODUCTION.REC<7,REF.NO> = ECD.RET.VALUE
+      PRODUCTION.REC<8,REF.NO> = DATE()
+      SCV.REC(11)<ESN,REF.NO> = OCONV(DATE(),"D2/")
+      ECD.NUM = 11 ; ECD.SUB.NUM = REF.NO; ECD.ACTION = 5; CALL SCRN.EDIT
+   END
+   RETURN
+*
+7000*
+*
+   RETURN
+9000*
+   MATREAD CUST.REC FROM CUSTOMER, CONO:PRODUCTION.REC<3> ELSE
+      MAT CUST.REC = ""
+   END
+   MATREAD SALESMAN.REC FROM SALESMAN, CONO:PRODUCTION.REC<4> ELSE
+      MAT SALESMAN.REC = ""
+   END
+   READ REC FROM JOB.CATEGORY, CONO:PRODUCTION.REC<5> ELSE
+      REC = ""
+   END
+   SCV.REC(1)<ESN> = PRODUCTION.REC<3>
+   SCV.REC(2)<ESN> = CUST.NAME
+   SCV.REC(3)<ESN> = PRODUCTION.REC<4>
+   SCV.REC(4)<ESN> = SALS.NAME
+   SCV.REC(5)<ESN> = PRODUCTION.REC<5>
+   SCV.REC(6)<ESN>  = REC
+   SCV.REC(7)<ESN>  = PRODUCTION.REC<6>
+   SCV.REC(10)<ESN> = PRODUCTION.REC<7>
+   SCV.REC(11)<ESN> = PRODUCTION.REC<8>
+   REF.CNT = DCOUNT(PRODUCTION.REC<7>,VM)
+   RETURN
+*
+* SCROLL
+*
+10000*
+   START.REF.NO = 1 + INT((REF.NO-1)/LINE.COUNT)*LINE.COUNT
+   IF START.REF.NO = CURR.REF.NO THEN RETURN
+   CURR.REF.NO = START.REF.NO
+   ECD.NUM = 9;ECD.SUB.NUM=START.REF.NO;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM = 10;ECD.SUB.NUM=START.REF.NO;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM = 11;ECD.SUB.NUM=START.REF.NO;ECD.ACTION=7;CALL SCRN.EDIT
+   RETURN
+*
+*T23278 v
+11000 *
+   ERRMSG = ""
+   CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+   IF ERRMSG # '' THEN
+      GOSUB 91000
+   END
+   RETURN
+*T23278 ^
+*
+*---   ERROR ROUTINE
+*
+91000 ERR.TYPE = 1; CALL SYSCOM(MAT SYSCOM.REC); RETURN
+92000 ERR.TYPE = 2; CALL SYSCOM(MAT SYSCOM.REC); RETURN
+93000 ERR.TYPE = 3; CALL SYSCOM(MAT SYSCOM.REC)
+999999*
+   ECD.ACTION = 99;CALL SCRN.EDIT
+   RETURN
+   END
+*

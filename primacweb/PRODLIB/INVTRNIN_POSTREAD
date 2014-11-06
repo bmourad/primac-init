@@ -1,0 +1,319 @@
+  SUBROUTINE INVTRNIN_POSTREAD
+*********************************************************************
+*
+* REVISION - [12.0]
+*
+* PROGRAM  - INVTRNIN_POSTREAD
+*
+* AUTHOR   - ALEJANDRO DELGADO
+*
+* DATE     - 11/27/2002
+*
+* DESCRIPTION
+*
+* The program builds the need RBO string for Transaction History Inq.
+*
+*********************************************************************
+*
+*---- FILE COPY STATEMENTS
+*
+  $INCLUDE WWINSERT RBO.H
+  $INCLUDE ICS.CPYLIB INVENTORY
+  $INCLUDE ICS.CPYLIB INV_AUDIT_HIST
+  $INCLUDE ICS.CPYLIB INV_AUDIT_BAL
+  $INCLUDE ICS.CPYLIB CATEGORY
+  $INCLUDE ICS.CPYLIB INV.WHSE
+  $INCLUDE PMC.CPYLIB FISCAL
+  $INCLUDE ICS.CPYLIB INV_SERIAL
+  $INCLUDE ICS.CPYLIB INV_RECEIPTS
+  $INCLUDE ICS.CPYLIB INV.HIST
+  $INCLUDE ICS.CPYLIB INV.CNV
+  $INCLUDE PMC.CPYLIB COMPANY
+  $INCLUDE PMC.CPYLIB DIVISION
+  $INCLUDE CPYLIB CHAR
+  $INCLUDE CPYLIB FILE.VARS
+
+  *
+  DEFFUN CALC.STK.QTY(COST.QTY,MAT INV.CNV.REC,ROND,LN)
+*
+**** OPEN FILES
+*
+  ERRMSG = "" ; IN_PARAM = "" ; OUT_PARAM = ""
+  IN_PARAM<1,1> = 'INV_AUDIT_BAL'
+  IN_PARAM<1,2> = 'INV_AUDIT_HIST'
+  IN_PARAM<1,3> = 'INV_SERIAL'
+  IN_PARAM<1,4> = 'INV_RECEIPTS'
+  IN_PARAM<1,5> = 'INVENTORY'
+  IN_PARAM<1,6> = 'INV.WHSE'
+  IN_PARAM<1,7> = 'CONTROL'
+  IN_PARAM<1,8> = 'DIVISION'
+  IN_PARAM<1,9> = 'CATEGORY'
+  IN_PARAM<1,10> = 'WAREHOUSE'
+
+  CALL GetInvOpenFiles(ERRMSG,IN_PARAM,OUT_PARAM,MAT FILE.VARS)
+*  IF ERRMSG # "" THEN GOTO SET.ERROR
+*
+*---- INITIALIZATION
+*
+
+*NULLIFYING THE PREV VALUES FOR MYSELF TO TEST 'EM
+  STATUS = RBO.setProperty('','SEL_SOURCE','')
+  STATUS = RBO.setProperty('','SEL_DATE','')
+  STATUS = RBO.setProperty('','SEL_RECP_ID','')
+  STATUS = RBO.setProperty('','SEL_DIV','')
+  STATUS = RBO.setProperty('','SEL_WHSE','')
+  STATUS = RBO.setProperty('','SEL_LOC','')
+  STATUS = RBO.setProperty('','SEL_SERIAL','')
+  STATUS = RBO.setProperty('','SEL_QTY','')
+  STATUS = RBO.setProperty('','SEL_COST','')
+  STATUS = RBO.setProperty('','SEL_PERIOD','')
+  STATUS = RBO.setProperty('','SEL_RECORD','')
+  STATUS = RBO.setProperty('','SEL_OPER_ID','')
+  STATUS = RBO.setProperty('','SEL_EBAL_QTY','')
+  STATUS = RBO.setProperty('','SEL_EBAL_AMT','')
+  STATUS = RBO.setProperty('','SEL_BBAL_QTY','')
+  STATUS = RBO.setProperty('','SEL_BBAL_AMT','')
+*END
+
+
+  ERRMSG = RBO.getProperty('','ID',ID)
+  ERRMSG = RBO.getProperty('','DIV',DIV)
+  ERRMSG = RBO.getProperty('','SOURCE',SOURCE)
+  ERRMSG = RBO.getProperty('','ID_FLAG',ID.FLAG)
+  ERRMSG = RBO.getProperty('','BEG_PERIOD',BEG.PERIOD)
+  ERRMSG = RBO.getProperty('','BEG_DATE',BEG.DATE)
+  ERRMSG = RBO.getProperty('','END_PERIOD',END.PERIOD)
+  ERRMSG = RBO.getProperty('','END_DATE',END.DATE)
+  ERRMSG = RBO.getProperty('','TRAN_TYPE',TRAN.TYPE)
+  ERRMSG = RBO.getProperty('','SUPPRESS_SERIAL',SUPPRESS.SERIAL)
+  ERRMSG = RBO.getProperty('','CATG_TRK_LVL',CATG.TRK.LVL)
+  CONO = ID[1,3]
+  SRP.ID = ID[4,99]
+*VALIDATING THE BEG.DATE OVER HERE, COZ IT WAZ GIVING SOME TROUBLE
+*AND CONVERTING THE SAME TO JULIAN DATE
+IF BEG.DATE # "" AND BEG.DATE # "ALL" THEN
+	BEG.DATE = ICONV(BEG.DATE,"D")
+END ELSE
+	BEG.DATE = "ALL"
+END
+*END
+
+  MATREAD FISCAL.REC FROM CONTROL, CONO:"ICFISCAL" ELSE
+    MAT FISCAL.REC=""
+  END
+  *
+  * PROCESS SELECTION
+  *
+  SEL.SOURCE='';  SEL.DATE=''
+  SEL.RECP.ID=''; SEL.DIV=''
+  SEL.WHSE='';    SEL.LOC=''
+  SEL.SERIAL='';  SEL.QTY=''
+  SEL.COST='';    SEL.PERIOD=''
+  SEL.RECORD='';  SEL.OPER.ID=''
+  SEL.EBAL.QTY=0; SEL.EBAL.AMT=0
+  SEL.BBAL.QTY=0; SEL.BBAL.AMT=0
+  WHSE.ARR = ''
+  *
+  BY.STMT=" BY PERIOD BY @ID BY INAH_DATE "
+  BEGIN CASE
+    CASE ID.FLAG = "P"
+      STMT='SSELECT INV_AUDIT_HIST WITH PROD_IDX="':CONO:SRP.ID:'" '
+    CASE ID.FLAG = "S"
+      STMT='SSELECT INV_AUDIT_HIST WITH SERIAL_IDX="':CONO:SRP.ID:'" '
+    CASE ID.FLAG = "R"
+      STMT='SSELECT INV_AUDIT_HIST WITH RECP_IDX="':CONO:SRP.ID:'" '
+  END CASE
+  IF DIV # "ALL" THEN STMT=STMT:'AND WITH WHSE_DIV="':DIV:'" ' 
+  IF BEG.PERIOD > FR.CURR.PER AND FR.CURR.PER # "" AND BEG.PERIOD # "ALL" THEN
+    NEW.PER=FR.CURR.PER
+  END ELSE
+    NEW.PER=BEG.PERIOD
+  END
+  IF NEW.PER AND BEG.PERIOD # "ALL" THEN STMT := ' AND WITH PERIOD >= "':NEW.PER:'"'
+
+
+  IF SOURCE # 'ALL' THEN
+    STMT := 'AND WITH INAH_SRC = '
+    IF SOURCE = 'U' THEN
+      STMT := '"U" '
+    END ELSE
+      STMT := '"':SOURCE:'" '
+    END
+  END
+  IF END.PERIOD # "ALL" THEN STMT := ' AND WITH PERIOD <= "':END.PERIOD:'"'
+  IF END.DATE # "ALL" THEN STMT=STMT : ' AND WITH INAH_DATE <= "':OCONV(END.DATE,"D2/"):'"'
+  IF TRAN.TYPE # 'B' THEN STMT := ' AND WITH IN_OUT="':TRAN.TYPE:'" '
+  STMT=STMT : BY.STMT
+  SYSLIST = ""
+
+  PERFORM STMT RTNLIST SYSLIST CAPTURING RESPONSE
+  *
+  RESPONSE=""; DATA=1; LINES=0
+  FIRST.TIME=1 ; TMP.PROD = ''
+  LOOP
+    READNEXT SEL.ID FROM SYSLIST ELSE DATA=0
+  WHILE DATA DO
+    IF SEL.ID[4,1]='C' THEN
+      ;* these are conversion created history records
+      ;* that are linked to serial/receipt and show up
+      ;* in serial/receipt tran history but should not
+      ;* show up in tran history inq.
+      NULL
+    END ELSE
+      MATREAD INAH.REC FROM INV_AUDIT_HIST, SEL.ID THEN
+        ;* find the begining balance
+        ;* for the period in which first 
+        ;* transaction in select list occurs.
+        ;*begining balances set in ENT.BEG.PERIOD are used
+        ;*for the cases where there was no activity for the 
+        ;*warehouse in the selected period and forward.
+        FOUND.ITB = 0 ; TMP.PROD = INAH.PROD
+        LOCATE INAH.WHSE IN WHSE.ARR<1> SETTING WPOS THEN
+          IF WHSE.ARR<2,WPOS>='' THEN
+            TMP.KEY=CONO:INAH.PROD:"!":INAH.WHSE:"!":INAH.PERIOD
+            GOSUB GET.BEG.BAL
+          END
+        END ELSE
+          TMP.KEY=CONO:INAH.PROD:"!":INAH.WHSE:"!":INAH.PERIOD
+          GOSUB GET.BEG.BAL                                           
+        END
+        IF FOUND.ITB THEN
+          WHSE.ARR<2,WPOS>= 'FOUND'
+          FOUND.ITB=0
+        END
+        IF BEG.DATE # "ALL" THEN
+          IF INAH.DATE < BEG.DATE THEN
+            SEL.BBAL.AMT += INAH.EXT.COST
+            SEL.BBAL.QTY += INAH.QTY
+            SEL.EBAL.QTY += INAH.QTY
+            SEL.EBAL.AMT += INAH.EXT.COST
+          END ELSE
+            GOSUB BUILD.SEL.REC
+          END
+        END ELSE
+          IF INAH.PERIOD < BEG.PERIOD THEN
+            SEL.BBAL.AMT += INAH.EXT.COST
+            SEL.BBAL.QTY += INAH.QTY
+            SEL.EBAL.QTY += INAH.QTY
+            SEL.EBAL.AMT += INAH.EXT.COST
+          END ELSE
+            GOSUB BUILD.SEL.REC
+          END
+        END
+      END ELSE
+        MAT INAH.REC=""
+      END
+    END
+  REPEAT
+  *
+  MATREAD INV.REC FROM INVENTORY, CONO:TMP.PROD ELSE MAT INV.REC = ""
+  ERRMSG = "" ; IN_PARAM = "" ; OUT_PARAM = "" ; MAT INV.CNV.REC = ""
+  CALL GetInvUMCnv(ERRMSG,IN_PARAM,OUT_PARAM,MAT INV.CNV.REC,MAT INV.REC)
+  SEL.BBAL.AMT += BEG.BAL.AMT;  SEL.BBAL.QTY += BEG.BAL.QTY
+  SEL.EBAL.AMT += BEG.BAL.AMT;  SEL.EBAL.QTY += BEG.BAL.QTY
+  TMP=CALC.STK.QTY(SEL.BBAL.QTY,MAT INV.CNV.REC,'','')
+  SEL.BBAL.QTY = OCONV(TMP,ICR.CNV)
+  SEL.BBAL.AMT = OCONV(SEL.BBAL.AMT, "MD2")
+  TMP=CALC.STK.QTY(SEL.EBAL.QTY,MAT INV.CNV.REC,'','')
+  SEL.EBAL.QTY = OCONV(TMP,ICR.CNV)
+  SEL.EBAL.AMT = OCONV(SEL.EBAL.AMT, "MD2")
+  CNT = DCOUNT(SEL.QTY<1>, VM)
+  FOR N = 1 TO CNT
+    ROND=0.5
+    IF SEL.QTY<1,N> < 0 THEN ROND=-0.5
+    SEL.QTY<1,N> = OCONV(INT(((SEL.QTY<1,N>/ICR.DV1) * ICR.MT1) / ICR.DV2 + ROND), ICR.CNV) "MR#11"
+    SEL.COST<1,N> = OCONV(SEL.COST<1,N>, "MD2") "MR#12"
+  NEXT N
+*
+  STATUS = RBO.setProperty('','SEL_SOURCE',SEL.SOURCE)
+  STATUS = RBO.setProperty('','SEL_DATE',SEL.DATE)
+  STATUS = RBO.setProperty('','SEL_RECP_ID',SEL.RECP.ID)
+  STATUS = RBO.setProperty('','SEL_DIV',SEL.DIV)
+  STATUS = RBO.setProperty('','SEL_WHSE',SEL.WHSE)
+  STATUS = RBO.setProperty('','SEL_LOC',SEL.LOC)
+  STATUS = RBO.setProperty('','SEL_SERIAL',SEL.SERIAL)
+  STATUS = RBO.setProperty('','SEL_QTY',SEL.QTY)
+  STATUS = RBO.setProperty('','SEL_COST',SEL.COST)
+  STATUS = RBO.setProperty('','SEL_PERIOD',SEL.PERIOD)
+  STATUS = RBO.setProperty('','SEL_RECORD',SEL.RECORD)
+  STATUS = RBO.setProperty('','SEL_OPER_ID',SEL.OPER.ID)
+  STATUS = RBO.setProperty('','SEL_EBAL_QTY',SEL.EBAL.QTY)
+  STATUS = RBO.setProperty('','SEL_EBAL_AMT',SEL.EBAL.AMT)
+  STATUS = RBO.setProperty('','SEL_BBAL_QTY',SEL.BBAL.QTY)
+  STATUS = RBO.setProperty('','SEL_BBAL_AMT',SEL.BBAL.AMT)
+
+  RETURN
+*
+BUILD.SEL.REC: 
+*
+  IF SUPPRESS.SERIAL="Y" THEN
+    ;*
+    ;*---- Summarized detail
+    ;*
+    THIS.PASS=INAH.SRC:INAH.DATE:INAH.RECP.NO:INAH.DV.DP.CC[1,2]:INAH.WHSE:INAH.LOC:INAH.PERIOD:INAH.TRAN:INAH.OPER.ID
+    IF THIS.PASS # PREV.PASS THEN
+      LINES += 1
+      SEL.SOURCE<1,LINES>=INAH.SRC
+      SEL.DATE<1,LINES> = OCONV(INAH.DATE,'D4/')
+*      SEL.DATE<1,LINES> = INAH.DATE
+      SEL.RECP.ID<1,LINES>=INAH.RECP.NO
+      SEL.DIV<1,LINES>=INAH.DV.DP.CC[1,2]
+      SEL.WHSE<1,LINES>=INAH.WHSE
+      SEL.LOC<1,LINES>=INAH.LOC
+      SEL.SERIAL<1,LINES>=""
+      SEL.QTY<1,LINES>=0
+      SEL.COST<1,LINES>=0
+      SEL.PERIOD<1,LINES>=INAH.PERIOD
+      SEL.RECORD<1,LINES>=INAH.TRAN
+      SEL.OPER.ID<1,LINES>=INAH.OPER.ID
+      PREV.PASS=THIS.PASS
+    END
+    SEL.QTY<1,LINES> += INAH.QTY
+    SEL.COST<1,LINES> += INAH.EXT.COST
+    SEL.EBAL.QTY += INAH.QTY
+    SEL.EBAL.AMT += INAH.EXT.COST
+  END ELSE
+    ;*
+    ;*---- Transaction level detail
+    ;*
+    LINES += 1
+    SEL.SOURCE<1,LINES>=INAH.SRC
+    SEL.DATE<1,LINES>=OCONV(INAH.DATE,'D4/')
+*    SEL.DATE<1,LINES>=INAH.DATE
+    SEL.RECP.ID<1,LINES>=INAH.RECP.NO
+    SEL.DIV<1,LINES>=INAH.DV.DP.CC[1,2]
+    SEL.WHSE<1,LINES>=INAH.WHSE
+    SEL.LOC<1,LINES>=INAH.LOC
+    IF CATG.TRK.LVL='S' THEN
+      SEL.SERIAL<1,LINES>=INAH.SERIAL
+    END
+    SEL.QTY<1,LINES>=INAH.QTY
+    SEL.COST<1,LINES>=INAH.EXT.COST
+    SEL.EBAL.QTY += INAH.QTY
+    SEL.EBAL.AMT += INAH.EXT.COST
+    SEL.PERIOD<1,LINES>=INAH.PERIOD
+    SEL.RECORD<1,LINES>=INAH.TRAN
+    SEL.OPER.ID<1,LINES>=INAH.OPER.ID
+  END
+  RETURN
+*
+GET.BEG.BAL: 
+*
+  FOUND.ITB=0
+  MATREAD ITB.REC FROM INV_AUDIT_BAL, TMP.KEY THEN
+    WHSE.ARR<1,WPOS>=OCONV(TMP.KEY,"G1!1")                     
+    WHSE.ARR<2,WPOS>=''
+    WHSE.ARR<3,WPOS>=ITB.BEG
+    WHSE.ARR<4,WPOS>=ITB.BEG.AMT
+    FOUND.ITB=1
+  END
+  BEG.BAL.QTY=SUM(WHSE.ARR<3>)
+  BEG.BAL.AMT=SUM(WHSE.ARR<4>)
+  RETURN
+*
+SET.ERROR: 
+*
+  STATUS = RBO.setProperty('','ServerStatus',1)
+  STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+  RETURN
+END

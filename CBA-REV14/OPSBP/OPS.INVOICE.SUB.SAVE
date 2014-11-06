@@ -1,0 +1,1214 @@
+      SUBROUTINE OPS.INVOICE.SUB(ACTION,MTYPE,CONO,IVC.NO,MAT IVC.REC,ARSFLAG,VOID.INVOICES)
+*COPY>CPYLIB>COM1
+*COPY>PMC.CPYLIB>COM.CUST
+*COPY>OPS.CPYLIB>COM.ORDER
+*********************************************************************
+* REVISION - [08.1]
+* Copyright 1982 by Vercom Software, Inc. (dba CBA)
+* SOURCE   - OPSBP
+* PROGRAM  - OPS.INVOICE.SUB
+* AUTHOR   - NICK AMENDOLA, COMPUTER BUSINESS ASSOCIATES
+* DATE     - 11/17/86
+* DESCRIPTION
+* This program is used to create and maintain order related invoices
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>PMC.CPYLIB>INVOICE.CODE
+*COPY>PMC.CPYLIB>TAX
+*COPY>PMC.CPYLIB>SALES.CODE
+*COPY>PMC.CPYLIB>SHIP.VIA
+*COPY>PMC.CPYLIB>VOID.INVOICES
+*COPY>OPS.CPYLIB>ORDER
+*COPY>OPS.CPYLIB>ORDER.DETAIL.INQ
+*COPY>OPS.CPYLIB>ORDER.INVOICE
+*COPY>CPYLIB>GEN.XREF.SUB
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*
+*---- INITIALIZATION
+*
+      ESN=ECD.SCRN.NO
+      REF.CNT=0
+      RNO=""
+      CURR.RNO=""
+      LINE.COUNT=6
+      INVOICE.TOTAL=0
+      N.IVC.NO=""
+      MAT EDIT.COM=""
+      MAT GEN.XREF.REC=""
+      TYP=0
+      CALL EDIT.SUB
+      FILL="#"
+      ERRMSG=""
+      MODE=""
+      TMP.TAX.RATE=""
+      TMP.TAX.CALC=""
+      DESC.LEN=40
+      IF ACTION # "I" THEN
+         GOSUB 21000
+      END
+*
+*---- MAIN PROCESSING
+100 *
+      SCV.REC(59)<ESN>=DATE()
+      ECD.NUM=59;ECD.ACTION=5;CALL SCRN.EDIT
+      GOSUB 9000
+      ECD.ACTION=3;CALL SCRN.EDIT
+      RNO=1
+      CURR.RNO=1
+      IF IVC.ORDER.NO = "" THEN
+         GOSUB 1400
+         IF ECD.RET.VALUE = "END" THEN GOTO 99999
+      END
+      IF REF.CNT > 0 THEN
+         GOSUB 6200
+      END ELSE
+         OPTION = "A"
+         GOTO 502
+      END
+*
+*---- GET OPERATOR REQUEST
+500 *
+      GOSUB 5000
+      OPTION=ECD.RET.VALUE
+502 *
+      BEGIN CASE
+      CASE NUM(OPTION) AND OPTION >= 1 AND OPTION <=  5
+         N=OPTION
+         ON N GOSUB 1100,1200,1300,1400,1500
+      CASE OPTION="A"
+         MODE="A"
+         DONE=0
+         FOR RNO=REF.CNT + 1 TO 99 UNTIL DONE
+            IF REF.CNT > 0 THEN GOSUB 10000
+            GOSUB 6000
+            BEGIN CASE
+            CASE ECD.RET.VALUE="END"
+               REF.CNT=RNO - 1
+               AREF=RNO
+               AREF.CNT=DCOUNT(IVC.CHG.CODE,VM)
+               FOR RNO=AREF.CNT TO AREF STEP -1
+                  GOSUB 600
+               NEXT RNO
+               DONE=1
+            CASE ECD.RET.VALUE="FNGD"
+               DONE=1
+            CASE 1
+               REF.CNT=RNO
+            END CASE
+            GOSUB 6200
+         NEXT RNO
+         RNO=REF.CNT
+         CURR.RNO=""
+         GOSUB 10000
+      CASE OPTION="C" AND REF.CNT > 0
+         MODE="C"
+         GOSUB 5100
+         IF NUM(ECD.RET.VALUE) AND ECD.RET.VALUE # "" THEN
+            RNO=ECD.RET.VALUE
+            BEGIN CASE
+            CASE IVC.CHG.CODE<1,RNO> = "FNGD"
+               IF MTYPE = "INVOICE" THEN
+                  ERRMSG = "Cannot modify finished goods item."
+                  GOSUB 90000
+               END ELSE
+                  IPTR = RNO
+                  ECD.SCRN.NO=2
+                  BEGIN CASE
+                  CASE MTYPE="CREDIT"
+**                   CALL OPS.RETURN.LINE.SUB("C",MTYPE,CONO,IVC.NO,MAT IVC.REC,IPTR,STATUS)
+                     CALL OPS.INVOICE.LINE.SUB("C",MTYPE,CONO,IVC.NO,MAT IVC.REC,IPTR,STATUS)
+                  CASE MTYPE="DEBIT"
+                     CALL OPS.INVOICE.LINE.SUB("C",MTYPE,CONO,IVC.NO,MAT IVC.REC,IPTR,STATUS)
+                  CASE MTYPE="RETURN"
+                     CALL OPS.RETURN.LINE.SUB("C",MTYPE,CONO,IVC.NO,MAT IVC.REC,IPTR,STATUS)
+                  END CASE
+                  GOSUB 9000
+                  GOSUB 6200
+                  ECD.SCRN.NO=ESN;ECD.ACTION=3;CALL SCRN.EDIT
+               END
+            CASE 1
+               GOSUB 6000
+               IF ECD.RET.VALUE="END" THEN CURR.RNO=""
+               GOSUB 6200
+            END CASE
+         END
+         GOSUB 10000
+      CASE OPTION="D" AND REF.CNT > 0
+         MODE="D"
+         GOSUB 5100
+         IF NUM(ECD.RET.VALUE) AND ECD.RET.VALUE # "" THEN
+            RNO=ECD.RET.VALUE
+            IF MTYPE="INVOICE" AND IVC.CHG.CODE<1,RNO>="FNGD" THEN
+               ERRMSG="Cannot delete finished goods from invoice."
+               GOSUB 90000
+            END ELSE
+               GOSUB 600
+               GOSUB 6200
+               REF.CNT=REF.CNT - 1
+               IF RNO > 1 THEN RNO=RNO - 1
+               CURR.RNO=""
+               GOSUB 10000
+            END
+         END
+      CASE OPTION="I" AND REF.CNT > 0
+         MODE="I"
+         GOSUB 5100
+         IF NUM(ECD.RET.VALUE) AND ECD.RET.VALUE # "" THEN
+            RNO=ECD.RET.VALUE
+*
+            AC=COUNT(IVC.A1A,",")+1
+            FOR AP=1 TO AC
+               AA=FIELD(IVC.A1A,",",AP)
+               AA1=FIELD(AA,"-",1)
+               AA2=FIELD(AA,"-",2)
+               IF AA2="" THEN AA2=AA1
+               FOR AAP=AA1 TO AA2
+                  IVC.REC(AAP) = INSERT(IVC.REC(AAP),1,RNO,0,"")
+               NEXT AAP
+            NEXT AP
+*
+            TMP.TAX.RATE=INSERT(TMP.TAX.RATE,1,RNO,0,"")
+            TMP.TAX.CALC=INSERT(TMP.TAX.CALC,1,RNO,0,"")
+            SCV.REC(13)=INSERT(SCV.REC(13),ESN,RNO,0,"")
+            SCV.REC(14)=INSERT(SCV.REC(14),ESN,RNO,0,"")
+            SCV.REC(30)=INSERT(SCV.REC(30),ESN,RNO,0,"")
+            SCV.REC(15)=INSERT(SCV.REC(15),ESN,RNO,0,"")
+            SCV.REC(31)=INSERT(SCV.REC(31),ESN,RNO,0,"")
+            SCV.REC(17)=INSERT(SCV.REC(17),ESN,RNO,0,"")
+            REF.CNT=REF.CNT + 1
+            CURR.RNO=""
+            GOSUB 10000
+            GOSUB 6000
+            BEGIN CASE
+            CASE ECD.RET.VALUE="END"
+               GOSUB 600
+               REF.CNT=REF.CNT - 1
+               CURR.RNO=""
+               GOSUB 10000
+            CASE ECD.RET.VALUE="FNGD"
+*              CURR.RNO=""
+*              GOSUB 10000
+            CASE 1
+               GOSUB 6200
+               GOSUB 10000
+            END CASE
+         END
+      CASE OPTION="S" AND REF.CNT > 0
+         RNO=CURR.RNO + LINE.COUNT
+         IF RNO > REF.CNT THEN RNO=1
+         GOSUB 10000
+      CASE OPTION="SF" AND REF.CNT > 0
+         RNO=CURR.RNO + LINE.COUNT
+         IF RNO > REF.CNT THEN RNO=1
+         GOSUB 10000
+      CASE OPTION="ST" AND REF.CNT > 0
+         RNO=1
+         GOSUB 10000
+      CASE OPTION="SR" AND REF.CNT > 0
+         RNO=CURR.RNO - LINE.COUNT
+         IF RNO < 1 THEN RNO=1
+         GOSUB 10000
+      CASE OPTION="SB" AND REF.CNT > 0
+         RNO=REF.CNT
+         GOSUB 10000
+      CASE OPTION="R"
+         MODE="R"
+         GOSUB 5100
+         IF ECD.RET.VALUE # "END" AND ECD.RET.VALUE # "" THEN
+            IF NUM(ECD.RET.VALUE) THEN
+               IF IVC.PROD<1,ECD.RET.VALUE>="" THEN
+                  ERRMSG="No detail present for selected line."
+                  GOSUB 90000
+                  GOTO 500
+               END
+            END
+            IPTR = ECD.RET.VALUE
+            ECD.SCRN.NO=2
+            BEGIN CASE
+**          CASE ACTION="M" AND IVC.PROC.DATE="" AND MTYPE="CREDIT"
+**             CALL OPS.RETURN.LINE.SUB("M",MTYPE,CONO,IVC.NO,MAT IVC.REC,IPTR,STATUS)
+            CASE MTYPE="INVOICE"
+               CALL OPS.INVOICE.LINE.SUB("",MTYPE,CONO,IVC.NO,MAT IVC.REC,IPTR,STATUS)
+            CASE ACTION="M" AND IVC.PROC.DATE=""
+               CALL OPS.INVOICE.LINE.SUB("M",MTYPE,CONO,IVC.NO,MAT IVC.REC,IPTR,STATUS)
+            CASE 1
+               CALL OPS.INVOICE.LINE.SUB("",MTYPE,CONO,IVC.NO,MAT IVC.REC,IPTR,STATUS)
+            END CASE
+            GOSUB 9000
+            IF IVC.PROC.DATE = "" THEN
+               GOSUB 6200
+            END
+            ECD.SCRN.NO=ESN;ECD.ACTION=3;CALL SCRN.EDIT
+         END
+      CASE OPTION="P" AND IVC.NO # "N"
+         ECD.NUM=22;ECD.ACTION=4;CALL SCRN.EDIT
+         IF ECD.RET.VALUE="Y" THEN
+            JCNT=DCOUNT(O.NOS,AM)
+            FOR J=1 TO JCNT
+               MATREADU ORD.REC FROM ORDER, CONO:O.NOS<J> ELSE
+                  RELEASE ORDER, CONO:O.NOS<J>
+                  ERRMSG="CANNOT LOCATE ORDER RECORD - ":O.NOS<J>
+                  GOSUB 90000;GOTO 504
+               END
+               LOCATE IVC.NO IN ORD.INV.NO<1>,1 SETTING FND ELSE FND=0
+               IF FND=0 THEN
+                  RELEASE ORDER, CONO:O.NOS<J>
+               END ELSE
+                  IF ORD.INV.DATE<1,FND>="" THEN
+                     ORD.INV.NO=DELETE(ORD.INV.NO,1,FND,0)
+                     ORD.INV.DATE=DELETE(ORD.INV.DATE,1,FND,0)
+                     ORD.INV.CAT=DELETE(ORD.INV.CAT,1,FND,0)
+                     ORD.INV.AMT=DELETE(ORD.INV.AMT,1,FND,0)
+                     ORD.INV.BAL=DELETE(ORD.INV.BAL,1,FND,0)
+                  END
+                  MATWRITE ORD.REC ON ORDER, CONO:O.NOS<J>
+               END
+504         NEXT J
+            MAT VOI.REC=""
+            VOI.DATE=IVC.DATE
+            VOI.ORDNO=IVC.ORDER.NO
+            VOI.CUST.NO=IVC.CUST.NO
+            VOI.CUST.NAME=IVC.CUST.NAME
+            VOI.ADDR1=IVC.ADDR1
+            VOI.ADDR2=IVC.ADDR2
+            VOI.ADDR3=IVC.ADDR3
+            VOI.ADDR4=IVC.ADDR4
+            VOI.PO=IVC.PO.NO
+            VOI.DEL.DATE=DATE()
+            MATREAD ORD.REC FROM ORDER, CONO:IVC.ORDER.NO ELSE MAT ORD.REC=""
+            VOI.SLSMAN=ORD.SLSMN
+            MATWRITE VOI.REC ON VOID.INVOICES, CONO:IVC.NO
+            DELETE DAILY.ORDER.INVOICE, CONO:IVC.NO
+            IVC.NO=""
+            GOTO 99999
+         END
+      CASE OPTION="E" OR OPTION="END"
+         GOTO 99999
+      CASE OPTION="F" AND INVOICE.TOTAL < 0
+         ERRMSG="Invalid Total Amount - Must be positive"
+         GOSUB 90000
+      CASE OPTION="F" AND IVC.PROC.DATE=""
+         REF.CNT=DCOUNT(IVC.CHG.CODE,VM)
+         BLK=0
+         FOR I=1 TO REF.CNT UNTIL BLK
+            IF IVC.CHG.CAT<1,I> # "CMT" THEN BLK=1
+         NEXT I
+         IF BLK=0 THEN
+            ERRMSG="At least one line item is required before filing"
+            GOSUB 90000;GOTO 599
+         END
+         BEGIN CASE
+         CASE MTYPE="CREDIT" OR MTYPE="DEBIT"
+            IVC.LAST="N"
+         CASE MTYPE="PREBILL"
+            IVC.LAST="N"
+         CASE 1
+            GOSUB 21000;GOSUB 22000
+            IF MATCH.ERROR THEN
+               X=0;Y=22;TYP=8
+               PMSG="Continue (Y/N)"
+               CALL EDIT.SUB
+               IF VALUE="N" THEN GOTO 500
+            END
+*X=0;Y=22;TYP=8
+*PMSG="Is this the last invoice (Y/N)"
+*CALL EDIT.SUB
+*IF VALUE="END" THEN GOTO 500
+*IVC.LAST=VALUE
+         END CASE
+         BEGIN CASE
+         CASE MTYPE="CREDIT" OR MTYPE="DEBIT"
+            IVC.PRE.BILL="N"
+            IVC.WIP.TYPE="ALL"
+            IVC.WIP.DATE="ALL"
+            IVC.WIP.PRCNT=0
+         CASE MTYPE="PREBILL"
+            IVC.PRE.BILL="N"
+            IVC.WIP.TYPE="ALL"
+            IVC.WIP.DATE="ALL"
+            IVC.WIP.PRCNT=0
+         CASE IVC.LAST="Y"
+            IVC.PRE.BILL="Y"
+            IVC.WIP.TYPE="ALL"
+            IVC.WIP.DATE="ALL"
+            IVC.WIP.PRCNT=10000
+         CASE 1
+            PRE.BILL.PRESENT=0
+            ICNT=DCOUNT(IVC.CHG.CODE,VM)
+            FOR I=1 TO ICNT UNTIL PRE.BILL.PRESENT
+               JB=IVC.CHG.ORDER<1,I>
+               IF JB # "" THEN
+                  LOCATE JB IN O.NOS,1 SETTING FND ELSE FND=0
+                  IF FND AND PRE.BILL.BAL<1,FND>="Y" THEN PRE.BILL.PRESENT=1
+               END
+            NEXT I
+            IF PRE.BILL.PRESENT THEN
+               X=0;Y=22;TYP=8
+               PMSG="Credit sales for pre-bills (Y/N)"
+               CALL EDIT.SUB
+               IF VALUE="END" THEN GOTO 500
+               IVC.PRE.BILL=VALUE
+            END ELSE
+               IVC.PRE.BILL="N"
+            END
+            IVC.WIP.TYPE="ALL"
+            IVC.WIP.DATE="ALL"
+            IVC.WIP.PRCNT=10000
+** CALL INVOICE.WIP.SUB(CONO,WIP.FLAG,IVC.NO,MTYPE,OPTION)
+** IF WIP.FLAG="END" OR IVC.NO="N" THEN
+** ECD.SCRN.NO=ESN;ECD.ACTION=3;CALL SCRN.EDIT
+** END
+** IF WIP.FLAG="END" THEN GOTO 500
+         END CASE
+         IF IVC.NO="N" THEN
+550         READU IVC.NO FROM CONTROL, CONO:"NEXT.INVOICE.NO" ELSE IVC.NO=1
+            N.IVC.NO=IVC.NO + 1
+            IVC.NO=STR("0",6-LEN(IVC.NO)):IVC.NO
+            WRITE N.IVC.NO ON CONTROL, CONO:"NEXT.INVOICE.NO"
+            BEGIN CASE
+            CASE MTYPE="CREDIT"
+               IVC.NO=IVC.NO:"CM"
+            CASE MTYPE="DEBIT"
+               IVC.NO=IVC.NO:"DM"
+            CASE MTYPE="PREBILL"
+               IVC.NO=IVC.NO:"PB"
+            END CASE
+            READ REC FROM DAILY.ORDER.INVOICE,CONO:IVC.NO ELSE GOTO 560
+            GOTO 550
+560         READ REC FROM ORDER.INVOICE,CONO:IVC.NO ELSE GOTO 565
+            GOTO 550
+565         READ REC FROM VOID.INVOICES,CONO:IVC.NO ELSE GOTO 570
+            GOTO 550
+570         IF ARSFLAG="Y" THEN
+               READ REC FROM OPEN.RECV,CONO:IVC.NO ELSE GOTO 580
+               GOTO 550
+580         END
+            ECD.NUM=7;SCV.REC(7)<ESN>=IVC.NO
+            ECD.ACTION=5;CALL SCRN.EDIT
+            ERRMSG="Please note the new number";GOSUB 90000
+         END
+         JCNT=DCOUNT(O.NOS,AM)
+         FOR J=1 TO JCNT
+            MATREADU ORD.REC FROM ORDER, CONO:O.NOS<J> ELSE
+               RELEASE ORDER, O.NOS<J>
+               ERRMSG="CANNOT LOCATE ORDER RECORD - ":O.NOS<J>
+               GOSUB 90000;GOTO 590
+            END
+            LOCATE IVC.NO IN ORD.INV.NO<1>,1 SETTING PTR ELSE
+               PTR=DCOUNT(ORD.INV.NO,VM) + 1
+               ORD.INV.NO<1,PTR>=IVC.NO
+            END
+            MATWRITE ORD.REC ON ORDER, CONO:IVC.CHG.ORDER<1,J>
+590      NEXT J
+         MATWRITE IVC.REC ON DAILY.ORDER.INVOICE, CONO:IVC.NO
+         GOTO 99999
+599 *
+      CASE 1
+         ERRMSG = "Invalid selection. Try again! "
+         GOSUB 90000
+      END CASE
+      GOTO 500
+*
+*---- DELETE SPECIFIC LINE
+600 *
+      AC=COUNT(IVC.A1A,",")+1
+      FOR AP=1 TO AC
+         AA=FIELD(IVC.A1A,",",AP)
+         AA1=FIELD(AA,"-",1)
+         AA2=FIELD(AA,"-",2)
+         IF AA2="" THEN AA2=AA1
+         FOR AAP=AA1 TO AA2
+            IVC.REC(AAP) = DELETE(IVC.REC(AAP),1,RNO,0)
+         NEXT AAP
+      NEXT AP
+*
+      TMP.TAX.RATE=DELETE(TMP.TAX.RATE,1,RNO,0)
+      TMP.TAX.CALC=DELETE(TMP.TAX.CALC,1,RNO,0)
+      SCV.REC(13)=DELETE(SCV.REC(13),ESN,RNO,0)
+      SCV.REC(14)=DELETE(SCV.REC(14),ESN,RNO,0)
+      SCV.REC(30)=DELETE(SCV.REC(30),ESN,RNO,0)
+      SCV.REC(15)=DELETE(SCV.REC(15),ESN,RNO,0)
+      SCV.REC(31)=DELETE(SCV.REC(31),ESN,RNO,0)
+      SCV.REC(17)=DELETE(SCV.REC(17),ESN,RNO,0)
+      RETURN
+*- GET CUSTOMER ID AND XREF FOR BILL TO
+1100 *
+      SCV.REC(1)<ESN>=IVC.CUST.NO
+      ECD.NUM=1;ECD.ACTION=4;CALL SCRN.EDIT
+      IF ECD.RET.VALUE="END" THEN RETURN
+      IF ECD.RET.VALUE="???" THEN
+         ECD.NUM=2;ECD.SUB.NUM=1;ECD.ACTION=4;CALL SCRN.EDIT
+         IF ECD.RET.VALUE="END" THEN GOTO 1100
+         MAT GEN.XREF.REC=""
+         GXR.CO=CONO
+         GXR.NAME="CUSTOMER"
+         GXR.XREF=CUSTOMER.XREF
+         GXR.FILE=CUSTOMER
+         GXR.SRCH.ID=ECD.RET.VALUE
+         CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+         IF GXR.ACTION # "X" THEN
+            ECD.ACTION=2;CALL SCRN.EDIT
+            ECD.ACTION=3;CALL SCRN.EDIT
+         END
+         IF GXR.ID="" THEN
+            SCV.REC(1)<ESN>=IVC.CUST.NO
+            ECD.NUM=1;ECD.ACTION=5;CALL SCRN.EDIT
+            SCV.REC(2)<ESN,1>=IVC.CUST.NAME
+            ECD.NUM=2;ECD.SUB.NUM=1;ECD.ACTION=5;CALL SCRN.EDIT
+            GOTO 1100
+         END
+         ECD.RET.VALUE=GXR.ID
+         SCV.REC(1)<ESN>=GXR.ID
+         ECD.NUM=1;ECD.ACTION=5;CALL SCRN.EDIT
+      END
+      MATREAD CUST.REC FROM CUSTOMER, CONO:ECD.RET.VALUE ELSE
+         ERRMSG="Invalid Customer ID"
+         GOSUB 90000
+         GOTO 1100
+      END
+      IVC.CUST.NO=ECD.RET.VALUE
+      IVC.CUST.NAME=CUST.NAME
+      IVC.ADDR1=CUST.ADDR1
+      IVC.ADDR2=CUST.ADDR2
+      IVC.ADDR3=CUST.ADDR3
+      IVC.ADDR4=CUST.ADDR4:" ":CUST.ZIP
+      IVC.ATTENTION=CUST.ATTENTION
+      SCV.REC(1)<ESN>=IVC.CUST.NO
+      SCV.REC(2)<ESN,1>=IVC.CUST.NAME
+      SCV.REC(2)<ESN,2>=IVC.ADDR1
+      SCV.REC(2)<ESN,3>=IVC.ADDR2
+      SCV.REC(2)<ESN,4>=IVC.ADDR3
+      SCV.REC(2)<ESN,5>=IVC.ADDR4
+      SCV.REC(28)<ESN>=IVC.ATTENTION
+      ECD.NUM=1;ECD.ACTION=5;CALL SCRN.EDIT
+      ECD.NUM=2;ECD.SUB.NUM=1;ECD.ACTION=7;CALL SCRN.EDIT
+      ECD.NUM=28;ECD.ACTION=5;CALL SCRN.EDIT
+      RETURN
+*
+*---- GET CUSTOMER NAME & ADDRESS
+1200 *
+      ECD.NUM=2;ECD.SUB.NUM=1;ECD.ACTION=4;CALL SCRN.EDIT
+      IF ECD.RET.VALUE="END" THEN RETURN
+      IF ECD.RET.VALUE="" THEN GOTO 1200
+      IVC.CUST.NAME=ECD.RET.VALUE
+      ECD.NUM=2;ECD.SUB.NUM=2;ECD.ACTION=4;CALL SCRN.EDIT
+      IF ECD.RET.VALUE="END" THEN RETURN
+      IVC.ADDR1=ECD.RET.VALUE
+      ECD.NUM=2;ECD.SUB.NUM=3;ECD.ACTION=4;CALL SCRN.EDIT
+      IF ECD.RET.VALUE="END" THEN RETURN
+      IVC.ADDR2=ECD.RET.VALUE
+      ECD.NUM=2;ECD.SUB.NUM=4;ECD.ACTION=4;CALL SCRN.EDIT
+      IF ECD.RET.VALUE="END" THEN RETURN
+      IVC.ADDR3=ECD.RET.VALUE
+      ECD.NUM=2;ECD.SUB.NUM=5;ECD.ACTION=4;CALL SCRN.EDIT
+      IF ECD.RET.VALUE="END" THEN RETURN
+      IVC.ADDR4=ECD.RET.VALUE
+      RETURN
+*
+*---- GET ATTENTION OF
+1300 *
+      ECD.NUM=28;ECD.ACTION=4;CALL SCRN.EDIT
+      IF ECD.RET.VALUE="END" THEN RETURN
+      IVC.ATTENTION=ECD.RET.VALUE
+      RETURN
+*
+*---- GET CUSTOMER P/O NUMBER AND ORDER NUMBER
+1400 *
+      ECD.NUM=9;ECD.ACTION=4;CALL SCRN.EDIT
+      IF ECD.RET.VALUE="END" THEN RETURN
+      TMP.CUST.PO=ECD.RET.VALUE
+      IVC.PO.NO=ECD.RET.VALUE
+1410 *
+      IF MTYPE # "INVOICE" THEN
+         ECD.NUM=6;ECD.ACTION=4;CALL SCRN.EDIT
+         IF ECD.RET.VALUE="END" THEN RETURN
+         MATREAD ORD.REC FROM ORDER, CONO:ECD.RET.VALUE ELSE
+            SCV.REC(6)<ESN> = IVC.ORDER.NO
+            ERRMSG="Invalid Order number. Try again! "
+            GOSUB 90000;GOTO 1410
+         END
+         IF ORD.CUST # IVC.CUST.NO THEN
+            SCV.REC(6)<ESN> = IVC.ORDER.NO
+            ERRMSG="Order / Customer ID mismatch. Try again! "
+            GOSUB 90000;GOTO 1410
+         END
+         FOR REF = 1 TO REF.CNT
+            IF IVC.CHG.ORDER<1,REF> = IVC.ORDER.NO THEN
+               IVC.CHG.ORDER<1,REF> = ECD.RET.VALUE
+            END
+         NEXT REF
+         IVC.ORDER.NO=ECD.RET.VALUE
+      END
+      RETURN
+*
+*---- GET INVOICE DATE
+1500 *
+* ECD.MINV=DATE()-365
+      ECD.NUM=8;ECD.ACTION=4;CALL SCRN.EDIT
+      IF ECD.RET.VALUE="END" THEN RETURN
+      IVC.DATE=ECD.RET.VALUE
+      RETURN
+*
+*---- GET OPERATOR REQUEST
+5000 *
+      IF ACTION="I" OR IVC.PROC.DATE#"" THEN
+         ECD.NUM=21;ECD.ACTION=4;CALL SCRN.EDIT
+      END ELSE
+         ECD.NUM=20;ECD.ACTION=4;CALL SCRN.EDIT
+      END
+      IF ECD.RET.VALUE="END" THEN RETURN
+      RETURN
+*
+*---- GET LINE NUMBER
+5100 *
+      SCV.REC(19)<ESN>=""
+      ECD.MINV=CURR.RNO;ECD.MAXV=CURR.RNO + LINE.COUNT - 1
+      IF ECD.MAXV > REF.CNT THEN ECD.MAXV=REF.CNT
+      ECD.NUM=19;ECD.ACTION=4;CALL SCRN.EDIT
+      IF ECD.RET.VALUE="END" THEN RETURN
+      RETURN
+*
+*---- GET LINE NUMBER OR ALL
+5200 *
+      SCV.REC(32)<ESN>=""
+      MIN.LINE=CURR.RNO;MAX.LINE=CURR.RNO + LINE.COUNT - 1
+      IF MAX.LINE > REF.CNT THEN MAX.LINE=REF.CNT
+      ECD.NUM=32;ECD.ACTION=4;CALL SCRN.EDIT
+      BEGIN CASE
+      CASE ECD.RET.VALUE = "END"
+      CASE ECD.RET.VALUE = ""
+      CASE ECD.RET.VALUE = "A"
+      CASE ECD.RET.VALUE = "ALL"
+      CASE ECD.RET.VALUE >= MIN.LINE AND ECD.RET.VALUE <= MAX.LINE
+      CASE 1
+         ERRMSG = "** OUT OF RANGE **"
+         GOSUB 90000
+         GOTO 5100
+      END CASE
+      RETURN
+*
+*---- GET MULTI-LINE DATA
+6000 *
+      ECD.NUM=12;ECD.SUB.NUM=RNO;ECD.ACTION=5;CALL SCRN.EDIT
+      IF SCV.REC(22)<ESN,RNO> # "" THEN
+         SCV.REC(22)<ESN,RNO>=""
+         SCV.REC(23)<ESN,RNO>=""
+         SCV.REC(24)<ESN,RNO>=""
+         ECD.NUM=22;ECD.SUB.NUM=RNO;ECD.ACTION=5;CALL SCRN.EDIT
+         ECD.NUM=23;ECD.SUB.NUM=RNO;ECD.ACTION=5;CALL SCRN.EDIT
+         ECD.NUM=24;ECD.SUB.NUM=RNO;ECD.ACTION=5;CALL SCRN.EDIT
+      END
+*---- GET INVOICE CODE
+6010 *
+      SCV.REC(13)<ESN,RNO>=IVC.CHG.CODE<1,RNO>
+      ECD.NUM=13;ECD.SUB.NUM=RNO;ECD.ACTION=4;CALL SCRN.EDIT
+      IF ECD.RET.VALUE="END" THEN RETURN
+      ICODE=ECD.RET.VALUE
+      BEGIN CASE
+      CASE ICODE="FNGD"
+         BEGIN CASE
+         CASE MTYPE = "INVOICE"
+            ERRMSG="Cannot add finished goods to invoice."
+            GOSUB 90000; GOTO 6010
+         CASE IVC.CHG.CODE<1,RNO> = "" OR IVC.CHG.CODE<1,RNO> = "FNGD"
+            NULL
+         CASE 1
+            ERRMSG="Invalid alteration. Use insert and delete."
+            GOSUB 90000; GOTO 6010
+         END CASE
+         LOCATE "TOT" IN IVC.CHG.CODE<1>,1 SETTING FND ELSE FND=999
+         IF FND < RNO THEN
+            ERRMSG="Only comment lines may be entered after total line."
+            GOSUB 90000; GOTO 6010
+         END
+         MAT INC.REC=""
+         INC.CATEGORY="OTH"
+         IVC.CHG.CODE<1,RNO>="FNGD"
+         IVC.CHG.CAT<1,RNO>="OTH"
+         IVC.DESC<1,RNO>="FINISHED GOODS"
+         IVC.HIDDEN<1,RNO>="N"
+         ECD.SCRN.NO=2
+         IPTR=RNO
+         CALL OPS.INVOICE.LINE.SUB(MODE,MTYPE,CONO,IVC.NO,MAT IVC.REC,IPTR,STATUS)
+*        IF STATUS = "E" THEN
+*           ECD.SCRN.NO=ESN;ECD.ACTION=3;CALL SCRN.EDIT
+*           ECD.RET.VALUE="END"
+*           RETURN
+*        END
+         GOSUB 9000
+         GOSUB 6200
+         ECD.SCRN.NO=ESN;ECD.ACTION=3;CALL SCRN.EDIT
+         ECD.RET.VALUE="FNGD"
+         RETURN
+      CASE ICODE="SUB" OR ICODE="SUBT"
+         LOCATE "TOT" IN IVC.CHG.CODE<1>,1 SETTING FND ELSE FND=999
+         IF FND < RNO THEN
+            ERRMSG="Only comment lines may be entered after total line"
+            GOSUB 90000;GOTO 6010
+         END
+         MAT INC.REC=""
+         INC.CATEGORY="CMT"
+         INC.DESC="SUB TOTAL"
+         INC.DESC=SPACE(DESC.LEN-LEN(INC.DESC)-4):INC.DESC
+      CASE ICODE="TOT"
+         FOR TN=RNO+1 TO REF.CNT
+            IF IVC.CHG.CAT<1,TN> # "CMT" THEN
+               ERRMSG="Total line can only preceed comment lines"
+               GOSUB 90000;GOTO 6010
+            END
+         NEXT TN
+         MAT INC.REC=""
+         INC.CATEGORY="CMT"
+         INC.DESC="TOTAL"
+         INC.DESC=SPACE(DESC.LEN-LEN(INC.DESC)-4):INC.DESC
+      CASE ICODE="CMT"
+         MAT INC.REC=""
+         INC.CATEGORY="CMT"
+      CASE 1
+         IF ICODE="???" THEN
+            GXR.CO=CONO
+            GXR.NAME="INVOICE.CODE"
+            GXR.FILE=INVOICE.CODE
+            GXR.SORT.FILE=INVOICE.CODE
+            CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+            ECD.ACTION=2; CALL SCRN.EDIT
+            ECD.ACTION=3; CALL SCRN.EDIT
+            IF GXR.ID="" THEN GOTO 6010
+            ECD.NUM=13; ECD.SUB.NUM=RNO; SCV.REC(ECD.NUM)<ESN,RNO>=GXR.ID
+            ECD.ACTION=5; CALL SCRN.EDIT
+            ICODE=GXR.ID
+         END
+         MATREAD INC.REC FROM INVOICE.CODE, CONO:ICODE ELSE
+            ERRMSG="Invalid code"
+            GOSUB 90000;GOTO 6010
+         END
+         IF INC.HIDDEN="Y" AND RNO=1 THEN
+            ERRMSG="Hidden line cannot be first line entered"
+            GOSUB 90000;GOTO 6010
+         END
+         IF INC.CATEGORY # "CMT" THEN
+            LOCATE "TOT" IN IVC.CHG.CODE<1>,1 SETTING FND ELSE FND=999
+            IF FND < RNO THEN
+               ERRMSG="Only comment lines may be entered after total line"
+               GOSUB 90000;GOTO 6010
+            END
+         END
+      END CASE
+      IF IVC.CHG.CODE<1,RNO>#ICODE THEN DESC.FLAG=1
+      IVC.CHG.CODE<1,RNO>=ICODE
+      IVC.CHG.CAT<1,RNO>=INC.CATEGORY
+      IVC.HIDDEN<1,RNO>=INC.HIDDEN
+*---- GET ORDER NUMBER
+6012 *
+      BEGIN CASE
+      CASE INC.CATEGORY="CMT"
+         IVC.CHG.ORDER<1,RNO>=""
+      CASE 1
+         IVC.CHG.ORDER<1,RNO>=IVC.ORDER.NO
+      END CASE
+      BEGIN CASE
+      CASE ICODE="FNGD"
+         NEW.DESC="FINISHED GOODS"
+         CALL DESC.REFORMAT (NEW.DESC, DESC.LEN, NEW.DESC)
+         MAT INC.REC=""
+         INC.CATEGORY="OTH"
+         INC.DESC=NEW.DESC<1,1>
+         IF MODE="A" THEN
+            DCNT=DCOUNT(NEW.DESC,VM)
+            FOR D=2 TO DCNT
+               IVC.CHG.CODE<1,RNO+D-1>="CMT"
+               IVC.CHG.CAT<1,RNO+D-1>="CMT"
+               IVC.DESC<1,RNO+D-1>=NEW.DESC<1,D>
+               SCV.REC(13)<ESN,RNO+D-1>="CMT"
+               SCV.REC(15)<ESN,RNO+D-1>=NEW.DESC<1,D>
+            NEXT D
+            CURR.RNO=""
+            GOSUB 10000
+         END
+      END CASE
+*---- GET TAX JURISDICTION OR SHIP VIA IF NECESSARY
+6015 *
+      BEGIN CASE
+      CASE IVC.CHG.CAT<1,RNO>="TAX"
+         SCV.REC(25)<ESN>="Tax Jur :"
+         ECD.NUM=25;ECD.ACTION=5;CALL SCRN.EDIT
+         SCV.REC(23)<ESN>=IVC.TAX.JURS<1,RNO>
+         SCV.REC(24)<ESN>=""
+         ECD.NUM=24;ECD.ACTION=5;CALL SCRN.EDIT
+         ECD.NUM=23;ECD.ACTION=4;CALL SCRN.EDIT
+         IF ECD.RET.VALUE="END" THEN RETURN
+         MATREAD TAX.REC FROM TAX, CONO:ECD.RET.VALUE ELSE
+            ERRMSG="Jurisdiction ":ECD.RET.VALUE:" is not on file"
+            GOSUB 90000
+            GOTO 6015
+         END
+** LOCATE ECD.RET.VALUE IN O.JURS<1>,1 SETTING FND ELSE FND=0
+** IF FND=0 THEN
+** ERRMSG="No shipment present for this tax jurisdiction"
+** GOSUB 90000
+** END
+         IVC.TAX.JURS<1,RNO>=ECD.RET.VALUE
+         TMP.TAX.RATE<1,RNO>=TAX.RATE
+         TMP.TAX.CALC<1,RNO>=""
+         SCV.REC(24)<ESN>=TAX.JUR
+         ECD.NUM=24;ECD.ACTION=5;CALL SCRN.EDIT
+      CASE IVC.CHG.CAT<1,RNO>="SHP"
+         SCV.REC(25)<ESN>="Ship Via :"
+         ECD.NUM=25;ECD.ACTION=5;CALL SCRN.EDIT
+         SCV.REC(23)<ESN>=IVC.TAX.JURS<1,RNO>
+         SCV.REC(24)<ESN>=""
+         ECD.NUM=24;ECD.ACTION=5;CALL SCRN.EDIT
+         ECD.NUM=23;ECD.ACTION=4;CALL SCRN.EDIT
+         IF ECD.RET.VALUE="END" THEN RETURN
+         MATREAD SHIP.VIA.REC FROM SHIP.VIA, CONO:ECD.RET.VALUE ELSE
+            ERRMSG="Ship Via ":ECD.RET.VALUE:" is not on file"
+            GOSUB 90000
+            GOTO 6015
+         END
+** LOCATE ECD.RET.VALUE IN O.SHIP<1>,1 SETTING FND ELSE FND=0
+** IF FND=0 THEN
+** ERRMSG="No shipment present for this carrier"
+** GOSUB 90000
+** END
+         IVC.TAX.JURS<1,RNO>=ECD.RET.VALUE
+         IVC.TAXABLE<1,RNO>=""
+         TMP.TAX.RATE<1,RNO>=""
+         TMP.TAX.CALC<1,RNO>=""
+         SCV.REC(24)<ESN>=SHPV.DESC
+         ECD.NUM=24;ECD.ACTION=5;CALL SCRN.EDIT
+      CASE IVC.CHG.CAT<1,RNO>="DSC" OR IVC.CHG.CAT<1,RNO>="MSC" OR IVC.CHG.CAT<1,RNO>="OTH"
+         SCV.REC(25)<ESN>="Sales CD :"
+         ECD.NUM=25;ECD.ACTION=5;CALL SCRN.EDIT
+         SCV.REC(23)<ESN>=IVC.TAX.JURS<1,RNO>
+         SCV.REC(24)<ESN>=""
+         ECD.NUM=24;ECD.ACTION=5;CALL SCRN.EDIT
+         ECD.NUM=23;ECD.ACTION=4;CALL SCRN.EDIT
+         IF ECD.RET.VALUE="END" THEN RETURN
+         MATREAD SLC.REC FROM SALES.CODE, CONO:ECD.RET.VALUE ELSE
+            ERRMSG="Sales Code ":ECD.RET.VALUE:" is not on file"
+            GOSUB 90000
+            GOTO 6015
+         END
+         IVC.TAX.JURS<1,RNO>=ECD.RET.VALUE
+         IVC.TAXABLE<1,RNO>=""
+         TMP.TAX.RATE<1,RNO>=""
+         TMP.TAX.CALC<1,RNO>=""
+         ECD.NUM=24;ECD.ACTION=5;CALL SCRN.EDIT
+      CASE 1
+         IVC.TAX.JURS<1,RNO>=""
+         IVC.TAXABLE<1,RNO>=""
+         TMP.TAX.RATE<1,RNO>=""
+         TMP.TAX.CALC<1,RNO>=""
+      END CASE
+      IF MODE="A" AND INC.DESC # "" THEN
+         SCV.REC(15)<ESN,RNO>=INC.DESC
+         ECD.NUM=15;ECD.SUB.NUM=RNO;ECD.ACTION=5;CALL SCRN.EDIT
+      END
+*---- GET QUANTITY
+6020 *
+      BEGIN CASE
+      CASE INC.CATEGORY="OTH" OR INC.CATEGORY="MSC"
+         ECD.NUM=14;ECD.SUB.NUM=RNO;ECD.ACTION=4;CALL SCRN.EDIT
+         IF ECD.RET.VALUE="END" THEN RETURN
+      CASE 1
+         ECD.RET.VALUE=""
+         SCV.REC(14)<ESN,RNO>=""
+         ECD.NUM=14;ECD.SUB.NUM=RNO;ECD.ACTION=5;CALL SCRN.EDIT
+      END CASE
+      IVC.QUANTITY<1,RNO>=ECD.RET.VALUE
+*---- GET U/M
+6025 *
+      BEGIN CASE
+      CASE IVC.QUANTITY<1,RNO> # ""
+         ECD.NUM=30;ECD.SUB.NUM=RNO;ECD.ACTION=4;CALL SCRN.EDIT
+         IF ECD.RET.VALUE="END" THEN RETURN
+      CASE 1
+         ECD.RET.VALUE=""
+         SCV.REC(30)<ESN,RNO>=""
+         ECD.NUM=30;ECD.SUB.NUM=RNO;ECD.ACTION=5;CALL SCRN.EDIT
+      END CASE
+      IVC.UM<1,RNO>=ECD.RET.VALUE
+*---- GET DESCRIPTION
+6030 *
+      ECD.DEFAULT=INC.DESC
+      ECD.NUM=15;ECD.SUB.NUM=RNO;ECD.ACTION=4;CALL SCRN.EDIT
+      IF ECD.RET.VALUE="END" THEN RETURN
+      IVC.DESC<1,RNO>=ECD.RET.VALUE
+*---- GET AMOUNT
+6040 *
+      IF IVC.QUANTITY<1,RNO>="" OR IVC.UM<1,RNO>="" THEN
+         SCV.REC(31)<ESN,RNO>=""
+         ECD.NUM=31;ECD.SUB.NUM=RNO;ECD.ACTION=5;CALL SCRN.EDIT
+         IVC.UNIT.PRICE<1,RNO>=""
+      END
+      BEGIN CASE
+      CASE IVC.QUANTITY<1,RNO> # ""
+         IF IVC.UM<1,RNO>="" THEN
+            ECD.NUM=17;ECD.SUB.NUM=RNO;ECD.ACTION=4;CALL SCRN.EDIT
+            IVC.AMOUNT<1,RNO>=ECD.RET.VALUE
+         END ELSE
+            ECD.NUM=31;ECD.SUB.NUM=RNO;ECD.ACTION=4;CALL SCRN.EDIT
+            IF ECD.RET.VALUE # "END" THEN
+               IVC.UNIT.PRICE<1,RNO>=ECD.RET.VALUE
+               BEGIN CASE
+               CASE IVC.UNIT.PRICE<1,RNO>=""
+                  ECD.NUM=17;ECD.SUB.NUM=RNO;ECD.ACTION=4;CALL SCRN.EDIT
+                  IVC.AMOUNT<1,RNO>=ECD.RET.VALUE
+               CASE IVC.UM<1,RNO>="M"
+                  FACTOR="1000"
+               CASE IVC.UM<1,RNO>="C"
+                  FACTOR="100"
+               CASE 1
+                  FACTOR="1"
+               END CASE
+               IF IVC.UNIT.PRICE<1,RNO> # "" THEN
+                  IVC.AMOUNT<1,RNO>=(IVC.QUANTITY<1,RNO>/FACTOR) * IVC.UNIT.PRICE<1,RNO>
+                  IF IVC.AMOUNT<1,RNO> > 0 THEN
+                     IVC.AMOUNT<1,RNO>=INT(IVC.AMOUNT<1,RNO>/10+0.5)
+                  END ELSE
+                     IVC.AMOUNT<1,RNO>=INT(IVC.AMOUNT<1,RNO>/10-0.5)
+                  END
+                  SCV.REC(17)<ESN,RNO>=IVC.AMOUNT<1,RNO>
+                  ECD.NUM=17;ECD.SUB.NUM=RNO;ECD.ACTION=5;CALL SCRN.EDIT
+               END
+            END
+         END
+      CASE INC.CATEGORY="TAX"
+         TAX.REF=RNO
+         GOSUB 6400
+         ECD.O.R="O";ECD.DEFAULT=TAMT
+         SCV.REC(17)<ESN,RNO>=""
+         ECD.NUM=17;ECD.SUB.NUM=RNO;ECD.ACTION=4;CALL SCRN.EDIT
+         IF ECD.RET.VALUE # "END" THEN
+            IF ECD.RET.VALUE="" THEN
+               ECD.RET.VALUE=TAMT
+               SCV.REC(17)<ESN,RNO>=TAMT
+               ECD.NUM=17;ECD.SUB.NUM=RNO;ECD.ACTION=5;CALL SCRN.EDIT
+            END
+            IF ECD.RET.VALUE=TAMT THEN
+               TMP.TAX.CALC<1,RNO>="C"
+               IVC.TAXABLE<1,RNO>=AMT.TAX
+            END ELSE
+               TMP.TAX.CALC<1,RNO>="E"
+               BEGIN CASE
+               CASE TMP.TAX.RATE<1,RNO>+0=0
+               CASE ECD.RET.VALUE < 0
+                  AMT.TAX=INT((ECD.RET.VALUE*100)/(TMP.TAX.RATE<1,RNO>/1000)-0.5)
+               CASE 1
+                  AMT.TAX=INT((ECD.RET.VALUE*100)/(TMP.TAX.RATE<1,RNO>/1000)+0.5)
+               END CASE
+6045           DEFAULT=OCONV(AMT.TAX, "MD2");O.R="O"
+               X=0;Y=22;TYP=4;SCALER=2;MINV=0;MAXV=999999999
+               MAXL=10;PMSG="Enter Taxable amount : "
+               CALL EDIT.SUB
+               PRINT @(0,22) : @(-4) :
+               IF VALUE="END" THEN GOTO 6040
+               IF VALUE="" THEN GOTO 6045
+               IVC.TAXABLE<1,RNO>=VALUE
+            END
+            IVC.AMOUNT<1,RNO>=ECD.RET.VALUE
+         END
+      CASE IVC.CHG.CODE<1,RNO>="SUB"
+         IF MODE = "A" OR MODE = "I" THEN
+            GOSUB 6200
+            ECD.RET.VALUE=AMT.SUB
+            SCV.REC(17)<ESN,RNO>=AMT.SUB
+            ECD.NUM=17;ECD.SUB.NUM=RNO;ECD.ACTION=5;CALL SCRN.EDIT
+            IVC.AMOUNT<1,RNO>=ECD.RET.VALUE
+         END
+      CASE IVC.CHG.CODE<1,RNO>="SUBT"
+         IF MODE = "A" OR MODE = "I" THEN
+            GOSUB 6200
+            ECD.RET.VALUE=IVC.AMOUNT<1,RNO>
+            ECD.NUM=17;ECD.SUB.NUM=RNO;ECD.ACTION=5;CALL SCRN.EDIT
+         END
+      CASE IVC.CHG.CODE<1,RNO>="TOT"
+         IF MODE = "A" OR MODE = "I" THEN
+            GOSUB 6200
+            ECD.RET.VALUE=AMT.TOT
+            SCV.REC(17)<ESN,RNO>=AMT.TOT
+            ECD.NUM=17;ECD.SUB.NUM=RNO;ECD.ACTION=5;CALL SCRN.EDIT
+            IVC.AMOUNT<1,RNO>=ECD.RET.VALUE
+         END
+      CASE INC.CATEGORY="CMT"
+         ECD.RET.VALUE=""
+         SCV.REC(17)<ESN,RNO>=""
+         ECD.NUM=17;ECD.SUB.NUM=RNO;ECD.ACTION=5;CALL SCRN.EDIT
+         IVC.AMOUNT<1,RNO>=ECD.RET.VALUE
+      CASE 1
+         ECD.NUM=17;ECD.SUB.NUM=RNO;ECD.ACTION=4;CALL SCRN.EDIT
+         IVC.AMOUNT<1,RNO>=ECD.RET.VALUE
+      END CASE
+      IF SCV.REC(23)<ESN> # "" THEN
+         SCV.REC(23)<ESN>=""
+         SCV.REC(24)<ESN>=""
+         SCV.REC(25)<ESN>=""
+         ECD.NUM=23;ECD.ACTION=5;CALL SCRN.EDIT
+         ECD.NUM=24;ECD.ACTION=5;CALL SCRN.EDIT
+         ECD.NUM=25;ECD.ACTION=5;CALL SCRN.EDIT
+      END
+      RETURN
+*
+*---- CALCULATE AND DISPLAY TOTAL
+6200 *
+      AMT.SUB=0
+      AMT.TOT=0
+      AMT.SUBT=0
+      FOR REF=1 TO REF.CNT+1
+         CODE=IVC.CHG.CODE<1,REF>
+         CATG=IVC.CHG.CAT<1,REF>
+         AMT=IVC.AMOUNT<1,REF>
+         BEGIN CASE
+         CASE CODE="SUB"
+            IF AMT.SUB # AMT THEN
+               IVC.AMOUNT<1,REF>=AMT.SUB
+               SCV.REC(17)<ESN,REF>=AMT.SUB
+               IF AMT # "" THEN CURR.RNO=""
+            END
+         CASE CODE="SUBT"
+            IF AMT.SUBT # AMT THEN
+               IVC.AMOUNT<1,REF>=AMT.SUBT
+               SCV.REC(17)<ESN,REF>=AMT.SUBT
+               IF AMT # "" THEN CURR.RNO=""
+            END
+            AMT.SUBT=0
+         CASE CODE="TOT"
+            IF AMT.TOT # AMT THEN
+               IVC.AMOUNT<1,REF>=AMT.TOT
+               SCV.REC(17)<ESN,REF>=AMT.TOT
+               IF AMT # "" THEN CURR.RNO=""
+            END
+         CASE CATG="TAX"
+            TAX.REF=REF
+            GOSUB 6400
+            IF TAMT # AMT OR TMP.TAX.RATE<1,REF>+0=0 THEN
+               IF TMP.TAX.CALC<1,REF>="E" THEN
+                  BEGIN CASE
+                  CASE MODE=""
+                  CASE MODE="A"
+                  CASE MODE="C" AND RNO >= REF
+                  CASE MODE="D" AND RNO > REF
+                  CASE MODE="I" AND RNO > REF
+                  CASE 1
+                     ERRMSG="Tax entry on line ":REF:" may be affected"
+                     GOSUB 90000
+                  END CASE
+               END ELSE
+                  AMT=TAMT
+                  IVC.AMOUNT<1,REF>=AMT
+                  IVC.TAXABLE<1,REF>=AMT.TAX
+                  SCV.REC(17)<ESN,REF>=AMT
+                  IF AMT # "" THEN CURR.RNO=""
+               END
+            END
+            AMT.SUB=AMT.SUB + AMT
+            AMT.TOT=AMT.TOT + AMT
+            AMT.SUBT=AMT.SUBT + AMT
+         CASE 1
+            AMT.SUB=AMT.SUB + AMT
+            AMT.TOT=AMT.TOT + AMT
+            AMT.SUBT=AMT.SUBT + AMT
+         END CASE
+      NEXT REF
+      INVOICE.TOTAL=AMT.TOT
+      SCV.REC(18)<ESN>=INVOICE.TOTAL
+      ECD.NUM=18;ECD.ACTION=5;CALL SCRN.EDIT
+      RETURN
+*
+*---- CALCULATE SALES TAX
+6400 *
+      AMT.TAX=0
+      TDONE=0
+      FOR TREF=TAX.REF-1 TO 1 STEP -1 UNTIL TDONE
+         IF IVC.CHG.CAT<1,TREF>="TAX" THEN
+            IF AMT.TAX > 0 THEN TDONE=1
+         END ELSE
+            IF IVC.CHG.CODE<1,TREF> # "SUBT" THEN
+               AMT.TAX=AMT.TAX + IVC.AMOUNT<1,TREF>
+               IF IVC.CHG.CODE<1,TREF>="SUB" THEN
+                  TDONE=1
+               END
+            END
+         END
+      NEXT TREF
+      IF IVC.TAX.EXEMPT="Y" THEN
+         TAMT=0
+      END ELSE
+         TAMT=INT(AMT.TAX*(TMP.TAX.RATE<1,TAX.REF>/1000)/100+0.5)
+      END
+      RETURN
+*
+*---- SET SCREEN VALUES
+9000 *
+      SCV.REC(1)<ESN>=IVC.CUST.NO
+      SCV.REC(2)<ESN,1>=IVC.CUST.NAME
+      SCV.REC(2)<ESN,2>=IVC.ADDR1
+      SCV.REC(2)<ESN,3>=IVC.ADDR2
+      SCV.REC(2)<ESN,4>=IVC.ADDR3
+      SCV.REC(2)<ESN,5>=IVC.ADDR4
+      SCV.REC(3)<ESN>=IVC.BOL.NO
+      SCV.REC(28)<ESN>=IVC.ATTENTION
+      SCV.REC(6)<ESN>=IVC.ORDER.NO
+      SCV.REC(7)<ESN>=IVC.NO
+      SCV.REC(8)<ESN>=IVC.DATE
+      SCV.REC(9)<ESN>=IVC.PO.NO
+      IF IVC.PROC.DATE="" THEN
+         IF IVC.PRT.DATE # "" THEN
+            SCV.REC(10)<ESN>="PRINTED"
+            SCV.REC(11)<ESN>=IVC.PRT.DATE
+         END
+      END ELSE
+         SCV.REC(10)<ESN>="PROCESSED"
+         SCV.REC(11)<ESN>=IVC.PROC.DATE
+      END
+      SCV.REC(13)<ESN>=IVC.CHG.CODE
+      SCV.REC(14)<ESN>=IVC.QUANTITY
+      SCV.REC(30)<ESN>=IVC.UM
+      SCV.REC(15)<ESN>=IVC.DESC
+      SCV.REC(31)<ESN>=IVC.UNIT.PRICE
+      SCV.REC(17)<ESN>=IVC.AMOUNT
+      REF.CNT=DCOUNT(IVC.CHG.CODE,VM)
+      FOR REF=1 TO REF.CNT
+         IF IVC.CHG.CAT<1,REF>="TAX" THEN
+            MATREAD TAX.REC FROM TAX, CONO:IVC.TAX.JURS<1,REF> ELSE
+               MAT TAX.REC=""
+               ERRMSG="Invalid tax jurisdiction - ":IVC.TAX.JURS<1,REF>
+               GOSUB 90000
+            END
+            TMP.TAX.RATE<1,REF>=TAX.RATE
+            TAX.REF=REF
+            GOSUB 6400
+            BEGIN CASE
+            CASE IVC.AMOUNT<1,REF>=""
+               IVC.TAXABLE<1,REF>=AMT.TAX
+               IVC.AMOUNT<1,REF>=TAMT
+               SCV.REC(17)<ESN,REF>=TAMT
+               TMP.TAX.CALC<1,REF>="C"
+            CASE TMP.TAX.CALC<1,REF>="C"
+               IVC.TAXABLE<1,REF>=AMT.TAX
+               IVC.AMOUNT<1,REF>=TAMT
+               SCV.REC(17)<ESN,REF>=TAMT
+            CASE IVC.AMOUNT<1,REF>=TAMT
+               TMP.TAX.CALC<1,REF>="C"
+            CASE 1
+               TMP.TAX.CALC<1,REF>="E"
+            END CASE
+         END
+      NEXT REF
+      SCV.REC(18)<ESN>=INVOICE.TOTAL
+      PGNUM=INT(CURR.RNO/LINE.COUNT+0.9)
+      IF PGNUM=0 THEN PGNUM=1
+      SCV.REC(41)<ESN>=PGNUM "R%2"
+      PGCNT=INT(REF.CNT/LINE.COUNT+0.9)
+      IF PGNUM > PGCNT THEN PGCNT=PGNUM
+      SCV.REC(42)<ESN>=PGCNT "R%2"
+      RETURN
+*
+*---- DISPLAY MULTI-LINE FIELDS
+10000 *
+      START.RNO=1 + INT((RNO-1)/LINE.COUNT)*LINE.COUNT
+      IF START.RNO=CURR.RNO THEN GOTO 10100
+      CURR.RNO=START.RNO
+      ECD.NUM=12;ECD.SUB.NUM=START.RNO;ECD.ACTION=7;CALL SCRN.EDIT
+      ECD.NUM=13;ECD.SUB.NUM=START.RNO;ECD.ACTION=7;CALL SCRN.EDIT
+      ECD.NUM=14;ECD.SUB.NUM=START.RNO;ECD.ACTION=7;CALL SCRN.EDIT
+      ECD.NUM=30;ECD.SUB.NUM=START.RNO;ECD.ACTION=7;CALL SCRN.EDIT
+      ECD.NUM=15;ECD.SUB.NUM=START.RNO;ECD.ACTION=7;CALL SCRN.EDIT
+      ECD.NUM=31;ECD.SUB.NUM=START.RNO;ECD.ACTION=7;CALL SCRN.EDIT
+      ECD.NUM=17;ECD.SUB.NUM=START.RNO;ECD.ACTION=7;CALL SCRN.EDIT
+10100 *
+      PGNUM=INT(CURR.RNO/LINE.COUNT+0.9)
+      PGCNT=INT(REF.CNT/LINE.COUNT+0.9)
+      IF PGNUM > PGCNT THEN PGCNT=PGNUM
+      SCV.REC(41)<ESN>=PGNUM "R%2"
+      ECD.NUM=41;ECD.ACTION=5;CALL SCRN.EDIT
+      SCV.REC(42)<ESN>=PGCNT "R%2"
+      ECD.NUM=42;ECD.ACTION=5;CALL SCRN.EDIT
+      RETURN
+*
+*---- GET ORDER SHIPPING INFORMATION
+21000 *
+      O.NOS="";O.JURS="";O.SHIP=""
+      JJCNT=0;JSCNT=0
+      OCNT=DCOUNT(IVC.CHG.ORDER,VM)
+      FOR OPTR=1 TO OCNT
+         ORD=IVC.CHG.ORDER<1,OPTR>
+         IF ORD # "" THEN
+            LOCATE ORD IN O.NOS,1 SETTING P ELSE O.NOS<P>=ORD
+         END
+      NEXT OPTR
+      PRE.BILL.BAL=""
+      SHIP.WIP=0
+      JCNT=DCOUNT(O.NOS,AM)
+      RETURN
+*
+*---- MATCH TAX JURISDICTIONS
+22000 *
+      SHIP.AMT=0
+      JJMAT="";JSMAT=""
+      LCNT=DCOUNT(IVC.CHG.CODE,VM)
+      FOR L=1 TO LCNT
+         CATG=IVC.CHG.CAT<1,L>
+         BEGIN CASE
+         CASE CATG="TAX"
+            J=IVC.TAX.JURS<1,L>
+            LOCATE J IN O.JURS<1>,1 SETTING FND ELSE FND=0
+            IF FND > 0 THEN JJMAT<1,FND>="X"
+         CASE CATG="SHP"
+            SHIP.AMT=SHIP.AMT + IVC.AMOUNT<1,L>
+            S=IVC.TAX.JURS<1,L>
+            LOCATE S IN O.SHIP<1>,1 SETTING FND ELSE FND=0
+            IF FND > 0 THEN JSMAT<1,FND>="X"
+         END CASE
+      NEXT L
+*
+      MATCH.ERROR=0
+      ERR=0
+      FOR J=1 TO JJCNT UNTIL ERR
+         IF JJMAT<1,J>="" THEN
+            ERR=1
+            MATCH.ERROR=1
+            ERRMSG="Taxes not entered for all tax jurisdictions on job"
+            GOSUB 90000
+         END
+      NEXT J
+      ERR=0
+      FOR S=1 TO JSCNT UNTIL ERR
+         IF JSMAT<1,S>="" THEN
+            ERR=1
+            MATCH.ERROR=1
+            ERRMSG="Shipping charges not entered for all carriers used on job"
+            GOSUB 90000
+         END
+      NEXT S
+*
+** IF SHIP.AMT > SHIP.WIP THEN
+** MATCH.ERROR=1
+** ERRMSG="Shipping charges entered exceeds WIP by ":OCONV((SHIP.AMT-SHIP.WIP),"MD2,$")
+** GOSUB 90000
+** END
+** IF SHIP.WIP > SHIP.AMT THEN
+** MATCH.ERROR=1
+** ERRMSG="WIP exceeds shipping charges entered by ":OCONV((SHIP.WIP-SHIP.AMT),"MD2,$")
+** GOSUB 90000
+** END
+      RETURN
+*
+*---- ERROR ROUTINE
+90000 *
+      PRINT @(0,23):@(-4):ERRMSG[1,78]:
+      INPUT REPLY,1:
+      PRINT @(0,23):@(-4):
+      RETURN
+*
+*---- END OF PROGRAM
+99999 *
+      RETURN
+   END

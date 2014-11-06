@@ -1,0 +1,174 @@
+SUBROUTINE WIN.ECSUB2(ARGS)
+* Example EDITCHECK subroutine
+* Compile for: GENERIC AP MD ME PI.SUB PR.SUB SQ UD UL UP UV UC IN GA
+* (C) Copyright IBM Corporation 2003. All rights reserved
+*
+* This is an Example of an editcheck routine:
+* It uses a file to stop multiple logins editing the same item
+*
+* Get the port number
+WRKFILE = "WIN.PARAMS"
+OPEN '','WIN.PARAMS' TO F.BP ELSE
+   WRKFILE = "WIN.PROGS"
+   OPEN '','WIN.PROGS' TO F.BP ELSE
+      CALL WIN.ECRESULT(1, "WIN.ECSUB2 example is unable to get port number for Edit check")
+      RETURN
+   END
+END
+*
+READ MACHINE.TYPE FROM F.BP, "MACHINE.TYPE" ELSE MACHINE.TYPE = "GENERIC"
+MACHINE.TYPE = MACHINE.TYPE<1>
+*
+SUB.SUFFIX = ''
+IF MACHINE.TYPE # 'GENERIC' THEN SUB.SUFFIX = '.' : MACHINE.TYPE
+PARAMSUB = "WIN.PARAM" : SUB.SUFFIX
+F.VOC = 0
+R.PARAM = ""
+CALL @PARAMSUB(F.VOC, R.PARAM)
+*
+PORTNO = R.PARAM<9>
+*
+OPEN "", "WIN.ECEX" TO F.EC ELSE
+   CALL WIN.ECRESULT(1, "WIN.ECSUB2 edit check example needs WIN.ECEX file")
+   RETURN
+END
+*
+REASON = ARGS<1>
+FILE = ARGS<2>
+ITEM = ARGS<3>
+*
+* Let WIN.PROGS through so I can develop this
+IF FILE = "WIN.PROGS" THEN
+   CALL WIN.ECRESULT(2,"")
+   RETURN
+END
+*
+K.EC = FILE:"*":ITEM
+*
+BEGIN CASE
+CASE REASON = 1; GOSUB 100; * Check OK to read
+CASE REASON = 2; GOSUB 200; * Check OK to write
+CASE REASON = 3; GOSUB 300; * Item closed in editor so release it
+CASE REASON = 4; GOSUB 400; * Transfer failed after read
+CASE REASON = 5; * Transfer failed after write - nothing to do here
+END CASE
+*
+RETURN
+*
+* Check if OK to read
+100 READU R.EC FROM F.EC, K.EC THEN
+      GOSUB 500;* Show item in use dialog
+    END ELSE
+      * Grab the lock
+      R.EC = PORTNO
+      R.EC<2> = DATE()
+      R.EC<3> = TIME()
+      WRITE R.EC ON F.EC, K.EC
+      CALL WIN.ECRESULT(2, "");* Continue with the download
+    END
+*
+RETURN
+*
+* Check if ok to write
+200 READU R.EC FROM F.EC, K.EC THEN
+      IF PORTNO = R.EC<1> THEN
+         CALL WIN.ECRESULT(2,""); * Continue with the upload
+      END ELSE
+         CALL WIN.ECRESULT(1, "Item is being edited on another port")
+      END
+    END ELSE
+      * Grab the lock
+      R.EC = PORTNO
+      R.EC<2> = DATE()
+      R.EC<3> = TIME()
+      WRITE R.EC ON F.EC, K.EC
+      CALL WIN.ECRESULT(2, "");* Continue with the download
+    END
+*
+RETURN
+*
+* Release the lock
+300 READU R.EC FROM F.EC, K.EC THEN
+      IF PORTNO = R.EC<1> THEN
+         DELETE F.EC, K.EC
+      END
+    END
+*
+    RETURN
+*
+* File transfer failed or cancelled after previous edit check
+400 READU R.EC FROM F.EC, K.EC THEN
+      IF PORTNO = R.EC<1> THEN
+         DELETE F.EC, K.EC
+      END
+    END
+*    
+RETURN
+*
+* Show a dialog box with the edit choices
+500 DLGNAME = "ItemInEdit"
+    ERR = 0
+    CALL WIN.DBSHOW(DLGNAME, 1, ERR)
+    IF ERR = 3 THEN
+       GOSUB 600;* Define the dialog box
+       CALL WIN.DBSHOW(DLGNAME, 1, ERR)
+    END
+*
+    IF ERR THEN
+       CALL WIN.PCRESULT(1, "Unable to show/create edit dialog")
+       RETURN
+    END
+*
+    CALL WIN.DBSET(DLGNAME, "PortNo", R.EC<1>)
+*
+* Tell editor to bring this dialog box to the front
+   CALL WIN.ECDLGIS(DLGNAME)
+*
+   DLG = "";CTRL = ""; ETYPE = ""
+   MORE = 1
+*
+   LOOP
+      CALL WIN.DBEVENT(DLG, CTRL, ETYPE)
+*
+      BEGIN CASE
+      CASE CTRL = "Cancel"
+         MORE = 0
+         CALL WIN.ECRESULT(0, "Edit cancelled")
+      CASE CTRL = "OK"
+         MORE = 0
+         VALUE = ""
+         CALL WIN.DBGET(DLGNAME, "Option", VALUE)
+         IF VALUE = "ReadOnly" THEN
+             CALL WIN.ECRESULT(3, "")
+         END ELSE
+             * In a real app you would get the next copy id
+             K.COPY = ITEM:"_COPY"
+             OPEN "",FILE TO F.COPY THEN
+                READ REC FROM F.COPY,ITEM ELSE REC = ""
+                WRITE REC ON F.COPY, K.COPY
+             END
+             CALL WIN.ECRESULT(4, K.COPY)
+         END
+      END CASE
+*
+   WHILE MORE DO
+   REPEAT
+*
+   CALL WIN.DBEND(DLGNAME,0)
+*
+RETURN
+*
+* Define the dialog box we want to show
+600 DBX = ""
+CALL WIN.DBNEW(DBX,DLGNAME,"Item is being edited",18,16,163,69,"","")
+CALL WIN.DBLABEL(DBX, "Item is being edited on port:",6,5,94,12,"")
+CALL WIN.DBTEXT(DBX, "PortNo", 109,4,45,12, "")
+CALL WIN.DBGROUP(DBX, "Option", "Options",7,22,93,41)
+CALL WIN.DBRADIO(DBX, "ReadOnly", "Open read only",17,33,73,12,1)
+CALL WIN.DBRADIO(DBX, "EditCopy", "Edit a copy",17,46,73,12,0)
+CALL WIN.DBBUTTON(DBX, "OK", "OK",107,26,49,14, 1)
+CALL WIN.DBBUTTON(DBX, "Cancel","Cancel",107,47,49,14, 0)
+* Load the dialog box
+CALL WIN.DBLOAD(DBX, ERR)
+*
+END

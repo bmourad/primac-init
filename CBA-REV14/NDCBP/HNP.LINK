@@ -1,0 +1,303 @@
+*********************************************************************
+*
+* PROGRAM  - HNP.LINK
+*
+* AUTHOR   - NICK AMENDOLA, NASTech
+*
+* DATE     - 02/28/95
+*
+* DESCRIPTION
+*
+* This program is used to transfer to a specified Network Controller,
+* programs and other files received from a remote P/C running NDC_LINK.
+*
+*--------------------------------------------------------------------
+*
+*  InMsgStatus     0       Inactive, awaiting SOH
+*                  1       Received SOH, awaiting ADR
+*                  2       Received ADR, awaiting ENQ, ACK, NAK, STX
+*                  3       Received ENQ, ACK or NAK
+*                  4       Received STX, awaiting DATA and ETX
+*                  5       Received ETX, awaiting CHK
+*                  6       Received CHK, awaiting CK1
+*                  7       Received CK1, awaiting CK2
+*                  8       Received CK2, awaiting EOT
+*                  9       Received EOT
+*
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>NDC.CPYLIB>DOWNLOAD
+*
+*---- DEFINE CONSTANTS
+*
+      EQU TRUE  TO -1
+      EQU FALSE TO 0
+*
+*
+      SOH$ = CHAR(1)
+      STX$ = CHAR(2)
+      ETX$ = CHAR(3)
+      EOT$ = CHAR(4)
+      ENQ$ = CHAR(5)
+      ACK$ = CHAR(6)
+      DLE$ = CHAR(16)
+      NAK$ = CHAR(21)
+      ETB$ = CHAR(23)
+      ESC$ = CHAR(27)
+*
+      EQU MSEP TO "^"
+*
+*---- Open all Files
+*
+      OPEN "","OUT.QUEUE" TO OUT.QUEUE ELSE
+         PRINT "CANNOT OPEN OUT.QUEUE FILE"
+         STOP
+      END
+      OPEN "","CMD.QUEUE" TO CMD.QUEUE ELSE
+         PRINT "CANNOT OPEN CMD.QUEUE FILE"
+         STOP
+      END
+      OPEN "","CONTROL" TO CONTROL ELSE
+         PRINT "CANNOT OPEN CONTROL FILE"
+         STOP
+      END
+      OPEN "","DOWNLOAD" TO DOWNLOAD ELSE
+         PRINT "CANNOT OPEN DOWNLOAD FILE"
+         STOP
+      END
+*
+*---- INITIALIZATION
+*
+      PROMPT ""
+      ECHO OFF
+*
+      STYPE = "UNIDATA"                          ;* set UniData timeouts
+      BEGIN CASE
+      CASE STYPE = "MDCSC"
+         PollTimer = 20
+         DataTimer = 40
+      CASE STYPE = "UNIDATA"
+         PollTimer = 2
+         DataTimer = 4
+      END CASE
+*
+      InMsgStatus = 0
+      InMsgBuffer = ""
+      InMsgErrorType = ""
+      InMsgError = FALSE
+      LastSeqNo = 0
+*
+*---- GET NETWORK STATUS
+*
+      PRINT
+      PRINT "HNP.LINK Started"
+      PRINT
+      FOR N = 1 TO 5
+         PRINT "NET  STATUS   ":
+      NEXT N
+      PRINT
+      FOR N = 1 TO 5
+         PRINT "--- --------  ":
+      NEXT N
+      PRINT
+      NetPort = ""; NetStatus = ""
+      SELECT DOWNLOAD
+      LOOP
+         READNEXT NetID ELSE NetID = ""
+      UNTIL NetID = "" DO
+         MATREAD DLOAD.REC FROM DOWNLOAD, NetID THEN
+            LOCATE NetID IN NetPort<1>,1 SETTING NP ELSE
+               NetPort<1,NP> = NetID
+               NetStatus<1,NP> = "ACTIVE"
+               MSG = "GETDATE"
+               CALL HNP.ADDQUEUE(NetID,MSG,CMD.QUEUE,QPTR,ERRMSG)
+               IF ERRMSG # "" THEN
+                  NetStatus<1,NP> = "Q-ERROR"
+               END ELSE
+                  GOSUB 3000
+                  IF ERRMSG # "" THEN
+                     NetStatus<1,NP> = "INACTIVE"
+                  END
+               END
+            END
+         END
+      REPEAT
+*
+*---- MAIN PROCESSING
+*
+100 *
+      NETCNT = DCOUNT(NetPort,CHAR(253))
+      FOR N = 1 TO NETCNT
+         PRINT NetPort<1,N>"R#3":" ":NetStatus<1,N>"L#8":"  ":
+         IF MOD(N,5) = 0 THEN PRINT
+      NEXT N
+      PRINT
+*
+      ACTIVE = TRUE
+      LOOP
+      WHILE ACTIVE DO
+         INPUT InputData:
+         GOSUB 2000                        ;* process input data
+         BEGIN CASE
+         CASE InMsgError
+            PRINT NAK$:
+         CASE InMsgStatus = 999
+            ACTIVE = FALSE
+         CASE InMsgStatus = 9
+            IF InMsgBuffer[1,4] = "SEQ-" THEN
+               MP = INDEX(InMsgBuffer,MSEP,1)
+               IF MP = 0 THEN
+                  SeqNo = InMsgBuffer[5,999]
+                  InMsgBuffer = ""
+               END ELSE
+                  SeqNo = InMsgBuffer[5,(MP-5)]
+                  InMsgBuffer = InMsgBuffer[MP+1,999]
+               END
+            END ELSE
+               SeqNo = 0
+            END
+            Command = FIELD(InMsgBuffer,MSEP,1)
+            CurQueue = ""
+            BEGIN CASE
+            CASE SeqNo > 0 AND SeqNo = LastSeqNo
+            CASE 1
+               CurQueue = "O"
+               CALL HNP.ADDQUEUE(CurAddr,InMsgBuffer,OUT.QUEUE,QPTR,Status)
+            END CASE
+            LastSeqNo = SeqNo
+            InMsgStatus = 0
+            PRINT ACK$:
+         END CASE
+      REPEAT
+      GOTO 99999
+*
+*---- Process Received Data
+*
+2000 *
+      IPTR = 0
+      ILEN = LEN(InputData)
+      LOOP
+      WHILE IPTR < ILEN DO
+         IPTR = IPTR + 1
+         CH$ = InputData[IPTR,1]
+         BEGIN CASE
+         CASE InMsgStatus = 0
+            BEGIN CASE
+            CASE CH$ = SOH$
+               InMsgStatus = 1
+            CASE CH$ = ESC$
+               InMsgStatus = 999
+            END CASE
+         CASE InMsgStatus = 1
+            CurAddr = SEQ(CH$) - 32
+            InMsgStatus = 2
+         CASE InMsgStatus = 2
+            BEGIN CASE
+            CASE CH$ = STX$
+               InMsgStatus = 4
+               InMsgBuffer = ""
+               InMsgLen = 0
+               InMsgError = FALSE
+            CASE 1
+               InMsgStatus = 0
+               IPTR = ILEN
+            END CASE
+         CASE InMsgStatus = 3
+         CASE InMsgStatus = 4
+            IF CH$ = ETB$ THEN
+               InMsgStatus = 5
+            END ELSE
+               p = INDEX(InputData[IPTR,999],ETB$,1)
+               IF p = 0 THEN
+                  InMsgBuffer = InMsgBuffer[1,InMsgLen]:InputData[IPTR,999]
+                  InMsgLen = InMsgLen + (ILEN - IPTR + 1)
+                  IPTR = ILEN
+               END ELSE
+                  p = p + IPTR - 1
+                  InMsgBuffer = InMsgBuffer[1,InMsgLen]:InputData[IPTR,(p - IPTR)]
+                  InMsgLen = InMsgLen + (p - IPTR)
+                  IPTR = p
+                  InMsgStatus = 5
+               END
+            END
+         CASE InMsgStatus = 5
+            CheckSum = 0
+            BEGIN CASE
+            CASE CH$ = EOT$
+               InMsgErrorType = "0"
+               InMsgStatus = 9
+            CASE CH$ = "1"
+               InMsgErrorType = "1"
+               InMsgStatus = 6
+            CASE CH$ = "2"
+               InMsgErrorType = "2"
+               InMsgStatus = 6
+            CASE 1
+               InMsgErrorType = "0"
+               InMsgStatus = 0
+            END CASE
+         CASE InMsgStatus = 6
+            CheckSum = CheckSum + (SEQ(CH$) - 32) * 64
+            InMsgStatus = 7
+         CASE InMsgStatus = 7
+            CheckSum = CheckSum + (SEQ(CH$) - 32)
+            InMsgStatus = 8
+            BEGIN CASE
+            CASE InMsgErrorType = "1"
+               CheckTotal = MOD(InMsgLen,4096)
+            CASE InMsgErrorType = "2"
+               CheckTotal = 0
+               FOR N = 1 TO InMsgLen
+                  CheckTotal = CheckTotal + SEQ(InMsgBuffer[N,1])
+                  CheckTotal = MOD(CheckTotal,4096)
+               NEXT N
+            CASE 1
+               CheckTotal = CheckSum
+            END CASE
+            IF CheckTotal <> CheckSum THEN InMsgError = TRUE
+            InMsgStatus = 8
+         CASE InMsgStatus = 8
+            InMsgStatus = 9
+         END CASE
+      REPEAT
+      RETURN
+*
+*---- GET NETWORK RESPONSE
+*
+3000 *
+      ERRMSG = ""
+      STIME = TIME()
+      DTIME = 4
+      LOOP
+         READ REC FROM CMD.QUEUE, NetID:"!":QPTR ELSE REC = ""
+         ETIME = TIME() - STIME
+         IF ETIME < 0 THEN ETIME = ETIME + 86400
+      WHILE REC<4> = "" AND ETIME < DTIME DO
+      REPEAT
+      IF REC<4> = "" THEN
+         ERRMSG = "NETWORK TIMEOUT"
+      END ELSE
+         IF REC<6>[1,9] = "GETSTATS" THEN
+            RESP = REC<6>[10,999]
+         END ELSE
+            RESP = REC<6>
+         END
+         RESPONSE = ""
+         FOR N = 1 TO LEN(RESP)
+            CH = RESP[N,1]
+            CV = SEQ(CH)
+            IF CV >= 32 AND CV <= 127 THEN
+               RESPONSE = RESPONSE : CH
+            END
+         NEXT N
+      END
+      RETURN
+*
+*---- END OF PROGRAM
+*
+99999 *
+      ECHO ON
+      PRINT
+   END

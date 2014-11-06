@@ -1,0 +1,337 @@
+*********************************************************************
+*
+* PROGRAM  - RCV.RF.MAIN
+*
+* AUTHOR   - NICK AMENDOLA, NASTech, Inc.
+*
+* DATE     - 09/27/97
+*
+* DESCRIPTION
+*
+* This program is used to process Roll Receiving transactions from
+* the hand-held R-F units used on the receiving dock.
+*
+*T26132 cm 09/06/2001 * Change screen size from 21x16 to 20x15.
+*CSF39165 ajibaly 12/12/2001 * Call GET.CONO.RF instead of GET.CONO1
+*T26496 lhelms 04/09/2002 * UPGRADE TO REV12; CHANGE ALL COM COMMONS
+*T26674 adelgado 06/21/2002 * Add an option for Physical Inventory
+*                             Maintenance.
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+*   *COPY>CPYLIB>SCOMMON1
+*   *COPY>ICS.CPYLIB>COM.TRN
+*COPY>CPYLIB>COM1
+*COPY>ICS.CPYLIB>COM.INV.MAIN  
+*COPY>ICS.CPYLIB>COM.INV.SERIAL
+*COPY>ICS.CPYLIB>COM.INV.LINK  
+*COPY>RCV.CPYLIB>RCV.FILE.VARS
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>EMPLOYEE
+*COPY>CPYLIB>SCREEN.COM
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*
+*---- PRE-INITIALIZATION
+*
+* DEFFUN ADDSUM(A,B)
+  PROCREAD PARAM ELSE PARAM = ""
+  ACTION = PARAM<1>
+  PROC.CALL = PARAM<2>
+  IF PROC.CALL = "AUTO" THEN
+    EMPID = PARAM<3>
+  END ELSE
+    EMPID = ""
+  END
+  TEST.MODE = 0
+  IF LEN(ACTION) > 1 THEN
+    IF ACTION[LEN(ACTION),1] = "T" THEN TEST.MODE = 1
+  END
+*
+*---- OPEN ALL FILES
+*
+  OPEN "","COMPANY" TO COMPANY ELSE
+    ERRMSG = "CANNOT OPEN COMPANY FILE"
+    GOTO 93000
+  END
+  OPEN "","CONTROL" TO CONTROL ELSE
+    ERRMSG = "CANNOT OPEN CONTROL FILE"
+    GOTO 93000
+  END
+  OPEN "","EMPLOYEE" TO EMPLOYEE ELSE
+    ERRMSG = "CANNOT OPEN EMPLOYEE FILE"
+    GOTO 93000
+  END
+  OPEN "","PO" TO PO ELSE
+    ERRMSG = "CANNOT OPEN PO FILE"
+    GOTO 93000
+  END
+  OPEN "","PO.RSKI.XREF" TO PO.RSKI.XREF ELSE
+    ERRMSG = "CANNOT OPEN PO.RSKI.XREF FILE"
+    GOTO 93000
+  END
+  OPEN "","PO.MAN.XREF" TO PO.MAN.XREF ELSE
+    ERRMSG = "CANNOT OPEN PO.MAN.XREF FILE"
+    GOTO 93000
+  END
+*  OPEN "","ROLL.SKID.INFO" TO ROLL.SKID.INFO ELSE
+*    ERRMSG = "CANNOT OPEN ROLL.SKID.INFO FILE"
+*    GOTO 93000
+*  END
+  OPEN "","CATEGORY" TO CATEGORY ELSE
+    ERRMSG = "CANNOT OPEN CATEGORY FILE"
+    GOTO 93000
+  END
+  OPEN "","WAREHOUSE" TO WAREHOUSE ELSE
+    ERRMSG = "CANNOT OPEN WAREHOUSE FILE"
+    GOTO 93000
+  END
+  OPEN "","INVENTORY" TO INVENTORY ELSE
+    ERRMSG = "CANNOT OPEN INVENTORY FILE"
+    GOTO 93000
+  END
+  OPEN "","INV.WHSE" TO INV.WHSE ELSE
+    ERRMSG = "CANNOT OPEN INV.WHSE FILE"
+    GOTO 93000
+  END
+  OPEN "","INV.WHSE.LOC" TO INV.WHSE.LOC ELSE
+    ERRMSG = "CANNOT OPEN INV.WHSE.LOC FILE"
+    GOTO 93000
+  END
+  OPEN "","INV.HIST" TO INV.HIST ELSE
+    ERRMSG = "CANNOT OPEN INV.HIST FILE"
+    GOTO 93000
+  END
+  OPEN "","INV.TRAN.HIST" TO INV.TRAN.HIST ELSE
+    ERRMSG = "CANNOT OPEN INV.TRAN.HIST FILE"
+    GOTO 93000
+  END
+  OPEN "","RS.XFER" TO RS.XFER ELSE
+    ERRMSG = "CANNOT OPEN RS.XFER FILE"
+    GOTO 93000
+  END
+  OPEN "","TRANSFER" TO TRANSFER ELSE
+    ERRMSG = "CANNOT OPEN TRANSFER FILE"
+    GOTO 93000
+  END
+  OPEN "","JOB" TO JOB ELSE
+    ERRMSG = "CANNOT OPEN JOB FILE"
+    GOTO 93000
+  END
+  OPEN "","JOB.STATS" TO JOB.STATS ELSE
+    ERRMSG = "CANNOT OPEN JOB.STATS FILE"
+    GOTO 93000
+  END
+*T26946  OPEN "","RCV.MANIFEST" TO RCV.MANIFEST ELSE
+*T26946    ERRMSG = "CANNOT OPEN RCV.MANIFEST FILE"
+*T26946    GOTO 93000
+*T26946  END
+* OPEN "","RCV.PO.XREF" TO RCV.PO.XREF ELSE
+*   ERRMSG = "CANNOT OPEN RCV.PO.XREF FILE"
+*   GOTO 93000
+* END
+* OPEN "","RCV.ROLL.XREF" TO RCV.ROLL.XREF ELSE
+*   ERRMSG = "CANNOT OPEN RCV.ROLL.XREF FILE"
+*   GOTO 93000
+* END
+*
+*---- INITIALIZATION
+*
+  CONO = ""
+  MAT COMP.REC = ""
+*  C39165 v
+      *CALL GET.CONO1 (CONO, MAT COMP.REC, COMPANY, CONTROL)
+  CALL GET.CONO.RF (CONO, MAT COMP.REC, COMPANY, CONTROL)
+*  C39165 ^
+  IF CONO = "END" THEN GOTO 99999
+  SPX = ""
+  EMPNAME = ""
+  IF EMPID # "" THEN
+    MATREAD EMP.REC FROM EMPLOYEE, CONO:EMPID THEN
+      EMPNAME = (EMP.FRST.NAME:" ":EMP.LAST.NAME)[1,20]
+      IF LEN(EMPNAME) < 20 THEN SPX = SPACE(INT((21-LEN(EMPNAME))/2))
+      EMPNAME = SPX:EMPNAME
+    END ELSE
+      EMPID = ""
+    END
+  END
+*
+*---- INITIALIZE SCREEN.COM
+*
+  MAT S$EDIT = ""
+  S$TYP = 0
+  CALL RF.INPUT
+  GOSUB 89990 ;* DRAW BORDER
+  S$MASK = "#"
+  ERY = 15
+*
+*---- INITIALIZE MENUS AND SCREENS
+*
+*T26132 v
+*     DIM SCRN(16)
+*     MAT SCRN = ""
+*     XXXXXXXX = " 123456789012345678901 "
+*     XXXXXXXX = "+---------------------+"
+*     SCRN(01) = "|      Main Menu      |"
+*     SCRN(02) = "|---------------------|"
+*     SCRN(03) = "|@@@@@@@@@@@@@@@@@@@@@|"
+*     SCRN(04) = "|---------------------|"
+*     SCRN(05) = "| 1- Receive Stock    |"
+*     SCRN(06) = "| 2- Transfer Stock   |"
+*     SCRN(07) = "| 3- Adjust Stock     |"
+*     SCRN(08) = "| 4- Transfer Out     |"
+*     SCRN(09) = "| 5- Transfer In      |"
+*     SCRN(10) = "| 6- Loc Transfer     |"
+*     SCRN(11) = "| 7- Bay Locator      |"
+*     SCRN(12) = "| X- Exit             |"
+*     SCRN(13) = "|                     |"
+*     SCRN(14) = "|                     |"
+*     SCRN(15) = "|   Selection: #      |"
+*     SCRN(16) = "|                     |"
+*     XXXXXXXX = "+---------------------+"
+*     XXXXXXXX = " 123456789012345678901 "
+  DIM SCRN(15)
+  MAT SCRN = ""
+  XXXXXXXX = " 12345678901234567890 "
+  XXXXXXXX = "+--------------------+"
+  SCRN(01) = "|     Main Menu      |"
+  SCRN(02) = "|--------------------|"
+  SCRN(03) = "|@@@@@@@@@@@@@@@@@@@@|"
+  SCRN(04) = "|--------------------|"
+  SCRN(05) = "| 1- Receive Stock   |"
+  SCRN(06) = "| 2- Transfer Stock  |"
+  SCRN(07) = "| 3- Adjust Stock    |"
+  SCRN(08) = "| 4- Transfer Out    |"
+  SCRN(09) = "| 5- Transfer In     |"
+  SCRN(10) = "| 6- Loc Transfer    |"
+  SCRN(11) = "| 7- Bay Locator     |"
+* T26674 v
+*     SCRN(12) = "| X- Exit            |"
+*     SCRN(13) = "|                    |"
+*     SCRN(14) = "|   Selection: #     |"
+*     SCRN(15) = "|                    |"
+  SCRN(12) = "| 8- Physical Inv.   |"
+  SCRN(13) = "| X- Exit            |"
+  SCRN(14) = "|                    |"
+  SCRN(15) = "|   Selection: #     |"
+* T26674 ^
+  XXXXXXXX = "+--------------------+"
+  XXXXXXXX = " 12345678901234567890 "
+*T26132 ^
+*
+  SLINE = @(-1)
+*T26132 v
+*     FOR SL = 1 TO 16
+*        SDATA = SCRN(SL)[2,21]
+  FOR SL = 1 TO 15
+    SDATA = SCRN(SL)[2,20]
+*T26132 ^
+    CONVERT "#" TO " " IN SDATA
+    CONVERT "@" TO " " IN SDATA
+    SDATA = TRIMB(SDATA)
+    LDATA = LEN(SDATA)
+    LDONE = 0
+    FOR N = 1 TO LDATA UNTIL LDONE
+      IF SDATA[N,1] # " " THEN
+        SLINE = SLINE:@((N-1),(SL-1)):SDATA[N,99]
+        LDONE = 1
+      END
+    NEXT N
+  NEXT SL
+*
+*---- MAIN PROCESSING
+*
+100 *
+  RELEASE
+  IF EMPID = "" THEN
+    CALL RCV.RF.SIGN.ON (ACTION, CONO, EMPID, MAT RCV.FILE.VARS)
+    IF EMPID = "" THEN GOTO 99999
+    MATREAD EMP.REC FROM EMPLOYEE, CONO:EMPID THEN
+      EMPNAME = (EMP.FRST.NAME:" ":EMP.LAST.NAME)[1,20]
+    END
+    IF LEN(EMPNAME) < 20 THEN SPX = SPACE(INT((21-LEN(EMPNAME))/2))
+    EMPNAME = SPX:EMPNAME
+  END
+  PRINT SLINE:
+  GOSUB 89990 ;* DRAW BORDER
+  PRINT @(0,2):EMPNAME:
+  S$TYP=1; S$X=14; S$Y=14; S$MAXL=1; S$EX=0; S$EY=15; ERY=15
+  S$VALDAT = "X"
+  FOR N = 1 TO 9
+    S$VALDAT = S$VALDAT:",":N
+  NEXT N
+  CALL RF.INPUT
+  GOSUB 89990
+  OPTION = S$VALUE
+120 *
+  BEGIN CASE
+    CASE OPTION = "END"
+      GOTO 99999
+    CASE OPTION = "1"           ;* RECEIVE ROLL1
+*A=1
+*B=2
+ * PRINT @(0,14):"SUMMATION IS ":ADDSUM(A,B) ;SS=""; INPUT SS
+CALL RCV.RF.RECEIVE(ACTION, CONO, EMPID, MAT RCV.FILE.VARS)
+**CALL RCV.RF.RECEIVE.1(ACTION, CONO, EMPID, MAT RCV.FILE.VARS)
+    CASE OPTION = "2"           ;* TRANSFER ROLL
+      CALL RCV.RF.TRANSFER(ACTION, CONO, EMPID, MAT RCV.FILE.VARS)
+    CASE OPTION = "3"           ;* ADJUST ROLL
+      CALL RCV.RF.ADJUST(ACTION, CONO, EMPID, MAT RCV.FILE.VARS)
+    CASE OPTION = "4"           ;* WAREHOUSE TRANSFER
+      CALL RCV.RF.WHSE.TRAN(ACTION, CONO, EMPID, MAT RCV.FILE.VARS)
+    CASE OPTION = "5"           ;* WAREHOUSE RECEIPT
+      CALL RCV.RF.WHSE.RECV(ACTION, CONO, EMPID, MAT RCV.FILE.VARS)
+    CASE OPTION = "6"           ;* LOCATION TRANSFER
+      CALL RCV.RF.LOC.TRAN(ACTION, CONO, EMPID, MAT RCV.FILE.VARS)
+    CASE OPTION = "7"           ;* BAY LOCATOR
+      CALL RCV.RF.PFINDER(ACTION, CONO, MAT RCV.FILE.VARS)
+* T26674 v
+    CASE OPTION = "8"           ;* PHYSICAL INVENTORY MAINTENANCE
+      CALL RCV.RF.PHY.INV(ACTION, CONO, EMPID, MAT RCV.FILE.VARS)
+* T26674 ^
+    CASE OPTION = "X"
+      GOTO 99999
+  END CASE
+  GOTO 100
+*
+*---- DRAW BORDER
+*
+89990 *
+  IF TEST.MODE THEN
+*T26132 v
+*        FOR SL = 1 TO 16
+*           PRINT @(21,(SL-1)):"|":
+*        NEXT SL
+*        PRINT @(0,16):"---------------------+":
+    FOR SL = 1 TO 15
+      PRINT @(20,(SL-1)):"|":
+    NEXT SL
+    PRINT @(0,15):"--------------------+":
+*T26132 ^
+  END
+  RETURN
+*
+*---- ERROR ROUTINE
+*
+91000 *
+  PRINT @(0,ERY):@(-4):BEL:BEL:ERRMSG:
+  INPUT REPLY,1:
+  PRINT @(0,ERY):@(-4):
+  GOSUB 89990
+  ERY = 15
+  RETURN
+93000 *
+  PRINT @(0,15):@(-4):ERRMSG:
+  INPUT REPLY,1:
+  PRINT @(0,15):@(-4):
+  GOTO 99999
+*
+*---- END OF PROGRAM
+*
+99999 *
+  PRINT @(-1):
+  IF PROC.CALL = "AUTO" THEN
+    PROCWRITE ""
+  END
+END

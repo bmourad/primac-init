@@ -1,0 +1,265 @@
+*COPY>CPYLIB>COMMON1
+***************************************************************************
+*
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+*
+* PROGRAM - SCREEN.BUILD
+*
+* BY      - NICK AMENDOLA, COMPUTER BUSINESS ASSOCIATES
+*
+* DATE    - 06/09/84
+*
+* DESCRIPTION
+*
+* This is the main program for the screen builder system. The name of the
+* screen to be added or maintained is requested and control is passed to
+* the associated subroutines for processing.
+*
+***************************************************************************
+*
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*
+*---- DEFINE VARIABLES
+*
+*
+*---- OPEN ALL FILES
+*
+      OPEN "","M.SCREENS" TO M.SCREENS ELSE
+         STOP "CANNOT OPEN M.SCREENS FILE"
+      END
+*
+*---- INITIALIZATION
+*
+10*
+      MAT EDIT.COM.DRIVER = ""
+      ECD.SCRN.NAME = "SCREEN.BUILD"
+      ECD.ACTION=1; CALL SCREEN.EDIT
+      ECD.SCRN.NO = 1
+      ECD.ACTION=2; CALL SCREEN.EDIT
+*
+*---- MAIN PROCESSING
+*
+100*
+      ECD.NUM = 9
+      GOSUB 1900
+      IF ECD.RET.VALUE = "END" THEN
+         PRINT @(-1):
+         STOP
+      END
+      SCREEN.NAME = ECD.RET.VALUE
+      NEW.SCREEN = 0
+      READ SCREEN FROM M.SCREENS, SCREEN.NAME:"*FRM" ELSE
+         NEW.SCREEN = 1
+      END
+      READ SCREEN.DIMENSIONS FROM M.SCREENS, SCREEN.NAME:"*DIM" ELSE
+         IF NOT(NEW.SCREEN) THEN
+            SCREEN.DIMENSIONS = ""
+            SCREEN.DIMENSIONS<1> = 0
+            SCREEN.DIMENSIONS<2> = 22
+            SCREEN.DIMENSIONS<3> = 0
+            SCREEN.DIMENSIONS<4> = 79
+            SCREEN.DIMENSIONS<5> = 0
+            SCREEN.DIMENSIONS<6> = 23
+            SCREEN.DIMENSIONS<7> = 0
+            SCREEN.DIMENSIONS<8> = 79
+            WRITE SCREEN.DIMENSIONS ON M.SCREENS, SCREEN.NAME:"*DIM"
+         END
+      END
+      IF NEW.SCREEN THEN
+         SCREEN.DIMENSIONS = ""
+         ECD.NUM = 12
+         ECD.ACTION=4; CALL SCREEN.EDIT
+         IF ECD.RET.VALUE = "N" THEN GOTO 100
+      END
+      IF NEW.SCREEN THEN
+         FOR N = 1 TO 8
+            ON N GOSUB 1100,1200,1300,1400,1500,1600,1700,1800
+            IF ECD.RET.VALUE = "END" THEN
+               ECD.RET.VALUES = ""
+               ECD.ACTION=6; CALL SCREEN.EDIT
+               GOTO 100
+            END
+         NEXT N
+      END ELSE
+         ECD.RET.VALUES<1,1> = SCREEN.DIMENSIONS<1>
+         ECD.RET.VALUES<1,2> = SCREEN.DIMENSIONS<2>
+         ECD.RET.VALUES<1,3> = SCREEN.DIMENSIONS<3>
+         ECD.RET.VALUES<1,4> = SCREEN.DIMENSIONS<4>
+         ECD.RET.VALUES<1,5> = SCREEN.DIMENSIONS<5>
+         ECD.RET.VALUES<1,6> = SCREEN.DIMENSIONS<6>
+         ECD.RET.VALUES<1,7> = SCREEN.DIMENSIONS<7>
+         ECD.RET.VALUES<1,8> = SCREEN.DIMENSIONS<8>
+         ECD.ACTION=3; CALL SCREEN.EDIT
+      END
+*
+*---- GET OPERATOR REQUEST
+*
+500*
+      GOSUB 2000
+      ACTION = ECD.RET.VALUE
+      BEGIN CASE
+         CASE ACTION = "E" OR ACTION = "END"
+            ECD.RET.VALUES = ""
+            ECD.ACTION=6; CALL SCREEN.EDIT
+            GOTO 100
+         CASE ACTION = "C"
+            SCREEN.DIMENSIONS<1> = ECD.RET.VALUES<1,1>
+            SCREEN.DIMENSIONS<2> = ECD.RET.VALUES<1,2>
+            SCREEN.DIMENSIONS<3> = ECD.RET.VALUES<1,3>
+            SCREEN.DIMENSIONS<4> = ECD.RET.VALUES<1,4>
+            SCREEN.DIMENSIONS<5> = ECD.RET.VALUES<1,5>
+            SCREEN.DIMENSIONS<6> = ECD.RET.VALUES<1,6>
+            SCREEN.DIMENSIONS<7> = ECD.RET.VALUES<1,7>
+            SCREEN.DIMENSIONS<8> = ECD.RET.VALUES<1,8>
+            CALL SCREEN.BUILD.SUB.1 (SCREEN.NAME, SCREEN.DIMENSIONS)
+            GOTO 10
+         CASE ACTION = "1"
+            FOR N = 1 TO 4
+               ON N GOSUB 1100,1200,1300,1400
+            NEXT N
+         CASE ACTION = "2"
+            FOR N = 1 TO 4
+               ON N GOSUB 1500,1600,1700,1800
+            NEXT N
+      END CASE
+      GOTO 500
+*
+*---- GET FIELD 1
+*
+1100*
+      IF SCREEN.DIMENSIONS<1> # "" THEN
+         ECD.MAXV = SCREEN.DIMENSIONS<1>
+      END
+      ECD.NUM = 1
+      ECD.ACTION=4; CALL SCREEN.EDIT
+      IF ECD.RET.VALUE = "END" THEN RETURN
+      RETURN
+*
+*---- GET FIELD 2
+*
+1200*
+      IF SCREEN.DIMENSIONS<2> # "" THEN
+         ECD.MINV = SCREEN.DIMENSIONS<2>
+      END
+      ECD.NUM = 2
+      ECD.ACTION=4; CALL SCREEN.EDIT
+      IF ECD.RET.VALUE = "END" THEN RETURN
+      RETURN
+*
+*---- GET FIELD 3
+*
+1300*
+      IF SCREEN.DIMENSIONS<3> # "" THEN
+         ECD.MAXV = SCREEN.DIMENSIONS<3>
+      END
+      ECD.NUM = 3
+      ECD.ACTION=4; CALL SCREEN.EDIT
+      IF ECD.RET.VALUE = "END" THEN RETURN
+      RETURN
+*
+*---- GET FIELD 4
+*
+1400*
+      IF SCREEN.DIMENSIONS<4> # "" THEN
+         ECD.MINV = SCREEN.DIMENSIONS<4>
+      END
+      ECD.NUM = 4
+      ECD.ACTION=4; CALL SCREEN.EDIT
+      IF ECD.RET.VALUE = "END" THEN RETURN
+      RETURN
+*
+*---- GET FIELD 5
+*
+1500*
+      ECD.MINV = SCREEN.DIMENSIONS<1>
+      IF SCREEN.DIMENSIONS<5> # "" THEN
+         ECD.MAXV = SCREEN.DIMENSIONS<5>
+      END
+      ECD.DEFAULT = ECD.RET.VALUES<1,1>
+      ECD.NUM = 5
+      ECD.ACTION=4; CALL SCREEN.EDIT
+      IF ECD.RET.VALUE = "END" THEN RETURN
+      RETURN
+*
+*---- GET FIELD 6
+*
+1600*
+      IF SCREEN.DIMENSIONS<6> # "" THEN
+         ECD.MINV = SCREEN.DIMENSIONS<6>
+      END
+      ECD.MAXV = SCREEN.DIMENSIONS<2>
+      ECD.DEFAULT = ECD.RET.VALUES<1,2>
+      ECD.NUM = 6
+      ECD.ACTION=4; CALL SCREEN.EDIT
+      IF ECD.RET.VALUE = "END" THEN RETURN
+      RETURN
+*
+*---- GET FIELD 7
+*
+1700*
+      ECD.MINV = SCREEN.DIMENSIONS<3>
+      IF SCREEN.DIMENSIONS<7> # "" THEN
+         ECD.MAXV = SCREEN.DIMENSIONS<7>
+      END
+      ECD.DEFAULT = ECD.RET.VALUES<1,3>
+      ECD.NUM = 7
+      ECD.ACTION=4; CALL SCREEN.EDIT
+      IF ECD.RET.VALUE = "END" THEN RETURN
+      RETURN
+*
+*---- GET FIELD 8
+*
+1800*
+      IF SCREEN.DIMENSIONS<8> # "" THEN
+         ECD.MINV = SCREEN.DIMENSIONS<8>
+      END
+      ECD.MAXV = SCREEN.DIMENSIONS<4>
+      ECD.DEFAULT = ECD.RET.VALUES<1,4>
+      ECD.NUM = 8
+      ECD.ACTION=4; CALL SCREEN.EDIT
+      IF ECD.RET.VALUE = "END" THEN RETURN
+      RETURN
+*
+*---- GET FIELD 9
+*
+1900*
+      ECD.NUM = 9
+      ECD.ACTION=4; CALL SCREEN.EDIT
+      IF ECD.RET.VALUE = "END" THEN RETURN
+      RETURN
+*
+*---- GET FIELD 10
+*
+2000*
+      ECD.NUM = 10
+      ECD.ACTION=4; CALL SCREEN.EDIT
+      IF ECD.RET.VALUE = "END" THEN RETURN
+      RETURN
+*
+*---- GET FIELD 11
+*
+2100*
+      ECD.NUM = 11
+      ECD.ACTION=4; CALL SCREEN.EDIT
+      IF ECD.RET.VALUE = "END" THEN RETURN
+      RETURN
+*
+*---- GET FIELD 12
+*
+2200*
+      ECD.NUM = 12
+      ECD.ACTION=4; CALL SCREEN.EDIT
+      IF ECD.RET.VALUE = "END" THEN RETURN
+      RETURN
+*
+*---- ERROR ROUTINE
+*
+90000*
+      PRINT @(0,23):CL:ERRMSG:
+      INPUT REPLY,1:
+      PRINT @(0,23):CL:
+      RETURN
+   END

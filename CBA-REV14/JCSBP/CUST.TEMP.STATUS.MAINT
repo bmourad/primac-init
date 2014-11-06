@@ -1,0 +1,180 @@
+*COPY>CPYLIB>COM1
+*COPY>JCS.CPYLIB>COM.DRS.FILE.VARS
+**************************************************************
+* REVISION    - [08.1]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+*
+* SOURCE         - DRSBP
+*
+* PROGRAM        - CUST.TEMP.STATUS.MAINT
+*
+* BY             - L. ROSS, COMPUTER BUSINESS ASSOCIATES
+*
+* DATE           - 09/19/91
+*
+* DESCRIPTION    -
+* This program will be used to maintain the CUST.TEMPLATE.LIST file status. 
+*
+*T26126 adelgado 02/28/2002 * Implement the LOCKED clause for READU.
+*T28276 bmourad 11/23/2004 * Change verbage from TEMPLATE to JOB.
+*T29032 cmyklebu 12/28/2006 * Move pgm from rev12 to rev14.
+*ENDDOC
+**************************************************************
+*
+*---- FILE EQUATES
+*
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>JCS.CPYLIB>DRS.FILE.VARS
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>FILE.VARS
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>JCS.CPYLIB>CUST.TEMPLATE.LIST
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>CPYLIB>CHAR
+*
+*---- SETUP FOR SYSTEM ERROR MESSAGES
+*
+  SYS.TYPE = 1
+  CALL SYSCOM(MAT SYSCOM.REC)
+*
+*---- OPEN FILES
+*
+  OPEN '','COMPANY' TO COMPANY ELSE ERRMSG = 'COMPANY FILE MISSING';GOTO 93000
+  OPEN '','CONTROL' TO CONTROL ELSE ERRMSG = 'CONTROL FILE MISSING';GOTO 93000
+  OPEN '','JCS.SCREENS' TO M.SCREENS ELSE ERRMSG = 'JCS.SCREENS FILE MISSING';GOTO 93000
+  OPEN '','CUSTOMER' TO CUSTOMER ELSE ERRMSG = 'CUSTOMER FILE MISSING'; GOTO 93000
+  OPEN '','CUST.TEMPLATE.LIST' TO CUST.TEMPLATE.LIST ELSE ERRMSG = 'CUST.TEMPLATE.LIST FILE MISSING'; GOTO 93000
+  OPEN '','JOB' TO JOB ELSE ERRMSG = 'JOB FILE MISSING';GOTO 93000
+*
+*---- INITIALIZATION
+*
+*      MAT EDIT.COM = ""
+  MAT EDIT.COM.DRIVER = ""
+*      TYP = 0
+*      CALL EDIT.SUB
+  ERRMSG = ""
+  UNKNOWN = "???????????????"
+*
+*---- GET COMPANY NUMBER
+*
+  CONO = ""
+  CALL GET.CONO(CONO,MAT COMP.REC)
+  IF CONO = "END" THEN GOTO 99999
+*
+*---- PRINT SCREEN
+*
+  ECD.SCRN.CNT = 1
+  ECD.SCRN.NAME<1> = 'CUST.TEMP.STATUS.MAINT'
+  ECD.ACTION = 1; CALL SCRN.EDIT
+  ECD.SCRN.NO = 1
+  MAT SCV.REC = ''
+  ECD.ACTION = 2; CALL SCRN.EDIT
+*
+*---- MAIN PROCESSING
+*
+10 *     GET CUSTOMER
+*
+  ECD.ACTION = 6; CALL SCRN.EDIT
+  P_X  = 0 ; P_Y = 23 ; P_VALUE = "" ; P_OPT = "CL"
+  CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+  MAT SCV.REC = ''
+  ECD.NUM = 1
+  ECD.ACTION = 4; CALL SCRN.EDIT
+  BEGIN CASE
+    CASE ECD.RET.VALUE = 'END'
+      GOTO 99999
+    CASE ECD.RET.VALUE # ''
+      CUST.KEY = ECD.RET.VALUE
+    CASE 1
+      GOTO 10
+  END CASE
+  MATREAD CUST.REC FROM CUSTOMER, CONO:CUST.KEY ELSE
+    ERRMSG = 'Customer record does not exist.'
+    GOSUB 91000
+    GOTO 10
+  END
+  ECD.NUM = 3; SCV.REC(3) = CUST.NAME; ECD.ACTION = 5; CALL SCRN.EDIT
+*
+*----GET TEMPLATE NO.
+*
+20 *
+  ECD.NUM = 2
+  ECD.ACTION = 4; CALL SCRN.EDIT
+  BEGIN CASE
+    CASE ECD.RET.VALUE = 'END'
+      GOTO 10
+    CASE ECD.RET.VALUE # ''
+      TEMP.NO = ECD.RET.VALUE
+      * T26126 v
+      MATREADU CTL.REC FROM CUST.TEMPLATE.LIST, CONO:CUST.KEY:"!":TEMP.NO:"!001" LOCKED
+        ERRMSG = 'TEMPLATE record is locked by user - ':GETUSERNAME(STATUS())
+        GOSUB 91000;GOTO 20 
+      END ELSE
+      * T26126 ^
+        RELEASE CUST.TEMPLATE.LIST, CONO:CUST.KEY:"!":TEMP.NO:"!001"
+        ERRMSG = 'This template record does not exist.'
+        GOSUB 91000
+        GOTO 20
+      END
+    CASE 1
+      GOTO 20
+  END CASE
+  SCV.REC(4) = CTL.DESC; ECD.NUM = 4; ECD.ACTION = 5; CALL SCRN.EDIT
+  GOSUB 1000
+  GOTO 10
+*
+*---- ENTER OPTIONS
+*
+1000 *
+  MORE = 1
+  LOOP
+    ECD.NUM = 10
+    ECD.ACTION = 4; CALL SCRN.EDIT
+    OPTION = ECD.RET.VALUE
+    BEGIN CASE
+      CASE OPTION = 'END' OR OPTION = 'E'
+        MORE = 0
+        RELEASE CUST.TEMPLATE.LIST, CONO:CUST.KEY:"!":TEMP.NO:"!001"
+      CASE OPTION = 'H'
+        IF CTL.STATUS<1,1> # 1 THEN
+          READV DUMMY FROM JOB, CONO:TEMP.NO, 1 THEN
+            CTL.STATUS<1,1> = 1
+            P_X  = 3 ; P_Y = 23 ; P_VALUE = 'Customer template status changed to HOLD.' ; P_OPT = ""
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+          END ELSE
+            P_X  = 3 ; P_Y = 23 ; P_VALUE = 'This template is not a JOB - cannot freeze.' ; P_OPT = ""
+            CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+          END
+        END ELSE
+          ERRMSG = 'Customer template list already frozen.'
+          GOSUB 91000
+        END
+      CASE OPTION = 'R'
+        IF CTL.STATUS<1,1> # '' THEN
+          CTL.STATUS<1,1> = ''
+          P_X  = 3 ; P_Y = 23 ; P_VALUE = 'Customer template status RELEASED.' ; P_OPT = ""
+          CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+        END ELSE
+          ERRMSG = 'Customer template list was not frozen.'
+          GOSUB 91000
+        END
+      CASE OPTION = 'F'
+        MATWRITE CTL.REC ON CUST.TEMPLATE.LIST, CONO:CUST.KEY:"!":TEMP.NO:"!001"
+        MORE = 0
+    END CASE
+  WHILE MORE DO REPEAT
+  RETURN
+*
+*---- CALLS FOR SYSCOM
+*
+91000 *
+  ERR.TYPE = 1
+  CALL SYSCOM(MAT SYSCOM.REC)
+  RETURN
+93000 *
+  ERR.TYPE = 3
+  CALL SYSCOM(MAT SYSCOM.REC)
+99999 *
+*       PRINT @(-1):
+END

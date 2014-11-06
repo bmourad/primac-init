@@ -1,0 +1,318 @@
+SUBROUTINE INVINQ_INVENTORYINQUIRYSERVICE_INVINQDATA(CONO,PVALUE,STRXML,ERRMSG,SCHEMA.ONLY) 
+SCHEMA.ONLY = 0
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE PMC.CPYLIB DIVISION
+$INCLUDE ICS.CPYLIB CATEGORY
+$INCLUDE PMC.CPYLIB COMPANY
+$INCLUDE ICS.CPYLIB INV.WHSE
+$INCLUDE ICS.CPYLIB FNGD.STATS
+$INCLUDE ICS.CPYLIB INV.WHSE.LOC
+$INCLUDE ICS.CPYLIB INV.STATS
+$INCLUDE ICS.CPYLIB INV.CNV
+$INCLUDE ICS.CPYLIB WAREHOUSE
+$INCLUDE PMC.CPYLIB CUSTOMER
+
+
+$INCLUDE CPYLIB FILE.VARS
+$INCLUDE CPYLIB CHAR
+*
+DEFFUN DIVISION.POSITION (CONO,CONTROL.FILE,DIV.CODE)
+DEFFUN CURRENT.PERIOD(CONO,CONTROL.FILE,DIV.POS,FISCAL.FLAG)
+OPEN '','COMPANY' TO COMPANY ELSE ERRMSG = 'COMPANY FILE IS MISSING'; GOTO 93000
+OPEN '','CONTROL' TO CONTROL ELSE ERRMSG = 'CONTROL FILE IS MISSING'; GOTO 93000
+OPEN '','INVENTORY' TO INVENTORY ELSE ERRMSG = 'INVENTORY FILE IS MISSING'; GOTO 93000
+OPEN '','CATEGORY' TO CATEGORY ELSE ERRMSG = 'INVENTORY FILE IS MISSING'; GOTO 93000
+OPEN '','INV.WHSE' TO INV.WHSE ELSE ERRMSG = 'INV.WHSE FILE IS MISSING'; GOTO 93000
+OPEN '','INV.WHSE.LOC' TO INV.WHSE.LOC ELSE ERRMSG = 'INV.WHSE.LOC FILE IS MISSING'; GOTO 93000
+OPEN '','INV.STATS' TO INV.STATS ELSE ERRMSG = 'INV.STATS FILE IS MISSING'; GOTO 93000
+OPEN "","FNGD.STATS" TO FNGD.STATS ELSE ERRMSG = "FNGD.STATS FILE IS MISSING"; GOTO 93000
+OPEN '','WAREHOUSE' TO WAREHOUSE ELSE ERRMSG = 'WAREHOUSE FILE IS MISSING'; GOTO 93000
+OPEN '','CUSTOMER' TO CUSTOMER ELSE ERRMSG = 'CUSTOMER FILE IS MISSING'; GOTO 93000
+OPEN '','DIVISION' TO DIVISION ELSE ERRMSG = 'DIVISION FILE IS MISSING'; GOTO 93000
+GEN.DIV='00'
+ERRMSG=""
+PROD.NUM = PVALUE<1>
+*
+* MAIN PROCESSING
+*
+STRXML = "<INVINQDATA>"
+MATREAD COMP.REC FROM COMPANY, CONO ELSE
+  ERRMSG = "COMPANY (":CONO:") DOES NOT EXIST"
+  GOTO 93000
+END
+MATREAD INV.REC FROM INVENTORY, CONO:PROD.NUM ELSE
+	*ERRMSG = "Cannot locate Product # ":PROD.NUM
+	ERRMSG = "Product # ":PROD.NUM:" does not exist"
+	GOTO 93000
+END
+STRXML := "<ProdNo>": PROD.NUM :"</ProdNo>"
+WHSE.CNT = DCOUNT(INV.WHSE.CODE<1>,VM)
+IF WHSE.CNT < 1 THEN
+	ERRMSG = "NO WAREHOUSES ARE SET UP FOR PRODUCT - ":PROD.NUM
+	GOTO 93000
+END
+MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE ELSE
+	MAT CATG.REC = ""
+END
+  IF INV.M.LINE = "FNGD" THEN
+      FNGD.FLG = 1
+      PLN.NO = 48
+   END ELSE
+      FNGD.FLG = 0
+      PLN.NO = 42
+   END
+$INCLUDE WSEBP INV_UM_CNV_WS
+    All_OnHandQTy=0;All_ReservedQty=0;All_OnOrderedQty=0;All_Allocated=0;All_NetAvail = ""
+   INV.ON.PO = ""; INV.ALLOC = ""; INV.ON.HAND = ""
+   INV.RESV = ""
+   FOR I = WHSE.CNT TO 1 STEP -1
+      IWH.ID = CONO:PROD.NUM:"!":INV.WHSE.CODE<1,I>
+      MATREAD IWH.REC FROM INV.WHSE, IWH.ID THEN
+         IF FNGD.FLG THEN
+            MATREAD FGS.REC FROM FNGD.STATS,IWH.ID THEN
+               INV.ON.PO<I> = SUM(FGS.M.QTY)
+               INV.ALLOC<I> = SUM(FGS.A.QTY)
+            END ELSE
+               INV.ON.PO<I> = 0
+               INV.ALLOC<I> = 0
+            END
+         END ELSE
+            MATREAD INV.STAT.REC FROM INV.STATS, IWH.ID THEN
+               INV.ON.PO<I> = SUM(ISTAT.PO.QTY)
+               INV.ALLOC<I> = 0; PO.CNT = DCOUNT(ISTAT.PO,VM)
+               FOR J = 1 TO PO.CNT
+                  INV.ALLOC<I> = INV.ALLOC<I> + SUM(ISTAT.PO.JOB.QTY<1,J>)
+               NEXT J
+            END ELSE
+               INV.ON.PO<I> = 0
+               INV.ALLOC<I> = 0
+            END
+         END
+         IF IWH.ON.HAND < 0 THEN
+            INV.ON.HAND<I>=INT(((IWH.ON.HAND/ICR.DV1)*ICR.MT1)/ICR.DV2-.5)
+         END ELSE
+            INV.ON.HAND<I>=INT(((IWH.ON.HAND/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+         END
+         IF IWH.RESV < 0 THEN
+            INV.RESV<I>=INT(((IWH.RESV/ICR.DV1)*ICR.MT1)/ICR.DV2-.5)
+         END ELSE
+            INV.RESV<I>=INT(((IWH.RESV/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+         END
+         IF INV.ON.PO<I> < 0 THEN
+            INV.ON.PO<I>=INT(((INV.ON.PO<I>/ICR.DV1)*ICR.MT1)/ICR.DV2-.5)
+         END ELSE
+            INV.ON.PO<I>=INT(((INV.ON.PO<I>/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+         END
+         IF INV.ALLOC<I> < 0 THEN
+            INV.ALLOC<I>=INT(((INV.ALLOC<I>/ICR.DV1)*ICR.MT1)/ICR.DV2-.5)
+         END ELSE
+            INV.ALLOC<I>=INT(((INV.ALLOC<I>/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+         END
+          All_OnHandQTy=All_OnHandQTy+INV.ON.HAND<I>
+         All_ReservedQty=All_ReservedQty+INV.RESV<I>
+         All_OnOrderedQty=All_OnOrderedQty+INV.ON.PO<I>
+         All_Allocated=All_Allocated+INV.ALLOC<I>
+      END ELSE
+         ERRMSG = "WAREHOUSE (":INV.WHSE.CODE<1,I>:") IS NOT SETUP FOR PRODUCT ":PROD.NUM
+         GOTO 93000
+         INV.WHSE.CODE = DELETE(INV.WHSE.CODE,1,I,0)
+         INV.ON.PO = DELETE(INV.ON.PO,I,0,0)
+         INV.ALLOC = DELETE(INV.ALLOC,I,0,0)
+         INV.ON.HAND = DELETE(INV.ON.HAND,I,0,0)
+         INV.RESV = DELETE(INV.RESV,I,0,0)
+      END
+   NEXT I
+   WHSE.CNT = DCOUNT(INV.WHSE.CODE,VM)
+   IF WHSE.CNT < 1 THEN
+      ERRMSG = "NO WAREHOUSES ARE SET UP FOR PRODUCT - ":PROD.NUM
+      GOTO 93000
+   END
+   STRXML := "<ProdType>": INV.PAP.TYPE :"</ProdType>"
+   STRXML := "<ProdDesc>": INV.FULL.DESC :"</ProdDesc>"
+   STRXML := "<CustomerName>": INV.CUST :"</CustomerName>"
+   CUST_NAME = ""
+    IF INV.CUST # "" THEN
+      MATREAD CUST.REC FROM CUSTOMER,CONO:INV.CUST ELSE
+         MAT CUST.REC = ""; CUST.NAME = STR("?",30)
+      END
+      CUST_NAME = CUST.NAME
+   END
+   STRXML := "<CustomerDesc>": CUST_NAME :"</CustomerDesc>"
+   STRXML := "<MajorLine>": INV.M.LINE :"</MajorLine>"
+   STRXML := "<PriceUM>": INV.UNIT<1,3> :"</PriceUM>"
+   STRXML := "<LastPODate>": OCONV(INV.LA.PUR,'D2/') :"</LastPODate>"
+   STRXML := "<ProdLine>": INV.LINE :"</ProdLine>"
+TOT_LD_DAYS = ""
+   TOT.LD.DAYS = SUM(INV.LEAD.TIME) + 0
+   IF TOT.LD.DAYS GT 0 THEN
+      TOT_LD_DAYS = TOT.LD.DAYS:" DAYS"
+   END
+   STRXML := "<StockUM>": INV.UNIT<1,2> :"</StockUM>"
+   STRXML := "<LastSaleDate>": OCONV(INV.LA.SALE,'D2/') :"</LastSaleDate>"
+   STRXML := "<MWEIGHT>": INV.M.WT :"</MWEIGHT>"
+   STRXML := "<LeadTime>": TOT_LD_DAYS :"</LeadTime>"
+   STRXML := "<Length>": OCONV(INV.PAP.LEN,'MD4') :"</Length>"
+   STRXML := "<Color>": INV.COLOR :"</Color>"
+   STRXML := "<BasicWeight>": OCONV(INV.BAS.WT,'MD2') :"</BasicWeight>"
+   STRXML := "<Width>": OCONV(INV.PAP.WIDTH,'MD4') :"</Width>"
+   STRXML := "<CostFactor>": OCONV(INV.COST.WT,'MD2') :"</CostFactor>"
+   STRXML := "<Weight>": OCONV(INV.WEIGHT,'MD2') :"</Weight>"
+   STRXML := "<Finish>": INV.PAP.FINSH :"</Finish>"
+   STRXML := "<ShipToBuyRatio>": INV.SBR :"</ShipToBuyRatio>"
+   STRXML := "<Volume>": OCONV(INV.VOLUME,'MD2') :"</Volume>"
+   STRXML := "<SOQTY>": OCONV(INV.SOQ,'MD2') :"</SOQTY>"
+  All_NetAvail = All_OnHandQTy - All_ReservedQty
+STRXML := "<AllOnHandQty>": OCONV(All_OnHandQTy,ICR.CNV1) :"</AllOnHandQty>"
+STRXML := "<AllReservedQty>": OCONV(All_ReservedQty,ICR.CNV1) :"</AllReservedQty>"
+STRXML := "<AllNetAvail>": OCONV(All_NetAvail,ICR.CNV1) :"</AllNetAvail>"
+STRXML := "<AllOnOrderedQty>": OCONV(All_OnOrderedQty,ICR.CNV1) :"</AllOnOrderedQty>"
+STRXML := "<AllAllocated>": OCONV(All_Allocated,ICR.CNV1) :"</AllAllocated>"
+   GOSUB 2000
+RETURN
+2000 
+*
+INV_WHSE_CODE = "";CURR.WHSE = ""
+WOnHandQTy=0;WReservedQty=0;WOnOrderedQty=0;WAllocated=0;WNetAvail = ""
+CURR.LOC = "";IWLO.ID = "";LOC_ONHANDQTY = "";WLOC = "";WCNT = 0
+SERIAL_LABEL = "";SERIAL_INFO = ""
+ FOR J = 1 TO WHSE.CNT
+ CURR.WHSE = INV.WHSE.CODE<1,J>
+	  MATREAD WHSE.REC FROM WAREHOUSE,CONO:CURR.WHSE ELSE 
+	      *ERRMSG='Warehouse record ':CURR.WHSE:' is missing.'
+	      CONTINUE
+          END
+WCNT = WCNT + 1
+	  INV_WHSE_CODE<1,WCNT> = CURR.WHSE
+******
+*	  IF WHS.DIV='' THEN WHS.DIV=GEN.DIV
+*	   DIV.POS=DIVISION.POSITION(CONO,CONTROL,WHS.DIV)
+*	   BEGIN CASE                                              
+*	      CASE DIV.POS<1,1>=''                                  
+*		 DIV.POS=DIV.POS<1,2>                                
+*		 CUR.PERIOD=CURRENT.PERIOD(CONO,CONTROL,DIV.POS,"IC")
+*		 IF CUR.PERIOD<1,1>='' THEN                          
+*		    CUR.PERIOD=CUR.PERIOD<1,2>                        
+*		 END ELSE                                            
+*		    IF CUR.PERIOD<1,2>='-2' THEN                      
+*		       ERRMSG=CUR.PERIOD<1,2>                          
+*		       GOSUB 93000                                     
+*		    END                                               
+*		 END                                                 
+*	      CASE DIV.POS<1,1>='-1'                                
+*		 ERRMSG=DIV.POS<1,2>                                 
+*		 GOSUB 91000                                         
+*	      CASE DIV.POS<1,1>='-2'                                
+*		 ERRMSG=DIV.POS<1,2>                                 
+*		 GOSUB 93000                                         
+*	   END CASE     
+*********
+	  IWH.ID = CONO:PROD.NUM:"!":CURR.WHSE
+	   MATREAD IWH.REC FROM INV.WHSE, IWH.ID ELSE
+	      MAT IWH.REC = ""
+	   END
+	   MATREAD INV.STAT.REC FROM INV.STATS, IWH.ID ELSE
+	      MAT INV.STAT.REC = ""
+	   END
+	   IF FNGD.FLG THEN                              
+	      MATREAD FGS.REC FROM FNGD.STATS, IWH.ID ELSE
+		 MAT FGS.REC = ""                          
+	      END                                         
+	   END ELSE                                      
+	      MAT FGS.REC = ""                            
+	   END 
+	   WOnHandQTy<1,WCNT> = OCONV(INV.ON.HAND<J>,ICR.CNV1)
+	   WReservedQty<1,WCNT>=OCONV(INV.RESV<J>,ICR.CNV1)
+	   WNetAvail<1,WCNT> = OCONV((INV.ON.HAND<J> - INV.RESV<J>),ICR.CNV1)
+	   WOnOrderedQty<1,WCNT>=OCONV(INV.ON.PO<J>,ICR.CNV1)
+	   WAllocated<1,WCNT>=OCONV(INV.ALLOC<J>,ICR.CNV1)
+	   LOC.CNT = DCOUNT(IWH.LOC,VM)
+	   IF LOC.CNT = 0 THEN
+             WLOC<1,WCNT> = ""
+	     LOC_ONHANDQTY<1,WCNT> = ""
+	   END
+	   FOR K = 1 TO LOC.CNT
+	          CURR.LOC = IWH.LOC<1,K> 
+	          WLOC<1,WCNT,K> = IWH.LOC<1,K>
+		  IWLO.ID = CONO:PROD.NUM:"!":CURR.WHSE:"!":CURR.LOC
+		   MATREAD IWLO.REC FROM INV.WHSE.LOC,IWLO.ID ELSE MAT IWLO.REC = "" 
+		      IF IWLO.LOC.ON.HAND  < 0 THEN                                       
+			 LOH = INT(((IWLO.LOC.ON.HAND / ICR.DV1) * ICR.MT1) / ICR.DV2 - .5)
+		      END ELSE                                                            
+			 LOH = INT(((IWLO.LOC.ON.HAND / ICR.DV1) * ICR.MT1) / ICR.DV2 + .5)
+		      END 
+		      *IF LOH > 0 THEN
+		        LOC_ONHANDQTY<1,WCNT,K> = OCONV(LOH,ICR.CNV1)
+		     * END ELSE
+		     *   LOC_ONHANDQTY<1,WCNT,K> = ""
+		     * END
+		     GOSUB 6000
+	   NEXT K
+ NEXT J
+ STRXML := "<WareHouse>": INV_WHSE_CODE :"</WareHouse>"
+ STRXML := "<WareHouseOnHandQty>": WOnHandQTy :"</WareHouseOnHandQty>"
+ STRXML := "<WareHouseReservedQty>": WReservedQty :"</WareHouseReservedQty>"
+ STRXML := "<WareHouseNetAvail>": WNetAvail :"</WareHouseNetAvail>"
+ STRXML := "<WareHouseOrderedQty>": WOnOrderedQty :"</WareHouseOrderedQty>"
+ STRXML := "<WareHouseAllocatedQty>": WAllocated :"</WareHouseAllocatedQty>"
+ STRXML := "<Location>": WLOC :"</Location>"
+ STRXML := "<LocationOnHandQty>": LOC_ONHANDQTY :"</LocationOnHandQty>"
+ STRXML := "<CategoryTrackingLevel>": CATG.TRK.LVL :"</CategoryTrackingLevel>"
+ STRXML := "<SerialLabel>": SERIAL_LABEL :"</SerialLabel>"
+ STRXML := "<SerialInfo>": SERIAL_INFO :"</SerialInfo>"
+  STRXML := "</INVINQDATA>"
+   RETURN
+**************
+6000*
+**************
+		    *PROD = PROD.NUM
+		    *WHSE = CURR.WHSE
+		    CALL GET_ALL_WHSE_SERIALS(CONO,PROD.NUM,CURR.WHSE,TMP.SERIAL,ERRMSG)
+		    IF ERRMSG # "" THEN GOTO 93000
+		    R.S.CNT=''
+		    IF CATG.TRK.LVL='S' THEN
+		       R.S.FLG = 0
+		       R.S.CNT = 0
+		       PTR = 1
+		       LOCATE CURR.LOC IN TMP.SERIAL<1>,1 SETTING WINDX ELSE WINDX = 0
+		       IF CATG.TRK.LVL='S' AND WINDX>0 THEN
+			  IF WINDX>0 THEN
+			     TOT.RS.CNT = DCOUNT(TMP.SERIAL<2,WINDX>,SVM)
+			     R.S.CNT=0
+			     FOR TRC=1 TO TOT.RS.CNT
+				IF TMP.SERIAL<3,WINDX,TRC>#0 THEN
+				   R.S.CNT+=1
+				END
+			     NEXT TRC
+			     R.S.FLG = 1
+			  END
+			  BEGIN CASE
+			     CASE NOT(R.S.FLG)
+				SERIAL_LABEL<1,WCNT,K> = ""
+				SERIAL_INFO<1,WCNT,K> = ""
+			     CASE INV.PAP.TYPE = "REGULAR"
+				SERIAL_LABEL<1,WCNT,K> = "# Serials"
+				SERIAL_INFO<1,WCNT,K> = R.S.CNT
+			     CASE INV.PAP.TYPE = "SHEET"
+				SERIAL_LABEL<1,WCNT,K> = "# Skids"
+				SERIAL_INFO<1,WCNT,K> = R.S.CNT
+			     CASE 1
+				SERIAL_LABEL<1,WCNT,K> = "# Rolls"
+				SERIAL_INFO<1,WCNT,K> = R.S.CNT
+			  END CASE
+		       END ELSE
+				SERIAL_LABEL<1,WCNT,K> = ""
+				SERIAL_INFO<1,WCNT,K> = ""
+		       END
+		    END
+
+RETURN
+*
+* WRITE ERROR MESSAGE
+*
+93000*
+IF ERRMSG <> "" THEN
+      STRXML='<INVINQDATA><ErrorStack>'  : ERRMSG : '</ErrorStack></INVINQDATA>'
+      ERRMSG = "InvInqData ----> INVINQ_INVENTORYINQUIRYSERVICE_INVINQDATA --->": ERRMSG
+      CALL WRITELOG(ERRMSG)
+END
+RETURN

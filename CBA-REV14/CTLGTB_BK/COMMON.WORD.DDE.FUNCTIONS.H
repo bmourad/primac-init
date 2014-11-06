@@ -1,0 +1,4 @@
+M
+0
+/usr/ud/primac/sbc550/SB.DEFN/TUBP COMMON.WORD.DDE.FUNCTIONS.H
+bmourad

@@ -1,0 +1,197 @@
+   SUBROUTINE PASS.CHECK(PORT.TYPE)
+*COPY>CPYLIB>COM1
+************************************************************************
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+*
+* PROGRAM  - PASS.CHECK
+*
+* AUTHOR   - NICK AMENDOLA, COMPUTER BUSINESS ASSOCIATES
+*
+* DATE     - 06/11/84
+*
+* REVISION - A.1.0
+*
+* DESCRIPTION
+*
+* This program will request a user identification and associated
+* password. If the user is not validated for the particular function
+* requested, he will be automatically logged off the system. An entry
+* will automatically be made to the INVALID.ACCESS file for later
+* interrogation.
+*
+*T27665 thompson 07/29/2003 * Change pass check to work with screen.
+************************************************************************
+*
+*COPY>PMC.CPYLIB>SECURITY
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>FILE.VARS
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>CPYLIB>SYSCOM
+   MAT FILE.VARS = ""
+*
+   MAT SYSCOM.REC =  ""; SYS.TYPE = 1
+*---- DIMENSIONED VARIABLES
+*
+   DIM USER.REC(5)
+   EQU USER.CONO TO USER.REC(1)
+   EQU USER.ID   TO USER.REC(2)
+   EQU USER.MENU TO USER.REC(3)
+*
+*---- INITIALIZATION
+*
+   PROMPT ""
+   PORT.NO = "TTY"
+   CALL SYSVARS.SUB(PORT.NO)
+   ACCT.NO = @WHO
+   PORT.ACCT = PORT.NO:" ":ACCT.NO
+*
+*---- GET SELECTION REQUESTED
+*
+   PROCREAD SEL.CMD ELSE SEL.CMD = ""
+   SEL.CMD = SEL.CMD<1>
+*
+*---- OPEN ALL FILES
+*
+   OPEN "","SECURITY" TO SECURITY ELSE
+      ERRMSG = "SECURITY FILE MISSING "
+      GOSUB 91000
+      CHAIN "LO"
+   END
+   OPEN "","COMPANY" TO COMPANY ELSE
+      ERRMSG = "COMPANY FILE MISSING "
+      GOSUB 91000
+      CHAIN "LO"
+   END
+   OPEN "","CONTROL" TO CONTROL ELSE
+      ERRMSG = "CONTROL FILE MISSING "
+      GOSUB 91000
+      CHAIN "LO"
+   END
+   CONO = ''
+   CALL GET.CONO(CONO,MAT COMP.REC)
+   IF CONO = "END" THEN CHAIN "LO"
+*
+*---- VALIDATE USER
+*
+   MATREAD USER.REC FROM SECURITY, "R.":PORT.NO ELSE
+      GOTO 99999                    ;* EASY.MENU WILL VALIDATE
+   END
+   MATREAD SEC.REC FROM SECURITY, USER.CONO:USER.ID ELSE
+      DELETE SECURITY, "R.":PORT.NO
+      GOTO 99999
+   END
+*
+*---- GET USER IDENTIFICATION
+*
+   ID.ERR = 1
+   FOR ID.CNT = 1 TO 3 UNTIL ID.ERR = 0
+      MAT EDIT.COM.DRIVER = ""
+      HMSG = "Enter UserId"
+      PMSG = "Enter UserId"
+      IF PORT.TYPE = "termulator" THEN 
+         X=0;Y=22;TYP=11;O.R='O'; MAXL=8; DEFAULT = ""
+      END ELSE
+         X=0;Y=23;TYP=1;O.R='O'; MAXL=8; DEFAULT = ""
+      END
+      CALL EDIT.SUB1(MAT EDIT.COM)
+      IF USER.ID = VALUE THEN
+         ID.ERR = 0
+      END ELSE
+         ERRMSG = "*** Logon ID Mismatch ***"
+         GOSUB 91000
+      END
+   NEXT ID.CNT
+   IF ID.ERR THEN
+      ERRMSG="Logon ID Mismatch!! - Forced logout"
+      GOTO 80000
+   END
+*
+*---- GET USER PASSWORD
+*
+   PW.ERR = 1
+   FOR PW.CNT = 1 TO 3 UNTIL PW.ERR = 0
+      MAT EDIT.COM.DRIVER = ""
+      HMSG = "Enter Password"
+      PMSG = "Enter Password"
+      IF PORT.TYPE = "termulator" THEN 
+         X=0;Y=22;TYP=11;O.R='O'; MAXL=8; DEFAULT = ""
+         ECHO.BACK = 0
+         P_X=0; P_Y=22; P_VALUE=SPACE(8); P_OPT='CL'
+      END ELSE
+         X=0;Y=23;TYP=1;O.R='O'; MAXL=8; DEFAULT = ""
+         ECHO.BACK = 0
+         P_X=0; P_Y=23; P_VALUE=SPACE(8); P_OPT='CL'
+      END
+      ECHO OFF
+      CALL EDIT.SUB1(MAT EDIT.COM)
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      ECHO ON
+      PASSWD = VALUE
+      IF SEC.PASSWORD = "" THEN
+         PW.ERR = 1
+         ERRMSG = "*** Password not on file ***"
+         GOSUB 91000
+         PW.CNT = 4
+      END ELSE
+         IF PASSWD = SEC.PASSWORD THEN PW.ERR = 0
+      END
+   NEXT PW.CNT
+   IF PW.ERR THEN
+      GOSUB 78000
+      ERRMSG="Invalid password!! - Forced logout"
+      GOTO 80000
+   END
+*
+*---- CHECK ACCESS AUTHORIZATION
+*
+   SEC.ERR = 1
+   BEGIN CASE
+      CASE SEC.MENU.LEVEL >= 3
+         SEC.ERR = 0
+      CASE SEC.MENU.FLAG = "A"
+         SEC.ERR = 0
+         LOCATE SEL.CMD IN  SEC.MENU.PROC<1>,1 SETTING FND ELSE
+            SEC.ERR = 1
+         END
+      CASE SEC.MENU.FLAG = "P"
+         SEC.ERR = 1
+         LOCATE SEL.CMD IN SEC.MENU.PROC<1>,1 SETTING FND ELSE
+            SEC.ERR = 0
+         END
+   END CASE
+   IF SEC.ERR THEN
+      GOSUB 78000
+      ERRMSG = "** You are not authorized to perform this function **"
+      GOTO 80000
+   END
+   GOTO 99999
+*
+*---- LOGON INVALID ACCESS ATTEMPT
+*
+78000*
+   OPEN "","INVALID.ACCESS" TO INVALID.ACCESS ELSE
+      ERRMSG = "** Cannot Open INVALID.ACCESS File **"
+      GOTO 80000
+   END
+   INV.ACC.REC = ""
+   INV.ACC.KEY = USER.ID:"*":DATE():"*":TIME()
+   INV.ACC.REC<1,1> = SEL.CMD
+   WRITE INV.ACC.REC ON INVALID.ACCESS, INV.ACC.KEY
+   RETURN
+*
+*---- UNRECOVERABLE ERROR
+*
+80000*
+   GOSUB 91000
+   DELETE SECURITY, "R.":PORT.NO
+   RQM
+   CHAIN "LO"
+*
+91000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+*---- END OF PROGRAM
+99999*
+   RETURN
+END

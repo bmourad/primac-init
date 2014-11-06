@@ -1,0 +1,177 @@
+SUBROUTINE POSPOM_GETOPENQTY
+********************************************************************************
+*   Program name :- POSPOM_GETOPENQTY
+*   Created:- 03/17/2007
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+
+
+$INCLUDE WWINSERT RBO.H
+$INCLUDE PMC.CPYLIB PO
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB INV.CNV
+
+OPEN '','INVENTORY' TO INVENTORY ELSE 
+	ERRMSG = 'INVENTORY FILE IS MISSING'; GOTO 93000
+END
+OPEN '','PO' TO PO ELSE 
+	ERRMSG = 'PO FILE IS MISSING'; GOTO 93000
+END
+STATUS = RBO.getProperty('','ID',ID)
+STATUS = RBO.getProperty('','ProdNum',ProdNum)
+STATUS = RBO.getProperty('','TotOnOrd',TotOnOrd)
+STATUS = RBO.getProperty('','TotCancel',TotCancel)
+STATUS = RBO.getProperty('','Type',TYPE)
+CONO=ID[1,3]
+PO.NO=ID[4,99]
+LN=1
+ERRMSG=""
+DEFAULTORD=""
+DEFAULTCANC=""
+LNO=""
+DEFFUN UOM.CONVERSION.CALC(QTY,FROM.UOM,TO.UOM,WGT,WIDTH,ROND,LN)    ;* C40540
+MATREAD PO.REC FROM PO,ID THEN
+   MATREAD INV.REC FROM INVENTORY,CONO:ProdNum THEN
+        PO.JB.UNITS<1,LN> = INV.UNIT<1,2>
+	PO.UNIT.FLG<1,LN> = INV.UNIT<1,1>
+	IF PO.PROD.TYPE<1,LN> = "REG" THEN
+	  PO.UNIT.FLG<1,LN> = INV.UNIT<1,1> 
+	END
+	GOSUB GET.CONV
+   END
+   GOSUB GETQTYOPEN
+END
+STATUS=RBO.setProperty('','ServerMessage',ERRMSG)
+STATUS=RBO.setProperty('','QtyOpen',QtyOpen)
+RETURN
+GETQTYOPEN:
+    IF TYPE = "QTYORD" THEN
+		PREV.TOT.ONORD = PO.TOT.ONORD<1,LN>
+		IF DIFF.UM<LN> = "Y" THEN
+			IF ICR.CNV<LN,2> = "MD0" THEN
+				IF TotOnOrd<1,LN> # "" THEN
+					DEFAULTORD = ICONV(((TotOnOrd<1,LN>/ICR.DV1<LN,2>)*ICR.MT1<LN,2>)/ICR.DV2<LN,2>, 'MD0')
+				END
+			END ELSE
+				IF TotOnOrd<1,LN> # "" THEN
+					IF ICR.CNV<LN,1> = "MD0" THEN
+						DEFAULTORD = OCONV(INT(TotOnOrd<1,LN>/10), "MD2")
+					END ELSE
+						DEFAULTORD = OCONV(INT((TotOnOrd<1,LN>/10)/ICR.MT1<LN,1>), "MD2")   
+					END
+				END
+			END
+		END ELSE
+			IF ICR.CNV<LN,1> = "MD0" THEN
+				IF TotOnOrd<1,LN> # "" THEN
+					DEFAULTORD = ICONV(((TotOnOrd<1,LN>/ICR.DV1<LN,1>)*ICR.MT1<LN,1>)/ICR.DV2<LN,1>,'MD0')
+				END
+			END ELSE
+				IF PO.TOT.ONORD<1,LN> # "" THEN
+					DEFAULTORD = OCONV(INT(TotOnOrd<1,LN>/10), "MD2")
+				END
+			END
+		END
+
+		*THIS IS THE DEFAULT PARTEND
+    END
+    IF TYPE = "QTYCAN" THEN
+        IF DIFF.UM<LN> = "Y" THEN
+		IF ICR.CNV<LN,2> = "MD0" THEN
+			DEFAULTCANC = ICONV(((TotCancel<1,LN>/ICR.DV1<LN,2>)*ICR.MT1<LN,2>)/ICR.DV2<LN,2>,'MD0')
+		END ELSE
+			IF ICR.CNV<LN,1> = "MD0" THEN
+				DEFAULTCANC = OCONV(INT(TotCancel<1,LN>/10), "MD2")
+			END ELSE
+				DEFAULTCANC = OCONV(INT((TotCancel<1,LN>/10)/ICR.MT1<LN,1>), "MD2")
+			END
+		END
+	END ELSE
+		IF ICR.CNV<LN,1> = "MD0" THEN
+			DEFAULTCANC = ICONV(((TotCancel<1,LN>/ICR.DV1<LN,1>)*ICR.MT1<LN,1>)/ICR.DV2<LN,1>,'MD0')
+		END ELSE
+			DEFAULTCANC = OCONV(INT(TotCancel<1,LN>/10), "MD2")
+		END
+	END
+    END
+    FOR I =1 TO PO.PROD.NUM 
+       IF ProdNum=PO.PROD.NUM<1,I> THEN
+          LNO=I
+       END
+    NEXT
+    IF TYPE="QTYORD" THEN
+      IF PO.TOT.RECEVED<1,LNO> > 0 AND DEFAULTORD < PO.TOT.RECEVED<1,LNO> + DEFAULTCANC THEN
+        ERRMSG="TOTAL QUANTITY ORDERED CAN'T BE LESS THAN QUANTITY RECEIVED"
+        STATUS=RBO.setProperty('','ServerMessage',ERRMSG)
+        GOTO 93000
+     END
+    END
+    IF TYPE="QTYCANC" THEN
+       VALUE = DEFAULTORD - (PO.TOT.RECEVED<1,LNO> + DEFAULTCANC )
+       IF ICR.CNV<LN,1> = "MD0" THEN
+         P_VALUE = INT(((VALUE/ICR.DV1<LN,1>)*ICR.MT1<LN,1>)/ICR.DV2<LN,1> + .5)
+       END ELSE
+         P_VALUE = OCONV(INT(VALUE/10), "MD2")
+       END
+       IF DIFF.UM<LN> = "Y" THEN
+         IF ICR.CNV<LN,2> = "MD0" THEN
+	   P_VALUE = OCONV(INT(((VALUE/ICR.DV1<LN,2>)*ICR.MT1<LN,2>)/ICR.DV2<LN,2> + .5), ICR.CNV<LN,2>)
+         END ELSE
+	   IF ICR.CNV<LN,1> = "MD0" THEN
+	      P_VALUE = OCONV(INT(VALUE/10), "MD2")
+	   END ELSE
+	      P_VALUE = OCONV(INT((VALUE/10)/ICR.MT1<LN,1>), "MD2")
+	   END
+	 END
+       END
+       QtyOpen=P_VALUE
+    END
+RETURN
+
+GET.CONV:
+  BEGIN CASE
+   CASE INV.UNIT<1,2> = "SHT" AND INV.UNIT<1,3> = "LBS"
+     ICR.CNV<LN,1> = "MD0"; ICR.DV2<LN,1> = 1
+     ICR.DV1<LN,1> = INV.M.WT; ICR.MT1<LN,1> = 1
+    CASE INV.UNIT<1,2> = "PC" AND INV.UNIT<1,3> = "MSI"
+      ICR.CNV<LN,1> = "MD0"; ICR.DV2<LN,1> = 1
+      ICR.DV1<LN,1> = INV.PAP.WIDTH/100; ICR.MT1<LN,1> = 10
+    CASE INV.UNIT<1,2> = "FT" AND INV.UNIT<1,3> = "MSI"
+      ICR.CNV<LN,1> = "MD0"; ICR.DV2<LN,1> = 12
+      ICR.DV1<LN,1> = INV.PAP.WIDTH/100; ICR.MT1<LN,1> = 100
+    CASE 1
+      ICR.CNV<LN,1> = "MD2"; ICR.DV2<LN,1> = 1
+      ICR.DV1<LN,1> = 10; ICR.MT1<LN,1> = INV.SBR
+  END CASE
+  BEGIN CASE
+    CASE PO.UNIT.FLG<1,LN> = "SHT" AND INV.UNIT<1,3> = "LBS"
+      ICR.CNV<LN,2> = "MD0"; ICR.DV2<LN,2> = 1
+      ICR.DV1<LN,2> = INV.M.WT; ICR.MT1<LN,2> = 1
+    CASE PO.UNIT.FLG<1,LN> = "PC" AND INV.UNIT<1,3> = "MSI"
+      ICR.CNV<LN,2> = "MD0"; ICR.DV2<LN,2> = 1
+      ICR.DV1<LN,2> = INV.PAP.WIDTH/100; ICR.MT1<LN,2> = 10
+    CASE PO.UNIT.FLG<1,LN> = "FT" AND INV.UNIT<1,3> = "MSI"
+      ICR.CNV<LN,2> = "MD0"; ICR.DV2<LN,2> = 12
+      ICR.DV1<LN,2> = INV.PAP.WIDTH/100; ICR.MT1<LN,2> = 100
+    CASE 1
+      ICR.CNV<LN,2> = "MD2"; ICR.DV2<LN,2> = 1
+      ICR.DV1<LN,2> = 10; ICR.MT1<LN,2> = 1
+  END CASE
+  IF PO.UNIT.FLG<1,LN> # INV.UNIT<1,2> THEN DIFF.UM<LN> = "Y" ELSE DIFF.UM<LN> = "N"
+RETURN
+
+
+
+93000:
+  STATUS = RBO.setProperty('','ServerStatus',1)        
+  STATUS = RBO.setProperty('','ServerMessage',ERRMSG) 
+RETURN

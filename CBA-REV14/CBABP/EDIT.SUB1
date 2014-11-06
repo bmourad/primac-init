@@ -1,0 +1,878 @@
+   SUBROUTINE EDIT.SUB1(MAT EDIT.COM)
+*COPY>CPYLIB>SCOMMON1
+*********************************************************************
+*
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* PROGRAM       - EDIT.SUB
+* BY            - ZIAD YAMOUT, COMPUTER BUSINESS ASSOCIATES
+* DATE          - 12/17/82
+* DESCRIPTION
+*
+*   THIS ROUTINE PROVIDES A BASIC INTERFACE BETWEEN
+*   ON-LINE PROCESSING PROGRAM AND A TERMINAL OPERATOR.
+*   THE FOLLOWING TYPES OF EDITTING MAY BE REQUESTED.
+*
+*       1 - ALPHANUMERIC
+*       2 - ALPHABETIC
+*       3 - NUMERIC
+*       4 - DECIMAL
+*       5 - ALPHANUMERIC WITH NO SPACES
+*       6 - DATE
+*       7 - PATTERN MATCH
+*       8 - (Y)ES OR (N)O
+*       9 - (OPEN)
+*
+*   FIELD LENGTH CHECKING, RANGE CHECKING, LEFT OR
+*   RIGHT JUSTIFICATION, AND EXTERNAL TO INTERNAL DATA
+*   CONVERSION IS ALSO SUPPORTED.
+*
+*T21177 diane 11/06/1996 * REV11 UPG
+*T23247 gat 09/10/1998 * Fix for display of error and help messages.
+*********************************************************************
+*
+*************
+* DIMENSION *
+*************
+*
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>TCC
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>PORT.CONTROL
+*COPY>CPYLIB>ROC.H
+*COPY>CPYLIB>SPECIAL.H
+*
+**************
+* INITIALIZE *
+**************
+*
+   PROMPT ""
+   ES_GUIFORM = 0
+   REINPUT = 0
+   MSKETX = " "
+   BEGIN CASE
+      CASE TYP = "E"
+         TYP = 1
+         FLD_EDIT = 0
+      CASE TYP = 1
+         FLD_EDIT = 1
+      CASE TYP > 1 AND TYP < 10
+         FLD_EDIT = 0
+      CASE TYP > 10 AND TYP < 20
+         TYP = TYP - 10
+         IF TYP = 1 THEN
+            FLD_EDIT = 1
+         END ELSE
+            FLD_EDIT = 0
+         END
+         BEGIN CASE
+            CASE GUIFORM
+               ES_GUIFORM = GUIFORM
+            CASE PC.PORT.TYPE = "termulator"
+               ES_GUIFORM = 0 - 1
+            CASE 1
+               GOTO 100
+         END CASE
+         TFILE = "PMCFORMS"
+         L = LEN(PMSG)
+         IF MAXL > L THEN L = MAXL
+         BEGIN CASE
+            CASE L < 28
+               TNAME = "EDITSUBS"
+            CASE L < 51
+               TNAME = "EDITSUBM"
+            CASE 1
+               TNAME = "EDITSUBL"
+         END CASE
+         M_FRMHNDL = ""
+         TU_FUNC = "TU.FORM.LOAD":TU_VERNO
+         CALL @TU_FUNC(TFILE,TNAME,M_FRMHNDL,"",GUIFORM,ERROR)
+         IF ERROR THEN
+            IF ES_GUIFORM > 0 THEN
+               GUIFORM = ES_GUIFORM
+            END
+            ES_GUIFORM = 0
+            VALUE = "END"
+            GOTO 190
+         END
+         X = 0; Y = 21
+         IF PMSG = "" THEN
+            PMSG = " "
+         END
+         TU_FUNC = "TU.FORM.SETATTR":TU_VERNO
+         CALL @TU_FUNC("_pmc70","max_chars",MAXL,ERROR)
+      CASE TYP = "I"
+         ERRMSG = ""
+         FILL = "_"
+         GUIFORM = ""
+         GOTO 190
+      CASE 1
+         ERRMSG = ""
+         FILL = "#"
+         GUIFORM = ""
+         GOTO 200
+   END CASE
+*
+***************************
+* MAIN PROCESSING ROUTINE *
+***************************
+*
+100 DPX = 0
+   BEGIN CASE
+      CASE PMSG = ""
+      CASE GUIFORM
+         PX = X; PY = Y
+         DPX = 3; X = 0
+      CASE 1
+         PX = X
+         PY = Y
+         X  = X + LEN(PMSG) + 1
+         IF VIDEO.PORT.TYPE # "STD" AND X + MAXL < (78 - ETX.EMBED) THEN
+            X = X + ETX.EMBED
+            IF PX = 0 THEN
+               DPX = ETX.EMBED
+            END ELSE
+               DPX = PX
+            END
+         END
+   END CASE
+   IF Y # 23 AND TRIM(DEFAULT) # "" AND O.R = "O" THEN
+      P.DEFAULT = 1
+   END ELSE
+      P.DEFAULT = 0
+   END
+110 BEGIN CASE
+      CASE PMSG = ""
+      CASE GUIFORM
+         CRT @(DPX,PY):GUI.LABEL:PMSG:GUI.END:
+      CASE DPX
+         IF ETX.EMBED THEN
+            CRT @(X,Y):CL:
+            CRT @(DPX,PY):CL:PMSG:ETX.OFF:
+            CRT @(DPX-1,PY):ETX.PHD:
+         END ELSE
+            CRT @(X,Y):CL:
+            CRT @(DPX,PY):ETX.PHD:PMSG:ETX.OFF:CL:
+         END
+      CASE 1
+         CRT @(X,Y):CL:
+         CRT @(PX,PY):PMSG:SPACE(1):CL:
+   END CASE
+   BEGIN CASE
+      CASE P.DEFAULT
+         GOSUB 310
+      CASE ECHO.BACK
+         GOSUB 320
+      CASE VIDEO.PORT.TYPE # "STD" AND X > 0 AND X + MAXL < 80
+         GOSUB 360
+      CASE 1
+         GOSUB 365
+   END CASE
+   IF REINPUT THEN
+      REINPUT = 0
+      GOTO 110
+   END
+   IF DVALUE = " " THEN
+      DVALUE = ""
+      DEFAULT = ""
+   END
+   INLEN = LEN(DVALUE)
+   T.DVALUE = TRIM(DVALUE)
+   IF JUSTIFY = "" THEN
+      IF TYP = 3 OR TYP = 4 THEN
+         JUSTIFY = "R"
+      END ELSE
+         JUSTIFY = "L"
+      END
+   END
+*
+*--- CHECK INPUT LENGTH
+*
+   BEGIN CASE
+      CASE INLEN < 1
+         IF O.R = "O" THEN
+            MINL = 0
+            DVALUE = DEFAULT
+            INLEN = LEN(DVALUE)
+            IF DVALUE = "" THEN
+               VALUE = DVALUE
+               GOTO 170
+            END
+         END ELSE
+            ERRMSG = "** REQUIRED **"
+            GOSUB 500
+            GOTO 110
+         END
+*
+*--- CHECK END REQUEST
+*
+      CASE T.DVALUE = CHAR(27) OR T.DVALUE = "END" OR T.DVALUE = "^"
+         DVALUE = PVALUE
+         VALUE  = "END"
+         GOTO 170
+*
+*--- CHECK HELP REQUEST
+*
+      CASE T.DVALUE = "?"
+         HBOX.MSG = HMSG
+         HBOX.ID = ""
+         HBOX.SEP = "VM"
+         SI_HLP.SUB = "SI_":TCC.HLP.SUB
+         CALL @SI_HLP.SUB
+         GOTO 110
+      CASE T.DVALUE = "~"
+         HBOX.MSG = "TYP=":TYP
+         IF TYP = 4 THEN
+            HBOX.MSG = HBOX.MSG:", SCALER=":SCALER
+         END
+         HBOX.MSG = HBOX.MSG:", MAXL=":MAXL
+         IF MINL > 1 THEN
+            HBOX.MSG = HBOX.MSG:", MINL=":MINL
+         END
+         IF MINV # MAXV OR (MINV # 0 AND MINV # "") THEN
+            HBOX.MSG = HBOX.MSG:", MAXV=":MAXV
+            HBOX.MSG = HBOX.MSG:", MINV=":MINV
+         END
+         HMV = 1
+         IF PATRN # "" THEN
+            MVP = 1
+            PVAR = ", PATRN="
+            LOOP
+               IF LEN(HBOX.MSG<1,HMV>) + LEN(PATRN<1,MVP>) + LEN(PVAR) > 67 THEN
+                  HMV = HMV + 1
+                  IF MVP = 1 THEN
+                     HBOX.MSG<1,HMV> = "PATRN=":PATRN<1,MVP>
+                  END ELSE
+                     HBOX.MSG<1,HMV> = "& PATRN=":PATRN<1,MVP>
+                  END
+               END ELSE
+                  HBOX.MSG<1,HMV> = HBOX.MSG<1,HMV>:PVAR:PATRN<1,MVP>
+               END
+               MVP = MVP + 1
+            WHILE PATRN<1,MVP> # "" DO
+               PVAR = ","
+            REPEAT
+         END
+         IF ORVALDAT # "" THEN
+            IF LEN(HBOX.MSG<1,HMV>) + LEN(ORVALDAT) + 11 > 70 THEN
+               HMV = HMV + 1
+               HBOX.MSG<1,HMV> = "ORVALDAT=":ORVALDAT
+            END ELSE
+               HBOX.MSG<1,HMV> = HBOX.MSG<1,HMV>:", ORVALDAT=":ORVALDAT
+            END
+         END
+         IF VALDAT # "" THEN
+            MVP = 1
+            PVAR = ", VALDAT="
+            LOOP
+               IF LEN(HBOX.MSG<1,HMV>) + LEN(VALDAT<1,MVP>) + LEN(PVAR) > 70 THEN
+                  HMV = HMV + 1
+                  IF MVP = 1 THEN
+                     HBOX.MSG<1,HMV> = "VALDAT=":VALDAT<1,MVP>
+                  END ELSE
+                     HBOX.MSG<1,HMV> = "& VALDAT=":VALDAT<1,MVP>
+                  END
+               END ELSE
+                  HBOX.MSG<1,HMV> = HBOX.MSG<1,HMV>:PVAR:VALDAT<1,MVP>
+               END
+               MVP = MVP + 1
+            WHILE VALDAT<1,MVP> # "" DO
+               PVAR = ","
+            REPEAT
+         END
+         HBOX.ID = ""
+         HBOX.SEP = "VM"
+         SI_HLP.SUB = "SI_":TCC.HLP.SUB
+         CALL @SI_HLP.SUB
+         GOTO 110
+      CASE T.DVALUE = ":"
+         GOTO 110
+      CASE T.DVALUE = "]"
+*---- XREF CHARACTER
+         GOTO 110
+      CASE T.DVALUE = "}"
+         BEGIN CASE
+            CASE GUIFORM
+               PORT.NO = "TTY"
+               CALL SYSVARS.SUB(PORT.NO)
+               IF FILEINFO(SECURITY,0) = 0 THEN
+                  OPEN "", "SECURITY" TO SECURITY ELSE
+                     VALUE = DVALUE
+                     GOTO 170
+                  END
+               END
+               MATREAD USER.REC FROM SECURITY, "R.":PORT.NO THEN
+                  PERFORM "VSI_ZOOM"
+                  GOTO 110
+               END ELSE
+                  VALUE = DVALUE
+                  GOTO 170
+               END
+            CASE PC.PORT.TYPE = "wIntegrate"
+               SCN_IMG = ""
+               CALL WIN.SSTATE(SCN_IMG,"")
+               CALL WIN.SPUSH
+               PERFORM "VSI_ZOOM"
+               CALL WIN.SPULL
+               CALL WIN.SSTATE("",SCN_IMG)
+               GOTO 110
+            CASE 1
+               GOTO 110
+         END CASE
+      CASE T.DVALUE = "[" AND PC.PORT.TYPE = "wIntegrate"
+         CALL WIN.TCL
+         GOTO 110
+   END CASE
+*
+*--- CHECK (OR) VALID INPUT
+*
+   IF ORVALDAT THEN
+      LOCATE DVALUE IN VALDAT<1>,1 SETTING Z THEN
+         VALUE = DVALUE
+         GOTO 170
+      END
+   END
+*
+*--- RANGE CHECK INPUT LENGTH
+*
+   IF INLEN < MINL THEN
+      ERRMSG = "** MINIMUM LENGTH = " : MINL : " **"
+      GOSUB 500
+      GOTO 110
+   END
+*
+*--- CHECK ILLEGAL CHARACTER INPUT
+*
+   IF INVALCHR # "" THEN
+      CNT = DCOUNT(INVALCHR,VM)
+      FOR I = 1 TO CNT
+         IF INDEX(DVALUE,INVALCHR<1,I>,1) THEN
+            ERRMSG = INVALCHR<1,I>
+            CNT = 0
+         END
+      NEXT I
+      IF NOT(CNT) THEN
+         ERRMSG = "** INVALID CHARACTER (":ERRMSG:") INPUT - PLEASE RE-KEY **"
+         GOSUB 500
+         GOTO 110
+      END
+   END
+   T.LEN = LEN(T.DVALUE)
+   FOR N = 1 TO T.LEN
+      DEC.EQUIV = SEQ(T.DVALUE[N,1])
+      IF DEC.EQUIV < 32 OR DEC.EQUIV > 126 THEN
+         ERRMSG = "** INVALID INPUT - PLEASE RE-KEY **"
+         GOSUB 500
+         GOTO 110
+      END
+   NEXT N
+*
+*--- THE FOLLOWING ALLOWS DATE OR SPECIFIED INPUT
+*
+   IF TYP = 6 AND VALDAT # "" AND ORVALDAT = "" THEN
+      LOCATE DVALUE IN VALDAT<1>,1 SETTING Z ELSE
+         VALDAT = ""
+         GOTO 150
+      END
+      VALUE = DVALUE
+      GOTO 170
+   END
+150 ERRMSG = ""
+*
+*---- ZERO OR BLANK FILL IF REQUESTED
+*
+   BEGIN CASE
+      CASE FILL.CHR = "" OR INLEN >= MAXL
+      CASE NUM(FILL.CHR) AND NOT(NUM(DVALUE))
+      CASE 1
+         IF FILL.CHR = "B" THEN FILL.CHR = " "
+         IF JUSTIFY = "R" THEN
+            DVALUE = STR(FILL.CHR,MAXL-INLEN):DVALUE
+         END ELSE
+            DVALUE = DVALUE:STR(FILL.CHR,MAXL-INLEN)
+         END
+   END CASE
+*
+*--- PROCESS EDIT REQUEST
+*
+   ON TYP GOSUB 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000
+   IF ERRMSG # "" THEN
+      GOSUB 500
+      GOTO 110
+   END
+*
+*--- RANGE CHECK IF REQUESTED
+*
+   BEGIN CASE
+      CASE MINV = MAXV AND (MINV = 0 OR MINV = "")
+      CASE VALUE < MINV OR VALUE > MAXV
+         ERRMSG = "** OUT OF RANGE **"
+         GOSUB 500
+         GOTO 110
+   END CASE
+*
+*--- CHECK (AND) VALID INPUT
+*
+   IF VALDAT # "" AND ORVALDAT = "" THEN
+      LOCATE VALUE IN VALDAT<1>,1 SETTING Z ELSE
+         ERRMSG = "** INVALID RESPONSE **"
+         GOSUB 500
+         GOTO 110
+      END
+   END
+*
+*--- RE-DISPLAY DATA
+*
+170 IF NOT(ECHO.BACK) THEN GOTO 190
+   IF GUIFORM THEN
+      IF DVALUE[1,1] = "&" AND DVALUE[3,1] = "&" THEN
+         PVALUE = " "
+      END ELSE
+         PVALUE = DVALUE
+      END
+      CRT @(X,Y):GUI.LABEL:PVALUE:GUI.END:
+   END ELSE
+      OUTLEN = LEN(DVALUE)
+      IF JUSTIFY = "L" THEN
+         IF FILL = " " THEN
+            PVALUE = DVALUE
+         END ELSE
+            PVALUE = DVALUE : STR(" ",MAXL-OUTLEN)
+         END
+      END ELSE
+         PVALUE = STR(" ",MAXL-OUTLEN) : DVALUE
+      END
+      IF ETX.EMBED THEN
+         CRT @(X,Y) : PVALUE :
+      END ELSE
+         CRT @(X,Y):ETX.DIN:PVALUE:ETX.DIN.OFF:
+      END
+   END
+*
+*--- INITIALIZE ALL PARAMETERS
+*
+190 TYP       = 1
+   PVALUE    = ""
+   MINL      = 1
+   MAXL      = 1
+   MINV      = ""
+   MAXV      = ""
+   O.R       = "R"
+   DEFAULT   = ""
+   JUSTIFY   = ""
+   SCALER    = 2
+   PATRN     = ""
+   EMODE     = 1
+   EX        = 0
+   EY        = 23
+   PMSG      = ""
+   HMSG      = ""
+   ECHO.BACK = 1
+   VID       = ""
+   VALDAT    = ""
+   AUTO.RTN  = 0
+   FILL.CHR = ""
+   ORVALDAT = ""
+   INVALCHR = ""
+   IF ES_GUIFORM # 0 THEN
+      TU_FUNC = "TU.FORM.KILL":TU_VERNO
+      CALL @TU_FUNC(GUIFORM,ERROR)
+      IF ES_GUIFORM > 0 THEN
+         GUIFORM = ES_GUIFORM
+      END ELSE
+         GUIFORM = 0
+      END
+   END
+   RETURN
+*
+200*
+   OPEN "", "CONTROL" TO CONTROL THEN
+      READV EDITLEN FROM CONTROL, "EDIT.CTRL",1 ELSE
+         EDITLEN = 80
+      END
+   END ELSE
+      EDITLEN = 80
+   END
+   GOTO 190
+*****************
+* Input Routine *
+*****************
+310*
+   BEGIN CASE
+      CASE GUIFORM
+         DEFAULT = TRIMF(TRIMB(DEFAULT))
+         TU_FUNC = "TU.FORM.UPDATEFIELD":TU_VERNO
+         IF DEFAULT = "" THEN
+            DEFAULT = " "
+            CALL @TU_FUNC(X,Y,DEFAULT,ERROR)
+            DEFAULT = ""
+         END ELSE
+            CALL @TU_FUNC(X,Y,DEFAULT,ERROR)
+         END
+         GOSUB 330
+      CASE FLD_EDIT AND MAXL >= EDITLEN
+         BEGIN CASE
+            CASE PC.PORT.TYPE = "wIntegrate"
+               GOSUB 340
+            CASE 1
+               GOSUB 345
+         END CASE
+      CASE VIDEO.PORT.TYPE # "STD" AND X > 0 AND X + MAXL < 80
+         IF ETX.EMBED THEN
+            BEGIN CASE
+               CASE LEN(DEFAULT) < 70
+                  CRT @(0,23):CL:ETX.HHD.OFF:"DEFAULT":ETX.HHD.OFF:DEFAULT:ETX.HHD.OFF:
+                  CRT @(0,23):ETX.HHD:@(8,23):ETX.HHD:
+               CASE LEN(DEFAULT) < 78
+                  CRT @(0,23):CL:ETX.HHD.OFF:DEFAULT:ETX.HHD.OFF:
+                  CRT @(0,23):ETX.HHD:
+               CASE 1
+                  CRT @(0,23):CL:DEFAULT "L#79":
+            END CASE
+         END ELSE
+            BEGIN CASE
+               CASE LEN(DEFAULT) < 72
+                  CRT @(0,23):ETX.HHD:"DEFAULT":ETX.HHD.OFF:" ":ETX.HHD:DEFAULT:ETX.HHD.OFF:CL:
+               CASE LEN(DEFAULT) < 80
+                  CRT @(0,23):CL:ETX.HHD:DEFAULT:ETX.HHD.OFF:
+               CASE 1
+                  CRT @(0,23):DEFAULT "L#79":CL:
+            END CASE
+         END
+         GOSUB 350
+         CRT @(0,23) : CL :
+      CASE 1
+         IF LEN(DEFAULT) > 70 THEN
+            CRT @(0,23):DEFAULT "L#79":CL:
+         END ELSE
+            CRT @(0,23):"DEFAULT- ":DEFAULT:CL:
+         END
+         GOSUB 355
+         CRT @(0,23) : CL :
+   END CASE
+   RETURN
+320*
+   BEGIN CASE
+      CASE GUIFORM
+         TU_FUNC = "TU.FORM.UPDATEFIELD":TU_VERNO
+         IF DEFAULT = "" THEN
+            DEFAULT = " "
+            CALL @TU_FUNC(X,Y,DEFAULT,ERROR)
+            DEFAULT = ""
+         END ELSE
+            CALL @TU_FUNC(X,Y,DEFAULT,ERROR)
+         END
+         GOSUB 330
+      CASE FLD_EDIT AND MAXL >= EDITLEN
+         BEGIN CASE
+            CASE PC.PORT.TYPE = "wIntegrate"
+               GOSUB 340
+            CASE 1
+               GOSUB 345
+         END CASE
+      CASE VIDEO.PORT.TYPE # "STD" AND X > 0 AND X + MAXL < 80
+         GOSUB 350
+      CASE 1
+         GOSUB 355
+   END CASE
+   RETURN
+330*
+   TU_FUNC = "TU.FORM.INPUT":TU_VERNO
+   CALL @TU_FUNC(X:",":Y,DVALUE,XVALUE,EVENT,ERROR)
+   BEGIN CASE
+*** TOOLBAR MOUSE CLICKED
+      CASE DCOUNT(EVENT,AM) < 7
+         BEGIN CASE
+            CASE DVALUE = "END"
+            CASE EVENT<1> = "special" AND EVENT<3> = "prtsc"
+               APP.MACRO = CHAR(27):'_p'
+               TU_FUNC = "TU.MACRO":TU_VERNO
+               CALL @TU_FUNC(APP.MACRO,"V",ERROR)
+               REINPUT = 1
+            CASE DVALUE = "LO"
+            CASE TRIM(DVALUE) = ""
+               DVALUE = ""
+            CASE DVALUE = "]" OR DVALUE = "}"
+*--- XREF & ZOOM
+            CASE DVALUE[1,3] = "&M&" OR DVALUE[1,3] = "&P&"
+*--- Return values for Menu processing
+            CASE DVALUE = "PMCVERSION"
+               CALL PMCIMAGE("PMC_VER","..\VSIPIC\PMCLOGOC.BMP",ERROR)
+               REINPUT = 1
+            CASE DVALUE[1,3] = "&H&"
+               GOSUB 410
+               REINPUT = 1
+            CASE 1
+               REINPUT = 1
+         END CASE
+      CASE EVENT<1> = "special" AND EVENT<3> = "27"
+         DVALUE = "END"
+      CASE DVALUE[1,3] = "&V&"
+         CRT @(X,Y):GUI.LABEL:" ":GUI.END:
+         PROC_ID = TRIM(DVALUE[4,999])
+         DVALUE = ""
+         OPEN "","PMC_PROCESS" TO PMC_PROCESS THEN
+            OPEN "","VOC" TO VOC THEN
+               VOC_ID = "TTY"; CALL SYSVARS.SUB(VOC_ID)
+               VOC_ID = "E_":VOC_ID
+               CALL VSI_VERB_SUB(VOC_ID,VOC,PROC_ID,PMC_PROCESS,EXE_TYPE,EXE_VERB,ERRMSG)
+               IF EXE_VERB # "" THEN
+                  EXECUTE EXE_VERB
+*  CRT @(X,Y):
+                  IF EXE_TYPE = "P" OR EXE_TYPE = "PB" THEN
+                     READU ITEM FROM VOC, VOC_ID THEN
+                        DELETE VOC, VOC_ID
+                     END ELSE
+                        RELEASE VOC, VOC_ID
+                     END
+                  END
+               END
+            END
+         END
+         REINPUT = 1
+      CASE DVALUE[1,3] = "&M&" OR DVALUE[1,3] = "&P&"
+*--- Return values for Menu processing
+      CASE DVALUE[1,3] = "&H&"
+         GOSUB 410
+         REINPUT = 1
+   END CASE
+   RETURN
+340*
+   FILLER = SPACE(MAXL)
+   GOSUB 381
+   DVALUE = DEFAULT
+   CALL EDIT_WTG(X,Y,MAXL,DVALUE)
+   IF ETX.EMBED THEN
+      CRT @(X-1,Y):ETX.DHD:
+   END ELSE
+      CRT @(X,Y):ETX.OFF:
+   END
+   RETURN
+345*
+   DVALUE = DEFAULT
+   CALL FIELD.EDIT(X,Y,MAXL,DVALUE,DEFAULT)
+   RETURN
+350*
+   GOSUB 380
+   INPUT DVALUE,MAXL _:
+   IF ETX.EMBED THEN
+      CRT @(X-1,Y):ETX.DHD:
+   END ELSE
+      CRT @(X,Y):ETX.OFF:
+   END
+   RETURN
+355*
+   GOSUB 385
+   INPUT DVALUE,MAXL _:
+   RETURN
+360*
+   GOSUB 380
+   ECHO OFF
+   INPUT DVALUE,MAXL _:
+   ECHO ON
+   IF ETX.EMBED THEN
+      CRT @(X-1,Y):ETX.DHD:
+   END ELSE
+      CRT @(X,Y):ETX.OFF:
+   END
+   RETURN
+365*
+   GOSUB 385
+   ECHO OFF
+   INPUT DVALUE,MAXL _:
+   ECHO ON
+   RETURN
+380*
+   BEGIN CASE
+      CASE TYP = 6 AND MAXL = 8
+         FILLER = MSKETX:MSKETX:"/":MSKETX:MSKETX:"/":MSKETX:MSKETX
+      CASE TYP = 4 AND SCALER > 0
+         FILLER = STR(MSKETX,MAXL-SCALER-1):".":STR(MSKETX,SCALER)
+      CASE 1
+         FILLER = STR(MSKETX,MAXL)
+   END CASE
+381*
+   IF ETX.EMBED THEN
+      CRT @(X-1,Y):ETX.DIN.OFF:FILLER:ETX.DIN.OFF:
+      CRT @(X-1,Y):ETX.DIN:
+   END ELSE
+      CRT @(X,Y):ETX.DIN:FILLER:
+      CRT @(X,Y):
+   END
+   RETURN
+385*
+   BEGIN CASE
+      CASE TYP = 6 AND MAXL = 8
+         FILLER = FILL:FILL:"/":FILL:FILL:"/":FILL:FILL
+      CASE TYP = 4 AND SCALER > 0
+         FILLER = STR(FILL,MAXL-SCALER-1):".":STR(FILL,SCALER)
+      CASE 1
+         FILLER = STR(FILL,MAXL)
+   END CASE
+   CRT @(X,Y):FILLER:@(X,Y):
+   RETURN
+410*
+   TYPE = "DLG.ERROR"
+   BUTTONS = ""; RETURNS = ""
+   TITLE = "H E L P   M E S S A G E"
+   IF HMSG = "" THEN
+      HMSG = "No Help Message For This Selection"
+   END
+   TU_FUNC = "TU.FORM.DIALOG":TU_VERNO
+   CALL @TU_FUNC(VALUE, TYPE, HMSG, BUTTONS, RETURNS, TITLE, ERROR)
+   TU_FUNC = "TU.FORM.UPDATEFIELD":TU_VERNO
+   CALL @TU_FUNC(X,Y,DEFAULT,ERROR)
+   RETURN
+*
+*****************
+* ERROR ROUTINE *
+*****************
+*
+500 BEGIN CASE
+      CASE GUIFORM
+         TYPE = "DLG.ERROR"
+         BUTTONS = ""; RETURNS = ""
+         TITLE = "M E S S A G E   B O X"
+         TU_FUNC = "TU.FORM.DIALOG":TU_VERNO
+         CALL @TU_FUNC(VALUE, TYPE, ERRMSG, BUTTONS, RETURNS, TITLE, ERROR)
+*        ERX = 3; ERY = 23
+*        CRT BEL:
+*        CRT @(ERX,ERY):GUI.LABEL:ERRMSG:GUI.END:
+*        CALL TU.FORM.INPUT("_pmc90",DVALUE,DEFAULT,XOXO,XOXO)
+*        CRT @(ERX,ERY):GUI.LABEL:" ":GUI.END:
+         GOTO 519
+      CASE EMODE = 1 OR EMODE = 4
+         ERX = EX
+         ERY = EY
+      CASE EMODE = 2 OR EMODE = 5
+         ERX = 40
+         ERY = EY
+      CASE EMODE = 3 OR EMODE = 6
+         ERX = EX
+         ERY = EY
+      CASE 1
+         ERX = 0
+         ERY = 23
+   END CASE
+   SP.LEN = 79 - ERX
+   CRT @(ERX,ERY):SPACE(SP.LEN):
+   IF ETX.EMBED THEN
+      CRT @(ERX,ERY):ETX.EHD.OFF:BEL:ERRMSG:ETX.EHD.OFF:
+      CRT @(ERX,ERY):ETX.EHD:@(ERX+LEN(ERRMSG)+2,ERY):
+   END ELSE
+      CRT @(ERX,ERY):BEL:ETX.EHD:ERRMSG:ETX.EHD.OFF:
+   END
+   IF EMODE < 4 THEN
+      INPUT STALL,1 _:
+      CRT @(ERX,ERY):SPACE(LEN(ERRMSG)+3):
+   END
+519 ERRMSG = ""
+   RETURN
+*
+***************************
+* EDIT ALPHANUMERIC INPUT *
+***************************
+*
+1000 VALUE = DVALUE
+   RETURN
+*
+*************************
+* EDIT ALPHABETIC INPUT *
+*************************
+*
+2000*APLHA(DVALUE) WORKS ONLY WITH NEW COMPILER
+   FOR I = 1 TO INLEN WHILE ERRMSG = ""
+      CHR = DVALUE[I,1]
+      IF CHR < "A" OR CHR > "Z" THEN
+         ERRMSG = "** ALPHA INPUT REQUIRED **"
+      END
+   NEXT I
+   IF ERRMSG = "" THEN
+      VALUE = DVALUE
+   END
+   RETURN
+*
+**********************
+* EDIT NUMERIC INPUT *
+**********************
+*
+3000 IF DVALUE MATCHES "0N" THEN
+      VALUE = DVALUE
+   END ELSE
+      ERRMSG = "** NUMERIC INPUT REQUIRED **"
+   END
+   RETURN
+*
+*****************************
+* EDIT SCALED DECIMAL INPUT *
+*****************************
+*
+4000 IF NOT(NUM(DVALUE)) THEN GOTO 4900
+   IF LEN(FIELD(DVALUE,".",1)) > (MAXL - SCALER - 1) THEN GOTO 4900
+   IF LEN(FIELD(DVALUE,".",2)) > SCALER THEN GOTO 4900
+   CNV = "MD" : SCALER
+   VALUE = ICONV(DVALUE,CNV)
+   DVALUE= OCONV(VALUE,CNV)
+   RETURN
+4900 ERRMSG = "** DECIMAL INPUT REQUIRED **"
+   RETURN
+*
+******************************************
+* EDIT ALPHANUMERIC WITH NO SPACES INPUT *
+******************************************
+*
+5000 IF INDEX(DVALUE," ",1) THEN
+      ERRMSG = "** INVALID SPACE CHARACTER INPUT **"
+   END ELSE
+      VALUE = DVALUE
+   END
+   RETURN
+*
+*******************
+* EDIT DATE INPUT *
+*******************
+*
+6000 IF DVALUE = "DATE" THEN DVALUE = OCONV(DATE(),"D2")
+   VALUE = ICONV(DVALUE,"D")
+   IF VALUE = DVALUE OR VALUE = "" THEN
+      ERRMSG = "** INVALID DATE **"
+   END ELSE
+      DVALUE = OCONV(VALUE,"D2/")
+      IF MINV = MAXV AND (MINV = 0 OR MINV = "") THEN GOTO 6999
+      IF MINV = "DATE" THEN MINV = DATE()
+      IF MAXV = "DATE" THEN MAXV = DATE()
+6999 END
+   RETURN
+*
+**********************
+* EDIT PATTERN INPUT *
+**********************
+*
+7000 CNT = DCOUNT(PATRN,VM)
+   FOR I = 1 TO CNT
+      IF DVALUE MATCHES PATRN<1,I> THEN
+         VALUE = DVALUE
+         GOTO 7999
+      END
+   NEXT I
+   ERRMSG = "** INVALID FORMAT **"
+7999 RETURN
+*
+******************
+* EDIT YES OR NO *
+******************
+*
+8000 IF DVALUE # "Y" AND DVALUE # "N" THEN
+      ERRMSG = "** PLEASE RESPOND (Y) OR (N) **"
+   END ELSE
+      VALUE = DVALUE
+   END
+   RETURN
+*
+***************
+* EDIT (OPEN) *
+***************
+*
+9000 VALUE = DVALUE
+   RETURN
+END

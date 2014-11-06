@@ -1,0 +1,527 @@
+************************************************************
+* REVISION       - [08.0]
+* Copyright 1982 - by Computer Business Associates
+*                - (Vercom Software, Inc.)
+* SYSTEM         - PRIMAC
+* SOURCE         - ARSBP
+* PROGRAM        - STATEMENTS
+* BY             - RHONDA PERRIN,COMPUTER BUSINESS ASSOCIATES
+* DATE           - 03/26/86
+* DESCRIPTION    - STATEMENTS PRINT PROGRAM
+*T21530 lanny 01/29/1997 * Widen debit/credit columns.
+*T22081 stefanie 08/06/1997 * Add code to determine if running on laser
+*                             printer and use laser settings
+*T26556 cmykleb 08/08/2002 * Rev12 changes.
+*T26915 ajibaly 10/14/2002 * Add emailing.
+*T27646 thompson 08/18/2003 * ALLOW FOR MULTI PLATFORM USE
+*ENDDOC
+************************************************************
+*
+*    IF MODE.SW = 0 THEN DO NOT PRINT STATEMENT.
+*    IF MODE.SW = 1 THEN PRINT STATEMENT,DR/CR ON LINE 1.
+*    IF MODE.SW = 2 THEN PRINT STATEMENT,1 LINE/ITEM.
+*    IF MODE.SW = 3 THEN DO NOT PRINT STATEMENT IF ARBAL <= 0.
+*                   DR/CR ON 1 LINE ON STATEMENTS PRINTED.
+*    IF MODE.SW = 4 THEN DO NOT PRINT STATEMENT IF ARBAL <= 0.
+*                   1 LINE/ITEM ON STATEMENTS PRINTED.
+*
+*---  FILE EQUATES
+*
+*COPY>ARS.CPYLIB>OPEN.RECV
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>FILE.VARS
+*COPY>PMC.CPYLIB>PMC_REPORTS ;* T26915
+*COPY>PMC.CPYLIB>SECURITY ;* T26915
+*
+   DIM AG(5),ADDRS(5)
+*
+*--- TOT.REC ARRAY IS MA BY INVOICE MV BY TRANS DATE
+*
+   DIM TOT.REC(10)
+   EQU TOT.DATE TO TOT.REC(1) ;* MA,MV
+   EQU TOT.INV  TO TOT.REC(2) ;* MA
+   EQU TOT.TYPE TO TOT.REC(3) ;* MA,MV
+   EQU TOT.AMT  TO TOT.REC(4) ;* MA,MV
+   EQU TOT.CR   TO TOT.REC(5) ;* MA,MV
+   EQU TOT.BAL  TO TOT.REC(6) ;* MA
+   EQU TOT.CRBL TO TOT.REC(7) ;* MA
+   EQU TOT.IDATE TO TOT.REC(8) ;* AGE DATE
+   PROMPT ""
+   ERRMSG = ""
+   LNNO = 0
+   PGD = "ONE":VM:"TWO":VM:"THREE":VM:"FOUR":VM:"FIVE"
+   ;*
+   ;* T26915 v
+   ;* List to contain print/mailing info:
+   ;* value loc 1 specifies print/mail/or both
+   ;* value loc 2 specifies email addresses (comma seperated)
+   ;* value loc 3 specifies background form image to use
+   STMT.KEYS = ''
+   PM.LIST = ''
+   USERNO = "USERNO"
+   CALL SYSVARS.SUB(USERNO)
+   LOGNAME = "LOGNAME"
+   CALL SYSVARS.SUB(LOGNAME)
+   RESTORE.PRINTER.CMD = "SETPTR ":GETPTR(0):",BRIEF"
+   NEW.PRINTER.CMD     = "SETPTR ,,,,,3,BRIEF,NOMESSAGE,NOHEAD,BANNER "
+   ;* T26915 ^
+   ;*
+   ;* Open files
+   ;*
+   ERR.FILE = ''
+   OPEN "CUSTOMER"     TO CUSTOMER    ELSE ERR.FILE = "CUSTOMER"
+   OPEN "OPEN.RECV"    TO OPEN.RECV   ELSE ERR.FILE = "OPEN.RECV"
+   OPEN "CONTROL"      TO CONTROL     ELSE ERR.FILE = "CONTROL"
+   OPEN "COMPANY"      TO COMPANY     ELSE ERR.FILE = "COMPANY"
+   ;*
+   ;* T26915 v
+   HOLD.FILE.NAME = "_HOLD_"
+   OPEN HOLD.FILE.NAME TO HOLD.FILE   ELSE ERR.FILE = HOLD.FILE.NAME
+   OPEN "PMC_REPORTS"  TO PMC_REPORTS ELSE ERR.FILE = "PMC_REPORTS"
+   OPEN "SECURITY"     TO SECURITY    ELSE ERR.FILE = "SECURITY"
+   ;* T26915 ^
+   IF ERR.FILE THEN
+      ERRMSG = "CANNOT OPEN " : ERR.FILE : " FILE"
+      GOSUB 90000;GOTO 999999
+   END
+   PROCREAD BUFFER ELSE
+      ERRMSG = "MUST BE RUN FROM A PROC";GOSUB 90000; GOTO 999999
+   END
+   CONO = BUFFER<1>
+   ;*
+   ;* T26915 v
+   RPT.NO = BUFFER<2>
+   MATREAD PRPT.REC FROM PMC_REPORTS, RPT.NO ELSE
+      ERRMSG = "Cannot read the PMC_REPORTS record for this report. "
+      ERRMSG:= "Make sure that the Report Screen flag is 'R'."
+      GOSUB 90000; RETURN
+   END
+   ;* Read the security record and get the user's email
+   USER.EMAIL.ADDR = ''
+   MATREAD SEC.REC FROM SECURITY, CONO:UPCASE(LOGNAME) THEN
+      IF SEC.EMAIL # '' THEN USER.EMAIL.ADDR = ',':SEC.EMAIL
+   END
+   ;* T26915 ^
+   ;*
+   ;* T26556 v
+   STDAT = ICONV(BUFFER<5>,'D2/')
+   MSG1 = TRIM(BUFFER<6>)
+   MSG2 = TRIM(BUFFER<7>)
+   IF MSG1 = "NONE" THEN MSG1 = ""
+   IF MSG2 = "NONE" THEN MSG2 = ""
+   MSG = MSG1:" ":MSG2
+   ;* T26556 ^
+   MATREAD COMP.REC FROM COMPANY, CONO ELSE
+      MAT COMP.REC = ""
+      CO.NAME = "NOT ON FILE"
+   END
+   READ ARSFISCAL FROM CONTROL, CONO:"ARSFISCAL" THEN
+      MM = ARSFISCAL<1>[5,2]
+   END ELSE MM = 1
+   READ OPENDATES FROM CONTROL, CONO:"OPENDATES" ELSE OPENDATES = ''
+   FRSTDAY = OPENDATES<1,MM>
+   ;*T22081 v
+   ;*
+   ;**  This will check security to see if this user wants to laser print
+   ;**  these statements.  If so, it will use laser print settings.
+   ;*
+   LASER.FLAG = ''
+   IF OCONV(CONO:OCONV(LOGNAME,'MCU'):'!LASER','TSECURITY;X;0;0') # '' THEN
+      LASER.FLAG = 1
+   END
+   IF LASER.FLAG = 1 THEN GOTO 51
+   ;*T22081 ^
+   PRINT @(0,15):"LOAD STATEMENT FORMS IN PRINTER AND ALIGN BY EYE."
+50*
+   PRINT @(0,16):@(-4):"ENTER OPTION (M)ASK OR (S)TATEMENTS :":
+   INPUT RESPONSE
+   IF RESPONSE="END" THEN GOTO 999999
+   IF RESPONSE # "M" AND RESPONSE # "S" THEN GOTO 50
+   IF RESPONSE = "M" THEN
+      PRINTER ON
+      PRINT CHAR(12):
+      FOR X = 1 TO 7
+         PRINT
+      NEXT X
+      PRINT SPACE(13) : STR("X",33) : SPACE(7) : "999"
+      PRINT SPACE(13) : STR("X",33)
+      PRINT SPACE(13) : STR("X",33)
+      PRINT SPACE(13) : STR("X",33)
+      PRINT SPACE(4) : "999999" : SPACE(3) : STR("X",33) : SPACE(2) : "MM/DD/YY"
+      FOR X = 1 TO 6
+         PRINT
+      NEXT X
+      FOR X = 1 TO 25
+         PRINT "  MM/DD/YY XXXXXXXX XX 99999999.99 9999999.99   99999999.99"
+      NEXT X
+      PRINT
+      PRINT
+      PRINT SPACE(46) : "  99999999.99"
+      PRINT
+      PRINT SPACE(28) : "99999999.99" : SPACE(9) : "99999999.99"
+      PRINT
+      PRINT SPACE(13) : "99999999.99" : SPACE(4) : "99999999.99" :
+      PRINT SPACE(7) : "9999999999.99"
+      PRINT
+      PRINT
+      PRINT "  " : STR("X",60)
+      PRINT
+      PRINT
+      PRINT SPACE(19):"I -INVOICE     CM -CREDIT MEMO"
+      PRINT SPACE(19):"A -ADJUSTMENT  DM -DEBIT MEMO"
+      PRINT SPACE(19):"C -CASH        AC -ON ACCOUNT"
+      PRINT SPACE(18):"PP -PREPAYMENT  PB -PREBILL"
+      PRINT SPACE(18):"BC -BAD CHECK"
+      FOR X = 1 TO 6
+         PRINT
+      NEXT X
+      PRINTER CLOSE
+      PRINTER OFF
+      GOTO 50
+   END
+*** BEGIN PRINT STATEMENT ***
+51*
+   MSG=SPACE(INT((60-LEN(MSG))/2)):MSG
+   PRINTER ON
+   FLAG=0; LACN=""
+   MAT TOT.REC = ""
+100*
+   READNEXT KEY ELSE
+      IF TOT.INV # "" THEN
+         GOSUB 10000
+      END
+      GOTO 999999
+   END
+   MATREAD OR.REC FROM OPEN.RECV,KEY ELSE GOTO 100
+   IF OR.BAL = 0 THEN
+      TD.CNT = DCOUNT(OR.TYPE,VM)
+      OKAY = 0
+      FOR I = 1 TO TD.CNT UNTIL OKAY
+         IF OR.TYPE<1,I> = 'C' OR OR.TYPE<1,I> = 'A' THEN
+            IF OR.TR.DATE<1,I> >= FRSTDAY THEN OKAY = 1
+         END
+      NEXT I
+      IF NOT(OKAY) THEN GOTO 100
+   END
+   IF OR.CUST#LACN THEN
+      IF FLAG AND TOT.INV # "" THEN GOSUB 10000
+      MAT TOT.REC = ""
+      MAT AG=0; PGNO=0; TOTALAMT=0; TOT.ICM=0
+      MATREAD CUST.REC FROM CUSTOMER,CONO:OR.CUST ELSE
+         MAT CUST.REC = ''
+         CUST.NAME = "NOT ON FILE"
+      END
+      FLAG = 1
+      LACN = OR.CUST
+      MAT ADDRS = ""
+      ADDRS(5) = CUST.ADDR4 : "  " : CUST.ZIP
+      IF CUST.ADDR3 # "" THEN
+         ADDRS(4) = CUST.ADDR3
+         IF CUST.ADDR2 # "" THEN
+            ADDRS(3) = CUST.ADDR2
+            ADDRS(2) = CUST.ADDR1
+            ADDRS(1) = CUST.NAME
+         END ELSE
+            ADDRS(3) = CUST.ADDR1
+            ADDRS(2) = CUST.NAME
+         END
+      END ELSE
+         IF CUST.ADDR2 # "" THEN
+            ADDRS(4) = CUST.ADDR2
+            ADDRS(3) = CUST.ADDR1
+            ADDRS(2) = CUST.NAME
+         END ELSE
+            ADDRS(4) = CUST.ADDR1
+            ADDRS(3) = CUST.NAME
+         END
+      END
+      STMT.CODE = CUST.STMT.CODE
+      ;* T26915 v
+      ;* Save each statement in a new file
+      PRINTER CLOSE
+      UDTEXECUTE NEW.PRINTER.CMD:"STMT-":USERNO:"-":CONO:OR.CUST
+      IF CUST.STMT.SEND.FLAG = 'Email' THEN
+         STMT.PRINT.MAIL.ITEM = 'N':SVM:'Y'
+      END ELSE
+         STMT.PRINT.MAIL.ITEM = 'Y':SVM:'N'
+      END
+      STMT.KEYS<-1> = CONO : OR.CUST
+      ;*
+      ;* Get the background form image for this statement
+      ;*
+      OCCUR.IDX = 1
+      LOOP
+         FIND CONO IN PRPT.FORM.CONO,OCCUR.IDX SETTING F,V THEN
+            ;* If an image is found for the CONO/DIV then stop looking
+            IF PRPT.FORM.DIV<1,V> = OR.DIV OR PRPT.FORM.DIV<1,V> = "00" THEN
+               STMT.PRINT.MAIL.ITEM<1,2> = PRPT.FORM.PATH<1,V>
+               EXIT
+            END
+            ;* Otherwise look for the next combination
+            OCCUR.IDX = OCCUR.IDX + 1
+         END ELSE
+            ;* If there are no more occurences of the CONO then exit
+            ;* and specify no background
+            STMT.PRINT.MAIL.ITEM<1,2> = ''
+            OCCUR.IDX = 0
+         END
+      UNTIL OCCUR.IDX = 0 DO REPEAT
+      ;*
+      ;* Get the company defined carbon copy emails
+      ;*
+      ADD.EMAIL.ADDR = USER.EMAIL.ADDR
+      FCCE.ID = CONO:"_FORMS_CC_EMAILS_":OR.DIV:"AR"
+      READ FCCE.ADDRESSES FROM CONTROL, FCCE.ID THEN
+         FOR FCCE.IDX = 1 TO DCOUNT(FCCE.ADDRESSES,VM)
+            ADD.EMAIL.ADDR:= ',':FCCE.ADDRESSES<1,FCCE.IDX>
+         NEXT FCCE.IDX
+      END
+      ;* Add the customer email to value loc 3, and add the record to the list
+      IF CUST.EMAIL # '' THEN
+         STMT.PRINT.MAIL.ITEM<1,3> = CUST.EMAIL:ADD.EMAIL.ADDR
+      END ELSE
+         STMT.PRINT.MAIL.ITEM<1,3> = ''
+      END
+      PM.LIST<-1> = STMT.PRINT.MAIL.ITEM
+      ;* T26915 ^
+      MAT CUST.REC = ""
+   END
+   IF STMT.CODE = "0" THEN GOTO 100
+   OR.ID = KEY[4,99]
+   ID.KEY = OR.ID[(LEN(OR.ID) - 1),2]
+   CR=0;DR=0
+   ACNT = COUNT(TOT.INV,AM) + (TOT.INV # "") + 1
+   TOT.INV<ACNT> = OR.ID
+   TOT.DATE<ACNT> = ""
+   TOT.TYPE<ACNT> = ""
+   TOT.CR<ACNT> = ""
+   TOT.AMT<ACNT> = ""
+   TOT.BAL<ACNT> = ""
+   TOT.CRBL<ACNT> = ""
+   TOT.IDATE<ACNT> = OR.INV.DATE
+   TD.CNT=COUNT(OR.TR.DATE,VM) + (OR.TR.DATE # "")
+   NN = 1
+   FOR ZZ = 1 TO TD.CNT
+      TC = OR.TYPE<1,ZZ>
+      TA = OR.INV.AMT<1,ZZ>
+      TD = OR.TR.DATE<1,ZZ>
+      IF TD > STDAT THEN GOTO 101
+      BEGIN CASE
+         CASE TC = "I" OR TC = "C" OR TC = "D" OR TC = "A"
+            TOT.TYPE<ACNT,NN> = TC
+            IF TA < 0 THEN
+               TOT.CR<ACNT,NN> = TOT.CR<ACNT,NN> - TA
+               TOT.CRBL<ACNT> = TOT.CRBL<ACNT> - TA
+               TOT.AMT<ACNT,NN> = TOT.AMT<ACNT,NN> + 0
+            END ELSE
+               TOT.AMT<ACNT,NN> = TOT.AMT<ACNT,NN> + TA
+               TOT.CR<ACNT,NN> = TOT.CR<ACNT,NN> + 0
+            END
+            TOT.BAL<ACNT> = TOT.BAL<ACNT> + TA
+            TOT.DATE<ACNT,NN> = TD
+            NN = NN + 1
+         CASE TC = "S" OR TC = "T" OR TC = "G" OR TC = "U" OR TC = "M"
+            IF NN > 1 THEN
+               IF TA < 0 THEN
+                  TOT.CR<ACNT,NN-1> = TOT.CR<ACNT,NN-1> - TA
+                  TOT.CRBL<ACNT> = TOT.CRBL<ACNT> - TA
+                  TOT.AMT<ACNT,NN-1> = TOT.AMT<ACNT,NN-1> + 0
+               END ELSE
+                  TOT.AMT<ACNT,NN-1> = TOT.AMT<ACNT,NN-1> + TA
+                  TOT.CR<ACNT,NN-1> = TOT.CR<ACNT,NN-1> + 0
+               END
+            END
+            TOT.BAL<ACNT> = TOT.BAL<ACNT> + TA
+      END CASE
+101*
+   NEXT ZZ
+   TD.CNT = COUNT(TOT.TYPE<ACNT>,VM) + (TOT.TYPE<ACNT> # "")
+   BEGIN CASE
+      CASE TD.CNT = 0
+         GOSUB 1000
+         GOTO 100
+      CASE STMT.CODE = "3" AND TOT.BAL<ACNT> = 0
+         GOSUB 1000
+         GOTO 100
+      CASE STMT.CODE = "4" AND TOT.BAL<ACNT> = 0
+         GOSUB 1000
+         GOTO 100
+   END CASE
+   BEGIN CASE
+      CASE ID.KEY = "MI"
+         TOT.ICM= 0
+         FOR I = 1 TO  6
+            TOT.ICM = TOT.ICM + OR.INV.AMT<1,I>
+         NEXT I
+      CASE TOT.ICM < 0
+         TOT.ICM = "CM"
+      CASE TOT.ICM > 0
+         TOT.ICM = "I"
+      CASE NUM(ID.KEY) OR ID.KEY = "MI"
+         TOT.TYPE<ACNT,1> = "I"
+      CASE 1
+         TOT.TYPE<ACNT,1> = ID.KEY
+   END CASE
+   AGN = INT((STDAT - OR.INV.DATE - 1) / 30) + 1
+   IF AGN < 1 THEN AGN = 1
+   IF AGN > 5 THEN AGN = 5
+   AG(AGN) = AG(AGN) + TOT.BAL<ACNT>
+   TOTALAMT = TOTALAMT + TOT.BAL<ACNT>
+   GOTO 100
+*
+*--- DELETE INVOICE FROM TOT TABLE
+*
+1000*
+   TOT.DATE = DELETE(TOT.DATE,ACNT,0,0)
+   TOT.INV = DELETE(TOT.INV,ACNT,0,0)
+   TOT.TYPE = DELETE(TOT.TYPE,ACNT,0,0)
+   TOT.CR = DELETE(TOT.CR,ACNT,0,0)
+   TOT.AMT = DELETE(TOT.AMT,ACNT,0,0)
+   TOT.BAL = DELETE(TOT.BAL,ACNT,0,0)
+   TOT.CRBL = DELETE(TOT.CRBL,ACNT,0,0)
+   TOT.IDATE = DELETE(TOT.IDATE,ACNT,0,0)
+   RETURN
+*
+*--- PRINT STATEMENT FOR CUSTOMER
+*
+10000*
+   GOSUB 81000
+   ACNT = COUNT(TOT.INV,AM) + (TOT.INV # "")
+   FOR LN = 1 TO ACNT
+      IF LNNO > 23 THEN GOSUB 80000
+      IF STMT.CODE = "2" OR STMT.CODE = "4" THEN
+         V.LINE = "  " : OCONV(TOT.IDATE<LN>, "D2/") "L#8"
+         V.LINE = V.LINE : " " : TOT.INV<LN> "L#8"
+*T22081 v
+         IF LASER.FLAG = '' THEN
+            V.LINE = V.LINE : " " : TOT.TYPE<LN,1> "L#3"
+         END ELSE
+            V.LINE = V.LINE : "  " : TOT.TYPE<LN,1> "L#3"
+         END
+*T22081 ^
+         V.LINE = V.LINE : OCONV(TOT.AMT<LN,1>, "MD2Z") "R#11"
+*T22081 v
+         IF LASER.FLAG = '' THEN
+            V.LINE = V.LINE : " " : OCONV(TOT.CRBL<LN>, "MD2Z") "R#10"
+         END ELSE
+            V.LINE = V.LINE : "" : OCONV(TOT.CRBL<LN>, "MD2Z") "R#10"
+         END
+*T22081 ^
+         V.LINE = V.LINE : " " : OCONV(TOT.BAL<LN>, "MD2Z") "R#13"
+         PRINT V.LINE
+         LNNO = LNNO + 1
+      END ELSE
+         VCNT = COUNT(TOT.TYPE<LN>,VM) + (TOT.TYPE<LN> # "")
+         FOR V = 1 TO VCNT
+            IF LNNO > 23 THEN GOSUB 80000
+            IF V = 1 THEN
+               V.LINE = "  " : OCONV(TOT.IDATE<LN,V>, "D2/") "L#8" : " "
+               V.LINE = V.LINE : TOT.INV<LN> "L#8"
+            END ELSE
+               V.LINE = "  " : OCONV(TOT.DATE<LN,V>, "D2/") "L#8" : " "
+               V.LINE = V.LINE : SPACE(8)
+            END
+*T22081 v
+            IF LASER.FLAG = '' THEN
+               V.LINE = V.LINE : " " : TOT.TYPE<LN,V> "L#3"
+            END ELSE
+               V.LINE = V.LINE : "  " : TOT.TYPE<LN,V> "L#3"
+            END
+*T22081 ^
+            V.LINE = V.LINE : OCONV(TOT.AMT<LN,V>, "MD2Z") "R#11"
+            V.LINE = V.LINE : " " : OCONV(TOT.CR<LN,V>, "MD2Z") "R#10"
+            IF V = VCNT THEN
+*T22081 v
+               IF LASER.FLAG = '' THEN
+                  V.LINE = V.LINE : " " : OCONV(TOT.BAL<LN>, "MD2Z") "R#13"
+               END ELSE
+                  V.LINE = V.LINE : "" : OCONV(TOT.BAL<LN>, "MD2Z") "R#13"
+               END
+*T22081 ^
+            END
+            PRINT V.LINE
+            LNNO = LNNO + 1
+         NEXT V
+      END
+   NEXT LN
+   FOR X = LNNO TO 26
+      PRINT
+   NEXT X
+   PRINT SPACE(46) : OCONV(TOTALAMT, "MD2Z") "R#13"
+   PRINT
+   V.LINE = SPACE(28) : OCONV(AG(1), "MD2Z") "R#11"
+   V.LINE = V.LINE : SPACE(9) : OCONV(AG(2), "MD2Z") "R#11"
+   PRINT V.LINE
+   PRINT
+   V.LINE = SPACE(13) : OCONV(AG(3), "MD2Z") "R#11"
+   V.LINE = V.LINE : SPACE(4) : OCONV(AG(4), "MD2Z") "R#11"
+   V.LINE = V.LINE : SPACE(7) : OCONV(AG(5), "MD2Z") "R#13"
+   PRINT V.LINE
+   PRINT
+   PRINT
+   PRINT "  " : MSG
+   PRINT
+   PRINT
+   PRINT SPACE(19):"I -INVOICE     CM -CREDIT MEMO"
+   PRINT SPACE(19):"A -ADJUSTMENT  DM -DEBIT MEMO"
+   PRINT SPACE(19):"C -CASH        AC -ON ACCOUNT"
+   PRINT SPACE(18):"PP -PREPAYMENT  PB -PREBILL"
+*T22081 v
+*  PRINT SPACE(18):"BC -BAD CHECK"
+   PRINT SPACE(18):"BC -BAD CHECK":CHAR(12):
+*T22081 ^
+   RETURN
+*
+*--- PRINT HEADER
+*
+80000*
+   PRINT
+   PRINT SPACE(47) : "CONTINUED"
+*T22081 v
+   PRINT CHAR(12):
+*T22081 ^
+81000*
+   PGNO = PGNO + 1
+*T22081 >      PRINT CHAR(12):
+   FOR X = 1 TO 7
+      PRINT
+   NEXT X
+   PRINT SPACE(13) : ADDRS(1) "L#33" : SPACE(7) : PGNO "R#3"
+   PRINT SPACE(13) : ADDRS(2) "L#33"
+   PRINT SPACE(13) : ADDRS(3) "L#33"
+   PRINT SPACE(13) : ADDRS(4) "L#33"
+   PRINT SPACE(4) : LACN "R#6" : SPACE(3) : ADDRS(5) "L#33" : SPACE(2) : OCONV(STDAT, "D2/") "L#8"
+   FOR X = 1 TO 6
+      PRINT
+   NEXT X
+   LNNO = 0
+   RETURN
+*
+*--- ERROR ROUTINE
+*
+90000*
+   PRINT @(0,23) : CL : ERRMSG :
+   INPUT REPLY,1 :
+   PRINT @(0,23) : CL :
+   RETURN
+999999*
+   PRINTER CLOSE
+   PRINTER OFF
+   ;* T26915 v
+   ;* Restore original printer settings, and output saved reports
+   UDTEXECUTE RESTORE.PRINTER.CMD
+   CALL DOC.PRINT.MAIL(HOLD.FILE,STMT.KEYS,PM.LIST,MAT COMP.REC,"STMT")
+   ;* T26915 ^
+*T22081 v
+   IF LASER.FLAG # '' THEN
+      OPEN '','SECURITY' TO SECURITY THEN
+         READ XX FROM SECURITY,CONO:OCONV(LOGNAME,'MCU'):'!LASER' THEN
+            DELETE SECURITY,CONO:OCONV(LOGNAME,'MCU'):'!LASER'
+         END
+      END ELSE
+         PRINT CHAR(12):
+      END
+*T22081 ^
+   END

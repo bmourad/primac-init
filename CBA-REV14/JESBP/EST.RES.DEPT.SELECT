@@ -1,0 +1,739 @@
+   SUBROUTINE EST.RES.DEPT.SELECT (CONO, ACTION, EST.KEY, STATUS)
+*********************************************************************
+*
+* REVISION - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+*
+* PROGRAM  - EST.RES.DEPT.SELECT
+*
+* AUTHOR   - NICK AMENDOLA, COMPUTER BUSINESS ASSOCIATES
+*
+* DATE     - 12/04/85
+*
+* DESCRIPTION
+*
+* This subroutine controls the sequencing of subsequent maintenance
+* routines. Departments and components required for the estimate are
+* specified.
+*
+*T21958 lanny 05/22/1997 * Cannot copy an estimate with diff DIV path.
+*T22036 ct6 06/23/1997 * Clear data, from previous screens with the same
+*                        level, that would cause improper defaulting on
+*                        prompt lines.
+*C29099 ct6 07/07/1997 * Clean-up the Cost Center Window section.
+*T22071 diane 12/01/1997 * FIX unit var using PRES.DESC CSF 29099 
+*T24120 diane 07/09/1999 * Fix screen clear data
+*T26138 cm 10/19/2001 * Expand qty fields from 8 to 9 digits.
+*T26413 cm 02/01/2002 * If an estimate qty is deleted the stock prices
+*                       get out of order if the stock prices are different
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>JES.CPYLIB>SCOMMON.ESTIMATE
+*COPY>PMC.CPYLIB>DIVISION
+*COPY>PMC.CPYLIB>DEPARTMENT
+*COPY>PMC.CPYLIB>COST.CNTR
+*COPY>JES.CPYLIB>ESTIMATE
+*COPY>JES.CPYLIB>ESTIMATE.RES
+*COPY>JES.CPYLIB>ESTIMATE.DIV
+*COPY>JES.CPYLIB>ESTIMATE.DEPT
+*COPY>CPYLIB>SCREEN.COM
+*COPY>CPYLIB>FILE.VARS
+*COPY>JES.CPYLIB>JES.FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+   MAT SYSCOM.REC =  ""; SYS.TYPE = 2
+* 18484 v
+*COPY>CPYLIB>GEN.XREF.SUB
+*COPY>CPYLIB>XREF.DATA
+* 18484 ^
+*
+*---- OPEN ALL FILES
+*
+   OPEN "","ESTIMATE.DEPT" TO FESTIMATE.DEPT ELSE
+      ERRMSG = "CANNOT LOCATE ESTIMATE.DEPT FILE"
+      GOSUB 90000
+      RETURN
+   END
+   OPEN "","ESTIMATE.WORK" TO ESTIMATE.WORK ELSE
+      ERRMSG = "CANNOT LOCATE ESTIMATE.WORK FILE"
+      GOSUB 90000
+      RETURN
+   END
+*
+*---- INITIALIZATION
+*
+   PORTNO="TTY"; CALL SYSVARS.SUB(PORTNO)
+   SCREEN DEFINE;EST.RES.DEPT.SELECT
+   SCREEN COUNT;;12
+   LINE.COUNT = S$LCNT
+   LINE.SPACE = S$LSPC
+   CURR.REF.NO = ""
+   SLINE.COUNT = S$LCNT
+   SLINE.SPACE = S$LSPC
+   SCURR.REF.NO = ""
+*C29099v
+   QLINE.COUNT = S$LCNT
+   QCURR.REF.NO = ""
+*C29099^
+   CCOPY.FLAG = 0
+   NEW.REC = 0
+* 18484 v ADD FOLLOWING 2 LINES TO SUPPORT EXPANDED QTYS      
+   MAT GEN.XREF.REC = ''
+   GXR.CO = CONO
+* 18484 ^      
+   IF EST.DEPT = "" THEN
+      NEW.REC = 1
+      FND = 1
+      MATREAD ESTV.REC FROM ESTIMATE.DIV, CONO:EST.DIV ELSE FND = 0
+      IF FND THEN
+         EST.DEPT = ESTV.DEPT
+         EST.DEPT.TYPE = ESTV.DEPT.TYPE
+         EST.DEPT.DESC = ESTV.DEPT.DESC
+      END ELSE
+         MATREAD DIV.REC FROM DIVISION, CONO:FIELD(EST.DIV,"-",1) ELSE MAT DIV.REC = ""
+         EST.DEPT = DIV.DEPT
+         DEPT.CNT = COUNT(EST.DEPT,VM) + (EST.DEPT # "")
+         FOR D = 1 TO DEPT.CNT
+            READ DDATA FROM DEPARTMENT, CONO:EST.DEPT<1,D> ELSE DDATA = "??????????"
+            EST.DEPT.TYPE<1,D> = DDATA<7>
+            EST.DEPT.DESC<1,D> = DDATA<2>
+         NEXT D
+      END
+   END
+   DEPT.CNT = COUNT(EST.DEPT,VM) + (EST.DEPT # "")
+   COMP.CNT = DCOUNT(EST.PROD.DESC,VM)
+   ECNT = DCOUNT(EST.QTY,VM)
+*C29099v
+   STK.CNT = DCOUNT(EST.PROD.OS.DESC<1,1>,SVM)
+*C29099^
+   IF EST.BASE.QTY = "" THEN EST.BASE.QTY = EST.QTY<1,1>
+*
+*---- MAIN PROCESSING
+*
+100 *
+   IF ACTION = "M" AND NEW.REC AND COMP.CNT # "" THEN
+      DREF = "ALL"
+      COMP = "ALL"
+      EQTY = EST.QTY<1,1>
+      STATUS = ""
+      S$SCR = S$SCR + 1
+      CALL EST.RES.DEPT.MAINT (CONO, "A", EST.KEY, DREF, COMP, EQTY, STATUS)
+      SCREEN CLOSE
+      S$SCR = S$SCR - 1
+   END
+   SCREEN FORMAT
+*T22036v
+   SCREEN CLEAR
+*T22036^
+   GOSUB 80000
+   CURR.REF.NO = ""
+   REF.NO = 1
+   GOSUB 70000
+   SCURR.REF.NO = ""
+   SREF.NO = 1
+*C29099v
+   QCURR.REF.NO = ""
+   QREF.NO = 1
+*C29099^
+   GOSUB 75000
+   IF ACTION = "M" AND EST.COMPONENT.CNT = "" THEN
+      GOSUB 1100
+      IF S$VALUE = "END" THEN GOTO 99999
+   END
+*
+*---- GET OPERATOR REPLY
+*
+500 *
+   IF ACTION = "M" THEN
+      S$DATA(26)<S$SCR> = ""
+      SCREEN FIELD;;26
+      SCREEN INPUT;;26
+   END ELSE
+      S$DATA(29)<S$SCR> = ""
+      SCREEN FIELD;;29
+      SCREEN INPUT;;29
+   END
+   OPTION = S$VALUE
+510 *
+   BEGIN CASE
+      CASE OPTION = "" OR OPTION = "E" OR OPTION = "END"
+         IF CCOPY.FLAG THEN GOSUB 900
+         GOTO 99999
+      CASE NUM(OPTION) AND OPTION # ""
+         ON OPTION GOSUB 1100
+      CASE OPTION = "A"
+         GOSUB 600
+         IF S$VALUE = "" OR S$VALUE = "END" THEN GOTO 500
+         DREF = S$VALUE
+         GOSUB 650
+         IF S$VALUE = "" OR S$VALUE = "END" THEN GOTO 500
+         COMP = S$VALUE
+         EQTY = EST.QTY<1,1>
+         IF CCOPY.FLAG THEN GOSUB 900
+         STATUS = ""
+         S$SCR = S$SCR + 1
+         CALL EST.RES.DEPT.MAINT (CONO, "A", EST.KEY, DREF, COMP, EQTY, STATUS)
+         SCREEN CLOSE
+         S$SCR = S$SCR - 1
+         SCREEN FORMAT
+         GOSUB 80000
+         CURR.REF.NO = ""
+         GOSUB 70000
+         SCURR.REF.NO = ""
+         GOSUB 75000
+*C29099v
+         QCURR.REF.NO = ""
+*C29099^
+      CASE OPTION = "C"
+         S$VALUE = "ALL"
+         IF S$VALUE = "" OR S$VALUE = "END" THEN GOTO 500
+         IF S$VALUE = "ALL" THEN
+            FIRST.DEPT = 1
+            LAST.DEPT = DEPT.CNT
+         END ELSE
+            FIRST.DEPT = S$VALUE
+            LAST.DEPT = S$VALUE
+         END
+         GOSUB 800
+      CASE OPTION = "R"
+         GOSUB 600
+         IF S$VALUE = "" OR S$VALUE = "END" THEN GOTO 500
+         DREF = S$VALUE
+         GOSUB 650
+         IF S$VALUE = "" OR S$VALUE = "END" THEN GOTO 500
+         COMP = S$VALUE
+         GOSUB 700
+         IF S$VALUE = "" OR S$VALUE = "END" THEN GOTO 500
+         EQTY = S$VALUE
+         IF CCOPY.FLAG THEN GOSUB 900
+         STATUS = ""
+         S$SCR = S$SCR + 1
+         CALL EST.RES.DEPT.MAINT (CONO, ACTION, EST.KEY, DREF, COMP, EQTY, STATUS)
+         SCREEN CLOSE
+         S$SCR = S$SCR - 1
+         SCREEN FORMAT
+         GOSUB 80000
+         CURR.REF.NO = ""
+         GOSUB 70000
+         SCURR.REF.NO = ""
+*C29099v
+         QCURR.REF.NO = ""
+*C29099^
+         GOSUB 75000
+      CASE OPTION = "SD"
+         REF.NO = CURR.REF.NO + LINE.COUNT
+         IF REF.NO > DEPT.CNT THEN REF.NO = 1
+         GOSUB 70000
+*C29099v
+*     CASE OPTION = "SC"
+      CASE OPTION = "SS"
+*C29099^
+         SREF.NO = SCURR.REF.NO + SLINE.COUNT
+*C29099v
+*        IF SREF.NO > COMP.CNT THEN SREF.NO = 1
+         IF SREF.NO > STK.CNT THEN SREF.NO = 1
+*C29099^
+         GOSUB 75000
+*C29099v
+      CASE OPTION = "SQ"
+         QREF.NO = QCURR.REF.NO + QLINE.COUNT
+         IF QREF.NO > ECNT THEN QREF.NO = 1
+         GOSUB 76000
+*C29099^
+      CASE OPTION[1,1] = "P"
+         STATUS = ""
+         S$SCR = S$SCR + 1
+         IF OPTION[2,1]="" THEN
+            CALL EST.RES.PROD.SUB1 (CONO,ACTION,EST.KEY,1,STATUS)
+         END ELSE
+            PDEF="EST.RES.PROD.SUB":OPTION[2,1]
+            CALL @PDEF (CONO,ACTION,EST.KEY,1,STATUS)
+         END
+         IF STATUS[1,1]='P' THEN
+            OPTION=STATUS
+            GO 510
+         END ELSE
+         END
+         S$SCR = 2
+         SCREEN FORMAT
+         GOSUB 80000
+         CURR.REF.NO = ""
+         GOSUB 70000
+         SCURR.REF.NO = ""
+*C29099v
+         QCURR.REF.NO = ""
+*C29099^
+         GOSUB 75000
+   END CASE
+   GOTO 500
+*
+*---- GET DEPARTMENT SELECTION
+*
+600 *
+   SCREEN FIELD;;27
+   SCREEN INPUT;;27;RETURN
+   IF S$VALUE # "ALL" AND S$VALUE # "" AND (S$VALUE < 1 OR S$VALUE > DEPT.CNT) THEN
+      ERRMSG = "** OUT OF RANGE **"
+      GOSUB 90000
+      GOTO 600
+   END
+   RETURN
+*
+*---- GET COMPONENT SELECTION
+*
+650 *
+   IF EST.COMPONENT.CNT <= 1 THEN
+      S$VALUE = "ALL"
+   END ELSE
+      SCREEN FIELD;;28
+      SCREEN INPUT;;28;RETURN
+      IF S$VALUE # "ALL" AND S$VALUE # "" AND (S$VALUE < 1 OR S$VALUE > EST.COMPONENT.CNT) THEN
+         ERRMSG = "** OUT OF RANGE **"
+         GOSUB 90000
+         GOTO 650
+      END
+   END
+   RETURN
+*
+*---- GET ORDER QUANTITY
+*
+700 *
+   EC=DCOUNT(EST.QTY,VM)
+   BEGIN CASE
+      CASE EC < 2 
+         S$VALUE=EST.QTY<1,1>
+*T26138 v
+*     CASE EC < 6
+*        SCREEN FIELD;;30
+*        S$MINV=1;S$MAXV=EC
+*        S$PMSG="Enter Quantity"
+*        FOR EP=1 TO EC
+*           S$PMSG=S$PMSG:"  (":EP:") ":EST.QTY<1,EP>
+*        NEXT EP
+*        SCREEN INPUT;;30;RETURN
+*        S$VALUE=EST.QTY<1,S$VALUE>
+*T26138 ^
+      CASE 1
+         GXR.NAME = 'EST.QTY.SEL'
+         GXR.XREF = ESTIMATE.WORK
+         GXR.SRCH.ID = EST.KEY
+         MATWRITE EST.REC ON ESTIMATE.WORK, CONO:EST.KEY
+         CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+         DELETE ESTIMATE.WORK, CONO EST.KEY
+         IF GXR.ID = "" THEN 
+            SCREEN FORMAT
+            GOSUB 80100
+            CURR.REF.NO = ""
+            GOSUB 70000
+            SCURR.REF.NO = ""
+*C29099v
+            QCURR.REF.NO = ""
+*C29099^
+            GOSUB 75000
+            S$VALUE = ''
+            RETURN
+         END
+         S$VALUE = EST.QTY<1,GXR.ID>
+   END CASE
+   RETURN
+*
+*---- COPY COMPONENT FROM ANOTHER ESTIMATE
+*
+800 *
+   SCREEN FIELD;;33
+   SCREEN INPUT;;33;RETURN
+   IF S$VALUE = "" THEN RETURN
+   IF S$VALUE = "???" THEN
+      PARAM="SELECT"; PARAM<-1>="RL"
+      WRITE PARAM ON CONTROL,"EST.XREF.":PORTNO
+      EXECUTE "EST.XREF"
+      READ FEST FROM CONTROL,"EST.XREF.":PORTNO ELSE FEST=""
+      DELETE CONTROL,"EST.XREF.":PORTNO
+      FCOMP = ""
+**       S$SCR = S$SCR+1
+**       CALL EST.STD.XREF(CONO,EST.CATG,FEST,FCOMP)
+**       S$SCR = S$SCR-1
+*        SCREEN FORMAT;2
+*         SCREEN DEFINE;EST.DEPT.SELECT;INSTANT.SCREENS
+      SCREEN FORMAT
+      GOSUB 80100
+      CURR.REF.NO = ""
+      GOSUB 70000
+      IF FEST = "" THEN RETURN
+   END ELSE
+      FEST = S$VALUE
+      FCOMP = ""
+   END
+   IF FEST = EST.KEY THEN
+      ERRMSG = "Cannot copy from current estimate. Try again! "
+      GOSUB 90000
+      GOTO 800
+   END
+   READ EREC FROM ESTIMATE, CONO:FEST ELSE
+      ERRMSG = "Cannot locate estimate. Try again! "
+      GOSUB 90000
+      GOTO 800
+   END
+*T21958 v
+   IF EREC<15> # EST.DIV THEN
+      ERRMSG = 'Copied estimate must have same DIVISION path. Try again! '
+      GOSUB 90000
+      GOTO 800
+   END
+*T21958 ^
+   READ ELREC FROM ESTIMATE.RES, CONO:FEST ELSE
+      ERRMSG = "Must be a roll label estimate. Try again! "
+      GOSUB 90000
+      GOTO 800
+   END
+820 *
+*     IF EREC<51> = 1 THEN
+   S$VALUE = 1
+*     END ELSE
+*        SCREEN FIELD;;34
+*        SCREEN INPUT;;34;RETURN
+*        BEGIN CASE
+*        CASE S$VALUE = ""
+*           RETURN
+*        CASE S$VALUE = "???"
+*           S$SCR = S$SCR + 1
+*           STATUS = ""
+*           CALL EST.COMP.XREF (CONO, "M", FEST, EREC<32>, EREC<69>, STATUS)
+*           S$SCR = S$SCR - 1
+*           SCREEN FORMAT
+*           GOSUB 80100
+*           CURR.REF.NO = ""
+*           GOSUB 70000
+*           SCURR.REF.NO = ""
+*           GOSUB 75000
+*           IF STATUS = "" THEN RETURN
+*           S$VALUE = STATUS
+*        CASE NOT(NUM(S$VALUE)) OR S$VALUE < 1 OR S$VALUE > EREC<51>
+*           ERRMSG = 'Invalid Reply. Enter component # or "???" '
+*           GOSUB 90000
+*           GOTO 820
+*        END CASE
+*     END
+   FCOMP = S$VALUE
+*
+   CCNT = DCOUNT(EST.PROD.DESC,VM)
+*     IF CCNT = 0 THEN
+   TCOMP = 1
+*     END ELSE
+*        SCREEN FIELD;;32
+*        S$MINV = 1
+*        S$MAXV = CCNT + 1
+*        IF S$MAXV > 16 THEN S$MAXV = 16
+*        S$O.R = "O"
+*        S$DEFAULT = S$MAXV
+*        SCREEN INPUT;;32;RETURN
+*        IF S$VALUE = "" THEN RETURN
+*        TCOMP = S$VALUE
+*     END
+*     IF TCOMP > CCNT THEN
+   IF EST.RL.PRESS.CCTR = "" THEN
+      MODE = "A"
+   END ELSE
+      MODE = "C"
+      SCREEN FIELD;;35
+      SCREEN INPUT;;35
+      IF S$VALUE # "Y" THEN GOTO 500
+   END
+*
+   AC = COUNT(EST.A9A,",") + (EST.A9A # "")
+   FOR AP = 1 TO AC
+      AA = FIELD(EST.A9A,",",AP)
+      AA1 = FIELD(AA,"-",1)
+      AA2 = FIELD(AA,"-",2)
+      IF AA2="" THEN AA2=AA1
+      FOR AAP = AA1 TO AA2
+         EST.REC(AAP)<1,TCOMP> = EREC<AAP,FCOMP>
+      NEXT AAP
+   NEXT AP
+   EST.COMPONENT.CNT = DCOUNT(EST.PROD.DESC,VM)
+   FOR AP = 1 TO EST.RL.REC.SIZE
+      EST.RL.REC(AP) = ELREC<AP>
+   NEXT AP
+*
+*
+   FOR DPTR = FIRST.DEPT TO LAST.DEPT
+      FFND = 1
+      FESTD.ID = DPTR:"!":FCOMP:"!":EREC<42>
+      READ DREC FROM FESTIMATE.DEPT, CONO:FEST:"!":FESTD.ID ELSE FFND = 0
+      IF FFND THEN
+         P_X  = 0 ; P_Y = 21 ; P_VALUE = "Processing department ":EST.DEPT<1,DPTR>:" - ":EST.DEPT.DESC<1,DPTR> ; P_OPT = "CL"
+         CALL VSI_SI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+         IF MODE = "C" THEN
+            CALL EST.OSP.UPD(CONO,"P",DPTR,TCOMP,EST.QTY<1,1>,"")
+         END
+         TESTD.ID = DPTR:"!":TCOMP:"!":EST.QTY<1,1>
+         WRITE DREC ON ESTIMATE.DEPT, CONO:EST.KEY:"!":TESTD.ID
+         CCOPY.FLAG = 1
+         LOCATE TESTD.ID IN EST.DEPT.COMP<1>,1 SETTING P ELSE
+            EST.DEPT.COMP<1,P> = TESTD.ID
+            EST.COMP.FLAG<1,DPTR,TCOMP> = "Y"
+         END
+      END
+   NEXT DPTR
+   GOSUB 80000
+   CURR.REF.NO = ""
+   GOSUB 70000
+   SCURR.REF.NO = ""
+*C29099v
+   QCURR.REF.NO = ""
+*C29099^
+   GOSUB 75000
+   RETURN
+*
+*---- RECALCULATE ESTIMATE
+*
+900 *
+   SCREEN FIELD;;36
+   SCREEN INPUT;;36;RETURN
+   IF S$VALUE = "Y" THEN
+*T26413 v
+*     CALL EST.RES.CALC.PAP(CONO,"")
+      CALL EST.RES.CALC.PAP(CONO,"","")
+*T26413 ^
+      DCCNT=DCOUNT(EST.DEPT.COMP,VM)
+      FOR DCPTR=1 TO DCCNT
+         RESTD.ID=EST.DEPT.COMP<1,DCPTR>
+         RDPTR=FIELD(RESTD.ID,"!",1)
+         RCPTR=FIELD(RESTD.ID,"!",2)
+         REQTY=FIELD(RESTD.ID,"!",3)
+         CALL EST.RES.QTY.CALC (CONO,"A",EST.KEY,RDPTR,RCPTR,REQTY)
+      NEXT DCPTR
+      CCOPY.FLAG = 0
+      EST.RECALC.FLAG=""
+   END
+   RETURN
+*
+*---- GET COMPONENT COUNT
+*
+1100 *
+   SCREEN FIELD;;3
+   SCREEN INPUT;;3;RETURN
+   EST.COMPONENT.CNT = S$VALUE
+   RETURN
+*
+*---- GET MULTI-LINE DATA
+*
+5000 *
+   S$VAL = REF.NO
+   SCREEN DISPLAY;;11
+*---- GET DEPARTMENT-COMPONENT FLAG
+   S$VAL = REF.NO
+   BEGIN CASE
+      CASE COMP = 1
+         SCREEN FIELD;;14
+         SCREEN INPUT;;14;RETURN
+         EST.COMP.FLAG<1,REF.NO,1> = S$VALUE
+*         CASE COMP = 2
+*            SCREEN FIELD;;15
+*            SCREEN INPUT;;15;RETURN
+*            EST.COMP.FLAG<1,REF.NO,2> = S$VALUE
+*         CASE COMP = 3
+*            SCREEN FIELD;;16
+*            SCREEN INPUT;;16;RETURN
+*            EST.COMP.FLAG<1,REF.NO,3> = S$VALUE
+*         CASE COMP = 4
+*            SCREEN FIELD;;17
+*            SCREEN INPUT;;17;RETURN
+*            EST.COMP.FLAG<1,REF.NO,4> = S$VALUE
+*         CASE COMP = 5
+*            SCREEN FIELD;;18
+*            SCREEN INPUT;;18;RETURN
+*            EST.COMP.FLAG<1,REF.NO,5> = S$VALUE
+*         CASE COMP = 6
+*            SCREEN FIELD;;19
+*            SCREEN INPUT;;19;RETURN
+*            EST.COMP.FLAG<1,REF.NO,6> = S$VALUE
+*         CASE COMP = 7
+*            SCREEN FIELD;;20
+*            SCREEN INPUT;;20;RETURN
+*            EST.COMP.FLAG<1,REF.NO,7> = S$VALUE
+*         CASE COMP = 8
+*            SCREEN FIELD;;21
+*            SCREEN INPUT;;21;RETURN
+*            EST.COMP.FLAG<1,REF.NO,8> = S$VALUE
+*         CASE COMP = 9
+*            SCREEN FIELD;;41
+*            SCREEN INPUT;;41;RETURN
+*            EST.COMP.FLAG<1,REF.NO,9> = S$VALUE
+*         CASE COMP = 10
+*            SCREEN FIELD;;42
+*            SCREEN INPUT;;42;RETURN
+*            EST.COMP.FLAG<1,REF.NO,10> = S$VALUE
+*         CASE COMP = 11
+*            SCREEN FIELD;;43
+*            SCREEN INPUT;;43;RETURN
+*            EST.COMP.FLAG<1,REF.NO,11> = S$VALUE
+*         CASE COMP = 12
+*            SCREEN FIELD;;44
+*            SCREEN INPUT;;44;RETURN
+*            EST.COMP.FLAG<1,REF.NO,12> = S$VALUE
+*         CASE COMP = 13
+*            SCREEN FIELD;;45
+*            SCREEN INPUT;;45;RETURN
+*            EST.COMP.FLAG<1,REF.NO,13> = S$VALUE
+*         CASE COMP = 14
+*            SCREEN FIELD;;46
+*            SCREEN INPUT;;46;RETURN
+*            EST.COMP.FLAG<1,REF.NO,14> = S$VALUE
+*         CASE COMP = 15
+*            SCREEN FIELD;;47
+*            SCREEN INPUT;;47;RETURN
+*            EST.COMP.FLAG<1,REF.NO,15> = S$VALUE
+*         CASE COMP = 16
+*            SCREEN FIELD;;48
+*            SCREEN INPUT;;48;RETURN
+*            EST.COMP.FLAG<1,REF.NO,16> = S$VALUE
+   END CASE
+   RETURN
+*
+*---- DISPLAY MULTI-LINE DATA
+*
+70000 *
+   START.REF.NO = 1 + INT((REF.NO-1)/LINE.COUNT)*LINE.COUNT
+   IF START.REF.NO = CURR.REF.NO THEN RETURN
+   CURR.REF.NO = START.REF.NO
+   S$VAL = START.REF.NO
+   S$CNT = COUNT(S$DATA(12)<S$SCR>,VM) + (S$DATA(12)<S$SCR> # "")
+*      SCREEN MULTI;;C;11;12;13;14;15;16;17;18;19;20;21;41;42;43;44;45;46;47;48
+   SCREEN MULTI;;C;11;12;13;14
+   RETURN
+*
+*---- DISPLAY MULTI-LINE DATA
+*
+75000 *
+   SSTART.REF.NO = 1 + INT((SREF.NO-1)/SLINE.COUNT)*SLINE.COUNT
+   IF SSTART.REF.NO = SCURR.REF.NO THEN RETURN
+   SCURR.REF.NO = SSTART.REF.NO
+   S$VAL = SSTART.REF.NO
+   S$CNT = DCOUNT(S$DATA(52)<S$SCR>,VM)
+*C29099v
+*      SCREEN MULTI;;C;50;51;52;53;54;55;56
+   SCREEN MULTI;;C;50;52;55
+   QCURR.REF.NO = ''
+   GOSUB 76000
+*C29099^
+   RETURN
+*C29099v
+*
+*---- DISPLAY QTY Lineal Feet / Impression Multi-Line Data
+*
+76000 *
+   QSTART.REF.NO = 1 + INT((QREF.NO - 1) / QLINE.COUNT) * QLINE.COUNT
+   IF QSTART.REF.NO = QCURR.REF.NO THEN RETURN
+   QCURR.REF.NO = QSTART.REF.NO
+   S$VAL = QSTART.REF.NO
+   S$CNT = DCOUNT(S$DATA(56)<S$SCR>,VM)
+   SCREEN MULTI;;C;51;56
+   RETURN
+*C29099^
+*
+*---- LOAD SCREEN DATA
+*
+80000 *
+   S$DATA(1)<S$SCR> = EST.KEY
+   S$DATA(2)<S$SCR> = EST.CUST.NAME
+*     S$DATA(3)<S$SCR> = EST.COMPONENT.CNT
+   S$DATA(12)<S$SCR> = EST.DEPT
+   S$DATA(13)<S$SCR> = EST.DEPT.DESC
+   S$DATA(60)<S$SCR> = EST.COMMENTS<1,1>
+   PROD.CNT = DCOUNT(EST.PROD.OS.PROD<1,1>,SM)
+*C29099v
+*T22071         READV PRESS.DESC FROM COST.CNTR,CONO:EST.RL.PRESS.CCTR<1,1,1>,1 ELSE PRES.DESC = ""
+   READV PRESS.DESC FROM COST.CNTR,CONO:EST.RL.PRESS.CCTR<1,1,1>,1 ELSE PRESS.DESC = ""
+   S$DATA(53)<S$SCR> = EST.RL.PRESS.CCTR<1,1,1>
+   S$DATA(54)<S$SCR> = PRESS.DESC
+   QTY.CNT = DCOUNT(EST.QTY,VM)
+*C29099^
+   PRESS.DESC = ""
+*
+* First Clear the Data for each component
+*
+*C29099v
+*      FOR X = 52 TO 59
+   S$DATA(52)<S$SCR>=''
+   FOR X = 55 TO 59
+*C29099^
+      S$DATA(X)<S$SCR>=''
+   NEXT X
+*
+* Now Load It
+*
+   LC=0
+   FOR X = 1 TO PROD.CNT
+      LC = LC + 1
+*        S$DATA(51)<S$SCR,LC> = X
+      S$DATA(52)<S$SCR,LC> = EST.PROD.OS.DESC<1,1,X>
+      Y=X
+*C29099v
+*         PRESS.DESC=""
+*         LOOP
+*            READV PRESS.DESC FROM COST.CNTR,CONO:EST.RL.PRESS.CCTR<1,1,Y>,1 THEN
+*               Y=0
+*            END ELSE
+*               Y=Y-1
+*            END
+*         WHILE Y DO REPEAT
+*Moved out of multi line area. vvv
+*         S$DATA(53)<S$SCR,LC> = EST.RL.PRESS.CCTR<1,1,X>
+*         S$DATA(54)<S$SCR,LC> = PRESS.DESC
+*C29099^
+*        S$DATA(59)<S$SCR,LC> = EST.PROD.MODE<1,X,1>
+*C29099v
+*         S$DATA(55)<S$SCR,LC> = EST.PROD.PS.WIDTH<1,1,X>
+      S$DATA(55)<S$SCR,LC> = EST.RL.ACT.WIDTH<1,1,X>
+   NEXT X
+   FOR X = 1 TO QTY.CNT
+*C29099^
+*        S$DATA(56)<S$SCR,LC> = INT((MSI / (EST.PROD.PS.WIDTH<1,X,1> / 1000)+ .5))
+*C29099v
+*         S$DATA(56)<S$SCR,LC>=INT(FIELD(EST.RL.TOTAL.PC<1,1,X>,"!",1)/12+.5)
+      S$DATA(56)<S$SCR,X>=INT(FIELD(EST.RL.TOTAL.PC<1,1,1>,"!",X)/12+.5)
+*C29099^
+*        S$DATA(58)<S$SCR,LC> = EST.PROD.COLORS.1<1,X,1>"R#2":'/':EST.PROD.COLORS.2<1,X,1>"L#2"
+   NEXT X
+   FOR D = 1 TO DEPT.CNT
+      S$DATA(14)<S$SCR,D> = EST.COMP.FLAG<1,D,1>
+*         S$DATA(15)<S$SCR,D> = EST.COMP.FLAG<1,D,2>
+*         S$DATA(16)<S$SCR,D> = EST.COMP.FLAG<1,D,3>
+*         S$DATA(17)<S$SCR,D> = EST.COMP.FLAG<1,D,4>
+*         S$DATA(18)<S$SCR,D> = EST.COMP.FLAG<1,D,5>
+*         S$DATA(19)<S$SCR,D> = EST.COMP.FLAG<1,D,6>
+*         S$DATA(20)<S$SCR,D> = EST.COMP.FLAG<1,D,7>
+*         S$DATA(21)<S$SCR,D> = EST.COMP.FLAG<1,D,8>
+*         S$DATA(41)<S$SCR,D> = EST.COMP.FLAG<1,D,9>
+*         S$DATA(42)<S$SCR,D> = EST.COMP.FLAG<1,D,10>
+*         S$DATA(43)<S$SCR,D> = EST.COMP.FLAG<1,D,11>
+*         S$DATA(44)<S$SCR,D> = EST.COMP.FLAG<1,D,12>
+*         S$DATA(45)<S$SCR,D> = EST.COMP.FLAG<1,D,13>
+*         S$DATA(46)<S$SCR,D> = EST.COMP.FLAG<1,D,14>
+*         S$DATA(47)<S$SCR,D> = EST.COMP.FLAG<1,D,15>
+*         S$DATA(48)<S$SCR,D> = EST.COMP.FLAG<1,D,16>
+   NEXT D
+80100 *
+   SCREEN DISPLAY;;ALL
+   RETURN
+*
+*---- ERROR ROUTINE
+*
+90000 ERR.TYPE=1;CALL SI_SYSCOM(MAT SYSCOM.REC);RETURN
+* 90000 *
+*       PRINT @(0,23):CL:ERRMSG:
+*       INPUT REPLY,1:
+*       PRINT @(0,23):CL:
+*       RETURN
+*
+*---- END OF PROGRAM
+*
+99999 *
+*        SCREEN CLEAR;;D
+*T24120 v
+   SCREEN CLEAR;;D
+   RETURN
+END

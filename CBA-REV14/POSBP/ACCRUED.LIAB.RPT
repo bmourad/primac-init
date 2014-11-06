@@ -1,0 +1,250 @@
+*********************************************************************
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - POSBP
+* PROGRAM     - ACCRUED.LIAB.HIST.RPT
+* BY          - DOOG
+* DATE        - 02/10/95
+* DESCRIPTION -
+*T21308 lanny 12/06/1996 * If DV/DP/CC is zero they donot print.
+*T22351 bilal 11/13/1997 * Add a column to list offset GL account.
+*T26493 cmykleb 03/22/2002 * Change report to use rpt # from proc.
+*T24884 lanny 04/01/2002 * Correct extraction of Outside PO Offset acct.
+*T23880 lross 10/16/2002 * For OS PO's get offset acct from ALH.OFF.ACCT
+*                          if available. 
+*T27391 lross 04/21/2003 * Total Line formatted incorrectly.
+*********************************************************************
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>POS.CPYLIB>ACCRUED.LIAB.HIST
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>CHAR
+* T22351
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>POS.CPYLIB>OUTSIDE.PO
+*COPY>POS.CPYLIB>MISC.PO
+*COPY>ICS.CPYLIB>CATEGORY
+*COPY>ICS.CPYLIB>CATEGORY.MISC
+*COPY>JCS.CPYLIB>CATEGORY.OSP
+*  T22351 ^
+DIM SAVE.REC(15)
+*
+**** SET UP FOR SYSCOM
+SYS.TYPE = 1; CALL SYSCOM(MAT SYSCOM.REC)
+PROCREAD BUFFER ELSE
+  ERRMSG = "THIS PROGRAM MUST RUN FROM A PROC"
+  GOTO 93000
+END
+CONO = BUFFER<1>
+DIV = BUFFER<7>
+CONO.NAME = ""
+*T26493 v
+*  REPORT.NAME = "ACCRUED LIABILITY HISTORY REPORT"
+*  REPORT.NUM = "XXXX"
+REPORT.NUM = BUFFER<2>
+REPORT.NAME = ""
+*T26493 ^
+REPORT.DATE = ""
+HD1 = " ; HD2 = "
+CALL GET.PROG.HEAD(CONO,CONO.NAME,REPORT.NAME,REPORT.NUM,REPORT.DATE,HD1,HD2)
+*
+*---- OPEN FILES
+*
+OPEN '','ACCRUED.LIAB.HIST' TO ACCRUED.LIAB.HIST ELSE ERRMSG = "ACCRUED.LIAB.HIST FILE IS MISSING"; GOTO 93000
+OPEN '','COMPANY' TO COMPANY ELSE ERRMSG = "COMPANY IS MISSING" ; GOTO 93000
+* T22351
+OPEN '','INVENTORY' TO INVENTORY ELSE ERRMSG = "INVENTORY IS MISSING";GOTO 93000
+OPEN '','OUTSIDE.PO' TO OUTSIDE.PO ELSE ERRMSG = "OUTSIDE.PO IS MISSING";GOTO 93000
+OPEN '','MISC.PO' TO MISC.PO ELSE ERRMSG ="MISC.PO IS MISSING";GOTO 93000
+OPEN '','CATEGORY' TO CATEGORY ELSE ERRMSG = "CATEGORY FILE IS MISSING";GOTO 93000
+OPEN '','CATEGORY.MISC' TO CATEGORY.MISC ELSE ERRMSG = "CATEGORY.MISC FILE IS MISSING";GOTO 93000
+OPEN '','CATEGORY.OSP' TO CATEGORY.OSP ELSE ERRMSG = "CATEGORY.OSP FILE IS MISSING";GOTO 93000
+* T22351 ^
+*
+*---- INITIALIZE
+*
+UNKNOWN = STR("?",45)
+ACCT.UNKNOWN = STR("?",20)
+PAGE.NO = 0
+LINE.CNT = 99
+PREV.REF = ""
+GRAND.TOT=0
+*
+*---- HEADINGS
+*
+* T22351
+*SHD1 = "      Type*Po*Prod          Date   Source Period    Account     Dv Dp Ctr     Amount"
+*SHD2 = "------------------------- ------- ------- ------ -------------- -- -- --- --------------"
+SHD1 = "      Type*Po*Prod          Date   Source Period Accrued Account Offset Account  Dv Dp Ctr     Amount"
+SHD2 = "------------------------- -------- ------ ------ --------------- --------------- -- -- --- --------------"
+* T22351 ^
+*
+*---- MAIN PROCESSING
+*
+100*
+DATA = 1
+READNEXT ALH.ID THEN
+  MATREAD ALH.REC FROM ACCRUED.LIAB.HIST, ALH.ID THEN
+    IDS = ALH.ID
+    BALANCE = ALH.AMT
+    PREV.REF = ALH.REF
+  END ELSE
+    GOTO 99999
+  END
+END
+PRINTER ON
+LOOP
+  READNEXT ALH.ID ELSE DATA = 0
+WHILE DATA DO
+  MATREAD ALH.REC FROM ACCRUED.LIAB.HIST, ALH.ID THEN
+    IF ALH.REF # PREV.REF THEN
+      IF BALANCE # 0 THEN
+        MAT SAVE.REC = MAT ALH.REC
+        GOSUB 1000
+        MAT ALH.REC = MAT SAVE.REC
+      END
+      IDS = ALH.ID
+      BALANCE = ALH.AMT
+    END ELSE
+      IDS<-1> = ALH.ID
+      BALANCE = BALANCE + ALH.AMT
+    END
+    PREV.REF = ALH.REF
+  END
+REPEAT
+IF BALANCE # 0 THEN GOSUB 1000
+*CSF 26313 v
+IF GRAND.TOT # 0 THEN GOSUB 1500
+*CSF 26313 ^
+GOTO 99999
+*
+*---- PRINT DETAIL LINE
+*
+1000*
+LCNT = DCOUNT(IDS,AM)
+FOR L = 1 TO LCNT
+  MATREAD ALH.REC FROM ACCRUED.LIAB.HIST, IDS<L> THEN
+    IF LINE.CNT > 55 THEN GOSUB 2000
+    LINE = ALH.REF "L#26"
+    LINE = LINE:OCONV(ALH.DATE,"D2/") "L#9"
+    LINE = LINE:ALH.SRC "L#7"
+    LINE = LINE:ALH.MON "L#7"
+* T22351
+*    LINE = LINE:ALH.ACCT "L#15"
+    LINE = LINE:ALH.ACCT "L#16"
+    PROD.LINE = ALH.SRC[1,1]
+    PROD = FIELD(ALH.REF,"*",3)
+    PO.NO = FIELD(ALH.REF,"*",2)
+    BEGIN CASE
+      CASE PROD.LINE = "I"
+        MATREAD INV.REC FROM INVENTORY,CONO:PROD THEN
+          MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE THEN
+            IF CATG.INV # "" THEN
+              LINE = LINE:CATG.INV "L#16"
+            END ELSE
+              LINE = LINE:"1":ACCT.UNKNOWN "L#16"
+            END
+          END ELSE
+            LINE = LINE:"2":ACCT.UNKNOWN "L#16"
+          END
+        END ELSE
+          LINE = LINE:"3":ACCT.UNKNOWN "L#16"
+        END
+      CASE PROD.LINE = "M"
+        MATREAD MPO.REC FROM MISC.PO,CONO:PO.NO THEN
+          LOCATE PROD IN MPO.PROD.NUM<1>,1 SETTING NUM THEN
+            MATREAD CAMISC.REC FROM CATEGORY.MISC,CONO:MPO.MISC.CAT<1,NUM> THEN
+              IF CAMISC.EXP.ACCT # "" THEN
+                LINE = LINE:CAMISC.EXP.ACCT "L#16"
+              END ELSE
+                LINE = LINE:"1":ACCT.UNKNOWN "L#16"
+              END
+            END ELSE
+              LINE = LINE:"2":ACCT.UNKNOWN "L#16"
+            END
+          END ELSE
+            LINE = LINE:"3":ACCT.UNKNOWN "L#16"
+          END
+        END ELSE
+          LINE = LINE:"4":ACCT.UNKNOWN "L#16"
+        END
+      CASE PROD.LINE = "O"
+*T23880 v                                                        
+        IF ALH.OFF.ACCT = '' THEN                         
+*T24884 v                                                        
+          MATREAD OPO.REC FROM OUTSIDE.PO, CONO:PO.NO THEN
+*T24884 v
+            LOCATE PROD IN OPO.JOB.NO<1>,1 SETTING NUM THEN
+              MATREAD CAOS.REC FROM CATEGORY.OSP,CONO:OPO.PROD.LINE<1,NUM> THEN
+                IF CAOS.WIP # "" THEN
+                  LINE = LINE:CAOS.WIP "L#16"
+                END ELSE
+                  LINE = LINE:"1":ACCT.UNKNOWN "L#16"
+                END
+              END ELSE
+                LINE = LINE:"2":ACCT.UNKNOWN "L#16"
+              END
+            END ELSE
+              LINE = LINE:"3":ACCT.UNKNOWN "L#16"
+            END
+          END ELSE
+            LINE = LINE:"4":ACCT.UNKNOWN "L#16"
+          END
+*T24884 ^
+          ;*23880v
+        END ELSE                          
+          LINE = LINE:ALH.OFF.ACCT "L#16"
+        END                               
+*23880 ^
+    END CASE
+* T22351 ^
+*T21308 v
+    IF ALH.DV.DP.CC = '' THEN ALH.DV.DP.CC = '0000000'
+*T21308 ^
+    DV=ALH.DV.DP.CC[1,2]
+    DP=ALH.DV.DP.CC[3,2]
+    CC=ALH.DV.DP.CC[5,3]
+    LINE = LINE:DV"R#2":" ":DP"R#2":" ":CC"R#3":" "
+    LINE = LINE:OCONV(ALH.AMT,"MD2C") "R#14"
+    PRINT LINE
+    LINE.CNT = LINE.CNT + 1
+  END
+NEXT L
+*T27391 PRINT SPACE(74):"--------------"
+PRINT SPACE(91):"--------------"
+*T27391 PRINT SPACE(68):"TOTAL ":OCONV(BALANCE,"MD2C") "R#14"
+PRINT SPACE(85):"TOTAL ":OCONV(BALANCE,"MD2C") "R#14"
+PRINT
+LINE.CNT = LINE.CNT + 3
+GRAND.TOT = GRAND.TOT + BALANCE
+*CSF 26313 v
+RETURN
+1500 *
+*CSF 26313 ^
+*IF NOT(DATA) THEN
+PRINT
+*T27391 PRINT SPACE(74):"--------------"
+PRINT SPACE(91):"--------------"
+*T27391 PRINT SPACE(62):"GRAND TOTAL ":OCONV(GRAND.TOT,"MD2C") "R#14"
+PRINT SPACE(79):"GRAND TOTAL ":OCONV(GRAND.TOT,"MD2C") "R#14"
+*END
+RETURN
+*
+*---- PRINT HEADINGS
+*
+2000*
+PRINT CHAR(12)
+PAGE.NO = PAGE.NO + 1
+PRINT HD1:PAGE.NO
+PRINT HD2
+PRINT "Division : ":DIV
+PRINT SHD1
+PRINT SHD2
+LINE.CNT = 5
+RETURN
+*
+93000*
+ERR.TYPE = 3 ; CALL SYSCOM(MAT SYSCOM.REC)
+99999*
+PRINTER OFF
+END

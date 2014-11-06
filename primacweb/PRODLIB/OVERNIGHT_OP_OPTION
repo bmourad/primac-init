@@ -1,0 +1,134 @@
+SUBROUTINE OVERNIGHT_OP_OPTION
+********************************************************************************
+*   Program name :- OVERNIGHT_OP_OPTION
+*   Created:- 5/18/2006
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE PMC.CPYLIB PMC_PROCESS
+$INCLUDE PMC.CPYLIB SECURITY
+$INCLUDE PMC.CPYLIB PMC_REPORTS
+$INCLUDE CPYLIB PORT.CONTROL
+$INCLUDE PMC.CPYLIB OVERNIGHT.REQUESTS
+$INCLUDE CPYLIB CHAR
+
+* Insert method code here
+   STATUS = RBO.getProperty('','PMCProperty',PMCProperty)
+   STATUS = RBO.getProperty('','PROCESS_ID',USER.VERB)
+   STATUS = RBO.getProperty('','SCHEDULE_DATE',SCHEDULE.DATE)
+   STATUS = RBO.getProperty('','ID',REPORT_ID)
+
+
+   OPEN '','PMC_PROCESS' TO PMC_PROCESS ELSE ERRMSG = 'Cannot open PMC_PROCESS file!';GOTO 93000
+   OPEN '','PMC_REPORTS' TO PMC_REPORTS ELSE ERRMSG = 'Cannot open PMC_REPORTS file!';GOTO 93000
+   OPEN '','CONTROL' TO CONTROL ELSE ERRMSG = 'Cannot open CONTROL file!';GOTO 93000
+   OPEN '','SECURITY' TO SECURITY ELSE ERRMSG = 'Cannot open SECURITY file!';GOTO 93000
+
+* CASE OPTION = "OP"
+*   ACCT = "ACCT"
+*   CALL SYSVARS.SUB(ACCT)
+*   SYSVAR = @WHO
+    CONO = PMCProperty<1,4>
+    ACCT = @WHO
+    UDT.NO = @UDTNO
+    LOG.NAME = @LOGNAME
+    PROC.VALUES = ""
+    USER.CONO = CONO
+    USER.ID = PMCProperty<1,3>
+    USER.ID = UPCASE(USER.ID)
+    PORT = LOG.NAME:"_":UDT.NO ; *T27646
+
+      OVERNIGHT.OK = 1
+      OPEN "","OVERNIGHT.PROCS" TO OVERNIGHT.PROCS ELSE
+         OVERNIGHT.OK = 0
+      END
+      IF NOT(OVERNIGHT.OK) THEN
+         ERRMSG = "Overnight processor not installed! "               
+         GOTO 93000
+      END
+*	    USER = PMCProperty<1,3>
+      USER_ID = UPCASE(@LOGNAME)
+      HF_NAME = PORT :"_": USER_ID    ;* T26090
+      HF_NAME = CHANGE(HF_NAME,"*","_");*ADDED TO REMOVE * FROM HF_NAME IF FROM EPRIMAC      
+* T26090 v
+*      DELETE CONTROL,HF_NAME
+
+      MATREAD PRPT.REC FROM PMC_REPORTS, REPORT_ID ELSE
+         MAT PRPT.REC = ""
+         SUB_REPORT = ""
+         GOTO 93000
+      END
+      INP.SEQ = CHANGE(PRPT.PROMPTS,VM,",")
+
+      MATREAD SEC.REC FROM SECURITY,CONO:USER_ID ELSE
+         MAT SEC.REC = ""
+      END
+      REPORT.NAME = PRPT.HEADING
+* T26090 ^
+
+      SAVE.USER.VERB = USER.VERB
+      MATREAD PPS.REC FROM PMC_PROCESS, USER.VERB THEN
+          USER.VERB = PPS.VOC
+      END
+
+      READ OPREC FROM OVERNIGHT.PROCS, USER.VERB ELSE
+         ERRMSG = "Not validated for Overnight processing! "
+         GOTO 93000
+      END
+      MATREAD OR.REC FROM CONTROL,"OVERNIGHT.REQUESTS" ELSE MAT OR.REC=""
+
+      OCNT = DCOUNT(OR.COMPANY.NO,VM)+1
+      OR.REPORT.NAME<1,OCNT> = REPORT.NAME
+      OR.MD.PROC<1,OCNT> = USER.VERB
+      OR.COMPANY.NO<1,OCNT> = USER.CONO
+      OR.USER.ID<1,OCNT> = USER.ID
+      OR.ACCOUNT.NAME<1,OCNT> = UPCASE(ACCT)
+      FIELD.CT = DCOUNT(INP.SEQ,",")
+      FIELDS = ""
+      PARAMETERS = ""
+      FOR I = 1 TO FIELD.CT
+         INP.FIELD = FIELD(INP.SEQ,",",I)
+*
+*  No terminal reports can be requested as overnight reports
+*
+         IF INP.FIELD = "37" AND PROC.VALUES<I+2> = "T" THEN
+            RELEASE CONTROL,"OVERNIGHT.REQUESTS"
+            ERRMSG = "Cannot use Overnight processor for a terminal report! "
+            GOTO 93000
+         END
+         FIELDS<1,1,I> = INP.FIELD
+         IF PROC.VALUES<I+2> = "" THEN PROC.VALUES<I+2> = "ALL"
+         PARAMETERS<1,1,I> = PROC.VALUES<I+2>
+      NEXT I
+         OR.PARAMETERS<1,OCNT> = PARAMETERS
+         OR.FIELDS<1,OCNT> = FIELDS
+*        OR.SCHED.DATE<1,OCNT> = SCHEDULE.DATE
+         OR.SCHED.DATE<1,OCNT> = ICONV(SCHEDULE.DATE,"D")
+
+         IF SCHEDULE.DATE = "" THEN
+            OR.STATUS<1,OCNT> = "S"
+         END ELSE
+            OR.STATUS<1,OCNT> = "H"
+         END
+WRITE "SCHEDULE.DATE ":ICONV(SCHEDULE.DATE,"D") ON CONTROL,"01RK"
+*         MATWRITE OR.REC ON CONTROL,"OVERNIGHT.REQUESTS"
+*T26090 v
+*           ERRMSG = "Overnight processor will run the process... Press <RETURN> to continue "
+         ERRMSG = "Overnight processor will run the process... "
+*T26090 ^
+         GOTO 93000
+RETURN
+
+93000
+      STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+RETURN
+

@@ -1,0 +1,156 @@
+SUBROUTINE APCPCR_CHECK_REGISTER
+********************************************************************************
+*   Program name :- APCPCR_CHECK_REGISTER
+*   Created:- 01/27/2006
+*------------------------------------------------------------------------------*
+* AUTHOR : Sk. Zahoor Ahmed
+* In Properties:
+* --------------
+* Cono, TYPE, DIVISION 
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE PMC.CPYLIB DIVISION
+$INCLUDE CPYLIB CHAR
+* Insert method code here
+OPEN '','CONTROL' TO CONTROL ELSE
+	ERRMSG = 'CANNOT LOCATE CONTROL FILE'
+      	GOTO 99999
+END
+OPEN '','SECURITY' TO SECURITY ELSE
+	ERRMSG = 'CANNOT LOCATE SECURITY FILE'
+      	GOTO 99999
+END
+OPEN '','DIVISION' TO DIVISION ELSE
+      	ERRMSG = 'CANNOT LOCATE DIVISION FILE'
+      	GOTO 99999
+END
+
+* Initialization
+STATUS = RBO.getProperty('','ID',PPSD_ID)
+STATUS = RBO.getProperty('','TYPE',TYPE)
+STATUS = RBO.getProperty('','DIV',DIV)
+STATUS = RBO.getProperty('','PROMPT_PARAM',PROMPT_PARAM)
+CONO = FIELD(PPSD_ID, "!", 5)
+ERRMSG = "" 
+
+  IF TYPE # "R" AND TYPE # "U" AND TYPE # "P" AND TYPE # "C" AND TYPE # "F" AND TYPE # "S" THEN
+      ERRMSG = "INVALID TYPE PARAMETER PASSED"
+      GOTO 99999
+   END
+   *PORT = 'TTY'
+   *CALL SYSVARS.SUB(PORT)
+   *READV USER.ID FROM SECURITY, 'R.':PORT,2 ELSE USER.ID = ''
+   USER.ID = FIELD(PPSD_ID,"!",1)   
+   PORT = UPCASE(USER.ID)
+   ACCT = @WHO
+   PORT.ACCT = PORT:" ":ACCT
+   READU ITEM FROM CONTROL, CONO : "APS.CHECK.PRCS.CHK" ELSE ITEM = ""
+*T26493 v
+*  LOCATE PORT IN ITEM<2>,1 SETTING UFND THEN
+*     DIV = ITEM<4,UFND>
+*  END ELSE
+*     DIV = ""
+*  END
+   LOCATE PORT IN ITEM<2>,1 SETTING UFND ELSE NULL
+   IF DIV = "" THEN DIV = ITEM<4,UFND>
+*T26493 ^
+100 *
+*T27358 v
+   IF TYPE = "S" THEN ITEM<4,UFND> = DIV ; * CM
+   ERR = 0
+   DCNT = DCOUNT(ITEM<4>,VM)
+   IF DIV = "ALL" THEN
+      FOR D = 1 TO DCNT
+         IF NUM(ITEM<4,D>) THEN
+            ERR = 1
+         END
+      NEXT D
+   END ELSE
+      LOCATE "ALL" IN ITEM<4>,1 SETTING PND ELSE PND = 0
+      IF PND THEN 
+         ERR = 1
+      END
+   END
+   IF ERR = 1 THEN 
+      ERRMSG = "You Cannot Run Checks by Division and All at the same time"
+      RELEASE CONTROL, CONO:"APS.CHECK.PRCS.CHK"
+      GOTO 99999
+   END
+*T27358 ^
+   LOCATE DIV IN ITEM<4>,1 SETTING DFND THEN
+      IF UFND # DFND THEN
+         ERRMSG = 'USER (':ITEM<2,DFND>:') IS RUNNING CHECKS FOR DIVISION ':DIV
+         RELEASE CONTROL, CONO:"APS.CHECK.PRCS.CHK"
+        GOTO 99999
+      END
+   END ELSE
+      ITEM<4,UFND> = DIV
+   END
+   BEGIN CASE
+      CASE ITEM<2,UFND> # "" AND ITEM<2,UFND> # PORT
+         BEGIN CASE
+            CASE ITEM<3,UFND> = "R"
+               ERRMSG = 'YOU NEED TO WAIT FOR USER (':ITEM<2,UFND>:') TO FINISH PRINTING CHECK REGISTER'
+            CASE ITEM<3,UFND> = "P"
+               ERRMSG = 'YOU NEED TO WAIT FOR USER (':ITEM<2,UFND>:') TO FINISH PRINTING CHECKS'
+            CASE ITEM<3,UFND> = "U"
+               ERRMSG = 'YOU NEED TO WAIT FOR USER (':ITEM<2,UFND>:') TO FINISH CHECK UPDATE'
+            CASE 1
+               ERRMSG = 'YOU NEED TO WAIT FOR USER (':ITEM<2,UFND>:') TO FINISH CHECK SCHEDULE'
+         END CASE
+         RELEASE CONTROL, CONO : "APS.CHECK.PRCS.CHK"
+         GOTO 99999
+      CASE TYPE = "C"
+      CASE TYPE = "F"
+      CASE TYPE = "R" AND ITEM<1,UFND> # "P"
+         ERRMSG = "YOU MUST PRINT CHECKS BEFORE THIS MENU OPTION"
+         RELEASE CONTROL, CONO : "APS.CHECK.PRCS.CHK"
+      CASE TYPE = "P" AND ITEM<1,UFND> # "U"
+         BEGIN CASE
+            CASE ITEM<1,UFND> = "S"
+               ERRMSG = "YOU MUST START CHECK PROCESS BEFORE THIS MENU OPTION"
+            CASE ITEM<1,UFND> = "R" OR ITEM<1,UFND> = "P"
+               ERRMSG = "YOU MUST UPDATE CHECKS BEFORE THIS MENU OPTION"
+            CASE 1
+               ERRMSG = "YOU MUST START CHECK PROCESS BEFORE THIS MENU OPTION"
+         END CASE
+         RELEASE CONTROL, CONO : "APS.CHECK.PRCS.CHK"
+      CASE TYPE = "U" AND (ITEM<1,UFND> = "P" OR ITEM<1,UFND> = "R")
+         ERRMSG = "YOU MUST FINISH CHECK PROCESS BEFORE THIS MENU OPTION"
+         RELEASE CONTROL, CONO : "APS.CHECK.PRCS.CHK"
+      CASE TYPE = "S" AND (ITEM<1,UFND> = "P" OR ITEM<1,UFND> = "R")
+         ERRMSG = "YOU MUST FINISH CHECK PROCESS BEFORE THIS MENU OPTION"
+         RELEASE CONTROL, CONO : "APS.CHECK.PRCS.CHK"
+      CASE 1
+         ITEM<3,UFND> = TYPE;ITEM<2,UFND> = PORT
+         WRITE ITEM ON CONTROL, CONO : "APS.CHECK.PRCS.CHK"
+         BEGIN CASE
+            CASE TYPE = "S" OR TYPE = "P"
+               DIV = ITEM<4,UFND>
+            CASE TYPE = "R"
+               PROMPT_PARAM = ITEM<4,UFND>
+            CASE TYPE = "U"
+               DIV = ITEM<4,UFND>
+1500 *
+               IF PROMPT_PARAM = "" THEN
+                  IF TYPE = "U" AND ITEM<1,UFND> # "S" AND ITEM<1,UFND> # "U" THEN
+                     PROMPT_PARAM = "M"
+                  END ELSE
+                     PROMPT_PARAM = 'RMU'
+                  END
+                  
+               END
+         END CASE
+	 IF ERRMSG # '' THEN GOTO 99999
+   END CASE
+   GOTO 99999
+99999 * 
+STATUS = RBO.setProperty('', 'ServerMessage', ERRMSG)
+STATUS = RBO.getProperty('','DIV',DIV)
+STATUS = RBO.getProperty('','PROMPT_PARAM',PROMPT_PARAM)
+END
+

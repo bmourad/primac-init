@@ -1,0 +1,205 @@
+SUBROUTINE JOBM_CHECK_INPUT_CREDIT
+********************************************************************************
+*   Program name :- JOBM_CHECK_INPUT_CREDIT
+*   Created:- 7/22/2003
+*------------------------------------------------------------------------------*
+*
+* In Properties:
+* --------------
+*  Cono,JOB_NO,JOB_EST,ORDNO
+*
+* Out Properties:
+* ---------------
+*  ServerStatus,ServerMessage
+* *T417   Redback TestTrack Issues  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE JES.CPYLIB ESTIMATE
+$INCLUDE JCS.CPYLIB JOB
+*$INCLUDE OPS.CPYLIB JOB.FNGD.STATS
+$INCLUDE PMC.CPYLIB COMP.OPS
+$INCLUDE PMC.CPYLIB CUSTOMER
+* Insert method code here
+*T417 v
+ERRMSG = "";HMSG = '';CREDIT_FLAG = '';CUR.ORD.BAL = '';CUR.JOB.BAL = ''
+*T417 ^
+OPEN "","CONTROL" TO CONTROL ELSE
+	ERRMSG = "Cannot locate the CONTROL file"
+	GOTO 99999
+END
+OPEN '','ESTIMATE' TO F.EST ELSE
+	ERRMSG = "UNABLE TO OPEN FILE!"
+	GOTO 99999
+END
+OPEN "","JOB" TO JOB ELSE
+	ERRMSG = "CANNOT OPEN JOB FILE"
+       GOTO 99999
+END
+OPEN "","JOB.FNGD.STATS" TO JOB.FNGD.STATS ELSE
+	ERRMSG = "UNABLE TO OPEN FILE!"
+	GOTO 99999
+END
+OPEN "","CUSTOMER" TO CUSTOMER ELSE
+	ERRMSG = "UNABLE TO OPEN FILE!"
+	GOTO 99999
+END
+
+VAL = RBO.getProperty('','Cono',CONO)
+VAL = RBO.getProperty('','JOB_NO',JOBNO)
+
+MATREAD JOB.REC FROM JOB,CONO:JOBNO ELSE MAT JOB.REC = ""
+
+VAL = RBO.getProperty('','JOB_EST',EST.NO)
+IF EST.NO = 0 THEN EST.NO = ""
+
+VAL = RBO.getProperty('','JOB_CUST',CUSTNO)
+IF CUSTNO = 0 THEN CUSTNO = ""
+
+VAL = RBO.getProperty('','ORDERNO',ORDNO) ;* IT IS ""
+VAL = RBO.getProperty('','ORIG_CUST',ORIG.CUST)
+IF ORIG.CUST = 0 THEN ORIG.CUST = ""
+
+VAL = RBO.getProperty('','FLG',FLG) ; * INDICATES JOBNO IS OLD OR NEW
+VAL = RBO.getProperty('','VALD_CUST',VALD.CUST)
+
+IF VALD.CUST = 0 THEN VALD.CUST = ""
+VAL = RBO.getProperty('','JFS_UMS',JFS.PROD)
+VAL = RBO.getProperty('','JFS_F_QTY',JFS.F.QTY)
+VAL = RBO.getProperty('','JFS_A_QTY',JFS.A.QTY)
+VAL = RBO.getProperty('','CO_JT',CO_JT)
+VAL = RBO.getProperty('','JOB_MASTER',JOB.MASTER)
+
+IF JOB.MASTER = 0 THEN JOB.MASTER = ""
+
+MATREAD EST.REC FROM F.EST,CONO:EST.NO ELSE MAT EST.REC = ""
+
+IF JOBNO = "N" THEN
+	JOB.MASTER = EST.JOB
+END
+
+*MATREAD JFS.REC FROM JOB.FNGD.STATS, CONO:JOBNO ELSE MAT JFS.REC = ""
+MATREAD OPCO.REC FROM CONTROL, CONO:"OPS" ELSE MAT OPCO.REC = ""
+MATREAD CUST.REC FROM CUSTOMER, CONO:CUSTNO ELSE MAT CUST.REC = ""
+VAL = RBO.getProperty('','JOB_CONF_AMT',JOB_CONF_AMT)
+
+IF CO_JT = "VALD" THEN ;*IF TO VALIDATE CUSTOMER
+	IF CUST.TYPE = "F" THEN
+		ERRMSG = CUSTNO : " Customer's Type is Frozen - Cannot Enter Job"
+		GOTO 99999
+	END ELSE IF CUST.CREDIT = "DEL" THEN
+   		ERRMSG = 'This customer has credit code "DEL", cannot enter a Job for this customer.'
+		GOTO 99999
+	END
+
+	IF VALD.CUST = 1 THEN
+	1200*
+		BEGIN CASE
+      			CASE JOB.STATUS # ""
+       			ERRMSG = "CAN NOT CHANGE CUSTOMER FOR ACTIVE JOBS"
+		         	GOTO 99999
+      			CASE SUM(JFS.F.QTY) > 0
+         			ERRMSG = "Finished Goods quantity already received from this JOB"
+	         		GOTO 99999
+	      		CASE SUM(JFS.A.QTY) > 0
+       	 		ERRMSG = "There are orders linked to this job"
+	       	  	GOTO 99999
+	      		CASE ORDNO # "" AND OPCO.JOB.BLD # "N"
+       	  		ERRMSG = "Customer Must Match Customer On Order"
+	       	 	GOTO 99999
+	      		CASE JOB.SUBS # "" AND JOBNO # ""
+       	  		ERRMSG = "There are Sub Jobs use Change Job Cust to change Cust"
+	       	  	GOTO 99999
+			CASE CUST.TYPE = "F"
+				ERRMSG = "Customer Type is Frozen - Cannot Enter Job"
+				GOTO 99999
+			CASE CUST.CREDIT = "DEL"
+				ERRMSG = 'This customer has credit code "DEL", cannot enter a Job for this customer.'
+				GOTO 99999
+			CASE JOB.MASTER # JOBNO AND JOB.MASTER # ""
+      				MATREAD JOB.REC FROM JOB, CONO:JOB.MASTER ELSE
+	       	  		ERRMSG = "CANNOT LOCATE MASTER JOB - ":JOB.MASTER
+       	  			GOTO 99999
+	      			END
+		      		IF CUSTNO # JOB.CUST THEN ; * MASTER JOB AND ITS SUB JOB SHOULD HAVE SAME CUSTOMER
+       		 		ERRMSG = "MASTER JOB HAVE A DIFFERENT CUSTOMER - ":JOB.CUST
+         				GOTO 99999
+		      		END
+ 		END CASE
+
+		STATUS = RBO.setProperty('','CUST_CREDIT',CUST.CREDIT) ;* CREDIT TYPE
+	END
+	
+
+	1250*
+	IF ORIG.CUST = '' THEN ORIG.CUST = CUSTNO
+	IF ORIG.CUST # CUSTNO THEN
+		VAL = RBO.setProperty('','CREDIT_AUTH','I') ;* REQUIRED I/P FOR CREDIT AUTH
+	END	
+END
+
+CUR.ORD.BAL = SUM(CUST.ORD.BAL)
+CUR.JOB.BAL = SUM(CUST.JOB.BAL)
+
+LOCATE JOBNO IN CUST.JOB<1>,1 SETTING JFND THEN
+	CUR.JOB.BAL = CUR.JOB.BAL - CUST.JOB.BAL<1,JFND>
+END
+
+3100*
+QUOTED.AMT = 0
+
+LOCATE "4" IN JOB.STATUS<1>,1 SETTING DUMMY ELSE
+	IF JOB.TOT.INV > 0 THEN
+       	QUOTED.AMT = JOB_CONF_AMT - JOB.TOT.INV
+      	END ELSE
+       	QUOTED.AMT = JOB_CONF_AMT
+      	END
+	IF QUOTED.AMT < 0 THEN QUOTED.AMT = 0
+END
+
+IF ORDNO # "" OR JFS.PROD # "" THEN
+	GOTO 99999
+END
+
+IF CUST.AR.BAL = "" THEN
+	CUST.AR.BAL = 0
+END
+
+BEGIN CASE
+	CASE CUST.CREDIT = "N"
+		ERRMSG = "THERE IS NO CREDIT FOR THIS CUSTOMER"
+		GOTO 3149
+       	*CREDIT_FLAG = "JOB_CREDIT"
+	CASE CUST.CREDIT = "E"
+       	AVAIL = CUST.CR.LIMIT * 100 - CUST.AR.BAL - CUR.JOB.BAL - CUR.ORD.BAL - QUOTED.AMT
+       	IF AVAIL < 0 THEN
+       		HMSG = "A/R=":OCONV(CUST.AR.BAL,"MD2$<")
+       		HMSG = HMSG:"&JOB/ORD=":OCONV(CUR.JOB.BAL+CUR.ORD.BAL+QUOTED.AMT,"MD2$<")
+       		HMSG = HMSG:"&AVAILABLE=":OCONV(AVAIL,"MD2$<")
+         	END ELSE
+			GOTO 3149
+            		*CREDIT_FLAG = "JOB_CREDIT"
+         	END
+	CASE 1
+       	HMSG = "A/R=":OCONV(CUST.AR.BAL,"MD2$<")
+       	HMSG = HMSG:"&JOB/ORD=":OCONV(CUR.JOB.BAL+CUR.ORD.BAL+QUOTED.AMT,"MD2$<")
+       	HMSG = HMSG:"&TOT BAL= ":OCONV(CUST.AR.BAL+CUR.JOB.BAL+CUR.ORD.BAL+QUOTED.AMT,"MD2$<")
+END CASE
+
+CREDIT_FLAG = "JOB_CREDIT"
+
+99999
+3149*
+STATUS = RBO.setProperty('','CUSTOMER_HMSG',HMSG)
+STATUS = RBO.setProperty('','CREDIT_FLAG',CREDIT_FLAG)
+STATUS = RBO.setProperty('','CO_POS',CUR.ORD.BAL)
+STATUS = RBO.setProperty('','ACTION',CUR.JOB.BAL)
+	
+IF (TRIM(ERRMSG) # "") THEN
+*T417 	STATUS = RBO.setProperty('','ServerStatus','E')
+	STATUS = RBO.setProperty('','ServerStatus','1')
+       STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+END ELSE
+       STATUS = RBO.setProperty('','ServerStatus','')
+       STATUS = RBO.setProperty('','ServerMessage','')
+END 
+RETURN

@@ -1,0 +1,178 @@
+   SUBROUTINE INV.JOB.INQ(CONO,PROD,WHSE)
+*COPY>CPYLIB>COM1
+*COPY>ICS.CPYLIB>COM.INV.INQ
+*********************************************************************
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - ICSBP
+* PROGRAM     - INV.JOB.INQ
+* BY          - EDVARD PITKA
+* DATA        - 05/04/01
+* DESCRIPTION -
+*T25740   edvard  06/30/01  rev12
+*T25978 adelgado 02/18/2002 * Add the use of prompts (S,SR,SB,ST).
+*T26683 epitka 06/20/2002 * Add used column.
+*T27118 epitka 12/17/2002 * Add true used qty from job (see task).
+*ENDDOC
+*********************************************************************
+*
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>ICS.CPYLIB>INV.STATS
+*COPY>ICS.CPYLIB>INV.JOB.STATS
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>JCS.CPYLIB>JOB
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+*
+   DEFFUN CALC.STK.QTY(COST.QTY,MAT INV.CNV.REC,ROND,LN)
+*
+   MAT SYSCOM.REC =  ""; SYS.TYPE = 2
+*
+   PAGE.SIZE = 5
+   S.CUST.NAME = ''
+   S.JOB.CUST = ''
+   S.JOB.DATE = ''
+   S.JOB.ALOC = ''
+   S.JOB.QTY = ''
+   S.JOB.USED=''
+   UNKNOWN = STR('?',30)
+   START = 1
+   ESN = ECD.SCRN.NO
+*
+   GOSUB GET.DATA
+   GOSUB BUILD.SCREEN
+   ECD.ACTION = 3; CALL SCRN.EDIT
+   ;*
+   ;* Main Prompt
+   ;*
+   LOOP
+      ECD.NUM = 7; SCV.REC(ECD.NUM)<ESN> = ''
+      ECD.ACTION = 4; CALL SCRN.EDIT
+      ACTION = ECD.RET.VALUE
+      BEGIN CASE
+         CASE ACTION = '' OR ACTION = 'END'
+            ACTION = ''
+      * T25978 v
+         CASE ACTION[1,1] = 'S'
+        * IF LN.CNT > PAGE.SIZE THEN
+        *   START += PAGE.SIZE
+        *   IF START > LN.CNT THEN START = 1
+            GOSUB SCROLL
+        * END
+      * T25978 ^
+      END CASE
+   WHILE ACTION # '' DO REPEAT
+   GOTO 99999
+*
+*************************************************************************
+**** S U B R O U T I N E S **********************************************
+*************************************************************************
+*
+***************
+GET.DATA: 
+****************
+*
+   LN.CNT = DCOUNT(ISTAT.JOB,VM)
+   TOT.ALLOC = 0
+   TOT.RSV = 0
+   TOT.USED=0
+   FOR I = 1 TO LN.CNT
+      IJS.ID = CONO:PROD:"!":WHSE:"!":ISTAT.JOB<1,I>
+      MATREAD INV.JS.REC FROM INV.JOB.STATS,IJS.ID ELSE
+         MAT INV.JS.REC = ""
+      END
+      CUST.ID = CONO:IJS.JOB.CUST
+      MATREAD CUST.REC FROM CUSTOMER,CUST.ID ELSE CUST.NAME = UNKNOWN
+      S.CUST.NAME<1,I> = CUST.NAME
+      S.JOB.CUST<1,I> = IJS.JOB.CUST
+      S.JOB.DATE<1,I> = IJS.JOB.DATE
+      S.JOB.ALOC<1,I> = IJS.JOB.ALOC
+      S.JOB.QTY<1,I> = IJS.JOB.QTY
+      TOT.ALLOC +=IJS.JOB.ALOC
+      TOT.RSV += IJS.JOB.QTY
+      ;* get used qty
+      S.JOB.USED<1,I>=0
+      JOB.ID=CONO:ISTAT.JOB<1,I>
+      MATREAD JOB.REC FROM JOB,JOB.ID THEN
+         EOL=0 ; BEG.POS=1
+         LOOP
+            LOCATE PROD IN JOB.RESV.MATL<1>,BEG.POS SETTING PIDX THEN
+               IF JOB.RESV.WHSE<1,PIDX>=WHSE THEN
+                  EOL=1
+                  S.JOB.USED<1,I>=JOB.USED.QTY<1,PIDX>
+               END ELSE
+                  BEG.POS +=1
+               END
+            END ELSE
+               EOL=1
+            END
+         UNTIL EOL DO REPEAT
+      END
+      TOT.USED +=S.JOB.USED<1,I>
+   NEXT I
+   RETURN
+*
+***************
+BUILD.SCREEN: 
+***************
+*
+   SCV.REC(12)<ESN> = ISTAT.JOB
+   SCV.REC(13)<ESN> = S.JOB.CUST
+   SCV.REC(18)<ESN> = S.CUST.NAME
+   LN.CNT = DCOUNT(ISTAT.JOB,VM)
+   FOR L = 1 TO LN.CNT
+      SCV.REC(11)<ESN,L> = L
+      SCV.REC(14)<ESN,L> = OCONV(S.JOB.DATE<1,L>,"D2/")
+      TMP=CALC.STK.QTY(S.JOB.ALOC<1,L>,MAT INV.CNV.REC,'','')
+      SCV.REC(15)<ESN,L>=OCONV(TMP,ICR.CNV1)
+      TMP=CALC.STK.QTY(S.JOB.QTY<1,L>,MAT INV.CNV.REC,'','')
+      SCV.REC(16)<ESN,L>=OCONV(TMP,ICR.CNV1)
+      TMP=CALC.STK.QTY(S.JOB.USED<1,L>,MAT INV.CNV.REC,'','')
+      SCV.REC(17)<ESN,L>=OCONV(TMP,ICR.CNV1)
+   NEXT L
+   TMP=CALC.STK.QTY(TOT.ALLOC,MAT INV.CNV.REC,'','')
+   SCV.REC(4)<ESN>=OCONV(TMP,ICR.CNV1)
+   TMP=CALC.STK.QTY(TOT.RSV,MAT INV.CNV.REC,'','')
+   SCV.REC(5)<ESN>=OCONV(TMP,ICR.CNV1)
+   TMP=CALC.STK.QTY(TOT.USED,MAT INV.CNV.REC,'','')
+   SCV.REC(6)<ESN>=OCONV(TMP,ICR.CNV1)
+   RETURN
+*
+*************
+SCROLL: 
+*************
+*
+  * T25978 v
+   BEGIN CASE
+      CASE ACTION = "S" OR ACTION = "SF"
+         START += PAGE.SIZE
+         IF START > LN.CNT THEN START = 1
+      CASE ACTION = "SR"
+         START -= PAGE.SIZE
+         IF START<1 THEN START=1
+      CASE ACTION = "ST"
+         START=1
+      CASE ACTION = "SB"
+         START = LN.CNT
+   END CASE
+   START = 1 + INT((START-1)/PAGE.SIZE) * PAGE.SIZE
+  * T25978 ^
+   ECD.NUM=11;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=12;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=13;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=14;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=15;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=16;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=17;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=18;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+*  ECD.NUM=19;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   RETURN
+*
+91000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+99999 *
+   ECD.ACTION=99;CALL SCRN.EDIT
+   RETURN
+END

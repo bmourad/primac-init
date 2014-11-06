@@ -1,0 +1,261 @@
+OPEN '','INV.GLA.TRANS' TO INV.GLA.TRANS ELSE STOP INV.GLA.TRANS
+OPEN '','INV.GLA.TAG' TO INV.GLA.TAG ELSE STOP INV.GLA.TAG
+OPEN '','INV.TRAN.HIST' TO INV.TRAN.HIST ELSE STOP 201 INV.TRAN.HIST
+OPEN '','INV_AUDIT_TAG' TO INV_AUDIT_TAG ELSE STOP 201 INV_AUDIT_TAG
+OPEN '','INV_AUDIT_HIST' TO INV_AUDIT_HIST ELSE STOP 201 INV_AUDIT_HIST
+OPEN '','ITH.INAH.XREF' TO ITH.INAH.XREF ELSE STOP 201 ITH.INAH.XREF
+OPEN '','INV.COST.ADJ' TO INV.COST.ADJ ELSE STOP 201 INV.COST.ADJ
+OPEN '','INV.REC.ADJ' TO INV.REC.ADJ ELSE STOP 201 INV.REC.ADJ
+OPEN '','INV.ADJ.HIST' TO INV.ADJ.HIST ELSE STOP 201 INV.ADJ.HIST
+OPEN '','INV_ADJ_HIST_TAG' TO INV_ADJ_HIST_TAG ELSE STOP 201 INV_ADJ_HIST_TAG
+OPEN '','ICA.XREF' TO ICA.XREF ELSE STOP 201 ICA.XREF
+OPEN '','IRA.XREF' TO IRA.XREF ELSE STOP 201 IRA.XREF
+OPEN '','CATEGORY.OLD' TO CATEGORY.OLD ELSE STOP 201 CATEGORY.OLD
+OPEN '','INVENTORY' TO INVENTORY ELSE STOP INVENTORY
+;* folowing needed only for misc. po receipts
+OPEN '','CONTROL' TO CONTROL ELSE STOP CONTROL
+OPEN '','COA' TO COA ELSE STOP COA
+OPEN '','MISC.PO' TO MISC.PO ELSE STOP MISC.PO
+*
+*COPY>ICS.CPYLIB>INV.GLA.TRANS
+*COPY>ICS.CPYLIB>INV.COST.ADJ
+*COPY>ICS.CPYLIB>INV.REC.ADJ
+*COPY>ICS.CPYLIB>INV.TRAN.HIST
+*COPY>ICS.CPYLIB>INV.ADJ.HIST
+*COPY>ICS.CPYLIB>INV_AUDIT_HIST
+*COPY>ICS.CPYLIB>CATEGORY.REV11
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>POS.CPYLIB>MISC.PO
+*COPY>PMC.CPYLIB>COA 
+DEFFUN GET.INAH.SEQ(CONO,CONTROL.FILE,INV_AUDIT_HIST.FILE)
+*
+;* first convert INV.GLA.TRANS records
+;* these records allways come in pairs (credit and debit)
+;* and this is how they are built in rev11 ics
+;* source = IR
+;* STOCK.REC.UPDATE AND RS.STOCK.REC.UPDATE 1. CATG.INV 2. CATG.ACCRU.LIAB
+;* source = IC
+;* RECV.COST.ADJ 1. CATG.INV 2. CATG.ACCRU.LIAB
+;* source = IQ
+;* STOCK.REV.MAINT 1. CATG.ACCRU.LIAB 2. CATG.INV
+;* source = MR or MA
+;* MISC.PO.REC.MAINT 1. CAMISC.EXP.ACCT 2. CAMISC.CRED.EXP
+;*
+PRINT @(-1)
+PRINT @(1,5):'SELECTING INV.GLA.TRANS':@(-4) 
+CMD='SSELECT INV.GLA.TAG'
+UDTEXECUTE CMD
+IF @LOGNAME='cba' THEN DEBUG
+;*
+PRINT @(1,5): 'Building INV_AUDIT_TAG records':@(-4)
+DONE=0 ; CNT=0
+LOOP
+  READNEXT IGT.ID ELSE DONE=1
+UNTIL DONE DO
+  CNT+=1                   
+  IF REM(CNT,100)=0 THEN   
+    PRINT @(45,5):CNT:@(-4)
+  END                      
+  CONO=IGT.ID[1,3]
+  MATREAD IGT.REC FROM INV.GLA.TRANS,IGT.ID THEN
+    DATE1=IGT.DATE
+    REF1=IGT.REF
+    SRC1=IGT.SRC
+    MON1=IGT.MON
+    AMT1=IGT.AMT
+    ACCT1=IGT.ACCT
+    PROD1=IGT.PROD
+    WHSE1=IGT.WHSE
+    IF REF1[1,1]='M' THEN
+      DV.DP.CC=IGT.DV.DP.CC
+    END
+    READNEXT IGT.ID THEN
+      MATREAD IGT.REC FROM INV.GLA.TRANS,IGT.ID THEN
+        DATE2=IGT.DATE
+        REF2=IGT.REF
+        SRC2=IGT.SRC
+        MON2=IGT.MON
+        AMT2=IGT.AMT
+        ACCT2=IGT.ACCT
+        PROD2=IGT.PROD
+        WHSE2=IGT.WHSE
+        IF PROD1=PROD2 AND WHSE1=WHSE2 AND SRC1=SRC2 AND ABS(AMT1)=ABS(AMT2) AND MON1=MON2 THEN
+          TRAN=OCONV(REF1,"G1*1")
+          BEGIN CASE 
+            CASE SRC1='IR'
+              TYPE='R' 
+              ITH.ID=CONO:PROD1:"!":WHSE1:"!":DATE1
+              INAH.XREF=''
+              READ INAH.XREF FROM ITH.INAH.XREF,ITH.ID THEN
+                MATREAD ITH.REC FROM INV.TRAN.HIST,ITH.ID THEN
+                  TCNT=DCOUNT(ITH.TYPE,@VM)
+                  FOR T=1 TO TCNT
+                    IF TYPE=ITH.TYPE<1,T> AND ITH.TRAN<1,T>=TRAN THEN
+                      INAH.ID=INAH.XREF<1,T>
+                      MATREAD INAH.REC FROM INV_AUDIT_HIST,INAH.ID THEN
+                        INAH.ACCT=ACCT1
+                        INAH.ACCR.ACCT=ACCT2
+                        MATWRITE INAH.REC ON INV_AUDIT_HIST,INAH.ID
+                        WRITE '' ON INV_AUDIT_TAG,INAH.ID
+                      END
+                    END
+                  NEXT T
+                END
+              END
+            CASE SRC1='IC'
+              TYPE='A'
+              ICXREF.ID=CONO:PROD1:"!":WHSE1:"!":DATE1
+              ID.XREF=''
+              READ ID.XREF FROM ICA.XREF,ICXREF.ID THEN
+*                ICA.ID=ID.XREF
+                ID.CNT=DCOUNT(ID.XREF<1>,@VM)
+                FOUND=0
+                FOR II=1 TO ID.CNT UNTIL FOUND
+                  ICA.ID=ID.XREF<1,II>
+                  MATREAD ICA.REC FROM INV.COST.ADJ,ICA.ID THEN
+                    ITH.ID=CONO:PROD1:"!":WHSE1:"!":ICA.REC.DATE
+                    INAH.XREF='' 
+                    READ INAH.XREF FROM ITH.INAH.XREF,ITH.ID THEN
+                      MATREAD ITH.REC FROM INV.TRAN.HIST,ITH.ID THEN 
+                        TCNT=DCOUNT(ITH.TYPE,@VM)
+                        FOR T=1 TO TCNT
+                          IF TYPE=ITH.TYPE<1,T> AND ITH.TRAN<1,T>=ICA.ID[4,99] THEN
+                            IF ICA.PO=TRAN THEN
+                              FOUND=1
+                              ID.XREF=DELETE(ID.XREF,1,II,0)
+                              WRITE ID.XREF ON ICA.XREF,ICXREF.ID
+                              INAH.ID=INAH.XREF<1,T> 
+                              MATREAD INAH.REC FROM INV_AUDIT_HIST,INAH.ID THEN
+                                INAH.ACCT=ACCT1
+                                INAH.ACCR.ACCT=ACCT2 
+                                MATWRITE INAH.REC ON INV_AUDIT_HIST,INAH.ID
+                                WRITE '' ON INV_AUDIT_TAG,INAH.ID
+                              END
+                            END
+                          END
+                        NEXT T 
+                      END
+                    END
+                  END
+                NEXT II
+              END
+            CASE SRC1='IQ'
+              ;* watch out in receipt cost adjustment
+              ;* first tag record is accrue liab acct
+              TYPE='A'
+              IRXREF.ID=CONO:PROD1:"!":WHSE1:"!":DATE1
+              ID.XREF=''
+              READ ID.XREF FROM IRA.XREF,IRXREF.ID THEN
+*                IRA.ID=ID.XREF
+                ID.CNT=DCOUNT(ID.XREF<1>,@VM)
+                FOUND=0
+                FOR II=1 TO ID.CNT UNTIL FOUND
+                  IRA.ID=ID.XREF<1,II>
+                  MATREAD IRA.REC FROM INV.REC.ADJ,IRA.ID THEN
+                    ITH.ID=CONO:PROD1:"!":WHSE1:"!":IRA.RECV
+                    INAH.XREF='' 
+                    READ INAH.XREF FROM ITH.INAH.XREF,ITH.ID THEN
+                      MATREAD ITH.REC FROM INV.TRAN.HIST,ITH.ID THEN 
+                        TCNT=DCOUNT(ITH.TYPE,@VM)
+                        FOR T=1 TO TCNT
+                          IF TYPE=ITH.TYPE<1,T> AND ITH.TRAN<1,T>=IRA.ID[4,99] THEN
+                            IF IRA.PO=TRAN THEN
+                              FOUND=1
+                              ID.XREF=DELETE(ID.XREF,1,II,0)
+                              WRITE ID.XREF ON IRA.XREF,IRXREF.ID
+                              INAH.ID=INAH.XREF<1,T> 
+                              MATREAD INAH.REC FROM INV_AUDIT_HIST,INAH.ID THEN
+                                INAH.ACCT=ACCT2
+                                INAH.ACCR.ACCT=ACCT1 
+                                MATWRITE INAH.REC ON INV_AUDIT_HIST,INAH.ID
+                                WRITE '' ON INV_AUDIT_TAG,INAH.ID
+                              END
+                            END
+                          END
+                        NEXT T 
+                      END
+                    END
+                  END
+                NEXT II
+              END
+            CASE SRC1='MA' OR SRC1='MR'
+              MPO=OCONV(REF1,'G1*1')
+              MPO.ID=CONO:MPO
+              MATREAD MPO.REC FROM MISC.PO,MPO.ID ELSE MAT MPO.REC=''
+              IF MPO.ACCRUE='Y' THEN
+                INAH.SEQ=GET.INAH.SEQ(CONO,CONTROL,INV_AUDIT_HIST)
+                INAH.ID=CONO:INAH.SEQ
+                ;* set INAH record since misc. po receipts
+                ;* do not create INV.TRAN.HIST record at all
+                MAT INAH.REC=''
+                INAH.ACCT=ACCT1
+                INAH.ACCR.ACCT=ACCT2
+                INAH.PROD=PROD1
+                INAH.DATE=DATE1
+                INAH.PERIOD=MON1
+                INAH.EXT.COST=AMT1
+                INAH.WHSE=WHSE1
+                INAH.SRC=SRC1
+                INAH.TYPE=SRC1
+                INAH.SYS.DATE=DATE() 
+                INAH.SYS.TIME=TIME() 
+                INAH.OPER.ID=@LOGNAME
+                INAH.DV.DP.CC=DV.DP.CC
+                MATREAD COA.REC FROM COA,CONO:INAH.ACCR.ACCT ELSE COA.LEVEL=0
+                BEGIN CASE
+                  CASE COA.LEVEL<1
+                    INAH.ACCR.DVDPCC='0000000'
+                  CASE COA.LEVEL<2
+                    INAH.ACCR.DVDPCC=INAH.DV.DP.CC[1,2]:'00000'
+                  CASE COA.LEVEL<3
+                    INAH.ACCR.DVDPCC=INAH.DV.DP.CC[1,4]:'000'
+                END CASE
+                INAH.PO=MPO
+                MATWRITE INAH.REC ON INV_AUDIT_HIST,INAH.ID
+                WRITE '' ON INV_AUDIT_TAG,INAH.ID
+              END
+          END CASE
+        END
+      END
+    END ELSE
+      DONE=1
+    END
+  END
+REPEAT
+*
+SELECT INV_ADJ_HIST_TAG
+*
+TYPE='A'
+DONE=0
+LOOP
+  READNEXT IAH.ID ELSE DONE=1
+UNTIL DONE DO
+  MATREAD IAH.REC FROM INV.ADJ.HIST,IAH.ID THEN
+    CONO=IAH.ID[1,3]
+    TRAN=IAH.ID[4,99]
+    ITH.ID=CONO:IAH.PROD:"!":IAH.WHSE:"!":IAH.DATE.UPD
+    READ INAH.XREF FROM ITH.INAH.XREF,ITH.ID THEN
+      MATREAD ITH.REC FROM INV.TRAN.HIST,ITH.ID THEN
+        TCNT=DCOUNT(ITH.TYPE,@VM)                            
+        FOR T=1 TO TCNT                                      
+          IF TYPE=ITH.TYPE<1,T> AND ITH.TRAN<1,T>=TRAN THEN  
+            INAH.ID=INAH.XREF<1,T>                           
+            MATREAD INAH.REC FROM INV_AUDIT_HIST,INAH.ID THEN
+              INV.ID=CONO:INAH.PROD
+              MATREAD INV.REC FROM INVENTORY,INV.ID THEN
+                CATG.ID=CONO:INV.LINE
+                MATREAD R11.CATG.REC FROM CATEGORY.OLD,CATG.ID THEN
+                  INAH.ACCT=R11.CATG.INV
+                  INAH.ADJ.ACCT=R11.CATG.ADJ
+                  MATWRITE INAH.REC ON INV_AUDIT_HIST,INAH.ID    
+                  WRITE '' ON INV_AUDIT_TAG,INAH.ID              
+                END
+              END
+            END                                              
+          END                                                
+        NEXT T                                               
+      END
+    END
+  END
+REPEAT
+STOP

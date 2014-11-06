@@ -1,0 +1,272 @@
+*COPY>CPYLIB>COM1
+********************************************************************
+* REVISION    - [08.1]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SOURCE        - OPSBP
+* PROGRAM       - PICK.TICKET.DELETE
+* BY            - STRAKA, VERCOM SOFTWARE INC.
+* DATE          - 05/01/95
+* DESCRIPTION   -
+*T20852 doug 08/21/1996 * Pick ticket tracking
+*T21177 diane 11/06/1996 * REV11 UPG
+*T23278 markt 01/28/1999 * Add check for divisional security.
+*T25122 renee 05/19/2000 * Since order numbers are allowed to have
+*                          dashes, we need to use the last occurence of
+*                          a dash instead of the first to distinguish the
+*                          order number from the pick ticket sequence
+*                          number. 
+*T25188 edvard 05/26/2000 * PICK TICKET PRINT FLAG IS NOT RESET TO Y
+*                           WHEN A PICK TICKET IS DELETED.
+*T25740 epitka 01/29/2002 * REV12
+********************************************************************
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>OPS.CPYLIB>PICK.TICKET
+*COPY>OPS.CPYLIB>ORDER
+*COPY>OPS.CPYLIB>ORDER.DETAIL
+*COPY>ICS.CPYLIB>INV_SERIAL
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+*
+*--- SETUP SYSTEM ERROR MESSAGES
+*
+SYS.TYPE = 1
+CALL SYSCOM(MAT SYSCOM.REC)
+*
+*---- PROCREAD
+*
+PROCREAD BUFFER ELSE
+  ERRMSG = "MUST RUN FROM A PROC"
+  GOTO 93000
+END
+*
+*---- OPEN FILES
+*
+OPEN '','COMPANY' TO COMPANY ELSE ERRMSG = "COMPANY FILE IS MISSING"; GOTO 93000
+OPEN '','CONTROL' TO CONTROL ELSE ERRMSG = "CONTROL FILE IS MISSING"; GOTO 93000
+OPEN '','ORDER' TO ORDER ELSE ERRMSG = "ORDER FILE IS MISSING";GOTO 93000
+OPEN '','ORDER.DETAIL' TO ORDER.DETAIL ELSE ERRMSG = "ORDER.DETAIL FILE IS MISSING";GOTO 93000
+OPEN '','PICK.TICKET' TO PICK.TICKET ELSE ERRMSG = "PICK.TICKET FILE IS MISSING";GOTO 93000
+OPEN '','INV_SERIAL' TO INV_SERIAL ELSE ERRMSG = "INV_SERIAL FILE IS MISSING";GOTO 93000
+OPEN '','INV_SERIAL_TEMP' TO INV_SERIAL_TEMP ELSE ERRMSG = "INV_SERIAL_TEMP FILE IS MISSING";GOTO 93000
+*
+*---- GET COMPANY
+*
+MAT COMP.REC = ''
+CONO = ''
+CALL GET.CONO(CONO,MAT COMP.REC)
+IF CONO = 'END' THEN GOTO 99999
+*
+*---- MAIN PROCESSING
+*
+DONE = 0
+LOOP
+  READNEXT ID ELSE DONE = 1
+UNTIL DONE DO
+  MATREADU PKT.REC FROM PICK.TICKET, ID ELSE
+    RELEASE PICK.TICKET, ID
+    GOTO 99
+  END
+*
+*---- VERIFY ORDER
+*
+  DASH.FOUND = 0
+  CHARCNT = LEN(ID)
+  FOR XX = CHARCNT TO 1 STEP (-1) UNTIL DASH.FOUND
+    IF ID[XX,1] = "-" THEN
+      ORDNO = ID[1,XX-1]
+      ORDNO = ORDNO[4,99]
+      DASH.FOUND = 1
+    END
+  NEXT XX
+  MATREADU ORD.REC FROM ORDER, CONO:ORDNO ELSE
+    ERRMSG = "Order is missing"
+    GOSUB 91000
+    RELEASE PICK.TICKET, ID
+    RELEASE ORDER, CONO:ORDNO
+    GOTO 99
+  END
+  DIV.CODE = ORD.DIV; USER.ID = UPCASE(@LOGNAME); ERRMSG = ''
+  CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+  IF ERRMSG # '' THEN
+    GOSUB 91000
+    RELEASE PICK.TICKET, ID
+    RELEASE ORDER, CONO:ORDNO
+    GOTO 99
+  END
+*
+*---- VERIFY ORDER DETAIL
+*
+  OSD.ID = CONO:ORDNO:"!":PKT.SHIP.TO
+  MATREADU ORD.DET.REC FROM ORDER.DETAIL, OSD.ID ELSE
+    ERRMSG = "Order Detail is missing"
+    GOSUB 91000
+    RELEASE PICK.TICKET, ID
+    RELEASE ORDER, CONO:ORDNO
+    RELEASE ORDER.DETAIL, OSD.ID
+    GOTO 99
+  END
+*
+*---- VERIFY PICK TICKET STATUS
+*
+  IF SUM(PKT.SHIP.QTY) THEN
+    ERRMSG = "Picking Ticket has already been shipped"
+    GOSUB 91000
+    RELEASE PICK.TICKET, ID
+    GOTO 99
+  END
+  IF PKT.BOL # "" THEN
+    ERRMSG = "Picking Ticket is on Bill of Lading ":PKT.BOL
+    GOSUB 91000
+    RELEASE PICK.TICKET, ID
+    GOTO 99
+  END
+  UPD = 0
+  IF PKT.REL.NO = "" THEN
+    GOSUB 1000
+  END ELSE
+    GOSUB 2000
+  END
+  IF UPD THEN
+    LOCATE ID[4,99] IN ORD.PICK.NO<1>,1 SETTING FND THEN
+      ORD.PICK.NO = DELETE(ORD.PICK.NO,1,FND,0)
+      ORD.PRINT = "Y" ; *25188
+    END
+    DELETE PICK.TICKET, ID
+    MATWRITE ORD.REC ON ORDER, CONO:ORDNO
+    MATWRITE ORD.DET.REC ON ORDER.DETAIL, OSD.ID
+  END ELSE
+    ERRMSG = "Picking Ticket has already been shipped"
+    GOSUB 91000
+    RELEASE PICK.TICKET, ID
+    RELEASE ORDER, CONO:ORDNO
+    RELEASE ORDER.DETAIL, OSD.ID
+  END
+99 *
+REPEAT
+GOTO 99999
+*
+**************************************************************************
+*
+*
+*---- FROM ORDER
+*
+1000 *
+OCNT = DCOUNT(PKT.PROD,VM)
+FOR OPTR = 1 TO OCNT
+  P = 1
+  LOOP
+    LOCATE PKT.PROD<1,OPTR> IN OSD.PROD<1>,P SETTING PPTR THEN
+      IF (PKT.WHSE<1,OPTR> = OSD.WHSE<1,PPTR>) AND (PKT.KIT<1,OPTR> = OSD.KIT<1,PPTR>) AND (PKT.SEQ<1,OPTR> = OSD.PROD.SEQ<1,PPTR>) THEN P = 0
+    END ELSE
+      P = 0; PPTR = 0
+    END
+  WHILE P DO
+    P = PPTR + 1
+  REPEAT
+  IF PPTR THEN
+    FCNT = DCOUNT(PKT.RECP.NO<1,OPTR>,SVM)
+    FOR F = 1 TO FCNT
+      LOCATE PKT.RECP.NO<1,OPTR,F> IN OSD.RECP.NO<1,PPTR>,1 SETTING FND THEN
+        OSD.P.QTY<1,PPTR,FND> = OSD.P.QTY<1,PPTR,FND> - PKT.R.QTY<1,OPTR,F>
+        IF OSD.P.QTY<1,PPTR,FND> < 0 THEN OSD.P.QTY<1,PPTR,FND> = 0
+        ORD.FLAG=1
+        GOSUB REMOVE.RESERVE
+        UPD=1
+      END
+    NEXT F
+  END
+NEXT OPTR
+RETURN
+*
+*---- FROM RELEASE
+*
+2000 *
+OCNT = DCOUNT(PKT.PROD,VM)
+FOR OPTR = 1 TO OCNT
+  P = 1
+  LOOP
+    LOCATE PKT.PROD<1,OPTR> IN OSD.PROD<1>,P SETTING PPTR THEN
+      IF (PKT.WHSE<1,OPTR> = OSD.WHSE<1,PPTR>) AND (PKT.KIT<1,OPTR> = OSD.KIT<1,PPTR>) AND (PKT.SEQ<1,OPTR> = OSD.PROD.SEQ<1,PPTR>) THEN P = 0
+    END ELSE
+      P = 0; PPTR = 0
+    END
+  WHILE P DO
+    P = PPTR + 1
+  REPEAT
+  IF PPTR THEN
+    FCNT = DCOUNT(PKT.RECP.NO<1,OPTR>,SVM)
+    FOR F = 1 TO FCNT
+      FPTR = 1
+      LOOP
+        LOCATE PKT.RECP.NO<1,OPTR,F> IN OSD.RECP.NO<1,PPTR>,FPTR SETTING FND THEN
+          IF PKT.REL.NO = OSD.REL.NO<1,PPTR,FND> THEN
+            OSD.P.QTY<1,PPTR,FND> = OSD.P.QTY<1,PPTR,FND> - PKT.R.QTY<1,OPTR,F>
+            IF OSD.P.QTY<1,PPTR,FND> < 0 THEN OSD.P.QTY<1,PPTR,FND> = 0
+            ORD.FLAG=0
+            GOSUB REMOVE.RESERVE
+            UPD = 1
+            FPTR = 0
+          END ELSE
+            FPTR = FND + 1
+          END
+        END ELSE
+          FPTR = FND + 1
+        END
+      WHILE FPTR DO REPEAT
+    NEXT F
+  END
+NEXT OPTR
+RETURN
+*
+*****************
+REMOVE.RESERVE: 
+*****************
+*
+ISTK.ID=CONO:PKT.SERIAL<1,OPTR,F>                       
+IF RECORDLOCKED(INV_SERIAL_TEMP,ISTK.ID)=0 THEN         
+  DELETE INV_SERIAL_TEMP,ISTK.ID                        
+END                                                     
+MATREADU ISTK.REC FROM INV_SERIAL_TEMP,ISTK.ID ELSE NULL
+MATREADU ISTK.REC FROM INV_SERIAL,ISTK.ID THEN          
+  IF NOT(ORD.FLAG) THEN
+    LOCATE PKT.REL.NO IN ISTK.RELNO<1> SETTING OPOS THEN
+      ISTK.RRSVD.QTY<1,OPOS>-=PKT.R.QTY<1,OPTR,F>
+      IF ISTK.RRSVD.QTY<1,OPOS>=0 THEN                     
+        ISTK.ORDER=DELETE(ISTK.ORDER,1,OPOS,0)            
+        ISTK.ORSVD.QTY=DELETE(ISTK.ORSVD.QTY,1,OPOS,0)      
+        ISTK.RELNO=DELETE(ISTK.RELNO,1,OPOS,0)
+        ISTK.RRSVD.QTY=DELETE(ISTK.RRSVD.QTY,1,OPOS,0)
+      END                                                 
+    END 
+  END ELSE
+    LOCATE ORDNO IN ISTK.ORDER<1> SETTING OPOS THEN        
+      ISTK.ORSVD.QTY<1,OPOS>-=PKT.R.QTY<1,OPTR,F>          
+      IF ISTK.ORSVD.QTY<1,OPOS>=0 THEN                     
+        ISTK.ORDER=DELETE(ISTK.ORDER,1,OPOS,0)            
+        ISTK.ORSVD.QTY=DELETE(ISTK.ORSVD.QTY,1,OPOS,0)      
+        ISTK.RELNO=DELETE(ISTK.RELNO,1,OPOS,0)
+        ISTK.RRSVD.QTY=DELETE(ISTK.RRSVD.QTY,1,OPOS,0)
+      END                                                 
+    END                                                   
+  END
+  ISTK.RSVB.QTY+=PKT.R.QTY<1,OPTR,F>                     
+  MATWRITE ISTK.REC ON INV_SERIAL,ISTK.ID               
+END ELSE                                                
+  RELEASE INV_SERIAL,ISTK.ID                            
+  UPD = 1                                               
+END                                                     
+RELEASE INV_SERIAL_TEMP,ISTK.ID                         
+RETURN
+*
+*--- CALLS FOR SYSCOM
+*
+91000 *
+ERR.TYPE = 1;CALL SYSCOM(MAT SYSCOM.REC); RETURN
+92000 *
+ERR.TYPE = 2;CALL SYSCOM(MAT SYSCOM.REC); RETURN
+93000 *
+ERR.TYPE = 3;CALL SYSCOM(MAT SYSCOM.REC)
+*
+99999 *
+END

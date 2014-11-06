@@ -1,0 +1,251 @@
+  SUBROUTINE CONVERT.TO.SLK(TEXT.FILE.NAME,TEXT.REC.NAME,FORMATSTR)
+*********************************************************************
+* REVISION     - [12.0]
+* Copyright 2001 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM       - PRIMAC
+* SOURCE       - PMCBP
+* PROGRAM      - CONVERT.TO.SLK
+* BY           - ABDULLAH JIBALY, COMPUTER BUSINESS ASSOCIATES
+* DATE         - 10/07/2002
+* DESCRIPTION  - This subroutine converts a report to
+*                SYLK format (Symbolic Link) - Excel compatible format
+*
+* ARGUMENTS    - TEXT.FILE.NAME: Directory that contains file to be converted
+*                TEXT.REC.NAME : The record name of the file to be converted
+*                FORMATSTR     : Not currently used
+*
+*ENDDOC
+*********************************************************************
+*
+**************************
+* DIMENSIONS AND EQUATES *
+**************************
+*COPY>CPYLIB>SYSCOM
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>SECURITY
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*
+*---- Setup system error messages
+*
+  SYS.TYPE = 1
+  CALL SYSCOM(MAT SYSCOM.REC)
+*
+**************
+* OPEN FILES *
+**************
+  ERRMSG = ''
+  OPEN TEXT.FILE.NAME TO TEXT.FILE ELSE
+    ERRMSG = 'CANNOT OPEN THE ' : TEXT.FILE.NAME : ' FILE!'
+  END
+* BBB
+  OPEN '','CONTROL' TO CONTROL ELSE NULL
+* BBB
+  IF ERRMSG THEN
+    GOSUB 91000
+    RETURN
+  END
+**************
+* INITIALIZE *
+**************
+  PAGE.FEED = CHAR(12)
+*  LINE.FEED = CHAR(13)
+  LINE.FEED = CHAR(10)
+  ;*
+  ;* Read the text file to convert
+  ;*
+  READ TEXT.REC FROM TEXT.FILE, TEXT.REC.NAME ELSE
+    ERRMSG = "ITEM " : TEXT.REC.NAME : " DOES NOT EXIST IN " : TEXT.FILE.NAME
+    GOSUB 91000
+    RETURN
+  END
+  ;*
+  ;* Set default values (none are used now)
+  ;*
+  VALUE = "DEFAULT"
+  LOCATE "PROPERTY" IN FORMATSTR<1> SETTING PTR THEN
+    VALUE = FORMATSTR<2,PTR>
+  END
+  ;*
+  ;* Remove the first line if it contains a PAGE.FEED
+  ;*
+  LOOP WHILE TEXT.REC<1> = PAGE.FEED DO
+     TEXT.REC = DELETE(TEXT.REC,1)
+  REPEAT
+  IF TEXT.REC<1>[1,1] = PAGE.FEED THEN
+     TEXT.REC<1> = TEXT.REC<1>[2,LEN(TEXT.REC)]
+  END
+  ;*
+  ;* Find the header for each page
+  ;*
+  SLK.REC = ''
+  SLK.ROWS = 0
+  SLK.HEADER.LINES = 0
+  IF TEXT.REC<1>[1,10] = "RUN D - T:" THEN
+    SLK.REC<-1> = "F;SD;R3"
+    SLK.REC<-1> = "F;SD;R4"
+    SLK.REC<-1> = "C;Y1;X1;K" : QUOTE(TRIM(CHANGE(TEXT.REC<1>[1,30],';',';;')))
+    SLK.REC<-1> = "C;Y2;X1;K" : QUOTE(TRIM(CHANGE(TEXT.REC<2>[1,30],';',';;')))
+    SLK.REC<-1> = "C;Y3;X1;K" : QUOTE(TRIM(CHANGE(TEXT.REC<1>[31,90],';',';;')))
+    SLK.REC<-1> = "C;Y4;X1;K" : QUOTE(TRIM(CHANGE(TEXT.REC<2>[31,90],';',';;')))
+    SLK.ROWS = 4
+    SLK.HEADER.LINES = 2
+  END
+  ;*
+  ;* Find the number of lines in the header
+  ;*
+  LINES = DCOUNT(TEXT.REC,@AM)
+  SLK.HEADER.CNT = 0
+  FOR IDX = SLK.HEADER.LINES+1 TO LINES
+    IF INDEX(TEXT.REC<IDX>,"---",1) THEN
+      SLK.HEADER.CNT = IDX
+      EXIT
+    END
+  NEXT IDX
+  ;*
+  ;* Find the column locations
+  ;*
+  COL.LIST  = ''
+  IF SLK.HEADER.CNT THEN
+    DASHES.LINE = " " : TEXT.REC<SLK.HEADER.CNT> : " "
+    DASHES.LINE = TRIM(DASHES.LINE,'-')
+    DASHES.CNT  = COUNT(DASHES.LINE,'-')
+    DASHES.LINE = TEXT.REC<SLK.HEADER.CNT>
+    FOR DASHES.IDX = 1 TO DASHES.CNT
+      COL.START = INDEX(DASHES.LINE,'-',1)
+      DASHES.REMAIN = LEN(DASHES.LINE) - COL.START + 1
+      COL.LEN   = INDEX(DASHES.LINE[DASHES.REMAIN],' ',1)-1
+      IF COL.LEN < 1 THEN COL.LEN = LEN(DASHES.LINE)
+      COL.LIST<DASHES.IDX,1> = COL.START
+      COL.LIST<DASHES.IDX,2> = COL.LEN
+      DASHES.LINE[COL.START,COL.LEN] = SPACE(COL.LEN)
+    NEXT DASHES.IDX
+  END
+  ;*
+  ;* Extract the column titles
+  ;*
+  COL.CNT = DCOUNT(COL.LIST,@AM)
+  FOR HDR.IDX = SLK.HEADER.LINES+1 TO SLK.HEADER.CNT-1
+    SLK.ROWS = SLK.ROWS + 1
+    SLK.Y = "Y" : SLK.ROWS : ";"
+    ;*
+    ;* Make sure the header properly fits into the column
+    ;* If it does not, then add it to the spreadsheet's first column
+    ;*
+    CHECK.LINE = TEXT.REC<HDR.IDX>
+    GOSUB CHECK.COLUMNS
+    IF NOT(CHECK.LINE) THEN
+      SLK.TEXT = TRIMB(CHANGE(TEXT.REC<HDR.IDX>,';',';;'))
+      SLK.REC<-1> = "C;" : SLK.Y : "X1;K" : QUOTE(SLK.TEXT)
+      CONTINUE
+    END
+    ;*
+    ;* The header fits, so add it to the column names
+    ;*
+    IF HDR.IDX = SLK.HEADER.CNT-1 THEN
+      SLK.REC<-1> = "F;SBD;R" : SLK.ROWS
+    END ELSE
+      SLK.REC<-1> = "F;SD;R" : SLK.ROWS
+    END
+    FOR COL.IDX = 1 TO COL.CNT
+      COL.START = COL.LIST<COL.IDX,1>
+      COL.LEN   = COL.LIST<COL.IDX,2>
+      SLK.X     = "X" : COL.IDX : ";"
+      SLK.TEXT  = TEXT.REC<HDR.IDX>[COL.START,COL.LEN]
+      SLK.TEXT  = TRIM(CHANGE(SLK.TEXT,';',';;'))
+      IF SLK.TEXT # '' THEN
+        SLK.REC<-1> = "C;" : SLK.Y : SLK.X : "K" : QUOTE(SLK.TEXT)
+        SLK.Y = ''
+      END
+    NEXT COL.IDX
+  NEXT HDR.IDX
+  ;*
+  ;* Begin conversion
+  ;*
+  LINES = DCOUNT(TEXT.REC,@AM)
+  FOR IDX = SLK.HEADER.CNT+1 TO LINES
+    ;*
+    ;* Check for a pagefeed, otherwise insert the next row of data
+    ;*
+    FINDSTR PAGE.FEED IN TEXT.REC<IDX> SETTING NEW.PAGE.MARKER THEN
+      IDX = IDX + SLK.HEADER.CNT
+      CONTINUE
+    END
+    SLK.ROWS = SLK.ROWS + 1
+    SLK.Y = "Y" : SLK.ROWS : ";"
+    ;*
+    ;* Make sure the row properly fits into the column
+    ;*
+    CHECK.LINE = TEXT.REC<IDX>
+    GOSUB CHECK.COLUMNS
+*BBB    IF NOT(CHECK.LINE) THEN
+*BBB      SLK.TEXT  = TRIM(CHANGE(TEXT.REC<IDX>,';',';;'))
+*BBB      SLK.TEXT  = TRIMB(CHANGE(TEXT.REC<IDX>,';',';;'))
+*BBB      SLK.REC<-1> = "C;" : SLK.Y : "X1;K" : QUOTE(SLK.TEXT)
+*BBB      CONTINUE
+*BBB    END
+    FOR COL.IDX = 1 TO COL.CNT
+      COL.START = COL.LIST<COL.IDX,1>
+      COL.LEN   = COL.LIST<COL.IDX,2>
+      SLK.X     = "X" : COL.IDX : ";"
+IF NOT(CHECK.LINE) THEN
+      SLK.TEXT  = TRIMB(CHANGE(TEXT.REC<IDX>,';',';;'))
+IF IDX = 19 THEN WRITE SLK.TEXT ON CONTROL, "001BRM"
+  IF LEN(TEXT.REC<IDX>) > COL.LEN THEN
+    TEMP.LEN = COL.LEN + COL.LIST<COL.IDX+1,2>
+    SLK.TEXT = TEXT.REC<IDX>[COL.START,TEMP.LEN]
+  END ELSE
+    SLK.TEXT = TEXT.REC<IDX>[COL.START,COL.LEN]
+  END
+END ELSE 
+      SLK.TEXT  = TEXT.REC<IDX>[COL.START,COL.LEN]
+END
+      SLK.TEXT  = TRIM(CHANGE(SLK.TEXT,';',';;'))
+      IF SLK.TEXT # '' THEN
+        SLK.REC<-1> = "C;" : SLK.Y : SLK.X : "K" : QUOTE(SLK.TEXT)
+        SLK.Y = ''
+      END
+    NEXT COL.IDX
+  NEXT IDX
+  ;*
+  ;* Insert SLK format header into record
+  ;*
+  SLK.REC.FMT = 'ID;PPRIMAC'
+  SLK.REC.FMT<-1> = 'P;ECourier'
+  SLK.REC.FMT<-1> = 'P;ECourier;SB'
+  SLK.REC.FMT<-1> = 'B;Y' : SLK.ROWS : ';X' : COL.CNT
+  FOR COL.IDX = 1 TO COL.CNT
+    COL.LEN = COL.LIST<COL.IDX,2>
+    SLK.REC.FMT<-1> = 'F;W' : COL.IDX : ' ' : COL.IDX : ' ' : COL.LEN+1
+  NEXT COL.IDX
+  SLK.REC = SLK.REC.FMT : @AM : SLK.REC : @AM : "E"
+  ;*
+  ;* Write SLK record
+  ;*
+  SLK.REC.PATH = "./":TEXT.FILE.NAME:"/":TEXT.REC.NAME:".slk"
+  SWAP @AM WITH LINE.FEED IN SLK.REC
+  OSWRITE SLK.REC ON SLK.REC.PATH
+  RETURN
+*
+CHECK.COLUMNS:
+  FOR CHECK.IDX = 1 TO COL.CNT
+    CHECK.START = COL.LIST<CHECK.IDX,1>
+    CHECK.LEN   = COL.LIST<CHECK.IDX,2>
+    CHECK.LINE[CHECK.START,CHECK.LEN] = SPACE(CHECK.LEN)
+  NEXT CHECK.IDX
+  IF TRIM(CHECK.LINE) = '' THEN
+    CHECK.LINE = 1
+  END ELSE
+    CHECK.LINE = 0
+  END
+  RETURN
+********************
+* CALLS FOR SYSCOM *
+********************
+91000*
+  ERR.TYPE = 1 ; CALL SYSCOM(MAT SYSCOM.REC)
+  RETURN
+*
+99999 *
+  RETURN
+END

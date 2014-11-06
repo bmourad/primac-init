@@ -1,0 +1,273 @@
+SUBROUTINE GET_ICSTRE_FROMLOC_DETAILS
+********************************************************************************
+*   Program name :- GET_ICSTRE_FROMLOC_DETAILS
+*   Created:- 7/22/2003
+*------------------------------------------------------------------------------*
+*
+*AUTHOR G.PURUSHOTHAM RAO
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  T312 03/10/2005 RedBack Issue
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE ICS.CPYLIB INV.WHSE
+$INCLUDE CPYLIB CHAR
+$INCLUDE ICS.CPYLIB WAREHOUSE
+$INCLUDE ICS.CPYLIB CATEGORY
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB INV.CNV
+$INCLUDE ICS.CPYLIB INV_SERIAL
+$INCLUDE ICS.CPYLIB INV_RECP_WHSE
+$INCLUDE ICS.CPYLIB INV.WHSE.LOC
+$INCLUDE ICS.CPYLIB INV_RECEIPTS
+$INCLUDE ICS.CPYLIB INV_AUDIT_HIST
+
+   DEFFUN CALC_STK_QTY(COST.QTY, MAT INV.CNV.REC,ROND,LN)
+   DEFFUN CALC_COST_QTY(STK.QTY,MAT INV.CNV.REC,ROND,LN)
+
+* Insert method code here
+   OPEN '','CATEGORY' TO CATEGORY ELSE
+      ERRMSG = 'CANNOT LOCATE CATEGORY FILE'
+      GOTO 93000
+   END
+
+  OPEN '','INVENTORY' TO INVENTORY ELSE
+      ERRMSG = 'CANNOT LOCATE INVENTORY FILE'
+      GOTO 93000
+  END
+
+  OPEN '','INV.WHSE' TO INV.WHSE ELSE
+    ERRMSG = 'CANNOT LOCATE INV.WHSE FILE'
+    GOTO 93000
+  END
+  OPEN '','WAREHOUSE' TO WAREHOUSE ELSE
+    ERRMSG = 'CANNOT LOCATE WAREHOUSE FILE'
+    GOTO 93000
+  END
+
+   OPEN '','INV.WHSE.LOC' TO INV.WHSE.LOC ELSE
+      ERRMSG = 'CANNOT LOCATE INV.WHSE.LOC FILE'
+      GOTO 93000
+   END
+
+   OPEN '','INV_SERIAL' TO INV_SERIAL ELSE
+      ERRMSG = 'CANNOT LOCATE INV_SERIAL FILE'
+      GOTO 93000
+   END
+
+   OPEN '','INV_RECP_WHSE' TO INV_RECP_WHSE ELSE
+      ERRMSG = 'CANNOT LOCATE INV_RECP_WHSE FILE'
+      GOTO 93000
+   END
+   OPEN '','INV_RECEIPTS' TO INV_RECEIPTS ELSE
+      ERRMSG = 'CANNOT LOCATE INV_RECEIPTS FILE'
+      GOTO 93000
+   END
+
+   OPEN '','INV_AUDIT_HIST' TO INV_AUDIT_HIST ELSE
+      ERRMSG = 'CANNOT LOCATE INV_AUDIT_HIST FILE'
+      GOTO 93000
+   END
+
+STATUS = RBO.getProperty('','TO_WHSE',TO.WHSE)
+STATUS = RBO.getProperty('','FROM_WHSE',FROM.WHSE)
+STATUS = RBO.getProperty('','PROD_NO',PROD.NO)
+
+STATUS = RBO.getProperty('','FROM_LOC',FROM.LOC)
+STATUS = RBO.getProperty('','RECEIPT_NO',D.TRAN.RECP)
+
+STATUS = RBO.getProperty('','SERIAL_NO',SERIAL.NO)
+STATUS = RBO.getProperty('','TRANSFER_PERIOD',D.TRAN.PERIOD)
+
+STATUS=RBO.getProperty('','PMCProperty',PMCProperty)
+LOGIN.NAME = PMCProperty<1,3>
+CONO = PMCProperty<1,4>
+
+XFROM.WHSE="X":FROM.WHSE;XTO.WHSE="X":TO.WHSE
+INV.ID = CONO : PROD.NO
+
+MATREAD INV.REC FROM INVENTORY,INV.ID THEN
+    INV.UOM.STK = INV.UNIT<1,2>
+    INV.UOM.CST = INV.UNIT<1,3>
+    
+    GOSUB SET.HEADING
+
+  CATG.ID = CONO:INV.LINE
+  MATREAD CATG.REC FROM CATEGORY,CATG.ID THEN
+    * GOSUB ENT.TO.WHSE
+  END ELSE
+     ERRMSG= "CATEGORY RECORD " : CATG.ID : " IS MISSING."
+     GOTO 93000
+  END
+
+   IWH.ID=CONO:PROD.NO:'!':TO.WHSE
+   MATREAD IWH.REC FROM INV.WHSE, IWH.ID ELSE
+      ERRMSG='CANNOT LOCATE INV.WHSE RECORD ':IWH.ID
+      GOTO 93000
+   END
+
+  BEGIN CASE 
+    CASE CATG.TRK.LVL='S'
+      MATREAD ISTK.REC FROM INV_SERIAL, CONO:SERIAL.NO ELSE
+      MAT ISTK.REC=""
+      END
+    CASE CATG.TRK.LVL='G' OR CATG.TRK.LVL='R'
+      IWH.ID=CONO:PROD.NO:'!':FROM.WHSE
+      IWLO.ID=IWH.ID:"!":FROM.LOC
+      TEMP.LOC=FROM.LOC
+      *GOSUB CALC.LOC.QTY
+      *GOSUB CALC.QTY.ENTERED
+  END CASE
+*
+*************
+*CALC.LOC.QTY: 
+*************
+*
+*LL = ""
+   BEGIN CASE
+      CASE CATG.TRK.LVL='G'
+      CURR.QTY=0; G.RSVBLE=0
+      TEST.CURQTY=0; TESTRSVBLE=0 ;*T27396
+      
+	MATREAD IWLO.REC FROM INV.WHSE.LOC,IWLO.ID THEN
+        S.CNT=DCOUNT(IWLO.SERIAL,VM)
+        FOR SS=1 TO S.CNT
+          S.ID=CONO:IWLO.SERIAL<1,SS>
+          MATREAD ISTK.REC FROM INV_SERIAL,S.ID THEN
+            ;*qty. received in the future period cannot be available
+            ;*for transfer.
+            IF ISTK.RECP.PERIOD<=D.TRAN.PERIOD THEN
+              CURR.QTY+=ISTK.CUR.QTY
+              G.RSVBLE+=ISTK.RSVB.QTY
+		*LL<1,-1> = CURR.QTY
+*T27396 v
+*           END
+            END ELSE
+              IACNT=DCOUNT(ISTK.AUDIT.NO,VM)
+              TESTRSVBLE+=ISTK.RSVB.QTY
+              TEST.CURQTY+=ISTK.CUR.QTY
+              FOR II = 1 TO IACNT
+                MATREAD INAH.REC FROM INV_AUDIT_HIST,CONO:ISTK.AUDIT.NO<1,II> THEN
+                  BEGIN CASE
+                  CASE INAH.TYPE # 'I'
+                  CASE INAH.SRC[1,1] = 'C'
+                  CASE 'X':INAH.WHSE # XFROM.WHSE
+                  CASE 'X':INAH.LOC # 'X':TEMP.LOC
+                  CASE INAH.PERIOD > D.TRAN.PERIOD
+                    TESTRSVBLE -= INAH.QTY
+                    TEST.CURQTY -= INAH.QTY
+                    IF TESTRSVBLE < 0 THEN TESTRSVBLE = 0
+                    IF TEST.CURQTY < 0 THEN TEST.CURQTY = 0
+                  END CASE
+                END
+              NEXT II
+              G.RSVBLE += TESTRSVBLE
+              CURR.QTY += TEST.CURQTY
+            END
+*T27396 ^
+          END
+        NEXT SS
+      END
+      IF CURR.QTY=0 THEN 
+        ERRMSG='THERE IS NO QUANTITY AVAILABLE FOR THIS LOCATION '
+        GOTO 93000
+      END
+      CASE CATG.TRK.LVL='R' AND INV.M.LINE='FNGD'
+         ISTK.ID=CONO:"R":D.TRAN.RECP:"!":FROM.WHSE:"!":TEMP.LOC
+         CURR.QTY=0; R.RSVBLE=0 
+         ;* qty is not reserved at the serial level (location level)
+         ;* until user prints a pick ticket.
+         MATREAD ISTK.REC FROM INV_SERIAL,ISTK.ID THEN
+            IF ISTK.RECP.PERIOD<=D.TRAN.PERIOD THEN
+		*T312 STATUS = RBO.getProperty('','RECEIPT_NO',D.TRAN.RECP)
+		*STATUS = RBO.getProperty('','RECEIPT_NO',D.TRAN.RECP)
+               MATREAD IRW.REC FROM INV_RECP_WHSE,CONO:D.TRAN.RECP:"!":FROM.WHSE THEN
+                  IF ISTK.RSVB.QTY < IRW.RSVB.QTY THEN
+                     IRW.CUR.QTY=CALC_STK_QTY(IRW.CUR.QTY,MAT INV.CNV.REC,'.5','')
+                     CURR.QTY=ISTK.CUR.QTY
+                  
+*T312			ISTK.RSVB.QTY=CALC_STK_QTY(ISTK.RSVB.QTY,MAT INV.CNV.REC,'.5','')
+                    R.RSVBLE=ISTK.RSVB.QTY
+                  END ELSE
+                     CURR.QTY=IRW.CUR.QTY
+                     R.RSVBLE=IRW.RSVB.QTY
+                  END
+               END
+            END
+         END
+   END CASE
+
+END
+ 
+  TMP=CALC_STK_QTY(CURR.QTY,MAT INV.CNV.REC,'.5','')
+  TMP=OCONV(TMP,ICR.CNV)
+  STATUS = RBO.setProperty('','CURR_QTY',TMP)
+
+  IF CATG.TRK.LVL='G' THEN
+    TMP=CALC_STK_QTY(G.RSVBLE,MAT INV.CNV.REC,'.5','')
+    TMP=OCONV(TMP,ICR.CNV)
+    STATUS = RBO.setProperty('','RSVBLE',TMP) 
+  END
+
+  IF CATG.TRK.LVL='R' AND INV.M.LINE='FNGD' THEN
+*T312 v
+    TMP=CALC_STK_QTY(R.RSVBLE,MAT INV.CNV.REC,'.5','')
+*T312 ^
+    TMP=OCONV(TMP,ICR.CNV)
+    STATUS = RBO.setProperty('','RSVBLE',TMP)
+  END
+
+ * STATUS = RBO.setProperty('','BALANCE_FROM',CATG.TRK.LVL : " : " : INV.M.LINE : ": " : CONO:D.TRAN.RECP:"!":FROM.WHSE : " : " : IWLO.SERIAL : " : " : D.TRAN.PERIOD : " : " :LL : " : ": IWLO.ID) 
+RETURN
+
+*
+************
+SET.HEADING: 
+************
+*
+   BEGIN CASE
+      CASE INV.UOM.STK='SHT' AND INV.UOM.CST='LBS'
+         ICR.CNV="MD0";ICR.CNV1="MD0,"
+         ICR.DV1=INV.M.WT;ICR.MT1=1;ICR.DV2=1
+         HD1A='Qty/SHT'
+         HD1B=""
+         HD1C=""
+         RX=46;QX=46
+      CASE INV.UOM.STK='PC' AND INV.UOM.CST='MSI'
+         ICR.CNV="MD0";ICR.CNV1="MD0,"
+         ICR.DV1=INV.PAP.WIDTH/100;ICR.MT1=10;ICR.DV2=1
+         ICR.TYPE=3;ICR.SCAL=0
+         HD1='Roll Number Qty/PC'
+         HD1A='Qty/PC'
+         HD1B=""
+         HD1C=""
+         RX=46;QX=46
+      CASE INV.UOM.STK='FT' AND INV.UOM.CST='MSI'
+         ICR.CNV="MD0";ICR.CNV1="MD0,"
+         ICR.DV1=INV.PAP.WIDTH/100;ICR.MT1=100;ICR.DV2=12
+         ICR.TYPE=3;ICR.SCAL=0
+         HD1A='Qty/FT'
+         HD1B=""
+         HD1C=""
+         RX=46;QX=46
+      CASE 1
+         ICR.CNV="MD2";ICR.CNV1="MD2,"
+         ICR.DV1=10;ICR.MT1=1;ICR.DV2=1
+         ICR.TYPE=4;ICR.SCAL=2
+         HD1A='Qty/':INV.UOM.STK
+         HD1B=""
+         HD1C=""
+         RX=46;QX=46
+   END CASE
+RETURN
+
+* End of method code
+RETURN
+93000 *
+  STATUS = RBO.setProperty('','ServerStatus',"1")        
+  STATUS = RBO.setProperty('','ServerMessage',ERRMSG ) 
+RETURN

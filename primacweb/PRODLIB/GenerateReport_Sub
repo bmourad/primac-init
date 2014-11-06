@@ -1,0 +1,501 @@
+   SUBROUTINE GenerateReport_Sub(ERRMSG,IN_PARAM,OUT_PARAM)
+**************************************************************************
+*   Program name :- GenerateReport_Sub
+*   Created:- 07/27/2002
+* Called Subroutine version of RBO Method GenerateReport
+* Created:- 01/29/2003
+* IN_PARAM<1> contains the string for PPSD_ID as it would exist in the
+* getProperty ID below.
+* e.G., IN_PARAM=UserID!PMC_PROCESS!SessionID!PMC_REPORTS_ID!CONO!PrintFlag
+* PrintFlag = 'Email' or 'V' or null.
+* IN_PARAM<2> Contains a multi-valued list of Prompt answers.
+*    NOTE! If there are unprompted items such as a Fiscal Period stored
+*          in the pre-ePrimac PROC Buffer, they should remain in the posi-
+*          tion that the report program expects; e.g., last actual prompt
+*          is in location 4 (4 prompts) but Fiscal Period was obtained by
+*          a called subroutine and the report expects it to be in PROC
+*          Buffer position 7 - IN_PARAM<2,5> should contain that value.
+* IN_PARAM<3> Contains the catalog name of report program or PROC item name.
+* IN_PARAM<4> Contains a "P" if Catalog item is a PROC.
+* IN_PARAM<5> Contains PROC File name if <4> is "P", e.g., PMCPROCS.
+* IN_PARAM<6> Contains File Name used by <3> if <4> is "P".
+* IN_PARAM<7> Contains a Report Heading Suffix, e.g., "REJECTS" if <4>=P.
+* OUT_PARAM<1> Contains the result of print, e.g., 'Report Executed'.
+* OUT_PARAM<2> Contains any ERRMSG found by report or the ReportImage ID.
+*
+*MODIFIED	:05/18/2005 BY ZAHOOR AHMED
+*		 PrintOption to check either to view/email/print or file the report
+*		 to set the printer through SEC.DFLT.QUEUE and to make a HF.NAME file in _HOLD_
+*		 made PRPT.HEADING as email subject instead of "report"
+*-------------------------------------------------------------------------*
+*
+* In Properties:
+* --------------
+*   IN_PARAM
+*
+* Out Properties:
+* ---------------
+*   OUT_PARAM
+********************************************************************************
+   $INCLUDE WWINSERT RBO.H
+* Insert method code here
+   $INCLUDE PMC.CPYLIB PMCProcessStatus
+   $INCLUDE PMC.CPYLIB PMC_PROCESS
+   $INCLUDE PMC.CPYLIB PMC_REPORTS
+   $INCLUDE CPYLIB PORT.CONTROL
+   $INCLUDE CPYLIB CHAR
+   $INCLUDE PMC.CPYLIB SECURITY
+* Insert method code here
+ERRMSG=''
+OUT_PARAM=''
+PrintOption = ''
+MAIL.FLAG = ''
+SETPTR_CMD = ''
+   OPEN '','VOC' TO F.VOC ELSE
+      ERRMSG = 'Cannot open VOC file!'
+      GOTO 99999
+   END
+   OPEN '','CONTROL' TO CONTROL ELSE
+      ERRMSG = 'Cannot open CONTROL file!'
+      GOTO 99999
+   END
+   OPEN '','COMPANY' TO COMPANY ELSE
+      ERRMSG = 'Cannot open COMPANY file!'
+      GOTO 99999
+   END
+   OPEN '','Primac_Security' TO Primac_Security ELSE
+      ERRMSG = 'Cannot open Primac_Security file!'
+      GOTO 99999
+   END
+   OPEN '','SECURITY' TO SECURITY ELSE
+      ERRMSG = 'Cannot open SECURITY file!'
+      GOTO 99999
+   END
+   OPEN '','PMCProcessData' TO PMCProcessData ELSE
+      ERRMSG = 'Cannot open PMCProcessData file!'
+      GOTO 99999
+   END
+   OPEN '','PMCProcessStatus' TO PMCProcessStatus ELSE
+      ERRMSG = 'Cannot open PMCProcessStatus file!'
+      GOTO 99999
+   END
+   OPEN '','PMC_REPORT_VALUES' TO PMC_REPORT_VALUES ELSE
+      ERRMSG = 'Cannot open PMC_REPORT_VALUES file!'
+      GOTO 99999
+   END
+   OPEN '','PMC_PROCESS' TO PMC_PROCESS ELSE
+      ERRMSG = 'Cannot open PMC_PROCESS file!'
+      GOTO 99999
+   END
+   OPEN '','PMC_REPORTS' TO PMC_REPORTS ELSE
+      ERRMSG = 'Cannot open PMC_REPORTS file!'
+      GOTO 99999
+   END
+* FOR PRINTER SETTINGS
+   OPEN '','WIN.PRINTERS' TO WIN.PRINTERS ELSE
+      ERRMSG = 'Cannot open WIN.PRINTERS file!'
+      GOTO 99999
+   END
+   OPEN '','_HOLD_' TO HOLD.FILE ELSE 
+	 ERRMSG = 'CANNOT LOCATE THE _HOLD_ FILE!'
+      GOTO 99999
+   END
+
+*
+*  STATUS = RBO.getProperty('', 'ID', PPSD_ID)
+   PPSD_ID = IN_PARAM<1>
+   PPDField = IN_PARAM<2>
+   Catalog_Name = IN_PARAM<3>
+   ProcFlag = IN_PARAM<4>
+   ProcFileName = IN_PARAM<5>
+   ReportFileName = IN_PARAM<6>
+   ReportSuffix = IN_PARAM<7>
+* Initialization
+STATUS = RBO.getProperty('','SECURITY_TEMP_INPUT',SECURITY_TEMP_INPUT)
+MENU = SECURITY_TEMP_INPUT<1,1>
+OPTION = SECURITY_TEMP_INPUT<1,2>
+
+   TDString = TIMEDATE ()
+   P_DATE = ICONV(TDString[10,11], "D")
+   P_TIME = ICONV(FIELD(TDString, " ",1), "MT")
+*
+* demo!CUSTL!111!PC116!001!Print
+   UserID = FIELD(PPSD_ID, "!", 1) ;* User ID
+   PPSID = FIELD(PPSD_ID, "!", 2) ;* PMC_PROCESS ID
+   SessionID = FIELD(PPSD_ID, "!", 3) ;* IE Session ID
+   PRPT_ID = FIELD(PPSD_ID, "!", 4) ;* PMC_REPORTS ID
+   Cono = FIELD(PPSD_ID, "!", 5)
+  IF FIELD(PPSD_ID, "!", 6) = "Email" THEN
+	Email_Flag = "M"
+   END ELSE
+      Email_Flag = "V"
+   END
+*****************
+*To set the print option either View/Email/Print/File 
+*
+   IF FIELD(PPSD_ID, "!", 6) = "Email" THEN
+      PrintOption = "M"
+      REPORT_OPTION = "Email"
+   END ELSE
+      IF FIELD(PPSD_ID, "!", 6) = "View" THEN
+         PrintOption = "V"
+         REPORT_OPTION = "View"
+      END ELSE
+	  PrintOption = ""
+         REPORT_OPTION = "Print"
+      END
+   END
+   MAIL.FLAG = FIELD(PPSD_ID, "!", 7)
+*****************
+*
+* to read the user default printer SEC.DFLT.QUEUE
+*
+   MATREAD SEC.REC FROM SECURITY, Cono:UPCASE(UserID) ELSE
+      ERRMSG = "USER ":UserID:" NOT ON FILE"
+      GOTO 99999
+   END
+   SETPTR_QUEUE = SEC.DFLT.QUEUE
+IF SEC.GUI.VIEW = "RTF" THEN
+	SEC_GUI_VIEW = SEC.GUI.VIEW
+END ELSE
+	SEC_GUI_VIEW = "PDF"
+END
+*CODE FOR FORM QUEUES
+  READ FORM.QUEUE FROM SECURITY, Cono:UPCASE(UserID) THEN
+	   FOR A = 1 TO DCOUNT(FORM.QUEUE<33>,VM)
+	      IF FORM.QUEUE<33,A> = MENU AND FORM.QUEUE<34,A> = OPTION THEN
+		 SETPTR_QUEUE = FORM.QUEUE<35,A>
+	      END
+	   NEXT A
+  END
+*END
+
+*****************
+   LOG_NAME = @LOGNAME
+   PORT_NO = "TTY"
+   CALL SYSVARS.SUB(PORT_NO)
+*
+   MATREAD PRPT.REC FROM PMC_REPORTS, PRPT_ID ELSE
+      ERRMSG = 'Cannot READ PMC_REPORTS record!'
+      GOTO 99999
+   END
+   PPDREC = ""
+   LAST_LINE = DCOUNT(PRPT.PROMPTS<1>,@VM)
+*
+   IF ProcFlag # 'P' THEN
+     FOR II = 1 TO LAST_LINE
+        DUMMY = ""
+*       TEST = 'PPDField': II "R%2"
+*       STATUS = RBO.getProperty('', TEST, DUMMY)
+        PPDREC<II> = PPDField<II>
+     NEXT II
+     IF LAST_LINE > DCOUNT(PPDREC,@AM) THEN
+        ERRMSG = 'Mismatch in Report Prompt count vs prompts supplied'
+        GOTO 99999
+     END
+   END ELSE LAST_LINE = 0
+*
+   WRITE PPDREC ON PMCProcessData, PPSD_ID
+   FOR X = 1 TO 1000
+   NEXT X
+   READU PPD_REC FROM PMCProcessData, PPSD_ID ELSE
+      RELEASE PMCProcessData, PPSD_ID
+      ERRMSG = 'Cannot READ PMCProcessData record!'
+      GOTO 99999
+   END
+* Read PMC_PROCESS
+   MATREAD PPS.REC FROM PMC_PROCESS, PPSID ELSE
+      ERRMSG = 'Cannot READ PMC_PROCESS record!'
+      GOTO 99999
+   END
+   IF PPS.TYPE # "P" OR PPS.PREPROCESS # "R" THEN
+      ERRMSG = 'Not a report'
+      GOTO 99999
+   END
+* Build PMCProcessStatus Record
+   MAT PPSR.REC = ""
+   PPSR.USER = UserID
+   PPSR.SESSION = SessionID
+   PPSR.PPID = PPSID
+   PPSR.PRPT = PRPT_ID
+   PPSR.LAST = LAST_LINE
+   PPSR.PROMPTS = PRPT.PROMPTS
+   PPSR.STATUS = "Submit"
+   IF LAST_LINE > 0 THEN
+      PPSR.PVALUES = CHANGE(PPD_REC,@AM,@VM):@VM:Email_Flag
+   END ELSE
+      PPSR.PVALUES = Email_Flag
+   END
+   PPSR.STDATE = P_DATE
+   PPSR.STTIME = P_TIME
+   CALL GetSYSVars (PPSR.STSVAL, TDString)
+   READU XXX_REC FROM CONTROL, Cono:"PMCProcessStatus" ELSE XXX_REC = ""
+   PPSR_ID = ""
+   LOOP
+   UNTIL PPSR_ID # "" DO
+      IF XXX_REC<1> = "" OR P_DATE > XXX_REC<1> THEN
+         XXX_REC<1> = P_DATE
+         XXX_REC<2> = 0
+      END
+      XXX_REC<2> += 1
+      PPSR_ID = Cono : P_DATE : "_" : XXX_REC<2>
+      READU DUMMY FROM PMCProcessStatus, PPSR_ID THEN
+         PPSR_ID = ""
+      END LOCKED
+         PPSR_ID = ""
+      END
+   REPEAT
+   DUMMY = ""
+   WRITE XXX_REC ON CONTROL, Cono:"PMCProcessStatus"
+   MATWRITE PPSR.REC ON PMCProcessStatus, PPSR_ID
+* Setup and Process REPORT.SCRN
+   DELETE PMCProcessData, PPSD_ID
+   HF_NAME = CHANGE(PORT_NO,"*","_"):"_":PRPT_ID
+   READU DUMMY FROM PMC_REPORT_VALUES, HF_NAME ELSE DUMMY = ""
+   PROC_VALUES = Cono
+   PROC_VALUES<2> = PRPT_ID
+   PROC_VALUES = PROC_VALUES : @AM : PPD_REC : @AM : Email_Flag
+   WRITE PROC_VALUES ON PMC_REPORT_VALUES, HF_NAME
+*
+   MATREADU USER.REC FROM SECURITY, "R.":PORT_NO ELSE DUMMY = ""
+   MAT USER.REC = ""
+   USER.CONO = Cono
+   USER.ID = OCONV(UserID, 'MCU')
+   USER.DIR = "primacweb"
+   USER.CORP = 0
+   USER.M.CO = 1
+   USER.C.CO = Cono
+   USER.STAT = "PROC"
+   USER.DATE = P_DATE
+   USER.TIME = P_TIME
+   USER.M.DSP = "XXX"
+   USER.VERB = PPSID
+   USER.V.DSP = "XXX"
+   MATWRITE USER.REC ON SECURITY , "R.":PORT_NO
+*
+   PREV_USER4 = @USER4
+   @USER4 = "redback":PPSR_ID:VM:UserID
+   HF.NAME = PORT_NO : "_" : OCONV(LOG_NAME, 'MCU')
+   HF.NAME = CHANGE(HF.NAME,"*","_")
+
+*****************
+*
+* to set the printer/to make a HF.NAME file in _HOLD_
+*
+   IF PrintOption = "" AND ProcFlag = 'P' THEN
+*	SETPTR_CMD = 'SETPTR 0,132,,,,1,AT \\Creative_domain\hpLaserJ,"Orientation=Portrait,Font=Courier,FontSize=8,TopMargin=1,BottomMargin=1",NHEAD,BRIEF'
+       * to set the printer
+	READ WIN.PRINTERS.REC FROM WIN.PRINTERS,SETPTR_QUEUE THEN
+         	SETPTR_FORMATSTR = "Orientation=":WIN.PRINTERS.REC<5>:","
+         	SETPTR_FORMATSTR := "Font=":WIN.PRINTERS.REC<6>:","
+         	SETPTR_FORMATSTR := "FontSize=":WIN.PRINTERS.REC<7>:","
+         	SETPTR_FORMATSTR := "TopMargin=":WIN.PRINTERS.REC<8>:","
+         	SETPTR_FORMATSTR := "BottomMargin=":WIN.PRINTERS.REC<9>
+*
+*         	SETPTR_CMD = 'SETPTR 0,132,,,,1,AT '
+              SETPTR_CMD = 'SETPTR 0,':WIN.PRINTERS.REC<2>:',,,,1,AT '
+         	SETPTR_CMD := WIN.PRINTERS.REC<3>
+         	SETPTR_CMD := ',"':SETPTR_FORMATSTR:'",NHEAD,BRIEF'
+      END ELSE
+	ERRMSG = 'Cannot Read':SETPTR_QUEUE:'from WIN.PRINTERS' 	
+      	GOTO 99999
+      END
+   END ELSE
+     IF ProcFlag = 'P' THEN 
+	WRITEV PrintOption ON CONTROL, HF.NAME, 1
+	SETPTR_CMD = 'SETPTR ,,,,,3,BRIEF,BANNER ':HF.NAME:',NOMESSAGE,NHEAD'
+     END
+   END
+   EXECUTE SETPTR_CMD CAPTURING JUNK
+*
+******************
+*
+   PROC_LINE    = "PQN"
+*  PROC_LINE<2> = 'MV %1 "' : PPSR_ID : '"'
+*  PROC_LINE<3> = 'MV %2 "' : HF_NAME : '"'
+*  PROC_LINE<4> = "H exePMCProcess"
+*  PROC_LINE<5> = "P"
+*  PROC_LINE<6> = "[" : PPS.DIR : " " : PPS.PROCESS : "]"
+   READU DUMMY FROM F.VOC, HF_NAME ELSE DUMMY = ""
+* Added this code to run report using Catalog_Name to bypass actual PROC
+* from PMC_PROCESS v .
+   IF ProcFlag # 'P' THEN
+     PROC_LINE<2> = 'MV%1 "':Cono:'"'
+     PROC_LINE<3> = 'MV%2 "':PRPT_ID:'"'
+     FOR I = 1 TO DCOUNT(PPD_REC,VM)
+       PROC_LINE<I+3> = 'MV%':I+2:' "':PPD_REC<1,I>:'"'
+     NEXT I
+     PROC_LINE<I+3> = 'MV%':I+2:' "':Email_Flag:'"'
+     PROC_LINE<-1> = 'H':Catalog_Name
+     PROC_LINE<-1> = 'P'
+   END ELSE
+     OPEN ProcFileName TO PROCFILE THEN
+       READ PROC_LINE FROM PROCFILE, Catalog_Name THEN
+         PROC_LINE<2> = 'MV%1 "':Cono:'"'
+         READV CO.NAME FROM COMPANY,Cono,1 ELSE CO.NAME = "UNKNOWN"
+*
+	  TEMP_HEAD = PRPT.HEADING
+	  PTR = INDEX(TEMP_HEAD,"(",1)
+	  IF PTR = 0 THEN
+      		TEMP_HEAD = TRIM(TEMP_HEAD)
+      		ReportSuffix = ""
+      	  END ELSE
+   		ReportSuffix = TRIM(TEMP_HEAD[PTR,99])
+      		TEMP_HEAD = TRIM(TEMP_HEAD[1,PTR-1])
+   	  END
+*
+         IHL = LEN(TEMP_HEAD)
+         SAVE.REPORT.NAME = ""
+         FOR P = 1 TO IHL
+            SAVE.REPORT.NAME = SAVE.REPORT.NAME:" ":TEMP_HEAD[P,1]
+         NEXT P
+         IF LEN(SAVE.REPORT.NAME) < 81 THEN
+            TEMP_HEAD = SAVE.REPORT.NAME[2,80]
+         END
+         HLINE1 = "RUN D - T: ":OCONV(DATE(), "D2/"):" - ":OCONV(TIME(), "MTS")
+         HLINE1 = HLINE1 "L#33"
+         HLINE2 = SPACE(INT((85-LEN(CO.NAME))/2)):CO.NAME
+         HLINE2 = HLINE2 "L#85"
+         HLINE3 = SPACE(3):"PAGE 'PL'"
+         HLINE = HLINE1:HLINE2:HLINE3
+         HLINE4 = "RPT #-BY : ":PRPT_ID:"-":USER.ID
+         HLINE4 = HLINE4 "L#33"
+         HLINE5 = SPACE(INT((85-LEN(PRPT.HEADING))/2)):TEMP_HEAD
+         HLINE5 = HLINE5:"   ":ReportSuffix
+         HLINEA = HLINE4:HLINE5
+         HLINE = HLINE:HLINEA
+         PROC_LINE<3> = 'MV%2 "':HLINE:'"'
+         I=4
+         INS 'MV%4 "':ReportFileName:'"' BEFORE PROC_LINE<I>
+         I += 1
+         INS 'MV%5 "':Email_Flag:'"' BEFORE PROC_LINE<I>
+	   END ELSE ERRMSG='Cannot Locate PROC ':Catalog_Name:' in ':ProcFileName
+     END ELSE ERRMSG='Cannot OPEN ':ProcFileName
+   END
+   IF ERRMSG = '' THEN
+* End of added code
+     WRITE PROC_LINE ON F.VOC, HF_NAME
+     UDTEXECUTE HF_NAME CAPTURING ERRMSG
+   END
+* The following doesn't work - PROCBUFFER is null upon return.
+   PROCREAD PRCBUF ELSE PRCBUF = ''
+*
+* RETURN after processing
+   READU DUMMY FROM SECURITY, "R.":PORT_NO ELSE DUMMY = ""
+   DELETE SECURITY, "R.":PORT_NO
+*
+   READU DUMMY FROM F.VOC, HF_NAME ELSE DUMMY = ""
+   DELETE F.VOC, HF_NAME
+*
+   
+*
+   IF PRCBUF<4> = 'END' THEN
+     OUT_PARAM = 'Report did not execute'
+     OUT_PARAM<2> = PRCBUF<5>
+     GOTO 99999
+   END
+   READ DUMMY FROM PMCProcessData, PPSD_ID THEN
+      ERRMSG = 'Report did not execute'
+      GOTO 99999
+   END ELSE
+*DEMO
+ *    HF.NAME = PORT_NO : "_" : OCONV(LOG_NAME, 'MCU')
+      READ DUMMY FROM CONTROL, HF.NAME ELSE DUMMY = ""
+      READ VIEW_REC FROM CONTROL, USER.CONO:"VIEW_CONTROL" ELSE VIEW_REC = ""
+      READ PSEC_REC FROM Primac_Security, UserID ELSE PSEC_REC = ""
+      *
+*ADDED to check "There is no data Error v
+	READ HOLD.REC FROM HOLD.FILE,HF.NAME ELSE HOLD.REC=''
+ IF (HOLD.REC # '') THEN
+*^
+
+      BEGIN CASE
+         CASE (DUMMY = "M" AND MAIL.FLAG # 1)
+	     READ EMAIL_REC FROM CONTROL, USER.CONO:"EMAIL_FORMAT" ELSE EMAIL_REC = ""
+            EMAIL_PARAM = ""
+            EMAIL_PARAM<1> = Cono
+            EMAIL_PARAM<2> = "ePRIMAC Company"
+            EMAIL_PARAM<3> = HF.NAME
+            IF EMAIL_REC<1> = "RTF" THEN
+               EMAIL_PARAM<4> = 1
+            END ELSE
+               EMAIL_PARAM<4> = 2
+            END
+            IF IN_PARAM<8> = "" THEN
+	     	EMAIL_PARAM<5> = PSEC_REC<8>
+	     END ELSE
+		EMAIL_PARAM<5> = IN_PARAM<8>
+	     END
+	     IF PRPT.HEADING # "" THEN
+		EMAIL_PARAM<6> = PRPT.HEADING
+            END ELSE
+            	EMAIL_PARAM<6> = "Report"
+            END
+            EMAIL_PARAM<7> = UPCASE(SYSTEM(33))[1,7]
+            EMAIL_PARAM<8> = PPSR_ID
+            EMAIL_PARAM<9> = "redback"
+            CALL PMC_EMAIL_SUB (EMAIL_PARAM, PERRMSG)
+            DELETE CONTROL, HF.NAME
+*         CASE DUMMY # "V"
+*         CASE VIEW_REC<1> = "PDF" OR VIEW_REC<1> = "RTF"
+          CASE DUMMY<1> = "V" AND (SEC_GUI_VIEW = "RTF" OR SEC_GUI_VIEW = "PDF")
+            EMAIL_PARAM = ""
+            EMAIL_PARAM<1> = Cono
+            EMAIL_PARAM<2> = "ePRIMAC Company"
+            EMAIL_PARAM<3> = HF.NAME
+*            IF VIEW_REC<1> = "RTF" THEN
+            IF SEC_GUI_VIEW = "RTF" THEN
+               EMAIL_PARAM<4> = 1
+            END ELSE
+               EMAIL_PARAM<4> = 2
+            END
+            EMAIL_PARAM<5> = ""
+	     IF PRPT.HEADING # "" THEN
+		EMAIL_PARAM<6> = PRPT.HEADING
+            END ELSE
+            	EMAIL_PARAM<6> = "Report"
+            END 
+            EMAIL_PARAM<7> = UPCASE(SYSTEM(33))[1,7]
+            EMAIL_PARAM<8> = PPSR_ID
+            EMAIL_PARAM<9> = "redback"
+            CALL PMC_VIEW_SUB (EMAIL_PARAM, PERRMSG)
+            DELETE CONTROL, HF.NAME
+            STMT2 = "COPY FROM _HOLD_ TO LOCAL_REPORTS "
+            STMT2 := PPSR_ID :".": VIEW_REC<1> : "," : PPSR_ID :".": VIEW_REC<1>
+            STMT2 := " DELETING"
+            UDTEXECUTE STMT2 CAPTURING JUNK
+            OUT_PARAM = PPSR_ID:".":VIEW_REC<1>
+      END CASE
+*ADDED to check "There is no data Error v 
+ END ELSE
+    	  IF (PrintOption # "") THEN ERRMSG  = "There is no data to ":REPORT_OPTION 
+         GOTO 99999
+END
+* ^
+
+*DEMO					
+      @USER4 = PREV_USER4
+      MATREADU PPSR.REC FROM PMCProcessStatus, PPSR_ID ELSE
+      MAT PPSR.REC = ""
+      PPSR.USER = UserID
+      PPSR.SESSION = SessionID
+      PPSR.PPID = PPSID
+      PPSR.STATUS = "Lost"
+      PPSR.STDATE = P_DATE
+      PPSR.STTIME = P_TIME
+      CALL GetSYSVars (PPSR.STSVAL, TDString)
+      PPSR.PVALUES = CHANGE(PPD_REC,@AM,@VM)
+   END
+   TDString = TIMEDATE ()
+   P_DATE = ICONV(TDString[10,11], "D")
+   P_TIME = ICONV(FIELD(TDString, " ",1), "MT")
+   PPSR.ENDATE = P_DATE
+   PPSR.ENTIME = P_TIME
+   MATWRITE PPSR.REC ON PMCProcessStatus, PPSR_ID
+	OUT_PARAM<2> = OUT_PARAM
+      OUT_PARAM<1> = 'Report Executed'
+      RETURN
+   END
+* End of method code
+99999*
+   RETURN

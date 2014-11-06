@@ -1,0 +1,406 @@
+*COPY>CPYLIB>COM1
+*********************************************************************
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - ICSBP
+* PROGRAM     - PRICE.TABLE.MAINT
+* BY
+* DATE        - 08/19/94
+* DESCRIPTION
+*T26126 adelgado 02/26/2002 * Implement the LOCKED clause for READU.
+*********************************************************************
+*
+*--- INSERT FILES EQUATES
+*
+*COPY>ICS.CPYLIB>PRICE.TABLE
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>GEN.XREF.SUB
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>CHAR
+*
+*---- SETUP FOR SYSTEM ERROR MESSAGES
+*
+  SYS.TYPE = 1
+  CALL SYSCOM(MAT SYSCOM.REC)
+*
+*---- OPEN FILES
+*
+  OPEN '','COMPANY' TO COMPANY ELSE ERRMSG = 'COMPANY FILE MISSING';GOTO 93000
+  OPEN '','CONTROL' TO CONTROL ELSE ERRMSG = 'CONTROL FILE MISSING';GOTO 93000
+  OPEN '','ICS.SCREENS' TO M.SCREENS ELSE ERRMSG = 'ICS.SCREENS FILE MISSING';GOTO 93000
+  OPEN '','PRICE.TABLE' TO PRICE.TABLE ELSE ERRMSG = 'PRICE.TABLE FILE MISSING';GOTO 93000
+  OPEN '','PREFIX' TO PREFIX ELSE ERRMSG = 'PREFIX FILE MISSING';GOTO 93000
+  OPEN '','XREF.DATA' TO XREF.DATA ELSE ERRMSG = 'XREF.DATA FILE MISSING';GOTO 93000
+*
+*---- INITIALIZATION
+*
+  MAT SCV.REC = ""
+*MAT EDIT.COM = ''
+*TYP = 0; CALL EDIT.SUB; FILL = "#"
+  MAT EDIT.COM.DRIVER = ''
+  ERRMSG = ''
+  LINE.SPACE = 1
+  BEGIN.PAGE = 7
+  PAGE.SIZE = 10
+  LINES = 0
+  LN = 1
+  OLD.START = 0
+*---- GET COMPANY NUMBER
+*
+  CONO = ''
+  CALL GET.CONO(CONO,MAT COMP.REC)
+  IF CONO = 'END' THEN GOTO 99999
+*
+*---- PRINT SCREEN
+*
+  ECD.SCRN.CNT = 1
+  ECD.SCRN.NAME<1> = 'PRICE.TABLE.MAINT'
+  ECD.ACTION = 1;CALL SCRN.EDIT
+  ECD.SCRN.NO = 1
+  MAT SCV.REC = ""
+  ECD.ACTION = 2;CALL SCRN.EDIT
+10*
+  MAT SCV.REC = ""
+  ECD.ACTION = 6; CALL SCRN.EDIT
+  LINES = 0; LN = 1; OLD.START = 0
+*
+*---- MAIN PROCESSING
+*
+  MAT PGT.REC = ""
+15*
+  ECD.NUM = 1;ECD.ACTION = 4;CALL SCRN.EDIT
+  PGT.KEY = ECD.RET.VALUE
+  BEGIN CASE
+    CASE PGT.KEY = 'END'
+      GOTO 99999
+    CASE PGT.KEY = "???" OR PGT.KEY = ""
+      MAT GEN.XREF.REC = ""
+      GXR.CO = CONO
+      GXR.NAME = "GEN.CODE"
+      GXR.FILE = PRICE.TABLE
+      GXR.SORT.FILE = "PRICE.TABLE"
+      CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+      SCV.REC(1)<ECD.SCRN.NO> = GXR.ID
+      ECD.ACTION = 2; CALL SCRN.EDIT
+      ECD.ACTION = 3; CALL SCRN.EDIT
+      IF GXR.ID = "" THEN
+        PGT.KEY = ""
+        GOTO 15
+      END
+      PGT.KEY = GXR.ID
+*CASE NOT(NUM(PGT.KEY))
+*  PGT.KEY = ""
+*  SCV.REC(1)<ECD.SCRN.NO> = ""
+*  ERRMSG = "*** NUMERIC INPUT REQUIRED ***"
+*  GOSUB 91000
+*  GOTO 15
+  END CASE
+  NEW.PGT = 0
+  * T26126 v
+  MATREADU PGT.REC FROM PRICE.TABLE, CONO:PGT.KEY LOCKED
+    ERRMSG = 'PRICE TABLE record is locked by user - ':GETUSERNAME(STATUS())
+    GOSUB 91000;GOTO 15 
+  END ELSE
+  * T26126 ^
+    ECD.NUM = 24; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ""
+    ECD.ACTION = 4; CALL SCRN.EDIT
+    IF ECD.RET.VALUE # "" THEN
+      MATREAD PGT.REC FROM PRICE.TABLE, CONO:ECD.RET.VALUE ELSE
+        ERRMSG = "Invalid Table ID"
+        GOSUB 91000
+        GOTO 15
+      END
+    END ELSE
+      NEW.PGT = 1;MAT PGT.REC = ''
+    END
+  END
+  IF NEW.PGT = 1 THEN
+    PGT.START = ""
+    GOSUB 1000
+    IF ECD.RET.VALUE = "END" THEN GOTO 10
+  END ELSE
+    SCV.REC(2)<ECD.SCRN.NO,1> = PGT.DESC
+    ECD.ACTION = 3;CALL SCRN.EDIT
+    LINES = DCOUNT(PGT.QTY,VM)
+    GOSUB 70000
+    GOSUB 80000
+  END
+*
+*--- ENTER OPTION
+*
+500*
+  MORE = 1
+  LOOP
+  WHILE MORE DO
+    IF NEW.PGT THEN
+      NEW.PGT = 0
+      OPTION = "A"
+    END ELSE
+      ECD.NUM = 21; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ""
+      ECD.ACTION = 4; CALL SCRN.EDIT
+      OPTION = ECD.RET.VALUE
+    END
+    BEGIN CASE
+      CASE OPTION = "E" OR OPTION = "END"
+        MORE = 0
+      CASE OPTION = "F"
+        MATWRITE PGT.REC ON PRICE.TABLE, CONO:PGT.KEY
+        MORE = 0
+      CASE OPTION = "A" AND LINES < 99
+        MODE = "A"
+        DONE = 0
+        FOR LN = LINES+1 TO 99 UNTIL DONE
+          GOSUB 80000
+          GOSUB 10000
+          IF VALUE = "END" THEN
+            DONE = 1
+            PGT.QTY = DELETE(PGT.QTY,1,LN,0)
+            PGT.PRICE = DELETE(PGT.PRICE,1,LN,0)
+          END ELSE
+            LINES = LINES + 1
+          END
+        NEXT LN
+        LN = LINES
+        OLD.START = 0
+        GOSUB 80000
+      CASE OPTION = "C" AND LINES > 0
+        MODE = "C"
+        GOSUB 30000
+        BEGIN CASE
+          CASE LNO = "0"
+          CASE LNO = "A"
+            VALUE = ""
+            FOR LN = 1 TO LINES UNTIL VALUE = "END"
+              GOSUB 80000
+              GOSUB 10000
+            NEXT LN
+          CASE NUM(LNO)
+            LN = LNO
+            GOSUB 10000
+        END CASE
+        IF VALUE = "END" THEN
+          OLD.START = 0
+          GOSUB 80000
+        END
+      CASE OPTION = "D" AND LINES > 0
+        MODE = "D"
+        GOSUB 30000
+        IF LNO # 0 THEN
+          LN = LNO
+          PGT.START = DELETE(PGT.START,1,LN+1,0)
+          PGT.QTY = DELETE(PGT.QTY,1,LN,0)
+          PGT.PRICE = DELETE(PGT.PRICE,1,LN,0)
+          LINES = LINES - 1
+          IF LN > LINES THEN LN = LN - 1
+          OLD.START = 0
+          GOSUB 80000
+        END
+      CASE OPTION = "I" AND LINES > 0 AND LINES < 99
+        MODE = "I"
+        GOSUB 30000
+        IF LNO > 0 THEN
+          LN = LNO
+          PGT.START = INSERT(PGT.START,1,LN,0,"")
+          PGT.QTY = INSERT(PGT.QTY,1,LN,0,"")
+          PGT.PRICE = INSERT(PGT.PRICE,1,LN,0,"")
+          LINES = LINES + 1
+          OLD.START = 0
+          GOSUB 80000
+          GOSUB 10000
+          IF VALUE = "END" THEN
+            PGT.START = DELETE(PGT.START,1,LN,0)
+            PGT.QTY = DELETE(PGT.QTY,1,LN,0)
+            PGT.PRICE = DELETE(PGT.PRICE,1,LN,0)
+            LINES = LINES - 1
+          END
+          OLD.START = 0
+          GOSUB 70000
+          GOSUB 80000
+        END
+      CASE OPTION[1,1] = "S"
+        PGT2 = OPTION[2,1]
+        BEGIN CASE
+          CASE PGT2 = "" OR PGT2 = "F"
+            LN = LN + PAGE.SIZE
+            IF LN > LINES THEN LN = 1
+          CASE PGT2 = "R"
+            LN = LN - PAGE.SIZE
+            IF LN < 1 THEN LN = 1
+          CASE PGT2 = "T"
+            LN = 1
+          CASE PGT2 = "B"
+            LN = LINES
+            IF LN < 1 THEN LN = 1
+        END CASE
+        GOSUB 80000
+      CASE OPTION = 1
+        GOSUB 1000
+    END CASE
+  REPEAT
+  GOTO 10
+*-----------------------*
+*---   SUBROUTINES   ---*
+*-----------------------*
+*
+*--- ENTER DESCRIPTION
+*
+1000*
+  ECD.NUM = 2;ECD.ACTION = 4;CALL SCRN.EDIT
+  IF ECD.RET.VALUE # 'END' THEN
+    PGT.DESC = ECD.RET.VALUE
+  END
+  RETURN
+*
+*--- LINE ENTRY
+*
+10000*
+  SLN = BEGIN.PAGE + LINE.SPACE * MOD(LN-1,PAGE.SIZE)
+  P_X  = 0 ; P_Y = SLN ; P_VALUE = LN "R%2" ; P_OPT = ""
+  CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+10100*
+  P_X  = 20 ; P_Y = SLN ; P_VALUE = SPACE(10) ; P_OPT = ""
+  CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+  TYP=3; X=20; Y=SLN; MAXL=8
+  BEGIN CASE
+    CASE MODE = "A"
+      IF LN = 1 THEN
+        MINV = 1
+      END ELSE
+        MINV = PGT.QTY<1,LN-1>+1
+      END
+      MAXV = 99999999
+      TEMP.START = MINV
+    CASE MODE = "C"
+      BEGIN CASE
+        CASE LINES = 1
+          MINV = 1
+          MAXV = 99999999
+        CASE LN = 1
+          MINV = 1
+          MAXV = PGT.START<1,LN+1>-1
+        CASE LN = LINES
+          MINV = PGT.QTY<1,LN-1>+1
+          MAXV = 99999999
+        CASE 1
+          MINV = PGT.QTY<1,LN-1>+1
+          MAXV = PGT.START<1,LN+1>-1
+      END CASE
+      TEMP.START = PGT.START<1,LN>
+      O.R = "O"
+      DEFAULT = PGT.QTY<1,LN>
+    CASE MODE = "I"
+      BEGIN CASE
+        CASE LN = 1
+          MINV = 1
+          MAXV = PGT.QTY<1,LN+1>-1
+        CASE 1
+          MINV = PGT.QTY<1,LN-1>+1
+          MAXV = PGT.QTY<1,LN+1>-1
+      END CASE
+      TEMP.START = MINV
+  END CASE
+  P_X  = 5 ; P_Y = SLN ; P_VALUE = OCONV(TEMP.START,"MD0,") "R#10" ; P_OPT = ""
+  CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+  CALL EDIT.SUB
+  IF VALUE = "END" THEN GOTO 10990
+  TEMP.QTY = VALUE
+  P_X  = 20 ; P_Y = SLN ; P_VALUE = OCONV(TEMP.QTY,"MD0,")"R#10" ; P_OPT = ""
+  CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+10200*
+  TYP=4; X=36; Y=SLN; SCALER=4; MAXL=10
+  HMSG = "PRICE"
+  IF PGT.PRICE<1,LN> # "" THEN
+    DEFAULT = OCONV(PGT.PRICE<1,LN>, "MD4")
+    O.R = "O"
+  END
+  CALL EDIT.SUB
+  IF VALUE = "END" THEN GOTO 10990
+  TEMP.PRICE = VALUE
+  P_X  = 36 ; P_Y = SLN ; P_VALUE = OCONV(TEMP.PRICE,"MD4")"R#10" ; P_OPT = ""
+  CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+10900*
+  PGT.START<1,LN> = TEMP.START
+  PGT.QTY<1,LN> = TEMP.QTY
+  PGT.PRICE<1,LN> = TEMP.PRICE
+  RETURN
+10990*
+  RETURN
+*
+*--- GET LINE NUMBER
+*
+30000*
+  GOSUB 80000
+  IF MODE = "C" THEN
+    ECD.NUM = 22
+    ECD.ACTION = 4; CALL SCRN.EDIT
+  END ELSE
+    ECD.NUM = 23
+    ECD.ACTION = 4; CALL SCRN.EDIT
+  END
+  BEGIN CASE
+    CASE ECD.RET.VALUE = ""
+      LNO = 0
+    CASE ECD.RET.VALUE = "END"
+      LNO = 0
+    CASE ECD.RET.VALUE = "A"
+      LNO = "A"
+    CASE NOT(NUM(ECD.RET.VALUE))
+      ERRMSG = "** INVALID RESPONSE **"; GOSUB 91000; GOTO 30000
+    CASE ECD.RET.VALUE >= ST.LINE AND ECD.RET.VALUE <= LST.LINE
+      LNO = ECD.RET.VALUE
+    CASE 1
+      ERRMSG = "** OUT OF RANGE **"; GOSUB 91000; GOTO 30000
+  END CASE
+  RETURN
+*
+*---- DERIVE START QTY
+*
+70000*
+  PGT.START = 1
+  FOR N = 2 TO LINES
+    PGT.START<1,N> = PGT.QTY<1,N-1>+1
+  NEXT N
+  OLD.START = 0
+  RETURN
+*
+*--- SCROLL
+*
+80000*
+  ST.LINE = 1 + INT((LN-1)/PAGE.SIZE) * PAGE.SIZE
+  LST.LINE = ST.LINE + PAGE.SIZE -1
+  IF LST.LINE > LINES THEN LST.LINE = LINES
+  IF ST.LINE = OLD.START THEN RETURN
+  OLD.START = ST.LINE
+  CNT = 1
+  FOR N = ST.LINE TO LST.LINE
+    SSLN = BEGIN.PAGE + LINE.SPACE * MOD(N-1,PAGE.SIZE)
+    P_X  = 0 ; P_Y = SSLN ; P_VALUE = N "R%2" ; P_OPT = ""
+    P_X  := AM:5 ; P_Y := AM:SSLN ; P_VALUE := AM:OCONV(PGT.START<1,N>,"MD0,")"R#10"
+    P_X  := AM:20 ; P_Y := AM:SSLN ; P_VALUE := AM:OCONV(PGT.QTY<1,N>,"MD0,")"R#10"
+    P_X  := AM:36 ; P_Y := AM:SSLN ; P_VALUE := AM:OCONV(PGT.PRICE<1,N>,"MD4")"R#10"
+    CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+    CNT = CNT + 1
+  NEXT N
+  FOR N = CNT TO PAGE.SIZE
+    SSLN = BEGIN.PAGE + LINE.SPACE * MOD(N-1,PAGE.SIZE)
+    P_X  = 0 ; P_Y = SSLN ; P_VALUE = "" ; P_OPT = "CL"
+    CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+  NEXT N
+  RETURN
+*
+*--- ERROR ROUTINE
+*
+91000*
+  ERR.TYPE = 1
+  CALL SYSCOM(MAT SYSCOM.REC)
+  RETURN
+93000*
+  ERR.TYPE = 3
+  CALL SYSCOM(MAT SYSCOM.REC)
+99999*
+* PRINT @(-1)
+END

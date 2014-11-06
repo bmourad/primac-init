@@ -1,0 +1,132 @@
+SUBROUTINE POSPOM_GET_INV_CODES
+*********************************************************************
+* Copyright 1998 by Primac Systems India
+* SYSTEM       - EPRIMAC
+* PROGRAM      - POSPOM_GET_INV_CODES
+* DATE         - 05/19/2003 (mm/dd/yyyy)
+* DESCRIPTION  - THIS PROGRAM will get the Inventory Codes, Desc, Um, Customer, StockBuyRatio, Paptype, Catg, Track QOH
+*ENDDOC
+*********************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE CPYLIB CHAR
+$INCLUDE ICS.CPYLIB CATEGORY
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE PMC.CPYLIB COMPANY
+
+ERRMSG = ''
+
+* Insert method code here
+OPEN '','INVENTORY' TO INVENTORY ELSE
+   ERRMSG = 'INVENTORY FILE IS MISSING'; GOTO 93000
+END
+OPEN '','CATEGORY' TO CATEGORY ELSE
+   ERRMSG = 'CATEGORY FILE IS MISSING'; GOTO 93000
+END
+
+OPEN '','COMPANY' TO COMPANY ELSE
+   ERRMSG = 'COMPANY FILE IS MISSING'; GOTO 93000
+END
+
+
+MAT CATG.REC = ''
+
+STATUS = RBO.getProperty('','PMCProperty',PMCProperty)
+STATUS = RBO.getProperty('','ProdNum',ProdNum) ;*list of products while in page load time
+STATUS = RBO.getProperty("","VendNo",VEND.NO) ;* added by suhail: in order to get the default unit price, PO.VEND is required
+
+USER.ID = PMCProperty<1,3>
+CONO = PMCProperty<1,4>
+ROLLTEXT=""
+INVENTORYCODES = ''
+INVENTORYDESCS = ''
+INVENTORYUMS = ''
+INVENTORYCUSTS = ''
+INVENTORYSBR = ''		;* SB RATIO
+INVENTORYUM = ''		;* UM ADDED
+INVENTORYPAPTYPE = ''   ;* PAPTYPE (REGULAR,SHEET,ROLL ETC...)
+INVENTORYTRKLVL = ''
+INVENTORYTRACKQOH = ''
+INVENTORYINVLINE = ''
+INVENTORYUNITPRICE=''
+CNT = DCOUNT(ProdNum<1>,VM)
+MATREAD COMP.REC FROM COMPANY,CONO THEN
+STATUS=RBO.setProperty('','DateRecvd',CO.INTR.WHSE)
+END
+
+FOR I = 1 TO CNT
+	PROD = ProdNum<1,I>
+	MATREAD INV.REC FROM INVENTORY,CONO:PROD THEN
+          IF INV.M.LINE = 'FNGD' THEN
+             IF CO.OPS = 'Y' THEN
+                 ERRMSG = "FINISHED GOODS PRODUCTS ARE INVALID FOR REGULAR PO'S"
+                 GOTO 93000
+             END
+          END 
+         MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE ELSE
+          ERRMSG = "CATEGORY (":INV.LINE:") IS NOT ON FILE."
+           GOTO 93000
+         END
+		IF INV.UNIT = "" THEN INV.UNIT = " "
+		INVENTORYCODES<1,I> = PROD
+   		INVENTORYDESCS<1,I> = INV.DESC
+		INVENTORYUMS<1,I>   = INV.UNIT<1,2> : " "
+   		INVENTORYCUSTS<1,I> = INV.CUST
+   		INVENTORYSBR<1,I>   = INV.SBR		;* SB RATIO
+		INVENTORYUM<1,I>    = LOWER(INV.UNIT<1>)	;* UM ADDED
+   		INVENTORYPAPTYPE<1,I> = INV.PAP.TYPE   ;* PAPTYPE (REGULAR,SHEET,ROLL ETC...)
+              MATREAD CATG.REC FROM CATEGORY,CONO:INV.LINE THEN
+                IF CATG.TRK.LVL='S' AND CATG.BARCODE='Y' THEN
+                   BEGIN CASE
+                     
+			         CASE INV.PAP.TYPE = "ROLL" OR INV.PAP.TYPE = "LROLL" OR INV.PAP.TYPE = "PCOAT"
+ 				     ROLLTEXT = "# Rolls"
+			         CASE 1	
+				     ROLLTEXT = "# Skids"
+                  END CASE
+                END ELSE
+                    ROLLTEXT=""
+                END
+             END
+		   
+            *  ROLLTEXT=INV.LINE
+		MATREAD CATG.REC FROM CATEGORY,CONO:INV.LINE ELSE
+			MAT CATG.REC = ""
+		END
+		INVENTORYTRKLVL<1,I> = CATG.TRK.LVL
+		INVENTORYTRACKQOH<1,I> = CATG.TRACK.QOH
+		INVENTORYINVLINE<1,I> = INV.LINE
+*v added by suhail: to get the default unit price on basis of Vendor
+              IF VEND.NO # "" AND VEND.NO # 0 THEN
+                 LOCATE VEND.NO IN INV.VENDOR<1>,1 SETTING VV ELSE VV = 0
+                 IF VV THEN INVENTORYUNITPRICE<1,I> = OCONV(INV.PRICE<1,VV>,"MD4")                 
+              END ELSE
+                 INVENTORYUNITPRICE<1,I> = OCONV(INV.PRICE,"MD4")
+              END
+	END ELSE
+		ERRMSG = "INVENTORY ITEM " : ProdNum : " NOT FOUND"
+	END
+*^
+NEXT I
+
+STATUS = RBO.setProperty('', 'InventoryCodes', INVENTORYCODES)
+STATUS = RBO.setProperty('', 'InventoryDescs', INVENTORYDESCS)
+STATUS = RBO.setProperty('', 'InventoryUMs', INVENTORYUMS)
+STATUS = RBO.setProperty('', 'InventoryCust', INVENTORYCUSTS)
+STATUS = RBO.setProperty('', 'InventorySbr', INVENTORYSBR)
+STATUS = RBO.setProperty('', 'InventoryUM', INVENTORYUM)
+STATUS = RBO.setProperty('', 'InventoryPaptype', INVENTORYPAPTYPE)
+STATUS = RBO.setProperty('', 'InventoryTrkLvl', INVENTORYTRKLVL)
+STATUS = RBO.setProperty('', 'InventoryTrkQOH', INVENTORYTRACKQOH)
+STATUS = RBO.setProperty('', 'InventoryInvLine', INVENTORYINVLINE)
+STATUS = RBO.setProperty('', 'InventoryUnitPrice',INVENTORYUNITPRICE)
+STATUS = RBO.setProperty('','ROLLTEXT',ROLLTEXT)
+
+* End of method code
+93000 
+	IF ((ERRMSG # "") AND (ERRMSG # 0)) THEN	
+  		*STATUS = RBO.setProperty('','ServerStatus',USER.ID : " CONO  : "  : CONO)        
+  		STATUS = RBO.setProperty('','ServerStatus','E')
+  		STATUS = RBO.setProperty('','ServerMessage',ERRMSG) 
+	END
+99999
+RETURN

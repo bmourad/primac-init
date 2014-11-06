@@ -1,0 +1,931 @@
+*COPY>CPYLIB>COM1
+*********************************************************************
+* REVISION    - [08.1]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - FASBP
+* PROGRAM     - REPAIRS.MAINT
+* BY          - Ziad Yamout, Vercom Software, Inc.
+* DATE        - 10/20/88
+* DESCRIPTION - Equipment Repairs Maintenance Program
+*T23278 markt 12/11/1998 * Add check for divisional security.
+*T26302 cm 11/20/2001 * Description display problem.
+*T25978 adelgado 02/13/2002 * Add the use of prompts (S,SR,SB,ST).
+*T26126 adelgado 02/25/2002 * Implement the LOCKED clause for READU.
+*********************************************************************
+*--- Data structure libraries
+*
+*COPY>FAS.CPYLIB>ASSETS
+*COPY>FAS.CPYLIB>EQUIP.FILE
+*COPY>FAS.CPYLIB>REPAIRS
+*COPY>FAS.CPYLIB>REPAIRS.DETAIL
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>SALESDATES
+*COPY>PMC.CPYLIB>FISCAL
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>CHAR
+*
+  DIM DTYPE(4)
+  DIM DPTR(4)
+  DIM DSRC(4)
+  DIM DDATE(4)
+  DIM DHRS(4)
+  DIM DUHRS(4)
+  DIM DCOST(4)
+  DIM DUNIT(4)
+  DIM DUPD(4)
+*
+*--- Setup SYSCOM subroutine
+*
+  SYS.TYPE = 1
+  CALL SYSCOM(MAT SYSCOM.REC)
+*
+*--- Open files
+*
+  MAT FILE.VARS = ""
+  OPEN "FAS.SCREENS" TO M.SCREENS ELSE ERRMSG = "FAS.SCREENS"; GOTO 93000
+  OPEN "ASSETS" TO ASSETS ELSE ERRMSG = "ASSETS"; GOTO 93000
+  OPEN "EQUIP.FILE" TO EQUIP.FILE ELSE ERRMSG = "EQUIP.FILE"; GOTO 93000
+  OPEN "REPAIRS" TO REPAIRS ELSE ERRMSG = "REPAIRS"; GOTO 93000
+  OPEN "REPAIRS.DETAIL" TO REPAIRS.DETAIL ELSE ERRMSG = "REPAIRS.DETAIL"; GOTO 93000
+  OPEN "PREFIX" TO PREFIX ELSE ERRMSG = "PREFIX"; GOTO 93000
+  OPEN "CONTROL" TO CONTROL ELSE ERRMSG = "CONTROL"; GOTO 93000
+  OPEN "COMPANY" TO COMPANY ELSE ERRMSG = "COMPANY"; GOTO 93000
+*
+*--- Initialization
+*
+  CONO = ""; MAT COMP.REC = ""
+  CALL GET.CONO(CONO,MAT COMP.REC)
+  IF CONO = "END" THEN GOTO 99999
+*
+  MATREAD SALESDATES.REC FROM CONTROL, CONO:"SALESDATES" ELSE
+    ERRMSG = "Need to setup sales dates table"
+    GOSUB 91000; GOTO 99999
+  END
+  MATREAD FISCAL.REC FROM CONTROL, CONO:"FAFISCAL" ELSE
+    ERRMSG = "Cannot locate Fixed Assets period"
+    GOSUB 91000; GOTO 99999
+  END
+  MN = FR.CURR.PER[5,2]
+  MAX.DATE = SALESDATES.REC(MN+1)<1,1>
+  IF MN > 1 THEN
+    MIN.DATE = SALESDATES.REC(MN)<1,1> + 1
+  END ELSE
+    MIN.DATE = OCONV(SALESDATES.REC(13)<1,1>,"D/")
+    MIN.DATE = MIN.DATE[1,6] : (MIN.DATE[7,4] - 1)
+    MIN.DATE = ICONV(MIN.DATE,"D/") + 1
+  END
+*
+  TODAY = DATE()
+  LINE.SPACE = 1
+  PAGE.SIZE = 7
+  BEGIN.PAGE = 13
+*
+  DTYPE(1) = "M"
+  DTYPE(2) = "R"
+  DTYPE(3) = "O"
+  DTYPE(4) = "U"
+*
+  Y.HDR = 11
+  Y.DSH = 12
+*      HDR1 = "Typ Sources  Ocur Lst Date  Down Time    Cost    Hours Used Units Used  Status"
+*      DSH1 = "--- -------- ---- -------- ---------- ---------- ---------- ---------- --------"
+  HD10 = 'Typ'
+  HD11 = 'Sources'
+  HD12 = 'Ocur'
+  HD13 = 'Lst Date'
+  HD14 = ' Down Time'
+  HD15 = '   Cost   '
+  HD16 = 'Hours Used'
+  HD17 = 'Units Used'
+  HD18 = ' Status'
+*      HDR2 = "Ocr Sc Use Date Hours Used Units Used Upd Date (Usage)"
+*      DSH2 = "--- -- -------- ---------- ---------- --------"
+  HD20 = 'Ocr'
+  HD21 = ' N / A '
+  HD22 = ' Sc '
+  HD23 = 'Use Date'
+  HD24 = 'Hours Used'
+  HD25 = 'Units Used'
+  HD26 = ' Upd Date '
+  HD27 = ' N / A '
+  HD28 = 'Usage'
+*      HDR3 = "Ocr Sc   Date    Down Time    Cost    Upd Date"
+*      DSH3 = "--- -- -------- ---------- ---------- --------"
+  HD30 = 'Ocr'
+  HD31 = ' N / A '
+  HD32 = ' Sc '
+  HD33 = '  Date  '
+  HD34 = ' Down Time'
+  HD35 = '   Cost   '
+  HD36 = 'Upd Date'
+  HD37 = ' N / A '
+  HD38 = ''
+*
+*--- Setup subroutines EDIT.SUB & SCRN.EDIT
+*
+  MAT EDIT.COM.DRIVER = ""
+  ECD.SCRN.CNT = 1
+  ECD.SCRN.NAME<1> = "REPAIRS.MAINT"
+  ECD.ACTION = 1; CALL SCRN.EDIT
+*     MAT EDIT.COM = ""
+*     TYP = 0; CALL EDIT.SUB
+*
+  ECD.SCRN.NO = 1
+  ECD.ACTION = 2; CALL SCRN.EDIT
+*
+*--- Enter ASSET number
+100*
+  MAT DPTR = 0
+  MAT DSRC = ""
+  MAT DDATE = ""
+  MAT DHRS = ""
+  MAT DUHRS = ""
+  MAT DCOST = ""
+  MAT DUNIT = ""
+  MAT DUPD = ""
+  A.TYPE = ""
+  A.SRC = ""
+  A.OCUR = ""
+  A.DATE = ""
+  A.HRS = ""
+  A.U.HRS = ""
+  A.COST = ""
+  A.UNITS = ""
+  A.UPD = ""
+  MAT SCV.REC = ""
+  ECD.ACTION = 6; CALL SCRN.EDIT
+  GOSUB 80000
+  LN = 1; OLD.START.LINE = 0
+  ECD.NUM = 1; ECD.ACTION = 4; CALL SCRN.EDIT
+  IF ECD.RET.VALUE = "END" THEN GOTO 99999
+  AST.NUM = ECD.RET.VALUE; AST.ID = CONO : AST.NUM
+  MATREAD AST.REC FROM ASSETS, AST.ID THEN
+*T23278 v
+    DIV.CODE = AST.DIV; USER.ID = UPCASE(@LOGNAME); ERRMSG = ''
+    CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+    IF ERRMSG # '' THEN
+      GOSUB 91000; GOTO 100
+    END
+*T23278 ^
+    SCV.REC(1) = AST.NUM
+    SCV.REC(2) = AST.DESC
+    * T26126 v
+    MATREADU EQP.REC FROM EQUIP.FILE, AST.ID LOCKED
+      ERRMSG = 'EQUIPMENT record is locked by user - ':GETUSERNAME(STATUS())
+      GOSUB 91000;GOTO 100 
+    END THEN
+      MATREADU RPR.REC FROM REPAIRS, AST.ID LOCKED
+        ERRMSG = 'REPAIRS record is locked by user - ':GETUSERNAME(STATUS())
+        GOSUB 91000;GOTO 100 
+      END ELSE
+    * T26126 ^
+        MAT RPR.REC = ""
+      END
+      SCV.REC(3) = EQP.SCH.DATE
+      SCV.REC(4) = EQP.NEXT.DATE
+      SCV.REC(5) = EQP.COMMENTS
+      SCV.REC(6) = RPR.COMMENTS
+      SCV.REC(7) = RPR.EMSG
+      ECD.ACTION = 3; CALL SCRN.EDIT
+      O.RPR.M.NO = RPR.M.NO
+      O.RPR.R.NO = RPR.R.NO
+      O.RPR.O.NO = RPR.O.NO
+      O.RPR.U.NO = RPR.U.NO
+      LINES = 0
+      IF RPR.M.NO THEN
+        SEL = 1; O.SLINES = RPR.M.NO
+        GOSUB 4100
+        RPR.M.NO = SLINES
+        IF RPR.M.NO THEN
+          LINES = LINES + 1
+          DPTR(SEL) = LINES
+          A.TYPE<LINES> = DTYPE(SEL)
+          A.SRC<LINES> = RPR.M.SRC
+          A.OCUR<LINES> = RPR.M.NO
+          A.DATE<LINES> = RPR.M.DATE
+          A.HRS<LINES> = RPR.M.HRS
+          A.COST<LINES> = RPR.M.COST
+          A.UPD<LINES> = L.UPD
+        END
+      END
+      IF RPR.R.NO THEN
+        SEL = 2; O.SLINES = RPR.R.NO
+        GOSUB 4100
+        RPR.R.NO = SLINES
+        IF RPR.R.NO THEN
+          LINES = LINES + 1
+          DPTR(SEL) = LINES
+          A.TYPE<LINES> = DTYPE(SEL)
+          A.SRC<LINES> = RPR.R.SRC
+          A.OCUR<LINES> = RPR.R.NO
+          A.DATE<LINES> = RPR.R.DATE
+          A.HRS<LINES> = RPR.R.HRS
+          A.COST<LINES> = RPR.R.COST
+          A.UPD<LINES> = L.UPD
+        END
+      END
+      IF RPR.O.NO THEN
+        SEL = 3; O.SLINES = RPR.O.NO
+        GOSUB 4100
+        RPR.O.NO = SLINES
+        IF RPR.O.NO THEN
+          LINES = LINES + 1
+          DPTR(SEL) = LINES
+          A.TYPE<LINES> = DTYPE(SEL)
+          A.SRC<LINES> = RPR.O.SRC
+          A.OCUR<LINES> = RPR.O.NO
+          A.DATE<LINES> = RPR.O.DATE
+          A.HRS<LINES> = RPR.O.HRS
+          A.COST<LINES> = RPR.O.COST
+          A.UPD<LINES> = L.UPD
+        END
+      END
+      IF RPR.U.NO THEN
+        SEL = 4; O.SLINES = RPR.U.NO
+        GOSUB 4100
+        DUHRS(SEL) = DHRS(SEL)
+        DHRS(SEL) = ""
+        RPR.U.NO = SLINES
+        IF RPR.U.NO THEN
+          LINES = LINES + 1
+          DPTR(SEL) = LINES
+          A.TYPE<LINES> = DTYPE(SEL)
+          A.SRC<LINES> = RPR.U.SRC
+          A.OCUR<LINES> = RPR.U.NO
+          A.DATE<LINES> = RPR.U.DATE
+          A.U.HRS<LINES> = RPR.U.HRS
+          A.UNITS<LINES> = RPR.U.UNITS
+          A.UPD<LINES> = L.UPD
+        END
+      END
+      GOSUB 3900
+    END ELSE
+      RELEASE EQUIP.FILE, AST.ID
+      ERRMSG = "Cannot locate the Equipment record for asset # ":AST.NUM
+      GOSUB 91000; GOTO 100
+    END
+  END ELSE
+    ERRMSG = "Cannot locate asset # ":AST.NUM
+    GOSUB 91000; GOTO 100
+  END
+*
+*--- Prompt line
+*
+  LOOP
+    ECD.NUM = 21; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ""
+    ECD.ACTION = 4; CALL SCRN.EDIT
+    OPTION = ECD.RET.VALUE
+    BEGIN CASE
+      CASE OPTION = "END" OR OPTION = "E" OR OPTION = ""
+        OPTION = "END"
+        RELEASE REPAIRS, AST.ID
+        RELEASE EQUIP.FILE, AST.ID
+      CASE OPTION = "F"
+        RPR.EMSG = ""
+        SEL = 1; SLINES = RPR.M.NO; O.SLINES = O.RPR.M.NO
+        RPR.M.HRS = SUM(DHRS(SEL))
+        RPR.M.COST = SUM(DCOST(SEL))
+        GOSUB 4500
+        RPR.M.SRC = A.SRC; RPR.M.DATE = A.DATE
+*
+        SEL = 2; SLINES = RPR.R.NO; O.SLINES = O.RPR.R.NO
+        RPR.R.HRS = SUM(DHRS(SEL))
+        RPR.R.COST = SUM(DCOST(SEL))
+        GOSUB 4500
+        RPR.R.SRC = A.SRC; RPR.R.DATE = A.DATE
+*
+        SEL = 3; SLINES = RPR.O.NO; O.SLINES = O.RPR.O.NO
+        RPR.O.HRS = SUM(DHRS(SEL))
+        RPR.O.COST = SUM(DCOST(SEL))
+        GOSUB 4500
+        RPR.O.SRC = A.SRC; RPR.O.DATE = A.DATE
+*
+        SEL = 4; SLINES = RPR.U.NO; O.SLINES = O.RPR.U.NO
+        RPR.U.HRS = SUM(DUHRS(SEL))
+        RPR.U.UNITS = SUM(DUNIT(SEL))
+        DHRS(SEL) = DUHRS(SEL)
+        GOSUB 4500
+        RPR.U.SRC = A.SRC; RPR.U.DATE = A.DATE
+*
+        MATWRITE RPR.REC ON REPAIRS, AST.ID
+        MATWRITE EQP.REC ON EQUIP.FILE, AST.ID
+        OPTION = "END"
+      CASE OPTION = "M"
+        HD38 = 'Maintenance'
+        GOSUB 80030
+        SEL = 1; SLINES = RPR.M.NO; O.LN = LN
+        GOSUB 3000; GOSUB 4200
+        RPR.M.NO = SLINES
+      CASE OPTION = "R"
+        HD38 = 'Repairs'
+        GOSUB 80030
+        SEL = 2; SLINES = RPR.R.NO; O.LN = LN
+        GOSUB 3000; GOSUB 4200
+        RPR.R.NO = SLINES
+      CASE OPTION = "O"
+        HD38 = 'Overhaul'
+        GOSUB 80030
+        SEL = 3; SLINES = RPR.O.NO; O.LN = LN
+        GOSUB 3000; GOSUB 4200
+        RPR.O.NO = SLINES
+      CASE OPTION = "U"
+        GOSUB 80020
+        SEL = 4; SLINES = RPR.U.NO; O.LN = LN
+        GOSUB 3000; GOSUB 4200
+        RPR.U.NO = SLINES
+      CASE OPTION = "S"
+        LN = 1 + INT((LN-1)/PAGE.SIZE) * PAGE.SIZE + PAGE.SIZE
+        IF LN > LINES THEN LN = 1
+        GOSUB 3900
+      * T25978 v
+      CASE OPTION = 'SR'
+        LN = 1 + INT((LN-1)/PAGE.SIZE) * PAGE.SIZE - PAGE.SIZE
+        IF LN < 1 THEN LN = 1
+        GOSUB 3900
+      CASE OPTION = 'ST'
+        LN = 1
+        GOSUB 3900
+      CASE OPTION = 'SB'
+        LN = LINES
+        GOSUB 3900
+      * T25978 ^
+      CASE NOT(NUM(OPTION))
+        ERRMSG = "*** Invalid selection ***"; GOSUB 91000
+      CASE OPTION > 0 AND OPTION < 4
+        ON OPTION GOSUB 1100,1200,1300
+      CASE 1
+        ERRMSG = "*** Out of range ***"; GOSUB 91000
+    END CASE
+  WHILE OPTION # "END" DO REPEAT
+  GOTO 100
+*
+*--- Scheduled date
+1100*
+  IF EQP.NEXT.DATE = EQP.SCH.DATE + EQP.FREQ.DAYS THEN
+    AUTO = 1
+  END ELSE
+    AUTO = 0
+  END
+  IF EQP.SCH.DATE < TODAY THEN
+    ECD.MINV = EQP.SCH.DATE
+  END ELSE
+    ECD.MINV = TODAY
+  END
+  ECD.MAXV = TODAY + 1095
+  ECD.NUM = 3; ECD.ACTION = 4; CALL SCRN.EDIT
+  IF ECD.RET.VALUE = "END" THEN GOTO 1199
+  EQP.SCH.DATE = ECD.RET.VALUE
+  IF AUTO THEN
+    EQP.NEXT.DATE = EQP.SCH.DATE + EQP.FREQ.DAYS
+    ECD.NUM = 4; SCV.REC(ECD.NUM) = EQP.NEXT.DATE
+    ECD.ACTION = 5; CALL SCRN.EDIT
+  END
+1199 RETURN
+*
+*--- Next scheduled date
+1200*
+  ECD.MINV = EQP.SCH.DATE + 1
+  ECD.MAXV = EQP.SCH.DATE + 1096
+  ECD.NUM = 4; ECD.ACTION = 4; CALL SCRN.EDIT
+  IF ECD.RET.VALUE # "END" THEN
+    EQP.NEXT.DATE = ECD.RET.VALUE
+  END
+  RETURN
+*
+*--- Current period comments
+1300*
+  ECD.NUM = 6; ECD.ACTION = 4; CALL SCRN.EDIT
+  IF ECD.RET.VALUE # "END" THEN
+    RPR.COMMENTS = ECD.RET.VALUE
+  END
+  RETURN
+*
+*--- Maintenance/Repairs/Overhaull/Usage Entries
+3000*
+  OLD.START.LINE = 0
+  IF SLINES < 1 THEN
+    ACTION = "A"
+    LOOP
+      LN = SLINES + 1
+      OLD.LINES = SLINES
+      ON SEL GOSUB 3100,3100,3100,3400
+    WHILE SLINES > OLD.LINES DO REPEAT
+    LN = SLINES
+    GOSUB 3700
+  END ELSE
+    LN = 1; GOSUB 3700
+  END
+  LOOP
+    ECD.NUM = 22; SCV.REC(ECD.NUM)<ECD.SCRN.NO> = ""
+    ECD.ACTION = 4; CALL SCRN.EDIT
+    ACTION = ECD.RET.VALUE
+    BEGIN CASE
+      CASE ACTION = "END" OR ACTION = "E" OR ACTION = ""
+        ACTION = "END"
+      CASE ACTION = "A"
+        LOOP
+          LN = SLINES + 1
+          OLD.LINES = SLINES
+          ON SEL GOSUB 3100,3100,3100,3400
+        WHILE SLINES > OLD.LINES DO REPEAT
+        LN = SLINES
+        GOSUB 3700
+      CASE ACTION = "C"
+        GOSUB 3800
+        IF LN.NO THEN
+          IF DUPD(SEL)<LN.NO> = "UPDATED" THEN
+            ERRMSG = "CANNOT change, this entry has already been updated."
+            GOSUB 91000
+          END ELSE
+            LN = LN.NO
+            ON SEL GOSUB 3100,3100,3100,3400
+          END
+        END
+      CASE ACTION = "D"
+        GOSUB 3800
+        IF LN.NO THEN
+          IF DUPD(SEL)<LN.NO> = "UPDATED" THEN
+            ERRMSG = "CANNOT delete, this entry has already been updated."
+            GOSUB 91000
+          END ELSE
+            LN = LN.NO
+            GOSUB 3850
+            IF LN > 1 AND LN > SLINES THEN LN = LN - 1
+            IF LN < 1 THEN LN = 1
+            OLD.START.LINE = 0
+            GOSUB 3700
+          END
+        END
+      CASE ACTION = "S"
+        LN = 1 + INT((LN-1)/PAGE.SIZE) * PAGE.SIZE + PAGE.SIZE
+        IF LN > SLINES THEN LN = 1
+        GOSUB 3700
+      * T25978 v
+      CASE ACTION = 'SR'
+        LN = 1 + INT((LN-1)/PAGE.SIZE) * PAGE.SIZE - PAGE.SIZE
+        IF LN < 1 THEN LN = 1
+        GOSUB 3700
+      CASE ACTION = 'ST'
+        LN = 1
+        GOSUB 3700
+      CASE ACTION = 'SB'
+        LN = SLINES
+        GOSUB 3700
+      * T25978 ^
+    END CASE
+  WHILE ACTION # "END" DO REPEAT
+  RETURN
+*
+*---- General line prompt
+3001*
+  GOSUB 3700
+  SLN = BEGIN.PAGE + LINE.SPACE * MOD(LN-1,PAGE.SIZE)
+  P_X  = 0 ; P_Y = SLN ; P_VALUE = LN "R%3" ; P_OPT = "CL"
+  CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+  RETURN
+*
+*---- Source
+3010*
+  X = 13; Y = SLN; TYP = 1; MINL = 2; MAXL = 2
+  BEGIN CASE
+    CASE DSRC(SEL)<LN> # ""
+      O.R = "O"
+      DEFAULT = DSRC(SEL)<LN>
+    CASE LN > 1
+      O.R = "O"
+      DEFAULT = DSRC(SEL)<LN-1>
+  END CASE
+  CALL EDIT.SUB
+  RETURN
+*
+*---- Date
+3020*
+  X = 18; Y = SLN; TYP = 6; MAXL = 8
+  IF DDATE(SEL)<LN> # "" THEN
+    O.R = "O"
+    DEFAULT = OCONV(DDATE(SEL)<LN>,"D2/")
+  END
+  CALL EDIT.SUB
+  IF VALUE = "END" THEN GOTO 3029
+  PTR = 1
+  LOOP
+    LOCATE VALUE IN DDATE(SEL),PTR SETTING FND ELSE FND = LN
+    BEGIN CASE
+      CASE FND = LN
+        PTR = 0
+      CASE DSRC(SEL)<FND> = DSRC(SEL)<LN>
+        ERRMSG = "Date ":OCONV(VALUE,"D2/"):" already exists on line # ":FND
+        GOSUB 91000; PTR = 0; FND = 0
+    END CASE
+  WHILE PTR DO
+    PTR = FND + 1
+  REPEAT
+  IF NOT(FND) THEN GOTO 3020
+  IF VALUE # DDATE(SEL)<LN> AND (VALUE < MIN.DATE OR VALUE > MAX.DATE) THEN
+    TVALUE = VALUE
+    X = 0; Y = 23; TYP = 18; O.R = "O"; DEFAULT = "Y"
+    PMSG = "Current period dates are ":OCONV(MIN.DATE,"D2/"):" thru ":OCONV(MAX.DATE,"D2/"):" continue (Y/N) :"
+    CALL EDIT.SUB
+    P_X  = 0 ; P_Y = 23 ; P_VALUE = "" ; P_OPT = "CL"
+    CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+    IF VALUE # "Y" THEN GOTO 3020
+    VALUE = TVALUE
+  END
+3029 RETURN
+*
+*---- Hours
+3030*
+  X = 27; Y = SLN; TYP = 4; SCALER = 2; MAXL = 10
+  MINV = 0; MAXV = 9999999.99
+  IF DHRS(SEL)<LN> # "" THEN
+    O.R = "O"
+    DEFAULT = OCONV(DHRS(SEL)<LN>,"MD2")
+  END
+  CALL EDIT.SUB
+  RETURN
+*
+*---- Cost
+3040*
+  X = 38; Y = SLN; TYP = 4; SCALER = 2; MAXL = 10
+  MINV = 0; MAXV = 9999999.99
+  IF DCOST(SEL)<LN> # "" THEN
+    O.R = "O"
+    DEFAULT = OCONV(DCOST(SEL)<LN>,"MD2")
+  END
+  CALL EDIT.SUB
+  RETURN
+*
+*---- Maintenance line prompt
+3100*
+  GOSUB 3001
+*
+*---- Source
+3110*
+  VALDAT = "JC"; VALDAT<1,2> = "FA"; VALDAT<1,3> = "AP"
+  GOSUB 3010
+  BEGIN CASE
+    CASE VALUE = "END" AND ACTION = "A"
+      GOSUB 3850
+      P_X  = 0 ; P_Y = SLN ; P_VALUE = "" ; P_OPT = "CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      GOTO 3169
+    CASE VALUE = "END"
+      GOSUB 3710; GOTO 3169
+  END CASE
+  DSRC(SEL)<LN> = VALUE
+*
+*---- Date
+3120*
+  GOSUB 3020
+  IF VALUE = "END" THEN GOTO 3100
+  DDATE(SEL)<LN> = VALUE
+*
+*---- Hours
+3130*
+  GOSUB 3030
+  IF VALUE = "END" THEN GOTO 3100
+  DHRS(SEL)<LN> = VALUE
+*
+*---- Cost
+3140*
+  GOSUB 3040
+  IF VALUE = "END" THEN GOTO 3100
+  DCOST(SEL)<LN> = VALUE
+  SLINES = DCOUNT(DSRC(SEL),AM)
+3169 RETURN
+*
+*---- Scrolling line prompt
+3400*
+  GOSUB 3001
+*
+*---- Source
+3410*
+  VALDAT = "JC"; VALDAT<1,2> = "FA"
+  GOSUB 3010
+  BEGIN CASE
+    CASE VALUE = "END" AND ACTION = "A"
+      GOSUB 3850
+      P_X  = 0 ; P_Y = SLN ; P_VALUE = "" ; P_OPT = "CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+      GOTO 3469
+    CASE VALUE = "END"
+      GOSUB 3740; GOTO 3469
+  END CASE
+  DSRC(SEL)<LN> = VALUE
+*
+*---- Usage date
+3420*
+  GOSUB 3020
+  IF VALUE = "END" THEN GOTO 3400
+  DDATE(SEL)<LN> = VALUE
+*
+*---- Used hours
+3430*
+  X = 27; Y = SLN; TYP = 4; SCALER = 2; MAXL = 10
+  MINV = 0; MAXV = 9999999.99
+  IF DUHRS(SEL)<LN> # "" THEN
+    O.R = "O"
+    DEFAULT = OCONV(DUHRS(SEL)<LN>,"MD2")
+  END
+  CALL EDIT.SUB
+  IF VALUE = "END" THEN GOTO 3400
+  DUHRS(SEL)<LN> = VALUE
+*
+*---- Used units
+3440*
+  X = 38; Y = SLN; TYP = 3; MAXL = 10
+  MINV = 0; MAXV = 99999999
+  IF DUNIT(SEL)<LN> # "" THEN
+    O.R = "O"
+    DEFAULT = DUNIT(SEL)<LN>
+  END
+  CALL EDIT.SUB
+  IF VALUE = "END" THEN GOTO 3400
+  DUNIT(SEL)<LN> = VALUE
+  SLINES = DCOUNT(DSRC(SEL),AM)
+3469 RETURN
+*
+*---- Display scrolling lines
+3700*
+  START.LINE = 1 + INT((LN-1)/PAGE.SIZE)*PAGE.SIZE
+  LAST.LINE = START.LINE + PAGE.SIZE - 1
+  IF LAST.LINE > SLINES THEN LAST.LINE = SLINES
+  IF START.LINE = OLD.START.LINE THEN GOTO 3799
+  OLD.START.LINE = START.LINE
+  N = LN; CNT = 1
+  FOR LN = START.LINE TO LAST.LINE
+    SLN = BEGIN.PAGE + LINE.SPACE * MOD(LN-1,PAGE.SIZE)
+    ON SEL GOSUB 3710,3710,3710,3740
+    CNT = CNT + 1
+  NEXT LN
+  FOR LN = CNT TO PAGE.SIZE
+    SLN = BEGIN.PAGE + LINE.SPACE * MOD(LN-1,PAGE.SIZE)
+    P_X  = 0 ; P_Y = SLN ; P_VALUE = "" ; P_OPT = "CL"
+    CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+  NEXT LN
+  LN = N
+3799 RETURN
+*
+*---- Display scrolling lines
+3710*
+  P_X  = 0 ; P_Y = SLN ; P_VALUE = LN "R%3" ; P_OPT = "CL"
+  P_X  := AM:13 ; P_Y := AM:SLN ; P_VALUE := AM:DSRC(SEL)<LN> "L#2"
+  P_X  := AM:18 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(DDATE(SEL)<LN>,"D2/") "L#8"
+  P_X  := AM:27 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(DHRS(SEL)<LN>,"MD2") "R#10"
+  P_X  := AM:38 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(DCOST(SEL)<LN>,"MD2") "R#10"
+  P_X  := AM:49 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(DUPD(SEL)<LN>,"D2/") "L#8"
+  CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+  RETURN
+*
+*---- Display scrolling lines
+3740*
+  P_X  = 0 ; P_Y = SLN ; P_VALUE = LN "R%3" ; P_OPT = "CL"
+  P_X  := AM:13 ; P_Y := AM:SLN ; P_VALUE := AM:DSRC(SEL)<LN> "L#2"
+  P_X  := AM:18 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(DDATE(SEL)<LN>,"D2/") "L#8"
+  P_X  := AM:27 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(DUHRS(SEL)<LN>,"MD2") "R#10"
+  P_X  := AM:38 ; P_Y := AM:SLN ; P_VALUE := AM:DUNIT(SEL)<LN> "R#10"
+  P_X  := AM:49 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(DUPD(SEL)<LN>,"D2/") "L#8"
+  CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+  RETURN
+*
+*---- Line # to change or delete
+3800*
+  GOSUB 3700
+  ECD.MINV = OLD.START.LINE; ECD.MAXV = LAST.LINE
+  ECD.NUM = 23; ECD.ACTION = 4; CALL SCRN.EDIT
+  LN.NO = ECD.RET.VALUE
+  IF LN.NO = "" OR LN.NO = "END" THEN LN.NO = 0
+  RETURN
+*
+*---- Delete M/R/O/U line
+3850*
+  DSRC(SEL) = DELETE(DSRC(SEL),LN,0,0)
+  DDATE(SEL) = DELETE(DDATE(SEL),LN,0,0)
+  DHRS(SEL) = DELETE(DHRS(SEL),LN,0,0)
+  DUHRS(SEL) = DELETE(DUHRS(SEL),LN,0,0)
+  DCOST(SEL) = DELETE(DCOST(SEL),LN,0,0)
+  DUNIT(SEL) = DELETE(DUNIT(SEL),LN,0,0)
+  DUPD(SEL) = DELETE(DUPD(SEL),LN,0,0)
+  SLINES = DCOUNT(DSRC(SEL),AM)
+  RETURN
+*
+*---- Display scrolling lines
+3900*
+  START.LINE = 1 + INT((LN-1)/PAGE.SIZE)*PAGE.SIZE
+  LAST.LINE = START.LINE + PAGE.SIZE - 1
+  IF LAST.LINE > LINES THEN LAST.LINE = LINES
+  IF START.LINE = OLD.START.LINE THEN GOTO 3990
+  OLD.START.LINE = START.LINE
+  CNT = 1
+  FOR N = START.LINE TO LAST.LINE
+    SLN = BEGIN.PAGE + LINE.SPACE * MOD(N-1,PAGE.SIZE)
+    P_X  = 0 ; P_Y = SLN ; P_VALUE = "" ; P_OPT = "CL"
+    P_X  := AM:1 ; P_Y := AM:SLN ; P_VALUE := AM:A.TYPE<N> "L#1"
+    P_X  := AM:4 ; P_Y := AM:SLN ; P_VALUE := AM:A.SRC<N> "L#8"
+    P_X  := AM:13 ; P_Y := AM:SLN ; P_VALUE := AM:A.OCUR<N> "R#4"
+    P_X  := AM:18 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(A.DATE<N>,"D2/") "L#8"
+    P_X  := AM:27 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(A.HRS<N>,"MD2Z") "R#10"
+    P_X  := AM:38 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(A.COST<N>,"MD2Z") "R#10"
+    P_X  := AM:49 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(A.U.HRS<N>,"MD2Z") "R#10"
+    P_X  := AM:60 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(A.UNITS<N>,"MD2Z") "R#10"
+    P_X  := AM:71 ; P_Y := AM:SLN ; P_VALUE := AM:OCONV(A.UPD<N>,"D2/") "L#8"
+    CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+    CNT = CNT + 1
+  NEXT N
+  FOR N = CNT TO PAGE.SIZE
+    SLN = BEGIN.PAGE + LINE.SPACE * MOD(N-1,PAGE.SIZE)
+    P_X  = 0 ; P_Y = SLN ; P_VALUE = "" ; P_OPT = "CL"
+    CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+  NEXT N
+3990 RETURN
+*
+*---- Load original values
+4100*
+  SLINES = 0; L.UPD = ""
+  FOR I = 1 TO O.SLINES
+    RDR.ID = AST.ID:DTYPE(SEL):I
+    MATREAD RDR.REC FROM REPAIRS.DETAIL, RDR.ID THEN
+      SLINES = SLINES + 1
+      DSRC(SEL)<SLINES> = RDR.SRC
+      DDATE(SEL)<SLINES> = RDR.DATE
+      DHRS(SEL)<SLINES> = RDR.HRS
+      DCOST(SEL)<SLINES> = RDR.COST
+      DUNIT(SEL)<SLINES> = RDR.UNITS
+      DUPD(SEL)<SLINES> = RDR.UPD
+      BEGIN CASE
+        CASE L.UPD = "ENTERED"
+        CASE NUM(RDR.UPD)
+          L.UPD = "ENTERED"
+        CASE L.UPD = "PRINTED"
+        CASE RDR.UPD = "PRINTED"
+          L.UPD = RDR.UPD
+        CASE L.UPD = "REJECTED"
+        CASE 1
+          L.UPD = RDR.UPD
+      END CASE
+    END
+  NEXT I
+  IF L.UPD = "" THEN L.UPD = "ENTERED"
+  RETURN
+*
+*---- Load summary by type
+4200*
+  GOSUB 80010
+  BEGIN CASE
+    CASE SLINES
+      IF NOT(DPTR(SEL)) THEN
+        LINES = LINES + 1
+        DPTR(SEL) = LINES
+        A.TYPE<DPTR(SEL)> = DTYPE(SEL)
+        A.UPD<DPTR(SEL)> = ""
+      END
+      A.SRC<DPTR(SEL)> = DSRC(SEL)<1>
+      A.DATE<DPTR(SEL)> = DDATE(SEL)<1>
+      A.OCUR<DPTR(SEL)> = SLINES
+      A.HRS<DPTR(SEL)> = SUM(DHRS(SEL))
+      A.U.HRS<DPTR(SEL)> = SUM(DUHRS(SEL))
+      A.COST<DPTR(SEL)> = SUM(DCOST(SEL))
+      A.UNITS<DPTR(SEL)> = SUM(DUNIT(SEL))
+      FOR I = 1 TO SLINES
+        IF NOT(INDEX(A.SRC<DPTR(SEL)>,DSRC(SEL)<I>,1)) THEN
+          A.SRC<DPTR(SEL)> = A.SRC<DPTR(SEL)> : "," : DSRC(SEL)<I>
+        END
+        IF DDATE(SEL)<I> > A.DATE<DPTR(SEL)> THEN
+          A.DATE<DPTR(SEL)> = DDATE(SEL)<I>
+        END
+        BEGIN CASE
+          CASE A.UPD<DPTR(SEL)> = "ENTERED"
+          CASE NUM(DUPD(SEL)<I>)
+            A.UPD<DPTR(SEL)> = "ENTERED"
+          CASE A.UPD<DPTR(SEL)> = "PRINTED"
+          CASE DUPD(SEL)<I> = "PRINTED"
+            A.UPD<DPTR(SEL)> = DUPD(SEL)<I>
+          CASE A.UPD<DPTR(SEL)> = "REJECTED"
+            A.UPD<DPTR(SEL)> = DUPD(SEL)<I>
+          CASE 1
+            A.UPD<DPTR(SEL)> = DUPD(SEL)<I>
+        END CASE
+      NEXT I
+      IF A.UPD<DPTR(SEL)> = "" THEN A.UPD<DPTR(SEL)> = DUPD(SEL)<I>
+    CASE DPTR(SEL)
+      A.TYPE = DELETE(A.TYPE,DPTR(SEL),0,0)
+      A.SRC = DELETE(A.SRC,DPTR(SEL),0,0)
+      A.OCUR = DELETE(A.OCUR,DPTR(SEL),0,0)
+      A.DATE = DELETE(A.DATE,DPTR(SEL),0,0)
+      A.HRS = DELETE(A.HRS,DPTR(SEL),0,0)
+      A.U.HRS = DELETE(A.U.HRS,DPTR(SEL),0,0)
+      A.COST = DELETE(A.COST,DPTR(SEL),0,0)
+      A.UNITS = DELETE(A.UNITS,DPTR(SEL),0,0)
+      A.UPD = DELETE(A.UPD,DPTR(SEL),0,0)
+      LINES = DCOUNT(A.TYPE,AM)
+      BEGIN CASE
+        CASE O.LN <= LINES
+        CASE LINES
+          O.LN = LINES
+        CASE 1
+          O.LN = 1
+      END CASE
+  END CASE
+  LN = O.LN; OLD.START.LINE = 0; GOSUB 3900
+  RETURN
+*
+*---- Update the detail
+4500*
+  A.SRC = DSRC(SEL)<1>
+  A.DATE = DDATE(SEL)<1>
+  FOR I = 1 TO SLINES
+    RDR.ID = AST.ID:DTYPE(SEL):I
+    MATREADU RDR.REC FROM REPAIRS.DETAIL, RDR.ID ELSE NULL
+    MAT RDR.REC = ""
+    RDR.SRC = DSRC(SEL)<I>
+    RDR.DATE = DDATE(SEL)<I>
+    RDR.HRS = DHRS(SEL)<I>
+    RDR.COST = DCOST(SEL)<I>
+    RDR.UNITS = DUNIT(SEL)<I>
+    RDR.UPD = DUPD(SEL)<I>
+    BEGIN CASE
+      CASE RDR.UPD = "UPDATED"
+      CASE NUM(RDR.UPD)
+      CASE 1
+        RDR.UPD = TODAY
+    END CASE
+    MATWRITE RDR.REC ON REPAIRS.DETAIL, RDR.ID
+    IF NOT(INDEX(A.SRC,RDR.SRC,1)) THEN
+      A.SRC = A.SRC : "," : RDR.SRC
+    END
+    IF RDR.DATE > A.DATE THEN
+      A.DATE = RDR.DATE
+    END
+  NEXT I
+  LIMIT = SLINES + 1
+  FOR I = LIMIT TO O.SLINES
+    RDR.ID = AST.ID:DTYPE(SEL):I
+    MATREADU RDR.REC FROM REPAIRS.DETAIL, RDR.ID ELSE NULL
+    DELETE REPAIRS.DETAIL, RDR.ID
+  NEXT I
+  RETURN
+*
+*--- Print headers
+80000 *
+80010 *
+  P_X  = 0 ; P_Y = Y.HDR ; P_VALUE = HD10 ; P_OPT = "CL"
+  P_X  := AM:4 ; P_Y := AM:Y.HDR ; P_VALUE := AM:HD11
+  P_X  := AM:13 ; P_Y := AM:Y.HDR ; P_VALUE := AM:HD12
+  P_X  := AM:18 ; P_Y := AM:Y.HDR ; P_VALUE := AM:HD13
+  P_X  := AM:27 ; P_Y := AM:Y.HDR ; P_VALUE := AM:HD14
+  P_X  := AM:38 ; P_Y := AM:Y.HDR ; P_VALUE := AM:HD15
+  P_X  := AM:49 ; P_Y := AM:Y.HDR ; P_VALUE := AM:HD16
+  P_X  := AM:60 ; P_Y := AM:Y.HDR ; P_VALUE := AM:HD17
+  CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+*T26302 v
+*  P_X  = 33 ; P_Y = Y.HDR-1 ; P_VALUE = HD18 ; P_OPT = ""
+  P_X  = 33 ; P_Y = Y.HDR-1 ; P_VALUE = HD18'L#11' ; P_OPT = ""
+*T26302 ^
+  CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+  RETURN
+*
+80020 *
+  P_X  = 0 ; P_Y = Y.HDR ; P_VALUE = HD20 ; P_OPT = "CL"
+  P_X  := AM:4 ; P_Y := AM:Y.HDR ; P_VALUE := AM:HD21
+  P_X  := AM:13 ; P_Y := AM:Y.HDR ; P_VALUE := AM:HD22
+  P_X  := AM:18 ; P_Y := AM:Y.HDR ; P_VALUE := AM:HD23
+  P_X  := AM:27 ; P_Y := AM:Y.HDR ; P_VALUE := AM:HD24
+  P_X  := AM:38 ; P_Y := AM:Y.HDR ; P_VALUE := AM:HD25
+  P_X  := AM:49 ; P_Y := AM:Y.HDR ; P_VALUE := AM:HD26
+  P_X  := AM:60 ; P_Y := AM:Y.HDR ; P_VALUE := AM:HD27
+  CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+  P_X  = 33 ; P_Y = Y.HDR-1 ; P_VALUE = HD28 ; P_OPT = ""
+  CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+  RETURN
+*
+80030 *
+  P_X  = 0 ; P_Y = Y.HDR ; P_VALUE = HD30 ; P_OPT = "CL"
+  P_X  := AM:4 ; P_Y := AM:Y.HDR ; P_VALUE := AM:HD31
+  P_X  := AM:13 ; P_Y := AM:Y.HDR ; P_VALUE := AM:HD32
+  P_X  := AM:18 ; P_Y := AM:Y.HDR ; P_VALUE := AM:HD33
+  P_X  := AM:27 ; P_Y := AM:Y.HDR ; P_VALUE := AM:HD34
+  P_X  := AM:38 ; P_Y := AM:Y.HDR ; P_VALUE := AM:HD35
+  P_X  := AM:49 ; P_Y := AM:Y.HDR ; P_VALUE := AM:HD36
+  P_X  := AM:60 ; P_Y := AM:Y.HDR ; P_VALUE := AM:HD37
+  CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+*T26302 v
+*  P_X  = 33 ; P_Y = Y.HDR-1 ; P_VALUE = HD38 ; P_OPT = ""
+  P_X  = 33 ; P_Y = Y.HDR-1 ; P_VALUE = HD38'L#11' ; P_OPT = ""
+*T26302 ^
+  CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+  RETURN
+*
+*--- Error message routine
+91000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+* 91000 PRINT @(0,23) : ERRMSG : CL :
+*       INPUT REPLY :
+*       PRINT @(0,23) : CL :
+*       RETURN
+93000 ERR.TYPE=3;CALL SYSCOM(MAT SYSCOM.REC)
+* 93000 ERRMSG = "Cannot locate ":ERRMSG:" file"
+*       ERR.TYPE = 3; CALL SYSCOM(MAT SYSCOM.REC)
+99999 END

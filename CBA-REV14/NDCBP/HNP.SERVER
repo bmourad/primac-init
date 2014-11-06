@@ -1,0 +1,678 @@
+*********************************************************************
+*
+* PROGRAM  - HNP.SERVER
+*
+* AUTHOR   - NICK AMENDOLA, NASTech
+*
+* DATE     - 12/18/93
+*
+* DESCRIPTION
+*
+*  This program is used to communicate with the Plant Controllers.
+*
+*--------------------------------------------------------------------
+*
+*  InMsgStatus     0       Inactive, awaiting SOH
+*                  1       Received SOH, awaiting ADR
+*                  2       Received ADR, awaiting ENQ, ACK, NAK, STX
+*                  3       Received ENQ, ACK or NAK
+*                  4       Received STX, awaiting DATA and ETX
+*                  5       Received ETX, awaiting CHK
+*                  6       Received CHK, awaiting CK1
+*                  7       Received CK1, awaiting CK2
+*                  8       Received CK2, awaiting EOT
+*                  9       Received EOT
+*
+*  OutMsgStatus    0       Inactive, output buffer empty
+*                  1       Output buffer ready, awaiting ENQ
+*                  2       Data transmitted, awaiting response
+*
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>NDC.CPYLIB>DOWNLOAD
+*
+*---- DEFINE CONSTANTS
+*
+      EQU TRUE  TO -1
+      EQU FALSE TO 0
+*
+      SOH$ = CHAR(1)
+      STX$ = CHAR(2)
+      ETX$ = CHAR(3)
+      EOT$ = CHAR(4)
+      ENQ$ = CHAR(5)
+      ACK$ = CHAR(6)
+      SI$  = CHAR(15)
+      DLE$ = CHAR(16)
+      NAK$ = CHAR(21)
+      ETB$ = CHAR(23)
+      ESC$ = CHAR(27)
+      AM   = CHAR(254)
+*
+      EQU MSEP TO "^"
+*
+*---- Define Polling Table
+*
+      DIM NetTable(250)       ;* attribute 1 = Status (A)ctive, (I)nactive
+*                             ;*           2 = Last activity time
+*                             ;*           3 = Start time
+*                             ;*           4 = Delay time
+*                             ;*           5 = Network address
+*                             ;*           6 = Timeout counter
+*                             ;*           7 = NAK counter
+*                             ;*          11 = QPTR to @START command
+*                             ;*          12 = QPTR to @CRITICAL command
+      MAT NetTable = ""
+*
+*---- Pre-Initialization
+*
+      PROCREAD PARAM ELSE PARAM = ""
+      ACTION = PARAM<1>
+      CPORT = PARAM<2>
+      TMODE = PARAM<3>
+      IF TMODE = "TRACE" THEN TRACEMODE = TRUE ELSE TRACEMODE = FALSE
+*
+*---- Open all Files
+*
+      OPEN "","INP.QUEUE" TO INP.QUEUE ELSE
+         PRINT "CANNOT OPEN INP.QUEUE FILE"
+         STOP
+      END
+      OPEN "","OUT.QUEUE" TO OUT.QUEUE ELSE
+         PRINT "CANNOT OPEN OUT.QUEUE FILE"
+         STOP
+      END
+      OPEN "","CMD.QUEUE" TO CMD.QUEUE ELSE
+         PRINT "CANNOT OPEN CMD.QUEUE FILE"
+         STOP
+      END
+      OPEN "","CONTROL" TO CONTROL ELSE
+         PRINT "CANNOT OPEN CONTROL FILE"
+         STOP
+      END
+      OPEN "","DOWNLOAD" TO DOWNLOAD ELSE
+         PRINT "CANNOT OPEN DOWNLOAD FILE"
+         STOP
+      END
+*
+*---- Get Network Configuration
+*
+      BegPtr = 1; EndPtr = 0
+      FOR N = 1 TO 250
+         MATREAD DLOAD.REC FROM DOWNLOAD, N THEN
+            IF DLOAD.PORT = CPORT THEN
+               EndPtr = EndPtr + 1
+               NetTable(EndPtr)<1> = "I"
+               NetTable(EndPtr)<2> = TIME()
+               NetTable(EndPtr)<3> = TIME()
+               NetTable(EndPtr)<4> = 0
+               NetTable(EndPtr)<5> = N
+               NetTable(EndPtr)<6> = 0
+               NetTable(EndPtr)<7> = 0
+               NetTable(EndPtr)<11> = ""
+               NetTable(EndPtr)<12> = ""
+            END
+         END
+      NEXT N
+      IF EndPtr = 0 THEN
+         PRINT "NO CONTROLLERS DEFINED FOR PORT ":CPORT
+         STOP
+      END
+*
+*---- Pre-Initialization
+*
+      CDATE = DATE()
+      CTIME = TIME()
+      IF CTIME < 10 THEN CDATE = DATE()
+      READU TREC FROM CONTROL, "HNP.SERVER.LOCK.":CPORT LOCKED GOTO 99999 ELSE NULL
+      READU TREC FROM CONTROL, "HNP.SERVER.CNTL.":CPORT ELSE TREC = ""
+      TREC = ""
+      TREC<2> = "STARTED ON ":OCONV(CDATE,"D2/"):" AT ":OCONV(CTIME,"MTS")
+      WRITE TREC ON CONTROL, "HNP.SERVER.CNTL.":CPORT
+*
+      IF TRACEMODE THEN
+         READ LREC FROM CONTROL, "HNP.TRACE.":CPORT ELSE LREC = ""
+         SDATE = DATE()
+         STIME = TIME()
+         IF STIME < 10 THEN SDATE = DATE()
+         DDATE = OCONV(SDATE,"D2-")
+         DTIME = OCONV(STIME,"MTS")
+         LMSG = STR("*",10):" ":DDATE:" @ ":DTIME
+         LREC = LMSG
+         WRITE LREC ON CONTROL, "HNP.TRACE.":CPORT
+      END
+*
+*---- INITIALIZATION
+*
+      PROMPT ""
+      ECHO OFF
+      LAGCNT = 0
+      READV LAGINCR FROM CONTROL, "HNP.SERVER.PARAM",1 ELSE LAGINCR=20
+*
+      STYPE = "UNIDATA"                          ;* set UniData timeouts
+      BEGIN CASE
+      CASE STYPE = "MDCSC"
+         PollTimer = 20
+         DataTimer = 40
+      CASE STYPE = "UNIDATA"
+         PollTimer = 4
+         DataTimer = 8
+      END CASE
+*
+      CurPtr = EndPtr
+      InMsgStatus = 0
+      InMsgControl = ""
+      InMsgBuffer = ""
+      InMsgErrorType = ""
+      OutMsgStatus = 0
+      OutMsgBuffer = ""
+      OutMsgErrorType = "1"
+      SyncTime = TRUE
+      CheckTran = TRUE
+      CMD = '!pwd'
+      UDTEXECUTE CMD CAPTURING CURR.PATH
+      CURR.PATH=FIELD(CURR.PATH,AM,1):'/'
+*
+*---- MAIN PROCESSING
+*
+      ACTIVE = TRUE
+      LOOP
+         READ TREC FROM CONTROL, "HNP.SERVER.CNTL.":CPORT ELSE TREC = ""
+         IF TREC<1> = "KILL" THEN ACTIVE = FALSE
+         IF TREC<1> = "STOP" THEN
+            ACTIVE = FALSE
+            FOR P = BegPtr TO EndPtr WHILE ACTIVE = FALSE
+               IF NetTable(P)<1> = "A" AND NetTable(P)<12> # "" THEN ACTIVE = TRUE
+            NEXT N
+         END
+      WHILE ACTIVE DO
+*
+* If File-Save is running, set flag to inhibit upload.
+*
+         SYS.LOCK = 1
+         OSREAD SYS.SAVE FROM CURR.PATH:'_HOLD_/sys.save' ELSE SYS.LOCK = 0
+*
+         InMsgStatus = 0
+         BEGIN CASE
+         CASE OutMsgStatus = 0
+            GOSUB 1000                           ;* get next polling address
+            GOSUB 1500                           ;* send poll message
+            InputTimer = PollTimer
+         CASE OutMsgStatus = 1
+            GOSUB 5000                           ;* format output message
+            PRINT OUTMSG:                        ;* send output message
+            LMSG = TRCMSG; GOSUB 7200
+            OutMsgStatus = 2
+            InputTimer = DataTimer
+         END CASE
+         LOOP
+            InputData = ""; Timeout = FALSE
+            INPUT InputData: FOR InputTimer ELSE Timeout = TRUE
+            IF InputData # "" THEN
+               GOSUB 2000                        ;* process input data
+               Timeout = FALSE
+            END
+         UNTIL Timeout OR InMsgStatus = 3 OR InMsgStatus = 9 DO
+         REPEAT
+*
+         BEGIN CASE
+         CASE Timeout 
+            IF NetTable(CurPtr)<1> = "A" THEN
+               NetTable(CurPtr)<1> = "I"
+               NetTable(CurPtr)<2> = TIME()
+            END
+            NetTable(CurPtr)<3> = TIME()
+            BEGIN CASE
+            CASE NetTable(CurPtr)<6> < 2
+               NetTable(CurPtr)<4> = 1
+               NetTable(CurPtr)<6> += 1
+            CASE NetTable(CurPtr)<6> = 2
+               NetTable(CurPtr)<4> = 5
+               NetTable(CurPtr)<11> = ""
+               NetTable(CurPtr)<6> += 1
+            CASE NetTable(CurPtr)<6> < 99
+               NetTable(CurPtr)<6> += 1
+            END CASE
+         CASE NetTable(CurPtr)<1> = "I"
+            NetTable(CurPtr)<1> = "A"
+            NetTable(CurPtr)<2> = TIME()
+            NetTable(CurPtr)<3> = TIME()
+            NetTable(CurPtr)<4> = 0
+            NetTable(CurPtr)<6> = 0
+            NetTable(CurPtr)<7> = 0
+         END CASE
+*
+         BEGIN CASE
+         CASE InMsgStatus = 3
+            BEGIN CASE
+            CASE InMsgControl = EOT$
+               IF OutMsgStatus = 0 THEN
+                  GOSUB 4000                     ;* check for output message
+               END
+               NetTable(CurPtr)<3> = TIME()
+               STIME = NetTable(CurPtr)<2>
+               CTIME = TIME(); IF CTIME < STIME THEN CTIME = CTIME + 86400
+               ETIME = CTIME - STIME
+               BEGIN CASE
+               CASE ETIME > 60
+                  NetTable(CurPtr)<4> = 2
+               CASE ETIME > 10
+                  NetTable(CurPtr)<4> = 1
+               CASE 1
+                  NetTable(CurPtr)<4> = 0
+               END CASE
+               NetTable(CurPtr)<6> = 0
+               NetTable(CurPtr)<7> = 0
+            CASE OutMsgStatus = 2 AND InMsgControl = ACK$
+               BEGIN CASE
+               CASE CurQueue = "O"
+                  LAGCNT = LAGCNT + 1
+                  IF MOD(LAGCNT,LAGINCR) = 0 THEN SLEEP 1
+                  IF LAGCNT = 1000000 THEN LAGCNT = 0
+                  IF NetTable(CurPtr)<11> = "" THEN
+                     IF TRACEMODE THEN
+                        CALL HNP.UPDQUEUE(CurAddr,"DELETE",OUT.QUEUE,Status)
+                     END ELSE
+                        CALL HNP.DELQUEUE(CurAddr,OUT.QUEUE)
+                     END
+                  END ELSE
+                     NetTable(CurPtr)<11,2> += 1
+                  END
+               CASE CurQueue = "C"
+                  CALL HNP.UPDQUEUE(CurAddr,"OK",CMD.QUEUE,Status)
+               END CASE
+               GOSUB 4000                        ;* check for output message
+               NetTable(CurPtr)<2> = TIME()
+               NetTable(CurPtr)<3> = TIME()
+               NetTable(CurPtr)<4> = 0
+               NetTable(CurPtr)<6> = 0
+               NetTable(CurPtr)<7> = 0
+            CASE OutMsgStatus = 2 AND InMsgControl = NAK$
+               OutMsgStatus = 1
+               BEGIN CASE
+               CASE NetTable(CurPtr)<7> < 2
+                  NetTable(CurPtr)<7> += 1
+               CASE NetTable(CurPtr)<7> = 2
+                  NetTable(CurPtr)<11> = ""
+                  NetTable(CurPtr)<7> += 1
+               CASE NetTable(CurPtr)<7> < 99
+                  NetTable(CurPtr)<7> += 1
+               END CASE
+            END CASE
+         CASE InMsgStatus = 9
+            GOSUB 3000                           ;* process input data
+            GOSUB 4000                           ;* check for output message
+            NetTable(CurPtr)<2> = TIME()
+            NetTable(CurPtr)<3> = TIME()
+            NetTable(CurPtr)<4> = 0
+            NetTable(CurPtr)<6> = 0
+            NetTable(CurPtr)<7> = 0
+         END CASE
+         IF OutMsgStatus = 2 THEN OutMsgStatus = 0
+      REPEAT
+*
+      CurAddr = 0
+      OutMsgBuffer = "BYE"
+      GOSUB 5000
+      PRINT OUTMSG:
+      LMSG = TRCMSG; GOSUB 7200
+      INPUT InputData: FOR PollTimer ELSE Timeout = TRUE
+*
+      CDATE = DATE()
+      CTIME = TIME()
+      IF CTIME < 10 THEN CDATE = DATE()
+      READU TREC FROM CONTROL, "HNP.SERVER.CNTL.":CPORT ELSE TREC = ""
+      TREC = ""
+      TREC<2> = "STOPPED ON ":OCONV(CDATE,"D2/"):" AT ":OCONV(CTIME,"MTS")
+      WRITE TREC ON CONTROL, "HNP.SERVER.CNTL.":CPORT
+      GOTO 99999
+*
+*---- Get next polling address
+*
+1000 *
+      CTIME = TIME()
+      MinTime = 99999
+      PrevPtr = CurPtr
+      LOOP
+         IF CurPtr = EndPtr THEN CurPtr = BegPtr ELSE CurPtr = CurPtr+1
+         CurAddr = NetTable(CurPtr)<5>
+         STIME = NetTable(CurPtr)<3>
+         DTIME = NetTable(CurPtr)<4>
+         ETIME = CTIME - STIME
+         IF ETIME < 0 THEN ETIME = ETIME + 86400
+         RTIME = DTIME - ETIME
+         IF RTIME < MinTime THEN
+            MinTime = RTIME
+            MinPtr = CurPtr
+         END
+      UNTIL CurPtr = PrevPtr DO
+      REPEAT
+      IF MinTime > 0 THEN SLEEP MinTime
+      CurPtr = MinPtr
+      CurAddr = NetTable(CurPtr)<5>
+      RETURN
+*
+*---- Send Poll Message
+*
+1500 *
+      PRINT SOH$:CHAR(CurAddr+32):ENQ$:
+      LMSG = "SOH ":CurAddr:" ENQ"; GOSUB 7200
+      RETURN
+*
+*---- Process Received Data
+*
+2000 *
+      IPTR = 0
+      ILEN = LEN(InputData)
+      LOOP
+      WHILE IPTR < ILEN DO
+         IPTR = IPTR + 1
+         CH$ = InputData[IPTR,1]
+         BEGIN CASE
+         CASE InMsgStatus = 0
+            IF CH$ = SOH$ THEN
+               InMsgStatus = 1
+               LMSG = "SOH"; GOSUB 7100
+            END
+         CASE InMsgStatus = 1
+            LMSG = (SEQ(CH$) - 32); GOSUB 7300
+            IF (SEQ(CH$) - 32) = CurAddr THEN
+               InMsgStatus = 2
+            END ELSE
+               InMsgStatus = 0
+               IPTR = ILEN
+            END
+         CASE InMsgStatus = 2
+            BEGIN CASE
+            CASE CH$ = EOT$ OR CH$ = ACK$ OR CH$ = NAK$
+               BEGIN CASE
+               CASE CH$ = EOT$
+                  LMSG = "EOT"; GOSUB 7300
+               CASE CH$ = ACK$
+                  LMSG = "ACK"; GOSUB 7300
+               CASE CH$ = NAK$
+                  LMSG = "NAK"; GOSUB 7300
+               END CASE
+               InMsgStatus = 3
+               InMsgControl = CH$
+               IPTR = ILEN
+            CASE CH$ = STX$
+               LMSG = "STX"; GOSUB 7300
+               InMsgStatus = 4
+               InMsgLen = 0
+            CASE 1
+               InMsgStatus = 0
+               IPTR = ILEN
+            END CASE
+         CASE InMsgStatus = 3
+         CASE InMsgStatus = 4
+            IF CH$ = ETB$ THEN
+               InMsgStatus = 5
+            END ELSE
+               p = INDEX(InputData[IPTR,999],ETB$,1)
+               IF p = 0 THEN
+                  InMsgBuffer = InMsgBuffer[1,InMsgLen]:InputData[IPTR,999]
+                  InMsgLen = InMsgLen + (ILEN - IPTR + 1)
+                  IPTR = ILEN
+               END ELSE
+                  p = p + IPTR - 1
+                  InMsgBuffer = InMsgBuffer[1,InMsgLen]:InputData[IPTR,(p - IPTR)]
+                  InMsgLen = InMsgLen + (p - IPTR)
+                  IPTR = p
+                  InMsgStatus = 5
+               END
+            END
+         CASE InMsgStatus = 5
+            LMSG = InMsgBuffer; GOSUB 7300
+            LMSG = "ETB"; GOSUB 7300
+            CheckSum = 0
+            BEGIN CASE
+            CASE CH$ = EOT$
+               LMSG = "EOT"; GOSUB 7300
+               InMsgErrorType = "0"
+               InMsgStatus = 9
+            CASE CH$ = "1"
+               LMSG = "1"; GOSUB 7300
+               InMsgErrorType = "1"
+               InMsgStatus = 6
+            CASE CH$ = "2"
+               LMSG = "2"; GOSUB 7300
+               InMsgErrorType = "2"
+               InMsgStatus = 6
+            CASE 1
+               LMSG = CH$; GOSUB 7300
+               InMsgErrorType = "0"
+               InMsgStatus = 0
+            END CASE
+         CASE InMsgStatus = 6
+            LMSG = "CK1"; GOSUB 7300
+            CheckSum = CheckSum + (SEQ(CH$) - 32) * 64
+            InMsgStatus = 7
+         CASE InMsgStatus = 7
+            LMSG = "CK2"; GOSUB 7300
+            CheckSum = CheckSum + (SEQ(CH$) - 32)
+            InMsgStatus = 8
+            BEGIN CASE
+            CASE InMsgErrorType = "1"
+               CheckTotal = MOD(InMsgLen,4096)
+            CASE InMsgErrorType = "2"
+               CheckTotal = 0
+               FOR N = 1 TO InMsgLen
+                  CheckTotal = CheckTotal + SEQ(InMsgBuffer[N,1])
+                  CheckTotal = MOD(CheckTotal,4096)
+               NEXT N
+            CASE 1
+               CheckTotal = CheckSum
+            END CASE
+            IF CheckTotal <> CheckSum THEN InMsgError = TRUE
+            InMsgStatus = 8
+         CASE InMsgStatus = 8
+            LMSG = "EOT"; GOSUB 7300
+            InMsgStatus = 9
+         END CASE
+      REPEAT
+      RETURN
+*
+*---- Process Message Response
+*
+3000 *
+      BEGIN CASE
+      CASE CurQueue = "C"
+         CALL HNP.UPDQUEUE(CurAddr,InMsgBuffer,CMD.QUEUE,Status)
+      CASE CurQueue = "I"
+         IF InMsgBuffer[1,5] = ("TRAN":MSEP) THEN
+            CALL HNP.ADDQUEUE(CurAddr,InMsgBuffer[6,999],INP.QUEUE,QPTR,Status)
+            IF Status = "" THEN
+               PRINT SOH$:CHAR(CurAddr+32):ACK$:
+               LMSG = "SOH ":CurAddr:" ACK"; GOSUB 7200
+            END
+            CheckTran = TRUE
+         END
+      END CASE
+      RETURN
+*
+*---- Get Record from Message Queue
+*
+4000 *
+      CurQueue = "C"
+      CALL HNP.GETQUEUE(CurAddr,OutMsgBuffer,CMD.QUEUE,QPTR,Status)
+      IF OutMsgBuffer = "" THEN
+         CTIME = TIME()
+         IF SyncTime AND MOD(CTIME,3600) >= 1800 THEN
+            OutMsgBuffer = "SETTIME^":OCONV(TIME(),"MTS")[4,5]
+            CurQueue = "X"
+            SyncTime = FALSE
+         END
+         IF MOD(CTIME,3600) < 1800 THEN SyncTime = TRUE
+      END
+      IF OutMsgBuffer = "" AND NOT(SYS.LOCK) THEN
+         CTIME = TIME()
+         IF CheckTran AND MOD(CTIME,60) >= 30 THEN
+            CurQueue = "I"
+            OutMsgBuffer = "TRAN"
+            CheckTran = FALSE
+         END
+         IF MOD(CTIME,60) < 30 THEN CheckTran = TRUE
+      END
+      IF OutMsgBuffer = "" THEN
+         CurQueue = "O"
+         LOOP
+            IF NetTable(CurPtr)<11> = "" THEN
+               CALL HNP.GETQUEUE(CurAddr,OutMsgBuffer,OUT.QUEUE,QPTR,Status)
+            END ELSE
+               QPTR = NetTable(CurPtr)<11,2>
+               CALL HNP.NXTQUEUE(CurAddr,OutMsgBuffer,OUT.QUEUE,QPTR,Status)
+               NetTable(CurPtr)<11,2> = QPTR
+            END
+         WHILE OutMsgBuffer[1,1] = "@" DO
+            GOSUB 6000
+            OutMsgBuffer = ""
+            IF NetTable(CurPtr)<11> # "" THEN NetTable(CurPtr)<11,2> += 1
+         REPEAT
+      END
+      IF OutMsgBuffer = "" AND NOT(SYS.LOCK) THEN
+         CurQueue = "I"
+         OutMsgBuffer = "TRAN"
+      END
+      IF OutMsgBuffer = "" THEN
+         CurQueue = ""
+      END ELSE
+         OutMsgStatus = 1
+      END
+      RETURN
+*
+*---- Format Output Message
+*
+5000 *
+      IF OutMsgBuffer = "SETTIME" THEN
+         OutMsgBuffer = "SETTIME^":OCONV(TIME(),"MTS")
+      END
+      OutMsgLen = LEN(OutMsgBuffer)
+      BEGIN CASE
+      CASE OutMsgErrorType = "1"
+         CheckSum = MOD(OutMsgLen,4096)
+         CK1 = INT(CheckSum / 64)
+         CK2 = MOD(CheckSum,64)
+         OUTMSG = SOH$:CHAR(CurAddr+32):STX$:OutMsgBuffer[1,OutMsgLen]:ETX$:"1":CHAR(CK1+32):CHAR(CK2+32):EOT$
+         TRCMSG = "SOH ":CurAddr:" STX ":OutMsgBuffer[1,OutMsgLen]:" ETX 1 CK1 CK2 EOT"
+      CASE OutMsgErrorType = "2"
+         CheckSum = 0
+         FOR N = 1 TO OutMsgLen
+            CheckSum = CheckSum + SEQ(OutMsgBuffer[N,1])
+            CheckSum = MOD(CheckSum,4096)
+         NEXT N
+         CK1 = INT(CheckSum / 64)
+         CK2 = MOD(CheckSum,64)
+         OUTMSG = SOH$:CHAR(CurAddr+32):STX$:OutMsgBuffer[1,OutMsgLen]:ETX$:"2":CHAR(CK1+32):CHAR(CK2+32):EOT$
+         TRCMSG = "SOH ":CurAddr:" STX ":OutMsgBuffer[1,OutMsgLen]:" ETX 2 CK1 CK2 EOT"
+      CASE 1
+         OUTMSG = SOH$:CHAR(CurAddr+32):STX$:OutMsgBuffer[1,OutMsgLen]:ETX$:EOT$
+         TRCMSG = "SOH ":CurAddr:" STX ":OutMsgBuffer[1,OutMsgLen]:" ETX EOT"
+      END CASE
+      RETURN
+*
+*---- PROCESS SERVER COMMAND
+*
+6000 *
+      CMD = FIELD(OutMsgBuffer,"^",1)
+      BEGIN CASE
+      CASE CMD = "@START"
+         IF NetTable(CurPtr)<11> # "" THEN
+            LOOP
+               CALL HNP.GETQUEUE(CurAddr,OutData,OUT.QUEUE,QPTR,Status)
+            UNTIL QPTR = NetTable(CurPtr)<11,2> DO
+               IF TRACEMODE THEN
+                  CALL HNP.UPDQUEUE(CurAddr,"DELETE",OUT.QUEUE,Status)
+               END ELSE
+                  CALL HNP.DELQUEUE(CurAddr,OUT.QUEUE)
+               END
+            REPEAT
+         END
+         NetTable(CurPtr)<11> = QPTR
+         NetTable(CurPtr)<11,2> = QPTR
+         NetTable(CurPtr)<12> = ""
+      CASE CMD = "@CRITICAL"
+         NetTable(CurPtr)<12> = QPTR
+      CASE CMD = "@TIMESTAMP"
+         FNAME = FIELD(OutMsgBuffer,"^",2)
+         MATREADU DLOAD.REC FROM DOWNLOAD, CurAddr THEN
+            LOCATE FNAME IN DLOAD.FILE<1>,1 SETTING DPTR THEN
+               CDATE = DATE()
+               CTIME = TIME()
+               IF CTIME < 10 THEN CDATE = DATE()
+               DLOAD.LAST.DATE<1,DPTR> = CDATE
+               DLOAD.LAST.TIME<1,DPTR> = OCONV(CTIME,"MTS")[1,5]
+               MATWRITE DLOAD.REC ON DOWNLOAD, CurAddr
+            END ELSE
+               RELEASE DOWNLOAD, CurAddr
+            END
+         END ELSE
+            RELEASE DOWNLOAD, CurAddr
+         END
+      CASE CMD = "@SLEEP"
+         TDELAY = FIELD(OutMsgBuffer,"^",2)
+         IF TDELAY+0 = 0 THEN TDELAY = 1
+         SLEEP TDELAY
+         IF NetTable(CurPtr)<11> = "" THEN
+            IF TRACEMODE THEN
+               CALL HNP.UPDQUEUE(CurAddr,"DELETE",OUT.QUEUE,Status)
+            END ELSE
+               CALL HNP.DELQUEUE(CurAddr,OUT.QUEUE)
+            END
+         END
+      CASE CMD = "@STOP"
+         LOOP
+            CALL HNP.GETQUEUE(CurAddr,OutData,OUT.QUEUE,QPTR,Status)
+            IF TRACEMODE THEN
+               CALL HNP.UPDQUEUE(CurAddr,"DELETE",OUT.QUEUE,Status)
+            END ELSE
+               CALL HNP.DELQUEUE(CurAddr,OUT.QUEUE)
+            END
+         UNTIL FIELD(OutData,"^",1) = "@STOP" DO
+         REPEAT
+         NetTable(CurPtr)<11> = ""
+         NetTable(CurPtr)<12> = ""
+      END CASE
+      RETURN
+*
+*---- Update Log File
+*
+7100  LogFlag = "I"; GOTO 7500
+7200  LogFlag = "O"; GOTO 7500
+7300  LogFlag = "A"; GOTO 7500
+7500  IF TRACEMODE THEN
+         LCNT = DCOUNT(LREC,CHAR(254))
+         BEGIN CASE
+         CASE LogFlag # "I"
+         CASE LCNT < 4
+         CASE LREC<LCNT-0> # LREC<LCNT-2>
+         CASE LREC<LCNT-1> # LREC<LCNT-3>
+         CASE 1
+            LREC = DELETE(LREC,LCNT,0,0)
+            LCNT = LCNT - 1
+            LREC = DELETE(LREC,LCNT,0,0)
+            LCNT = LCNT - 1
+         END CASE
+         FOR N = LCNT TO 500 STEP -1
+            LREC = DELETE(LREC,1,0,0)
+         NEXT N
+         BEGIN CASE
+         CASE LogFlag = "I"
+            LREC<-1> = "   <<<":LMSG[1,40]
+         CASE LogFlag = "O"
+            LREC<-1> = ">>>":LMSG
+         CASE LogFlag = "A"
+            LREC = LREC:" ":LMSG
+         END CASE
+         WRITE LREC ON CONTROL, "HNP.TRACE.":CPORT
+      END
+      RETURN
+*
+*---- END OF PROGRAM
+*
+99999 *
+      ECHO ON
+      CHAIN "QUIT"
+   END

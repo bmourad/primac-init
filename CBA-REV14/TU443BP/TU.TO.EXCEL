@@ -1,0 +1,435 @@
+SUBROUTINE TU.TO.EXCEL(HOSTFILENAME, FIELDLIST, SELECTION, OPTIONS, BOOK, STATUS)
+ INCLUDE TUBP USER.INCLUDE.H
+*
+** SBClient Host 3GL API
+** Copyright (C) Ardent Software Inc. 1998
+** Copyright (C) UniData, Inc. 1996, 1997
+** Copyright (C) System Builder Corporation. 1995
+**
+**      This software is the proprietary property and contains
+**      trade secrets of Ardent Software, Inc. Any unauthorized use,
+**      disclosure or duplication is strictly prohibited.
+**      All rights reserved.
+*
+***************************************************************************
+*-* TU.TO.EXCEL(Pickfilename, Fieldlist, Selection, Options, Sheetname,
+*-* Status)
+*-*
+*-*       This function will download formatted pick data into a EXCEL spreadsheet
+*-* using a combination of file transfer and DDE.
+*-*
+*-* [P] Pickfilename	The name of the pick file to be downloaded.
+*-*
+*-* [P] Fieldlist	List of dictionary definitions of fields to be
+*-* downloaded.
+*-*
+*-* [P] Selection	Selection criteria to locate items to be downloaded.
+*-*
+*-* [P] Options	This is an array of characters to indicate minor details
+*-* of the transfer. Possible values INCLUDE :-
+*-*
+*-*  C Clear the destination before downloading
+*-*  F Use file transfer protocol to send data
+*-*  M Transfer field MASKS (spreadsheets only)
+*-*  H Transfer Heading
+*-*  I Do OEM to ANSI conversion - can only be used if F option is specified
+*-*
+*-* [P] Book This the name of the PC file to store the data.
+*-*
+*-* [R] Status	This is an indication of the success or failure of the
+*-* subroutine. A successful call will return with zero
+*-* Status and failure will return with a non-zero value.
+***************************************************************************
+*
+ INCLUDE TUBP SPECIAL.H
+ INCLUDE TUBP TU.API.H
+ INCLUDE TUBP HEADER.H
+ INCLUDE TUBP DOS.PATH.H
+ INCLUDE TUBP TU.ERRORCODES.H
+*
+EQU TRUE TO 1
+EQU FALSE TO 0
+*
+DEBUGMODE = FALSE
+*
+OPEN '','TUDEFN' TO TUSTATE ELSE
+STATUS = FTE.TUDEFN.OPEN.ERROR
+RETURN
+END
+READ MACRO.DEFN FROM TUSTATE, "EXCEL.MACROS" ELSE
+STATUS = FTE.EXCEL.MACROS.READ.ERROR
+RETURN
+END
+*
+FILE.TRANSFER = INDEX(OPTIONS, 'F', 1)
+BUILD.ALL = INDEX(OPTIONS, '0', 1)
+COLUMN.HEADER = INDEX(OPTIONS, '1', 1)
+INSERT.BLANK = INDEX(OPTIONS, '2', 1)
+DEFN.SIZE = DCOUNT(MACRO.DEFN, AM)
+TEMP = DEFT.DOS.PATH:'\SBCLIENT.XLS'
+SHEETNAME = "SBCLIENT"
+OLDNAME = "Sheet1"
+IF INDEX(BOOK, ",", 1) THEN
+SHEETNAME = FIELD(BOOK, ",", 2)
+BOOK = FIELD(BOOK, ",", 1)
+IF FILE.TRANSFER THEN OLDNAME = "SBCLIENT"
+END
+GOSUB 200; * Resolve Simple Name
+BOOKNAME = SIMPLENAME
+TIMEOUT = 150
+HANDLE = ''
+SYSTEMHANDLE = ''
+HDR.SUPP = INDEX(FIELDLIST, "HDR-SUPP", 1) + INDEX(FIELDLIST, "HDR.SUP", 1)
+*
+*-*  First establish a link with the SYSTEM topic
+*
+CALL TU.DDE.CONNECT('EXCEL', 'System', SYSTEMHANDLE, STATUS)
+IF STATUS THEN
+EXCEL = "EXCEL.EXE"
+CALL TU.LAUNCH.APP(EXCEL, APP.SHOWNORMAL, STATUS)
+IF STATUS THEN RETURN
+CALL TU.CHECK.APP(EXCEL, STATUS)
+IF STATUS THEN RETURN
+CALL TU.DDE.CONNECT('EXCEL', 'System', SYSTEMHANDLE, STATUS)
+IF STATUS THEN RETURN
+END
+IF DEBUGMODE THEN CRT "System Handle = ":SYSTEMHANDLE
+HANDLE = SYSTEMHANDLE
+*
+*-* If download via file, send the file on ahead
+*-* Otherwise, build the data to be sent in preparation for DDE transfer
+*
+IF FILE.TRANSFER THEN
+SEPARATORS = SEP.TABS; HEADER = ''
+DOWNLOADOPTIONS = 'HOM'; * host init, overwrite, no STATUS window
+IF BUILD.ALL THEN DOWNLOADOPTIONS = DOWNLOADOPTIONS:'0'
+IF COLUMN.HEADER THEN DOWNLOADOPTIONS = DOWNLOADOPTIONS:'1'
+IF INSERT.BLANK THEN DOWNLOADOPTIONS = DOWNLOADOPTIONS:'2'
+DESCRIPTION = 'Excel Data Transfer'
+CALL TU.PC.DOWNLOAD(HOSTFILENAME, FIELDLIST, SELECTION, TEMP, SEPARATORS, DOWNLOADOPTIONS, DESCRIPTION, STATUS)
+IF STATUS THEN RETURN
+CALL TU.BUILD.HEADER(HOSTFILENAME, FIELDLIST, HEADER, 'EXCEL', STATUS)
+IF STATUS THEN RETURN
+END ELSE
+FLAG = "EXCEL"; BUILD.OPT = ""
+IF BUILD.ALL THEN BUILD.OPT = BUILD.OPT:"F"
+IF COLUMN.HEADER THEN BUILD.OPT = BUILD.OPT:"H"
+IF INSERT.BLANK THEN BUILD.OPT = BUILD.OPT:"I"
+IF BUILD.OPT # "" THEN FLAG = FLAG:VM:BUILD.OPT
+CALL TU.BUILD.XFER.DATA(HOSTFILENAME, FIELDLIST, SELECTION, FLAG, STATUS)
+OPEN '','TUXFER.DATA.':PORTNO TO TUXFER.DATA ELSE STATUS = FTE.TUXFER.DATA.FILE.OPEN.ERROR; RETURN
+READ HEADER FROM TUXFER.DATA,'XFER.HEADER' ELSE STATUS = FTE.ITEM.READ.ERROR; RETURN
+END
+*
+IF STATUS THEN RETURN
+*-* Do OEM to ANSI conversion if I option is specified
+IF (INDEX(OPTIONS, 'I', 1) AND FILE.TRANSFER) THEN
+CALL TU.OEM.TO.ANSI(TEMP, TEMP, STATUS)
+IF STATUS THEN RETURN
+END
+*
+*-* Get Field Information from header record
+*
+FIELDCOUNT = DCOUNT(HEADER<HED.DICTNAME>, VM)
+*
+*-* Now see if EXCEL is already looking at the sheet we are interested in
+*-* the "Topics" call returns an alphabetically sorted list of all the
+*-* open books and all the sheets within
+*
+CALL TU.DDE.READ(SYSTEMHANDLE, 'Topics', TIMEOUT, DATA, STATUS)
+IF STATUS THEN GOTO 999
+CALL TU.CONVERT(TAB, " ", DATA)
+D = DCOUNT(DATA, " ")
+FOUND = 0
+BEGIN CASE
+CASE SIMPLENAME NE ""
+*
+*-* If a simplename has been specified then we will use it
+*
+LOOKUP = "[":OCONV(SIMPLENAME, "MCU"):"]"
+FOR I = 1 TO D UNTIL FOUND
+BIT = OCONV(FIELD(DATA, ' ', I), 'MCU')
+IF INDEX(BIT , LOOKUP, 1) THEN FOUND = I
+NEXT I
+CASE 1
+*
+*-* We will pick out the first book as the one to use.
+*-* We will also search this book for the specified sheet name
+*
+CALL TU.DDE.READ(SYSTEMHANDLE, "Selection", TIMEOUT, SEL, STATUS)
+IF STATUS THEN SEL = ""
+BOOK = FIELD(SEL, "[", 2)
+BOOK = FIELD(BOOK, "]", 1)
+*         BOOK = ""
+IF BOOK = "" THEN
+MACRO = "New"; GOSUB 100
+IF STATUS THEN GOTO 998
+CALL TU.DDE.READ(SYSTEMHANDLE, "Selection", TIMEOUT, SEL, STATUS)
+IF STATUS THEN GOTO 998
+BOOK = FIELD(SEL, "[", 2)
+BOOK = FIELD(BOOK, "]", 1)
+END
+IF BOOK = "" THEN STATUS = 16; GOTO 998
+FOUND = 1
+BOOKNAME = BOOK
+SIMPLENAME = BOOK
+BOOK = ".\":BOOK
+END CASE
+*
+*
+*-* To ensure that Excel loads our temp file without discarding the
+*-* default workbook we need to make Excel think that the default
+*-* workbook has changed.  We do something that should be harmless
+*-* ie we insert a row and then undo our insertion.
+*
+*
+*
+MACRO = "Insert Row"; GOSUB 100; IF STATUS THEN GOTO 998
+MACRO = "Undo"; GOSUB 100; IF STATUS THEN GOTO 998
+*
+*-* Is excel not looking at our book ?
+*
+IF NOT(FOUND) THEN
+CALL TU.CHECK.FILE(BOOK, STATUS); * See if it exists
+IF NOT(STATUS) THEN
+MACRO = "Open Book"; GOSUB 100; IF STATUS THEN GOTO 998
+END ELSE
+MACRO = "New"; GOSUB 100; IF STATUS THEN GOTO 998
+*-* Now Save As
+MACRO = "Save As"; GOSUB 100; IF STATUS THEN GOTO 998
+END
+END ELSE
+MACRO = "Activate"; GOSUB 100
+IF STATUS THEN GOTO 998
+END
+*
+*-* Now ask for Topic list again and search for the sheet name
+*
+IF NOT(FILE.TRANSFER) THEN
+CALL TU.DDE.READ(SYSTEMHANDLE, 'Topics', TIMEOUT, NEWDATA, STATUS)
+IF STATUS THEN GOTO 999
+CALL TU.CONVERT(TAB, " ", NEWDATA)
+D = DCOUNT(NEWDATA, " ")
+FOUNDSHEET = 0
+LOOKUP = "[":OCONV(SIMPLENAME, "MCU"):"]":OCONV(SHEETNAME, "MCU")
+FOR I = 1 TO D UNTIL FOUNDSHEET
+BIT = OCONV(FIELD(DATA, ' ', I), 'MCU')
+IF BIT = LOOKUP THEN
+FOUNDSHEET = 1
+CALL TU.DDE.CONNECT('EXCEL', SIMPLENAME, HANDLE, DUMMY)
+MACRO = "Select Sheet"; GOSUB 100
+IF STATUS THEN GOTO 998
+IF INDEX(OPTIONS, "C", 1) THEN
+MACRO = "Clear Sheet"; GOSUB 100
+IF STATUS THEN GOTO 998
+END
+END
+NEXT I
+IF NOT(FOUNDSHEET) THEN
+*
+*-* What we need to do now is to create a new sheet and then look at the
+*-* system topics to see what has changed
+*
+IF DEBUGMODE THEN CRT "Connecting to ":SIMPLENAME
+CALL TU.DDE.CONNECT('EXCEL', SIMPLENAME, HANDLE, DUMMY)
+MACRO = "New Sheet"; GOSUB 100
+IF STATUS THEN GOTO 998
+CALL TU.DDE.READ(SYSTEMHANDLE, 'Topics', TIMEOUT, NEWDATA, STATUS)
+IF STATUS THEN GOTO 999
+CALL TU.CONVERT(TAB, " ", NEWDATA)
+D = DCOUNT(NEWDATA, " ")
+FOR I = 1 TO D UNTIL FOUNDSHEET
+BIT = OCONV(FIELD(DATA, ' ', I), 'MCU')
+NEWBIT = OCONV(FIELD(NEWDATA, ' ', I), 'MCU')
+IF BIT NE NEWBIT THEN
+NEWBOOK = FIELD(NEWBIT, "[", 2)
+NEWBOOK = FIELD(NEWBOOK, "]", 1)
+IF OCONV(SIMPLENAME, "MCU") = NEWBOOK THEN
+OLDNAME = FIELD(NEWBIT, "]", 2)
+MACRO = "Rename Sheet"; GOSUB 100; IF STATUS THEN GOTO 998
+OLDNAME = ""
+FOUNDSHEET = 1
+END
+END
+NEXT I
+END
+END
+*
+*-* We now have the book opened. We must either open the temp file and
+*-* move it across or else fill the book via DDE
+*
+IF FILE.TRANSFER THEN
+MACRO = "Open Temp"; GOSUB 100; IF STATUS THEN GOTO 998
+SIMPLENAME = "SBCLIENT.XLS"; * We are talking to this one now
+MACRO = "Rename Sheet"; GOSUB 100
+END
+*
+*-* Now try and connect to the sheet we are interested in
+*
+SIMPLENAME = "[":SIMPLENAME:"]":SHEETNAME
+IF DEBUGMODE THEN CRT "Connecting To ":SIMPLENAME:" ... ":
+CALL TU.DDE.CONNECT('EXCEL', SIMPLENAME, HANDLE, STATUS)
+IF STATUS THEN
+SIMPLENAME = FIELD(SIMPLENAME, "]", 1):"]Sheet1"
+CALL TU.DDE.CONNECT('EXCEL', SIMPLENAME, HANDLE, STATUS)
+IF NOT(STATUS) THEN
+OLDNAME = "Sheet1"; MACRO = "Rename Sheet"; GOSUB 100
+END
+END
+IF STATUS THEN GOTO 999
+IF DEBUGMODE THEN CRT "Handle = ":HANDLE
+MACRO = "Select Sheet"; GOSUB 100
+*
+*-* If we are in the temp sheet then we must insert a row for the column headings
+*
+IF FILE.TRANSFER AND NOT(HDR.SUPP) THEN
+L = "R1"; R = "R1"; C = "C1"
+MACRO = "Select"; GOSUB 100; IF STATUS THEN GOTO 998
+MACRO = "Insert Row"; GOSUB 100; IF STATUS THEN GOTO 998
+END
+*
+*-* For DDE fills, do we need to clear the sheet first ...
+*
+!   IF NOT(FILE.TRANSFER) AND INDEX(OPTIONS, 'C', 1) THEN
+!     MACRO = "Clear Sheet"; GOSUB 100; IF STATUS THEN GOTO 998
+!   END
+*
+*-* Set column justification and masks if required
+*
+IF NOT(HDR.SUPP) THEN ROW = 2 ELSE ROW = 1
+COL = 1
+FOR I = 1 TO FIELDCOUNT
+IF INDEX(OPTIONS, 'M', 1) THEN
+L = "C":I; R = "R1"; C = "C":I
+MACRO = "Select"; GOSUB 100; IF STATUS THEN GOTO 998
+WIDTH = HEADER<HED.LENGTH, I>
+MACRO = "Width"; GOSUB 100; IF STATUS THEN GOTO 998
+IF HEADER<HED.JUST, I> = 'R' THEN MACRO = "Right" ELSE MACRO = "Left"
+GOSUB 100; IF STATUS THEN GOTO 998
+MASK = HEADER<HED.MASK, I>
+IF MASK # '' THEN
+MACRO = "Mask"
+GOSUB 100; IF STATUS THEN GOTO 998
+END
+END
+*
+*-* Set headings if required
+*
+IF NOT(HDR.SUPP) THEN
+CALL TU.DDE.WRITE(HANDLE, 'R1C':I, TIMEOUT, HEADER<HED.HEADING, I>, STATUS)
+IF STATUS THEN GOTO 998
+END
+NEXT I
+*
+!     IF OLDNAME NE "" THEN
+!       MACRO = "Rename Sheet"; GOSUB 100; IF STATUS THEN GOTO 998
+!     END
+IF FILE.TRANSFER THEN
+*
+*-* Move sheet into BOOK
+*
+MACRO = "Move Sheet"; GOSUB 100
+IF STATUS THEN GOTO 998
+*
+END ELSE
+*
+*-* Send data down cell at a time
+*
+SLEEP 2
+FOR ID = 1 TO HEADER<HED.IDCOUNT>
+READ ITEM FROM TUXFER.DATA,'XFER.DATA.':ID ELSE STATUS = 202; RETURN
+AMC = DCOUNT(ITEM, AM)
+FOR AC = 1 TO AMC
+VMC = COUNT(ITEM<AC>, VM) + (ITEM<AC> # '')
+FOR COL = 1 TO VMC
+FIELD = ITEM<AC, COL>
+CALL TU.DDE.WRITE(HANDLE, 'R':ROW:'C':COL, TIMEOUT, FIELD, STATUS)
+IF STATUS THEN GOTO 998
+NEXT COL
+ROW = ROW + 1
+NEXT AC
+NEXT ID
+END
+*
+MACRO = "Home"; GOSUB 100; IF STATUS THEN GOTO 998
+IF INDEX(OPTIONS, 'P', 1) THEN MACRO = "Print Sheet"; GOSUB 100; IF STATUS THEN GOTO 998
+IF INDEX(OPTIONS, 'R', 1) THEN MACRO = "Restore"; GOSUB 100; IF STATUS THEN GOTO 998
+*
+CALL TU.DDE.DISCONNECT(HANDLE, STATUS)
+CALL TU.DDE.DISCONNECT(SYSTEMHANDLE, STATUS)
+RETURN
+*
+100 * Execute Macro
+*
+LOCATE("[":MACRO:"]", MACRO.DEFN; POS) THEN
+DDE.MACRO = ""
+STATUS = 0
+LOOP
+POS = POS + 1
+LINE = MACRO.DEFN<POS>
+DONE = STATUS OR LINE[1, 1] = "[" OR POS > DEFN.SIZE
+UNTIL DONE DO
+IF TRIM(LINE) NE "" AND TRIM(LINE)[1, 1] NE ";" THEN
+DDE.MACRO = "[":LINE:"]"
+GOSUB 110; * Insert Variables
+IF DEBUGMODE THEN CRT HANDLE:" ":DDE.MACRO
+CALL TU.DDE.EXEC.MACRO(HANDLE, TIMEOUT, DDE.MACRO, STATUS)
+IF STATUS THEN STATUS = 15
+END
+REPEAT
+END ELSE STATUS = 14
+RETURN
+*
+110 * Insert Variables
+*
+OLD = "%BOOKNAME%"; IF INDEX(DDE.MACRO, OLD, 1) THEN NEW = BOOKNAME; GOSUB 111
+OLD = "%SHEETNAME%"; IF INDEX(DDE.MACRO, OLD, 1) THEN NEW = SHEETNAME; GOSUB 111
+OLD = "%OLDNAME%"; IF INDEX(DDE.MACRO, OLD, 1) THEN NEW = OLDNAME; GOSUB 111
+OLD = "%BOOK%"; IF INDEX(DDE.MACRO, OLD, 1) THEN NEW = BOOK; GOSUB 111
+OLD = "%WIDTH%"; IF INDEX(DDE.MACRO, OLD, 1) THEN NEW = WIDTH; GOSUB 111
+OLD = "%MASK%"; IF INDEX(DDE.MACRO, OLD, 1) THEN NEW = MASK; GOSUB 111
+OLD = "%TEMP%"; IF INDEX(DDE.MACRO, OLD, 1) THEN NEW = TEMP; GOSUB 111
+OLD = "%L%"; IF INDEX(DDE.MACRO, OLD, 1) THEN NEW = L; GOSUB 111
+OLD = "%R%"; IF INDEX(DDE.MACRO, OLD, 1) THEN NEW = R; GOSUB 111
+OLD = "%C%"; IF INDEX(DDE.MACRO, OLD, 1) THEN NEW = C; GOSUB 111
+OLD = "%ARRAY%"
+IF INDEX(DDE.MACRO, OLD, 1) THEN
+NEW = "Array(1, 1)"
+FOR I = 2 TO FIELDCOUNT
+NEW = NEW:", Array(":I:", 1)"
+NEXT I
+GOSUB 111
+END
+RETURN
+*
+111 * Do the swap
+*
+CALL TU.CHANGE(OLD, NEW, DDE.MACRO)
+RETURN
+*
+200 * Resolve Simple Name
+*
+SIMPLENAME = BOOK
+P = COUNT(SIMPLENAME, '.')
+P = INDEX(SIMPLENAME, ',', P)
+IF P THEN
+SIMPLENAME = SIMPLENAME[1, P - 1]
+END
+IF INDEX(SIMPLENAME, '\', 1) THEN
+SIMPLENAME = FIELD(SIMPLENAME, '\', DCOUNT(SIMPLENAME, '\') )
+END
+SIMPLENAME = OCONV(SIMPLENAME, 'MCU')
+RETURN
+*
+998 * error exits
+*
+DUMMY = ''
+IF HANDLE AND HANDLE NE SYSTEMHANDLE THEN
+CALL TU.DDE.DISCONNECT(HANDLE, DUMMY)
+END
+999 *
+DUMMY = ''
+IF SYSTEMHANDLE THEN CALL TU.DDE.DISCONNECT(SYSTEMHANDLE, DUMMY)
+RETURN
+*
+END

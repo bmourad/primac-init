@@ -1,0 +1,215 @@
+SUBROUTINE APCREM_READ_DAILY_CASH_REVERSAL
+********************************************************************************
+*   Program name :- APCREM_READ_DAILY_CASH_REVERSAL
+*   Created:- 5/28/2003
+*------------------------------------------------------------------------------*
+*
+* In Properties:
+* --------------
+*  ID,DIV_POS,APCK_VEND,APCK_VOUCH
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE APS.CPYLIB DAILY.CHECK.REVERSAL
+$INCLUDE PMC.CPYLIB FISCAL
+$INCLUDE APS.CPYLIB HDCH
+$INCLUDE APS.CPYLIB SQV
+$INCLUDE CPYLIB CHAR
+
+* Insert method code here
+
+ERRMSG = ""
+OPEN '','DAILY.CHECK.REVERSAL' TO DAILY.CHECK.REVERSAL ELSE 
+	ERRMSG = 'DAILY.CHECK.REVERSAL FILE MISSING'
+	GOTO 99999
+END
+
+OPEN '','CONTROL' TO CONTROL ELSE 
+	ERRMSG = 'CONTROL FILE MISSING'
+	GOTO 99999
+END
+
+OPEN '','HDCH' TO HDCH ELSE 
+	ERRMSG = 'HDCH FILE MISSING'
+	GOTO 99999
+END
+
+OPEN '','SQV' TO SQV ELSE 
+	ERRMSG = 'SQV FILE MISSING'
+	GOTO 99999
+END
+
+ALL.ACCT = ""
+ALL.DIV = ""
+ALL.DEPT = ""
+ALL.CCTR = ""
+ALL.AMT = ""
+ALL.EQUIP = ""
+ALL.NET = ""
+ALL.DSC = ""
+
+STATUS = RBO.getProperty('','ID',ID)
+STATUS = RBO.getProperty('','DIV_POS',POS)
+STATUS = RBO.getProperty('','APCK_VEND',APCK.VEND)
+STATUS = RBO.getProperty('','APCK_VOUCH',APCK.VOUCH)
+STATUS = RBO.getProperty('','APCK_DATE',APCK.DATE)
+STATUS = RBO.getProperty('','APCK_AMT',APCK.AMT)
+STATUS = RBO.getProperty('','CO_CHK_RECON',CO.CHK.RECON)
+APCK.AMT = ICONV(APCK.AMT,"MD2")
+
+IF POS = "" THEN
+	POS = 1
+END
+
+CONO = ID[1,3]
+
+MATREAD FISCAL.REC FROM CONTROL,CONO:'APVFISCAL' ELSE
+    ERRMSG = "APVFISCAL CONTROL RECORD IS MISSING"
+    GOTO 99999
+END
+
+STATUS = 1
+DCR.KEY = CONO:"!":ID[10,6]:"!":ID[4,6]:"!":FR.CURR.PER<1,POS>
+DCR.CHECK.NO = ID[10,6]
+DCR.DISB.ACCT = ID[4,6]
+DCR.VEND = APCK.VEND
+NEW_ITEM = 0
+
+MATREAD DCR.REC FROM DAILY.CHECK.REVERSAL, DCR.KEY ELSE
+   STATUS = 0
+   NEW_ITEM = 1
+END
+
+TR.CNT = DCOUNT(APCK.VOUCH,VM)
+PROG.FLAG = "MANUAL"
+PAID.AMT = 0
+PAID.DSC = 0
+BLK.FLG = 0
+PAID.GRS = 0
+IF(CO.CHK.RECON # "N") THEN ;* NON - MANUAL
+	FOR TR = 1 TO TR.CNT UNTIL BLK.FLG
+		BLK.FLG = 1
+		MATREAD HDCK.REC FROM HDCH, CONO : APCK.VOUCH<1,TR> ELSE BLK.FLG = 0 ;* CHECK FOR THE EXISTENCY OF THE REC
+		MAT HDCK.REC = ""
+	      	IF BLK.FLG THEN GOTO 17 ; * CONTINUE WITH NEXT ITERATION
+		MATREAD SQV.REC FROM SQV, CONO : APCK.VOUCH<1,TR> ELSE MAT SQV.REC = ""	
+		IF SQV.DUE.DATE = "ADVANCE" THEN MULT = (-1) ELSE MULT = 1
+		PTR = 1
+		LOOP
+			LOCATE DCR.CHECK.NO IN SQV.CHK.NO<1>,PTR SETTING FND ELSE FND = 0
+			BEGIN CASE
+			CASE FND = 0
+	      			PTR = 0
+	       	CASE DCR.DISB.ACCT # SQV.DISB.ACCT<1,FND>
+		            	PTR = FND + 1
+			CASE APCK.DATE # SQV.PAID.DATE<1,FND>
+		            	PTR = FND + 1	
+			CASE 1
+				PAID.AMT = PAID.AMT + SQV.PAID.AMT<1,FND>
+       	     		PAID.DSC = PAID.DSC + SQV.DSC.PAID<1,FND>
+		            	PAID.GRS = SQV.PAID.AMT<1,FND> + SQV.DSC.PAID<1,FND>
+				CALL AMOUNT.DIST.SUB(SQV.DIV,SQV.DIST.AMT,PAID.GRS,ALL.NET,SQV.DSC.PAID<1,FND>,TEMP.DSC,ERRMSG)	
+				DCNT = DCOUNT(SQV.DIST.AMT,@VM)
+				FOR D = 1 TO DCNT
+	              		DPTR = 1
+	              		LOOP
+			              	LOCATE SQV.ACCT<1,D> IN ALL.ACCT<1>,DPTR SETTING DFND ELSE
+	       	           			ALL.ACCT<1,DFND> = SQV.ACCT<1,D>
+       	       	    			ALL.DIV<1,DFND> = SQV.DIV<1,D>
+              	    				ALL.DEPT<1,DFND> = SQV.DEPT<1,D>
+                  					ALL.CCTR<1,DFND> = SQV.CCTR<1,D>
+                  					ALL.EQUIP<1,DFND> = SQV.ASSET<1,D>
+	                  				ALL.AMT<1,DFND> = ALL.NET<1,D>
+       	           				ALL.DSC<1,DFND> = TEMP.DSC<1,D>
+	              	    			DPTR = 0
+       	         			END
+						BEGIN CASE
+		       	          		CASE DPTR = 0
+	              			    	CASE ALL.DIV<1,DFND> # SQV.DIV<1,D>
+				       	    		DPTR = DFND + 1
+ 			       	       	CASE ALL.DEPT<1,DFND> # SQV.DEPT<1,D>
+			       	       	      DPTR = DFND + 1
+       	       				CASE ALL.CCTR<1,DFND> # SQV.CCTR<1,D>
+				              	      DPTR = DFND + 1
+					              CASE ALL.EQUIP<1,DFND> # SQV.ASSET<1,D>
+			       	             		DPTR = DFND + 1
+              	    				CASE 1
+				              	      	ALL.AMT<1,DFND> = ALL.AMT<1,DFND> + ALL.NET<1,D>
+								ALL.DSC<1,DFND> = ALL.DSC<1,DFND> + TEMP.DSC<1,D>
+			              	      		DPTR = 0
+				             END CASE
+       			       WHILE DPTR DO 
+					REPEAT
+		            NEXT D
+		            PTR = 0
+			END CASE
+	      	WHILE PTR DO
+      		REPEAT
+	17*
+	NEXT TR
+	IF BLK.FLG THEN
+		ERRMSG = "YOU MUST RUN HAND CHECK REGISTER"
+	      	GOSUB 99999
+	END
+	IF PAID.AMT = APCK.AMT THEN
+		PROG.FLAG = ""
+		PAID.GRS = PAID.AMT + PAID.DSC
+	END
+END
+
+
+  IF STATUS = 1 OR PROG.FLAG = "" THEN
+	IF PROG.FLAG = "" THEN
+		DCR.ACCT = ALL.ACCT
+		DCR.DIST.AMT = ALL.AMT
+		DCR.ASSET.ID = ALL.EQUIP
+		DCR.DIV = ALL.DIV
+		DCR.DEPT = ALL.DEPT
+		DCR.CCTR = ALL.CCTR
+		DCR.DSC = ALL.DSC
+		DCR.CTR = DCOUNT(DCR.ACCT,VM)
+		DCR.GRS.AMT = PAID.GRS	
+		DCR.MER.AMT = PAID.GRS
+		DCR.DSC.AMT = PAID.DSC
+		DCR.VOUCH = APCK.VOUCH
+	END
+  END
+
+CNT = DCOUNT(DCR.DIST.AMT,VM)
+FOR I = 1 TO CNT
+	DCR.DIST.AMT<1,I> = OCONV(DCR.DIST.AMT<1,I>,"MD2")
+NEXT I
+
+* End of method code
+
+IF((NEW_ITEM = 1) AND (CO.CHK.RECON # "Y")) THEN
+	NEW_ITEM = 1
+END ELSE
+	NEW_ITEM = 0
+END
+STATUS = RBO.setProperty('','DCR_ACCT',DCR.ACCT)
+STATUS = RBO.setProperty('','DCR_DIST_AMT',DCR.DIST.AMT)
+STATUS = RBO.setProperty('','DCR_ASSET_ID',DCR.ASSET.ID)
+STATUS = RBO.setProperty('','DCR_DIV',DCR.DIV)
+STATUS = RBO.setProperty('','DCR_DEPT',DCR.DEPT)
+STATUS = RBO.setProperty('','DCR_CCTR',DCR.CCTR)
+STATUS = RBO.setProperty('','DCR_GRS_AMT',OCONV(DCR.GRS.AMT,"MD2"))
+STATUS = RBO.setProperty('','DCR_MER_AMT',OCONV(DCR.MER.AMT,"MD2"))
+STATUS = RBO.setProperty('','DCR_DSC_AMT',OCONV(DCR.DSC.AMT,"MD2"))
+STATUS = RBO.setProperty('','DCR_NET_AMT',OCONV(DCR.GRS.AMT - DCR.DSC.AMT,"MD2"))
+STATUS = RBO.setProperty('','PROG_FLAG',PROG.FLAG)
+STATUS = RBO.setProperty('','APCK_VEND',DCR.VEND)
+STATUS = RBO.setProperty('','FR_CURR_PERIOD',FR.CURR.PER<1,POS>)
+STATUS = RBO.setProperty('','STATUS',NEW_ITEM)
+
+
+99999
+IF (TRIM(ERRMSG) # "") THEN
+       STATUS = RBO.setProperty('','ServerStatus',"F")
+       STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+END
+RETURN
+

@@ -1,0 +1,250 @@
+SUBROUTINE ReadVendPoNProdStats
+********************************************************************************
+*   Program name :- ReadVendPoNProdStats
+*   Created:- 7/17/2003
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE CPYLIB CHAR
+$INCLUDE APS.CPYLIB VEND.PROD.STATS
+$INCLUDE APS.CPYLIB VEND.PO.STATS
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB INV.CNV
+$INCLUDE POS.CPYLIB OUTSIDE.PO
+$INCLUDE POS.CPYLIB MISC.PO
+* Insert method code here
+ERRMSG   = ""
+PONUM    = ""
+MISCCAT  = ""
+LINE.ORD = ""
+LINE.REC = ""
+VPDS_ORD_INFO = ""
+VPDS_REC_INFO = ""
+INV.COST.WT = 0
+ICR.CNV = ""
+ICR.DV2 = ""
+ICR.DV1 = ""
+ICR.MT1 = ""
+
+TSTR=""
+TSTR<1>="IN READVEND"
+    OPEN '','VEND.PROD.STATS' TO VEND.PROD.STATS ELSE
+        ERRMSG = 'Cannot open VEND_PROD_STATS file!'
+        GOTO 93000
+    END
+    OPEN '','CONTROL' TO CONTROL ELSE
+        ERRMSG = 'Cannot open CONTROL file!'
+        GOTO 93000
+    END
+
+
+    OPEN '','VEND.PO.STATS' TO VEND.PO.STATS ELSE
+        ERRMSG = 'Cannot open VEND_PO_STATS file!'
+        GOTO 93000
+    END
+
+    OPEN '','INVENTORY' TO INVENTORY ELSE
+        ERRMSG = 'Cannot open INVENTORY file!'
+        GOTO 93000
+    END
+
+    OPEN '','OUTSIDE.PO' TO OUTSIDE.PO ELSE
+        ERRMSG = 'Cannot open OUTSIDE_PO file!'
+        GOTO 93000
+    END
+
+    OPEN '','MISC.PO' TO MISC.PO ELSE
+        ERRMSG = 'Cannot open MISC_PO file!'
+        GOTO 93000
+    END
+
+    STATUS  = RBO.getProperty('','ID',ID)	
+    CONO    = ID[1,3]
+    VEND    = FIELD(ID,'!',1)[4,99]
+    PO.TYPE = FIELD(ID,'!',2)
+    PONUM   = FIELD(ID,'!',3)
+
+TSTR<-1>="ID ":ID 
+TSTR<-1>="VPS.REC ":CONO:VEND:"!":PO.TYPE:"!":PONUM
+WRITE TSTR ON CONTROL,"2907"
+        MATREAD VPS.REC FROM VEND.PO.STATS,CONO:VEND:"!":PO.TYPE:"!":PONUM ELSE
+           MAT VPS.REC = ""
+    	 END
+*ERRMSG = CONO:VEND:"!":PO.TYPE:"!":PONUM :"  FFFFFFFF " :VPS.PROD.DESC
+*GOTO 1000
+	IF PO.TYPE = 'M' THEN
+	     MATREAD MPO.REC FROM MISC.PO, CONO:PONUM ELSE MAT MPO.REC=""
+	END	
+
+	IF VPS.REC(1) # '' AND PO.TYPE="O" THEN 
+	     XLNS = DCOUNT(VPS.WHSE,VM)
+   	     MATREAD OPO.REC FROM OUTSIDE.PO, CONO:PONUM ELSE MAT OPO.REC=''
+   	     FOR XX = 1 TO XLNS      
+                CURR.CAT            = FIELD(VPS.WHSE<1,XX>,"@",1)      
+                VPS.SEQ.NO<1,XX>    = FIELD(VPS.WHSE<1,XX>,"@",2)
+*               VPS.PROD.DESC<1,XX> = OPO.ITEM.COMM<1,1>
+                WHSE=VPS.WHSE<1,XX>
+                
+                VPS.PROD.DESC<1,XX> = OPO.ITEM.COMM<1,XX,1>
+                VPS.WHSE<1,XX>      = CURR.CAT 
+   	     NEXT XX
+
+       END
+       IF PO.TYPE="R" OR PO.TYPE="M" THEN
+          XLNS = DCOUNT(VPS.WHSE,VM)
+          FOR XX = 1 TO XLNS      
+                CURR.CAT            = FIELD(VPS.WHSE<1,XX>,"@",1)      
+                VPS.WHSE<1,XX>      = CURR.CAT 
+   	     NEXT XX
+
+       END
+	 IF DCOUNT(VPS.PROD,VM) > DCOUNT(VPS.PROD.DESC,VM) THEN
+		 PRODCOUNT = DCOUNT(VPS.PROD,VM)
+	 END ELSE
+		 PRODCOUNT = DCOUNT(VPS.PROD.DESC,VM)	
+	 END 	
+
+        FOR J = 1 TO PRODCOUNT
+
+	    MATREAD VPDS.REC FROM VEND.PROD.STATS,CONO:VEND:"!":PO.TYPE:"!":PONUM:"!":VPS.PROD<1,J>:"!":VPS.WHSE<1,J> ELSE
+        	MAT VPDS.REC = ""
+    	    END
+********* Converions code for qtys, unitcost etc *************************
+	    IF PO.TYPE = "R" THEN
+	    	MATREAD INV.REC FROM INVENTORY, CONO:VPS.PROD<1,J> ELSE
+               	MAT INV.REC = ""
+           	END
+	    END ELSE IF PO.TYPE = 'M' THEN
+            	LOCATE VPS.PROD<1,J> IN MPO.PROD.NUM<1>,1 SETTING TOFFSET THEN
+               	MISCCAT<1,J> = MPO.MISC.CAT<1,TOFFSET>
+            	END ELSE
+               	MISCCAT<1,J> = ''
+            	END
+	    END
+
+
+	
+	    IF INV.COST.WT + 0 = 0 THEN INV.COST.WT = 100      
+	    BEGIN CASE
+         	CASE VPS.U.M<1,J> = "SHT" AND INV.UNIT<1,3> = "LBS" AND PO.TYPE = "R"
+        	     ICR.CNV<J> = "MD0"; ICR.DV2<J> = 1
+	            ICR.DV1<J> = INV.M.WT; ICR.MT1<J> = 10
+         	CASE VPS.U.M<1,J> = "PC" AND INV.UNIT<1,3> = "MSI" AND PO.TYPE = "R"
+            	     ICR.CNV<J> = "MD0"; ICR.DV2<J> = 1
+            	     ICR.DV1<J> = INV.PAP.WIDTH/100; ICR.MT1<J> = 100
+         	CASE VPS.U.M<1,J> = "FT" AND INV.UNIT<1,3> = "MSI" AND PO.TYPE = "R"
+            	     ICR.CNV<J> = "MD0"; ICR.DV2<J> = 12
+                   ICR.DV1<J> = INV.PAP.WIDTH/100; ICR.MT1<J> = 1000
+         	CASE 1
+            	     ICR.CNV<J> = "MD2"; ICR.DV2<J> = 1
+                   ICR.DV1<J> = 1; ICR.MT1<J> = 1
+           END CASE
+
+	    IF ICR.CNV<J> = "MD0" THEN
+		TEMP = INT(((VPS.ORD.QTY<1,J>/ICR.DV1<J>)*ICR.MT1<J>)/ICR.DV2<J> + .5)         
+		VPS.ORD.QTY<1,J> = TEMP
+         	TEMP = INT(((VPS.REC.QTY<1,J>/ICR.DV1<J>)*ICR.MT1<J>)/ICR.DV2<J> + .5)
+         	IF TEMP + 0 = 0 THEN TEMP = ""
+		VPS.REC.QTY<1,J> = TEMP
+         	TEMP = INT(((VPS.VOU.QTY<1,J>/ICR.DV1<J>)*ICR.MT1<J>)/ICR.DV2<J> + .5)
+	       IF TEMP + 0 = 0 THEN TEMP = ""
+              VPS.VOU.QTY<1,J> = TEMP 
+           END ELSE
+		VPS.ORD.QTY<1,J> = OCONV(VPS.ORD.QTY<1,J>, "MD2")
+		VPS.REC.QTY<1,J> = OCONV(VPS.REC.QTY<1,J>, "MD2")
+		VPS.VOU.QTY<1,J> = OCONV(VPS.VOU.QTY<1,J>, "MD2")
+           END
+
+*************START OF CODE FOR DETERMINING PAY FLAG***********************
+	    LINE.ORD<J> = VPS.ORD.AMT<1,J> - VPS.VOU.AMT<1,J>
+	    IF LINE.ORD<J> < 0 THEN LINE.ORD<J> = 0
+      	    LINE.REC<J> = VPS.REC.AMT<1,J> - VPS.VOU.AMT<1,J>
+	    IF LINE.REC<J> < 0 THEN LINE.REC<J> = 0
+*************END OF CODE FOR DETERMINING PAY FLAG*************************
+
+           VPS.ORD.AMT<1,J> = OCONV(VPS.ORD.AMT<1,J>, "MD2")
+	    VPS.REC.AMT<1,J> = OCONV(VPS.REC.AMT<1,J>, "MD2")
+	    VPS.VOU.AMT<1,J> = OCONV(VPS.VOU.AMT<1,J>, "MD2")
+
+
+	    FOR D = 1 TO DCOUNT(VPDS.ORD.QTY,VM)
+       		IF ICR.CNV<J>= "MD0" THEN
+		      	    TEMP  = INT(((VPDS.ORD.QTY<1,D>/ICR.DV1<J>) * ICR.MT1<J>)/ICR.DV2<J> + .5)      		           
+	    		END ELSE
+      		           TEMP  = VPDS.ORD.QTY<1,D> / ICR.DV1<J>
+		      	    TEMP  = OCONV(TEMP, "MD2")
+       	       END        		
+ 	       	VPDS.ORD.QTY<1,D>     = TEMP
+		       VPDS.ORD.UN.COST<1,D> = OCONV(VPDS.ORD.UN.COST<1,D>,"MD4")
+			VPDS.ORD.DATE<1,D>    = OCONV(VPDS.ORD.DATE<1,D>,"D2/")
+
+           NEXT D   
+	    FOR R = 1 TO DCOUNT(VPDS.REC.QTY,VM)
+		       IF ICR.CNV<J>  = "MD0" THEN
+     				TEMP  = INT(((VPDS.REC.QTY<1,R>/ICR.DV1<J>) * ICR.MT1<J>)/ICR.DV2<J> + .5)				
+			END ELSE
+      				TEMP  = VPDS.REC.QTY<1,R> / ICR.DV1<J>			       
+				TEMP  = OCONV(TEMP, "MD2")
+		  	END	
+			VPDS.REC.QTY<1,R>     = TEMP
+			VPDS.REC.UN.COST<1,R> = OCONV(VPDS.REC.UN.COST<1,R>,"MD4")
+			VPDS.REC.DATE<1,R>    = OCONV(VPDS.REC.DATE<1,R>,"D2/")
+	    NEXT R
+
+	    VPDS_ORD_INFO = VPDS_ORD_INFO : "|" : VPDS.ORD.DATE : "ü" : VPDS.ORD.QTY : "ü" : VPDS.ORD.UN.COST
+ 	    VPDS_REC_INFO = VPDS_REC_INFO : "|" : VPDS.REC.DATE : "ü" : VPDS.REC.QTY : "ü" : VPDS.REC.UN.COST : "ü" : VPDS.REC.PERIOD
+        NEXT J	  
+
+*************START OF CODE FOR DETERMINING PAY FLAG LIKE WHETHER IT IS ORDER OR RECIPT TO PAY ****************
+	BEGIN CASE
+         	CASE SUM(LINE.ORD) > 0 AND SUM(LINE.REC) = 0
+	            	PAY.FLG = "O"
+         	CASE SUM(LINE.REC) > 0 AND SUM(LINE.ORD) = 0
+            		PAY.FLG = "R"
+         	CASE SUM(LINE.REC) = SUM(LINE.ORD)
+	            PAY.FLG = "O"
+		CASE 1
+		     PAY.FLG = "PROMPT"
+       END CASE
+*************END OF CODE FOR DETERMINING PAY FLAG LIKE WHETHER IT IS ORDER OR RECIPT TO PAY ****************
+TSTR<-1>="VPS.ORD.QTY ":VPS.ORD.QTY :" VPS.REC.QTY ":VPS.REC.QTY :" VPS.VOU.QTY ":VPS.VOU.QTY
+TSTR<-1>="VPS.ORD.AMT ":VPS.ORD.AMT :" VPS.REC.AMT ":VPS.REC.AMT :" VPS.VOU.AMT ":VPS.VOU.AMT
+WRITE TSTR ON CONTROL,"2907"
+
+STATUS=RBO.setProperty('','POProducts',VPS.PROD)
+STATUS=RBO.setProperty('','POProductsDesc',VPS.PROD.DESC)
+STATUS=RBO.setProperty('','POProductsWhse',VPS.WHSE)
+STATUS=RBO.setProperty('','MISCCAT',MISCCAT)
+STATUS=RBO.setProperty('','POProductsSeqNo',VPS.SEQ.NO)
+STATUS=RBO.setProperty('','POProductsUM',VPS.U.M)
+
+STATUS=RBO.setProperty('','POProductsOrdQty',VPS.ORD.QTY)
+STATUS=RBO.setProperty('','POProductsRecQty',VPS.REC.QTY)
+STATUS=RBO.setProperty('','POProductsVouQty',VPS.VOU.QTY)
+STATUS=RBO.setProperty('','POProductsOrdAmt',VPS.ORD.AMT)
+STATUS=RBO.setProperty('','POProductsRecAmt',VPS.REC.AMT)
+STATUS=RBO.setProperty('','POProductsVouAmt',VPS.VOU.AMT)
+STATUS=RBO.setProperty('','PAY_FLG',PAY.FLG)
+
+
+STATUS=RBO.setProperty('','VPDS_ORD_INFO',VPDS_ORD_INFO[2,LEN(VPDS_ORD_INFO)])    
+STATUS=RBO.setProperty('','VPDS_REC_INFO',VPDS_REC_INFO[2,LEN(VPDS_REC_INFO)])  
+STATUS=RBO.setProperty('','ServerMessage',PRODCOUNT)  
+
+93000*
+    IF ERRMSG # "" THEN
+	STATUS = RBO.setProperty('','ServerStatus',1)        
+	STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+    END
+* End of method code
+RETURN
+

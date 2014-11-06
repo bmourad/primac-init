@@ -1,0 +1,342 @@
+      SUBROUTINE POST.SP.REVERSE.SUB(CONO)
+*COPY>CPYLIB>COM1
+*COPY>JCS.CPYLIB>COM.JCS.LINK  
+*COPY>ICS.CPYLIB>COM.INV.MAIN  
+*COPY>ICS.CPYLIB>COM.INV.SERIAL
+*COPY>JCS.CPYLIB>COM.INV.STATS 
+*COPY>APS.CPYLIB>COM.APS.FILE.VARS
+*********************************************************************
+* REVISION     - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM       - PRIMAC
+* SOURCE       - JCSBP
+* PROGRAM      - POST.SP.REVERSE.SUB
+* BY           - WALID A. YAMOUT , C.B.A
+* DESCRIPTION  -
+*ENDDOC
+*********************************************************************
+*
+***** INSERT FILE EQUATE
+*
+*COPY>JCS.CPYLIB>JOB
+*COPY>JCS.CPYLIB>DAILY.REVERSE
+*COPY>JCS.CPYLIB>JOB.SHIP
+*COPY>PMC.CPYLIB>SHIP.VIA
+*COPY>JCS.CPYLIB>JOB.REVERSE
+*COPY>JCS.CPYLIB>COST.CNTR.WIP
+*COPY>JCS.CPYLIB>SPOIL.STATS
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*
+***** MAIN PROCESSING
+*
+      SEQ.CNT = COUNT(DRV.SEQ,VM) + (DRV.SEQ # "")
+1000  FOR MLP = SEQ.CNT TO 1 STEP -1
+         DEPT = DRV.DEPT<1,MLP>; CCTR = DRV.CCTR<1,MLP>
+         SEQ = DRV.SEQ<1,MLP>
+         SP.ID = CONO:DRV.JOB:"!":DEPT:"!":CCTR:"!"
+         MATREAD JSP.REC FROM JOB.SHIP, SP.ID : SEQ ELSE
+            DRV.STATUS<1,MLP> = "CANNOT LOCATE JOB.SHIP - ":SP.ID:SEQ
+            GOTO 1999
+         END
+         BEGIN CASE
+         CASE JSP.OPER # DRV.OPER<1,MLP>
+            DRV.STATUS<1,MLP> = "OPERATION MISMATCH"
+            GOTO 1999
+         CASE JSP.VIA # DRV.EMP<1,MLP>
+            DRV.STATUS<1,MLP> = "SHIP VIA MISMATCH"
+            GOTO 1999
+         CASE (JSP.COST-JSP.RC.COST) = DRV.COST<1,MLP>
+            REV.ALL = 1
+         CASE (JSP.COST-JSP.RC.COST) > DRV.COST<1,MLP>
+            REV.ALL = 0
+         CASE 1
+            DRV.STATUS<1,MLP> = "COST MISMATCH"
+            GOTO 1999
+         END CASE
+         PTR = 1
+         LOOP
+            LOCATE DEPT IN JOB.SP.DEPT<1>,PTR SETTING DFND ELSE
+               DFND = 0; PTR = 0
+            END
+            IF DFND THEN
+               IF CCTR = JOB.SP.CCTR<1,DFND> THEN
+                  PTR = 0
+               END ELSE
+                  PTR = DFND + 1
+               END
+            END
+         WHILE PTR DO REPEAT
+         IF DFND = 0 THEN
+            DRV.STATUS<1,MLP> = "CANNOT LOCATE MAIN DEPT/CCTR/SEQ"
+            GOTO 1999
+         END
+         WCNT = COUNT(JSP.WIP,VM) + (JSP.WIP # "")
+         WPTR = 0; TOT.WIP = 0; INV.WIP = ""
+         FOR I = 1 TO 2
+            IF JSP.WIP<1,1,I> + 0 <> 0 THEN
+               INV.WIP<1,1,I> = 0 - JSP.WIP<1,1,I>
+               TOT.WIP = TOT.WIP + JSP.WIP<1,1,I>
+               WPTR = I
+            END
+         NEXT I
+         FOR W = 2 TO WCNT
+            FOR I = 1 TO WPTR
+               INV.WIP<1,1,I> = INV.WIP<1,1,I> - JSP.WIP<1,W,I>
+            NEXT I
+         NEXT W
+         TOT.RC.DCOST = 0; TOT.RC.COST = 0; TOT.RC.SALE = 0
+         TOT.RC.WIP = 0; REV.WIP = ""
+         IF JSP.RC.COST + 0 <> 0 THEN
+            FOR S = SEQ + 1 TO JOB.SP.SEQ<1,DFND>
+               MATREAD JSP.REC FROM JOB.SHIP, SP.ID : S ELSE
+                  DRV.STATUS<1,MLP> = "CANNOT LOCATE JOB.SHIP - ":SP.ID:S
+                  GOTO 1999
+               END
+               IF JSP.RC.TRAN = DRV.TRAN<1,MLP> THEN
+                  FOR I = 1 TO WPTR
+                     REV.WIP<1,1,I> = REV.WIP<1,1,I> - JSP.WIP<1,1,I>
+                     TOT.RC.WIP = TOT.RC.WIP - JSP.WIP<1,1,I>
+                  NEXT I
+                  TOT.RC.DCOST = TOT.RC.DCOST - JSP.DCOST
+                  TOT.RC.COST = TOT.RC.COST - JSP.COST
+                  TOT.RC.SALE = TOT.RC.SALE - JSP.SALE
+               END
+            NEXT S
+            MATREAD JSP.REC FROM JOB.SHIP, SP.ID : SEQ ELSE
+               DRV.STATUS<1,MLP> = "CANNOT LOCATE JOB.SHIP - ":SP.ID:SEQ
+               GOTO 1999
+            END
+            IF TOT.RC.COST <> JSP.RC.COST THEN
+               DRV.STATUS<1,MLP> = "REVERSE COST MISMATCH ":OCONV(TOT.RC.COST,"MD2")
+               GOTO 1999
+            END
+         END
+         NEW.WIP = ""
+         IF REV.ALL THEN
+            NEW.SHPMT = 1
+            NEW.QTY = 0 - JSP.QTY
+            NEW.DCOST = TOT.RC.DCOST - JSP.DCOST
+            NEW.SALE = TOT.RC.SALE - JSP.SALE
+            FOR I = 1 TO WPTR
+               NEW.WIP<1,1,I> = REV.WIP<1,1,I> - JSP.WIP<1,1,I>
+            NEXT I
+         END ELSE
+            NEW.SHPMT = 0
+            NEW.QTY = 0
+            PCT = DRV.COST<1,MLP> / (JSP.COST/1000)
+            IF JSP.COST = JSP.DCOST THEN
+               NEW.DCOST = 0 - DRV.COST<1,MLP>
+            END ELSE
+               NEW.DCOST = 0 - INT((JSP.DCOST/1000) * PCT + .5)
+               IF TOT.RC.DCOST - NEW.DCOST > JSP.DCOST THEN
+                  NEW.DCOST = TOT.RC.DCOST - JSP.DCOST
+               END
+            END
+            IF JSP.SALE = JSP.COST THEN
+               NEW.SALE = 0 - DRV.COST<1,MLP>
+            END ELSE
+               NEW.SALE = 0 - INT(((JSP.SALE-JSP.COST)/(JSP.COST/1000)) * (DRV.COST<1,MLP>/1000) + DRV.COST<1,MLP> + .5)
+               IF TOT.RC.SALE - NEW.SALE > JSP.SALE THEN
+                  NEW.SALE = TOT.RC.SALE - JSP.SALE
+               END
+            END
+            BEGIN CASE
+            CASE TOT.WIP = JSP.COST
+               CHK.WIP = DRV.COST<1,MLP>
+            CASE TOT.WIP = JSP.DCOST
+               CHK.WIP = 0 - NEW.DCOST
+            CASE 1
+               CHK.WIP = INT((TOT.WIP/1000) * PCT + .5)
+               IF TOT.RC.WIP + CHK.WIP > TOT.WIP THEN
+                  CHK.WIP = TOT.WIP - TOT.RC.WIP
+               END
+            END CASE
+            TOT.WIP = 0
+            FOR I = 1 TO WPTR
+               NEW.WIP<1,1,I> = 0 - INT((JSP.WIP<1,1,I>/1000) * PCT + .5)
+               IF REV.WIP<1,1,I> - NEW.WIP<1,1,I> > JSP.WIP<1,1,I> THEN
+                  NEW.WIP<1,1,I> = REV.WIP<1,1,I> - JSP.WIP<1,1,I>
+               END
+               TOT.WIP = TOT.WIP - NEW.WIP<1,1,I>
+            NEXT I
+            DIFF = CHK.WIP - TOT.WIP
+            BEGIN CASE
+            CASE DIFF = 0
+            CASE DIFF > 0
+               FOR I = WPTR TO 1 STEP -1 WHILE DIFF > 0
+                  IF NEW.WIP<1,1,I> < 0 - DIFF THEN
+                     IF REV.WIP<1,1,I>-NEW.WIP<1,1,I>+DIFF <= JSP.WIP<1,1,I> THEN
+                        NEW.WIP<1,1,I> = NEW.WIP<1,1,I> - DIFF
+                        TOT.WIP = TOT.WIP + DIFF
+                        DIFF = 0
+                     END
+                  END
+               NEXT I
+            CASE 1
+               FOR I = WPTR TO 1 STEP -1 WHILE DIFF < 0
+                  IF NEW.WIP<1,1,I> < DIFF THEN
+                     NEW.WIP<1,1,I> = NEW.WIP<1,1,I> - DIFF
+                     TOT.WIP = TOT.WIP + DIFF
+                     DIFF = 0
+                  END
+               NEXT I
+            END CASE
+            IF TOT.WIP <> CHK.WIP THEN
+               DRV.STATUS<1,MLP> = "WIP MISMATCH ":OCONV(TOT.WIP,"MD2")
+               GOTO 1999
+            END
+         END
+         ADD.MON = 0; WIP.CNTR = 0
+         FOR I = 1 TO WPTR
+            INV.WIP<1,1,I> = INV.WIP<1,1,I> + 0
+            BEGIN CASE
+            CASE INV.WIP<1,1,I> < NEW.WIP<1,1,I>
+               INV.WIP<1,1,I> = NEW.WIP<1,1,I>
+               ADD.MON = 1; WIP.CNTR = 3
+            CASE INV.WIP<1,1,I> <> 0
+               ADD.MON = 1; WIP.CNTR = 2
+            CASE NEW.WIP<1,1,I> <> 0
+               WIP.CNTR = 2
+            END CASE
+         NEXT I
+         IF ADD.MON THEN
+            IF JSP.MON<1,WCNT> > JRV.MON THEN
+               NEW.MON = JSP.MON<1,WCNT>
+            END ELSE
+               NEW.MON = JRV.MON
+            END
+            WCNT = WCNT + 1
+            JSP.MON<1,WCNT> = NEW.MON
+            JSP.WIP<1,WCNT> = INV.WIP
+            CCW.ID = CONO : JSP.DIV : DEPT : "!" : CCTR : NEW.MON
+            MATREADU CCW.REC FROM COST.CNTR.WIP, CCW.ID ELSE MAT CCW.REC = ""
+            FOR I = 1 TO WPTR
+               CCW.SP.O<1,I> = CCW.SP.O<1,I> - INV.WIP<1,1,I>
+            NEXT I
+            MATWRITE CCW.REC ON COST.CNTR.WIP, CCW.ID
+         END ELSE
+            IF JSP.MON<1,1> > JRV.MON THEN
+               NEW.MON = JSP.MON<1,1>
+            END ELSE
+               NEW.MON = JRV.MON
+            END
+         END
+         IF WIP.CNTR THEN
+            FOR I = 1 TO WPTR
+               NEW.WIP<1,2,I> = 0 - NEW.WIP<1,1,I>
+            NEXT I
+            NEW.MON<1,2> = NEW.MON<1,1>
+         END
+         MATREADU SHIP.VIA.REC FROM SHIP.VIA, CONO : JSP.VIA ELSE
+            RELEASE SHIP.VIA, CONO : JSP.VIA
+            DRV.STATUS<1,MLP> = "CANNOT LOCATE SHIP.VIA - ": JSP.VIA
+            GOTO 1999
+         END
+         JSP.RC.COST = JSP.RC.COST + DRV.COST<1,MLP>
+         MATWRITE JSP.REC ON JOB.SHIP, SP.ID : SEQ
+         JSP.RC.COST = 0
+         JSP.QTY = NEW.QTY
+         JSP.COST = 0 - DRV.COST<1,MLP>
+         JSP.DCOST = NEW.DCOST
+         JSP.SALE = NEW.SALE
+         JSP.DATE = DRV.DATE
+         JSP.MON = NEW.MON
+         JSP.WIP = NEW.WIP
+         JSP.RC.TRAN = DRV.TRAN<1,MLP>
+         JSP.RC.JOB = DRV.JOB
+         JSP.RC.DESC = DRV.REASON<1,MLP>
+         IF WIP.CNTR THEN
+            JOB.SP.WIP<1,1> = JOB.SP.WIP<1,1> + WIP.CNTR
+            JOB.WIP<1,1> = JOB.WIP<1,1> + WIP.CNTR
+            FOR I = 1 TO WPTR
+               JOB.SP.WIP<1,2,I> = JOB.SP.WIP<1,2,I> + INV.WIP<1,1,I>
+               JOB.SP.WIP<1,3,I> = JOB.SP.WIP<1,3,I> - INV.WIP<1,1,I> + JSP.WIP<1,1,I>
+               JOB.WIP<1,2,I> = JOB.WIP<1,2,I> + INV.WIP<1,1,I>
+               JOB.WIP<1,3,I> = JOB.WIP<1,3,I> - INV.WIP<1,1,I> + JSP.WIP<1,1,I>
+            NEXT I
+         END
+         IF JSP.MON<1,1> < JOB.SP.WIP<1,4> OR JOB.SP.WIP<1,4> = "" THEN
+            JOB.SP.WIP<1,4> = JSP.MON<1,1>
+            IF JSP.MON<1,1> < JOB.WIP<1,4> OR JOB.WIP<1,4> = "" THEN
+               JOB.WIP<1,4> = JSP.MON<1,1>
+            END
+         END
+         IF JSP.MON<1,1> > JOB.SP.WIP<1,5> THEN
+            JOB.SP.WIP<1,5> = JSP.MON<1,1>
+            IF JSP.MON<1,1> > JOB.WIP<1,5> THEN
+               JOB.WIP<1,5> = JSP.MON<1,1>
+            END
+         END
+         JOB.SP.QTY<1,DFND> = JOB.SP.QTY<1,DFND> + JSP.QTY
+*CSF 25042 v
+         IF REV.ALL THEN
+           JOB.QTY<1,2> = JOB.QTY<1,2> + JSP.QTY
+           JOB.QTY<1,3> = JOB.QTY<1,3> + JSP.QTY
+           IF JOB.QTY<1,2> < 0 THEN JOB.QTY<1,2> = 0
+           IF JOB.QTY<1,3> < 0 THEN JOB.QTY<1,3> = 0
+         END
+*CSF 25042 ^
+         JOB.SP.DCOST<1,DFND> = JOB.SP.DCOST<1,DFND> + JSP.DCOST
+         JOB.SP.COST<1,DFND> = JOB.SP.COST<1,DFND> + JSP.COST
+         JOB.SP.SALE<1,DFND> = JOB.SP.SALE<1,DFND> + JSP.SALE
+         BEGIN CASE
+         CASE JSP.TYPE = "N"
+            PTR = 2
+         CASE JSP.TYPE = "C"
+            PTR = 3
+         CASE JSP.TYPE = "S"
+            PTR = 4
+            IF JSP.SPOIL.CODE # "" THEN
+               SSR.ID=CONO:JSP.DIV:DEPT:"!":CCTR:NEW.MON<1,1>:JSP.SPOIL.CODE
+               MATREADU SSR.REC FROM SPOIL.STATS,SSR.ID ELSE MAT SSR.REC = ""
+               SSR.SP<1,1> = SSR.SP<1,1> + JSP.DCOST
+               IF JSP.DCOST <> JSP.COST THEN
+                  SSR.SP<1,2> = SSR.SP<1,2> + JSP.COST - JSP.DCOST
+               END
+               MATWRITE SSR.REC ON SPOIL.STATS,SSR.ID
+            END
+         CASE 1
+            PTR = 1
+         END CASE
+         JOB.SP.TCOST<1,DFND,PTR> = JOB.SP.TCOST<1,DFND,PTR> + JSP.COST
+         JOB.TOT.DCOST = JOB.TOT.DCOST + JSP.DCOST
+         JOB.TOT.COST = JOB.TOT.COST + JSP.COST
+         JOB.TOT.SALE = JOB.TOT.SALE + JSP.SALE
+         READU JSP.SEQ FROM CONTROL, CONO:"DAILY.SHIP" ELSE JSP.SEQ = 10001
+         NEXT.SEQ = JSP.SEQ + 1
+         WRITE NEXT.SEQ ON CONTROL,CONO:"DAILY.SHIP"
+         LOCATE NEW.MON<1,1> IN SHPV.PERIOD<1>,1 BY "DR" SETTING FND.PER ELSE
+            INS NEW.MON<1,1> BEFORE SHPV.PERIOD<1,FND.PER>
+            INS "0" BEFORE SHPV.SHPMT<1,FND.PER>
+            INS "0" BEFORE SHPV.COST<1,FND.PER>
+            INS "0" BEFORE SHPV.SALE<1,FND.PER>
+         END
+         SHPV.SHPMT<1,FND.PER> = SHPV.SHPMT<1,FND.PER> - NEW.SHPMT
+         SHPV.COST<1,FND.PER> = SHPV.COST<1,FND.PER> - DRV.COST<1,MLP>
+         JOB.SP.SEQ<1,DFND> = JOB.SP.SEQ<1,DFND> + 1
+         JSP.GLA.DATE = ""
+         MATWRITE JSP.REC ON JOB.SHIP, SP.ID:JOB.SP.SEQ<1,DFND>
+         MATWRITE SHIP.VIA.REC ON SHIP.VIA, CONO : JSP.VIA
+         PPTR = COUNT(JRV.TRAN,VM) + (JRV.TRAN # "") + 1
+         JRV.TRAN<1,PPTR> = DRV.TRAN<1,MLP>
+         JRV.TTRAN<1,PPTR> = JSP.SEQ
+         JRV.REASON<1,PPTR> = DRV.REASON<1,MLP>
+         JRV.COST<1,PPTR> = DRV.COST<1,MLP>
+         JRV.QTY<1,PPTR> = 0 - JSP.QTY
+         JRV.SEQ<1,PPTR> = SEQ
+         JRV.TSEQ<1,PPTR> = JOB.SP.SEQ<1,DFND>
+         DRV.DEPT = DELETE(DRV.DEPT,1,MLP,0)
+         DRV.CCTR = DELETE(DRV.CCTR,1,MLP,0)
+         DRV.OPER = DELETE(DRV.OPER,1,MLP,0)
+         DRV.EMP = DELETE(DRV.EMP,1,MLP,0)
+         DRV.TRAN = DELETE(DRV.TRAN,1,MLP,0)
+         DRV.REASON = DELETE(DRV.REASON,1,MLP,0)
+         DRV.COST = DELETE(DRV.COST,1,MLP,0)
+         DRV.STATUS = DELETE(DRV.STATUS,1,MLP,0)
+         DRV.CONV = DELETE(DRV.CONV,1,MLP,0)
+         DRV.QTY = DELETE(DRV.QTY,1,MLP,0)
+         DRV.SEQ = DELETE(DRV.SEQ,1,MLP,0)
+1999  NEXT MLP
+99999 RETURN
+   END

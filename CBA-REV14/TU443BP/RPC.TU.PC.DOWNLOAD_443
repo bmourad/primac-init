@@ -1,0 +1,417 @@
+SUBROUTINE RPC.TU.PC.DOWNLOAD_443(ATTR, VALS, STATUS)
+!@!CASING ON; !*AP*!
+ INCLUDE TU443BP USER.INCLUDE.H
+ INCLUDE TU443BP SPECIAL.H
+ INCLUDE TU443BP TU.API.H
+ INCLUDE TU443BP ROC.MAIN.H
+ INCLUDE TU443BP HEADER.H
+ INCLUDE TU443BP TRANSFER.OPTIONS.H
+ INCLUDE TU443BP TU.ERRORCODES.H
+*
+** SBClient Host 3GL API
+** Copyright (C) UniData, Inc., 1995
+**      This software is the proprietary property and contains
+**      trade secrets of UniData, Inc.  Any unauthorized use,
+**      disclosure or duplication is strictly prohibited.
+**    All rights reserved.
+*
+*
+***************************************************************************
+*-* TU.PC.DOWNLOAD(ATTR, VALS, STATUS)
+*-*
+*-*  This subroutine selects and downloads pick items to PC.
+*
+*-* [P] PICKFILENAME
+*    The name of the pick file to be downloaded.
+*-*
+*-* [P] FIELDLIST
+*    List of dictionary definitions of fields to be
+*    downloaded.
+*-*
+*-* [P] SELECTION
+*    Selection criteria to locate items to be downloaded.
+*-*
+*-* [P] DOSFILENAME
+*    This the name of the PC file to store the data.
+*-*
+*
+*-* [P] OPTIONS
+*    This is an array of characters to indicate minor details
+*    of the transfer. Possible values INCLUDE :-
+*-*
+*-*  A Append to existing file
+*-*  B Data is in binary
+*-*  D Debug mode - create TUSTATE records
+*-*  H Host initiated transfer
+*-*  L Local transfer - simple protocol
+*-*  O Overwrite the dosfile if it exists
+*-*  R Non resilient line - complex protcol
+*-*  T Text - no protocol
+*-*  V Strip VMs and SVMs
+*-*  X Hex output
+*-*  Z No status window
+*-*
+*-* [P] DESCRIPTION
+*     Description This is a description of the data being transferred and
+*     will be displayed in the dialog box by Termulator.
+*-*
+*-* [R] STATUS
+*      This is the result of the transfer. Possible return
+*      values are :-
+**************************************************************************
+*
+*-*  Might need to check all operators on all platforms are screened
+*-*  in the OPERATORS decalaration
+*-*  This will get confused by id's called LT or GT or WI or TH etc
+*-*  so although intelligent, might want rethinking
+*
+OPERATORS = ';LT;GT;=<=;=>=;WITH;BY;'
+NULL = ""; DEBUGFLAG = FALSE; H.HOST2PC = 0
+BLK.SIZE = 4096
+*
+*-* ATTR contains definition rec
+*
+PCFILENAME = ATTR<3>; * DOS destination file & path
+OPTIONS = ATTR<9>; * Download options
+HOSTFILENAME = ATTR<2>; * Pick File Name
+DICTIONARY = ATTR<7>; * file to use for Dictionary
+FIELDLIST = ATTR<6>; * List of fields to capture
+SELECTION = ATTR<5>:' ':ATTR<4>; * Selection Criterion
+TEMPFILE = ATTR<17>:'\':ATTR<18>; * Temp file path for conv
+SEPARATORS = ATTR<10>; * Separators
+DESCRIPTION = ATTR<15>; * Desc
+ACCOUNT = ATTR<12>; * Account Name
+CONVTYPE = ICONV(ATTR<22>,'MCL'); * Conv type (ie CSV)
+PCLIST = ATTR<21>
+HOSTLIST = ATTR<20>
+H.HOST2PC = ATTR<24>; * hHost2pc handle
+STATUS = 0
+*
+*-* Need to check that dir exists or we hang
+*
+SCNT = COUNT(PCFILENAME,'\')
+IF SCNT > 1 THEN
+DIR = PCFILENAME[1,INDEX(PCFILENAME,'\',SCNT)-1]
+STAT = 0
+CALL TU.CHECK.DIRECTORY_443(DIR, STAT)
+IF STAT THEN
+STATUS = FTE.INVALID.DIRECTORY
+RETURN
+END
+END
+*
+SELECTION = TRIM(SELECTION)
+FIELDLIST = TRIM(FIELDLIST)
+BINOPTION = (CONVTYPE = 'bin')
+HEXOPTION = (CONVTYPE = 'hex')
+ASCIIOPTION = (CONVTYPE = 'ascii')
+CONVERSION = NOT(INDEX('bin;hex;ascii', CONVTYPE, 1))
+IF INDEX(OPTIONS,'Z',1) THEN STATOPT = 'Z' ELSE STATOPT = ''
+IF INDEX(OPTIONS,'H',1) THEN USEROPT = 'H' ELSE USEROPT = ''
+BUILD.ALL = INDEX(OPTIONS, '0', 1)
+COLUMN.HEADER = INDEX(OPTIONS, '1', 1)
+INSERT.BLANK = INDEX(OPTIONS, '2', 1)
+*
+*-* Compile a default header Record for file conversion
+*
+DEFHEADER = ''
+DEFHEADER<HED.DICTNAME> = 'NOFIELDS'
+DEFHEADER<HED.BORT> = 'NONE'
+DEFHEADER<HED.RECORDCOUNT> = 'DEFAULT'
+*
+*-* Check for Convtype FLF and no Fieldlist
+*
+IF CONVTYPE = "flf" AND FIELDLIST = "" THEN STATUS = FTE.INVALID.OPTION; RETURN
+*
+*-* Check the hostfile exists
+*
+OPEN HOSTFILENAME TO HOSTFILE ELSE
+STATUS = FTE.FILE.OPEN.ERROR
+RETURN
+END
+*
+*-* Check if an Account is specified (NOW NOT SUPPORTED)
+*
+IF(TRIM(ACCOUNT)#'') THEN GOSUB 10; *CREATEACCOUNT
+*
+*-*  Check for conversion
+*
+IF CONVERSION THEN
+OPTIONS = 'OB':STATOPT:USEROPT
+PCFILENAME = TEMPFILE
+END ELSE
+IF DEBUGFLAG THEN CRT 'NO Conversion Reqired..'
+CALL TU.CONVERT_443('VBXT','',OPTIONS)
+BEGIN CASE
+CASE ASCIIOPTION; OPTIONS = OPTIONS:ASCIIOPT
+CASE HEXOPTION
+OPTIONS = OPTIONS:HEXOPT:BINOPT
+RECORD.DELIM = ''
+CASE BINOPTION; OPTIONS = OPTIONS:BINOPT
+END CASE
+END
+DESCRIPTION = CONVTYPE:' Conversion'
+HEADER = ''; IDLIST = ''
+CALLCNT = 1; BLOCKCALL = 1; BLK.CNT = 0
+REC.CNT = 0; TOTAL.XFER.SIZE = 0; DATA.OUT = ""
+*
+*-*  if Fieldlist used then use Build Xfer Data
+*
+IF FIELDLIST#'' THEN
+GOSUB 100; * Build and format data & download
+RETURN
+END
+*
+*-* Check if SELECTION is a list of explicit ID's to save SELECTION
+*
+FWORD = FIELD(SELECTION,' ',1)
+BEGIN CASE
+CASE SELECTION = '*'
+SELECTION = ''
+CASE FWORD = '*'
+SELECTION = SELECTION[2,LEN(SELECTION)]
+CASE 1
+*-* Explicit ID's expected
+IDLIST = SELECTION
+CALL TU.CONVERT_443('"','',IDLIST)
+CALL TU.CHANGE_443(' ',AM,IDLIST)
+SELECTION = ''
+END CASE
+*
+GOSUB 550; * Open Xfer File
+IF IDLIST = '' THEN
+GOSUB 200; * download by dict ID
+END ELSE
+GOSUB 300; * Download Explicit ID's only
+END
+RETURN
+*
+100 * Build Data for transmission :*
+*-* Items processed by TU.BUILD.XFER.DATA
+IF DEBUGFLAG THEN CRT 'Formatting by TU.BUILD.XFER.DATA'
+FILES = HOSTFILENAME:AM:DICTIONARY
+IF H.HOST2PC # "HOST" THEN STATUS = 0 - H.HOST2PC
+BUILD.OPT = ""
+IF BUILD.ALL THEN BUILD.OPT = BUILD.OPT:"F"
+IF COLUMN.HEADER THEN BUILD.OPT = BUILD.OPT:"H"
+IF INSERT.BLANK THEN BUILD.OPT = BUILD.OPT:"I"
+IF BUILD.OPT # "" THEN DESCRIPTION = DESCRIPTION:VM:BUILD.OPT
+CALL TU.BUILD.XFER.DATA_443(FILES, FIELDLIST, SELECTION, DESCRIPTION, STATUS)
+IF STATUS THEN RETURN
+FILENAME = "TUXFER.DATA.":PORTNO
+OPEN '',FILENAME TO TUXFER.DATA ELSE
+STATUS = FTE.FILE.OPEN.ERROR
+RETURN
+END
+READ HEADER FROM TUXFER.DATA,'XFER.HEADER' ELSE
+STATUS = FTE.ITEM.READ.ERROR
+HEADER = DEFHEADER
+RETURN
+END
+*
+GOSUB 900
+RETURN
+*
+200 * Download of items without fieldlist:*
+*-* ID's obtained via selection statement
+IF DEBUGFLAG THEN CRT 'Using Select list'
+SMT = 'SELECT ':HOSTFILENAME:' ':SELECTION
+CRP = NULL; ERNO = 0; SELVAR = NULL; RECCNT = 0
+CALL TU.EXECUTE_443(SMT, 8, '', '', '', CRP, ERNO, SELVAR, RECCNT)
+*
+IF DEBUGFLAG THEN
+CRT 'STATEMENT: ':SMT
+CRT 'RETURNED: ':CRP
+CRT 'Record Count ':RECCNT
+END
+IF H.HOST2PC # "HOST" THEN
+DVALS = "Building Data on Host ... 0%"; ERR = 0; DATTR = "prog_status"
+CALL ROC.MAIN_443(ROC.SET.ATTRIB, H.HOST2PC, DATTR, DVALS, ERR)
+END
+*
+EOL = 0; RECNO = 0; OLD.PER = 10
+LOOP
+RECNO = RECNO+1
+!@!READNEXT ID FROM SELVAR ELSE EOL = 1; !*-UDT,-UDTVMS*!
+REMOVE ID FROM SELVAR SETTING MORE ; !*UDT,UDTVMS*!
+IF ID = '' AND NOT(MORE) THEN EOL = 1 ; !*UDT,UDTVMS*!
+UNTIL EOL OR STATUS DO
+READ TREC FROM HOSTFILE,ID THEN
+TREC = ID:AM:TREC
+IF DEBUGFLAG THEN CRT ID
+IF CONVERSION THEN CALL TU.CONVERT_443(SVM:VM:AM, '~':SVM:VM ,TREC)
+GOSUB 500; * append to the buffered Block
+END ELSE
+STATUS = FTE.READ.ITEM.ERROR
+END
+IF H.HOST2PC # "HOST" THEN
+DONE.PER = (RECNO/RECCNT)*100
+DONE.PER = FIELD(DONE.PER, ".", 1)
+IF DONE.PER > 100 THEN DONE.PER = 100
+IF DONE.PER >= OLD.PER THEN
+OLD.PER = OLD.PER + 10
+DVALS = "Building Data on Host ... ":DONE.PER:"%"; ERR = 0
+CALL ROC.MAIN_443(ROC.SET.ATTRIB, H.HOST2PC, DATTR, DVALS, ERR)
+END
+END
+REPEAT
+IF REC.CNT = 0 THEN STATUS = FTE.NO.ITEMS.FOUND
+ INCLUDE TU443BP CLEAR.SELECTLIST.H
+IF STATUS THEN RETURN
+GOSUB 510; * Flush Buffer
+GOSUB 575; * write header record
+GOSUB 900; * send data
+*
+IF DEBUGFLAG THEN CRT
+RETURN
+*
+300 * Process a list of explicit ID's:*
+*-* ID's explicitly specified
+IF DEBUGFLAG THEN CRT 'Processing Explicit IDs'
+RECNO = 0; RECCNT = DCOUNT(IDLIST,AM)
+EOL = 0; OLD.PER = 10
+IF H.HOST2PC # "HOST" THEN
+DATTR = 'prog_status'; ERR = 0; DVALS = "Building Data on Host ... 0%"
+CALL ROC.MAIN_443(ROC.SET.ATTRIB, H.HOST2PC, DATTR, DVALS, ERR)
+END
+LOOP
+RECNO = RECNO + 1
+IF RECNO > RECCNT THEN EOL = TRUE
+UNTIL EOL OR STATUS DO
+ID = IDLIST<RECNO>
+READ TREC FROM HOSTFILE,ID THEN
+TREC = ID:AM:TREC
+IF CONVERSION THEN CALL TU.CONVERT_443(SVM:VM:AM, '~':SVM:VM ,TREC)
+GOSUB 500; * append to the buffered Block
+END ELSE
+STATUS = FTE.READ.ITEM.ERROR
+END
+IF H.HOST2PC # "HOST" THEN
+DONE.PER = (RECNO/RECCNT)*100
+DONE.PER = FIELD(DONE.PER, ".", 1)
+IF DONE.PER > 100 THEN DONE.PER = 100
+IF DONE.PER >= OLD.PER THEN
+OLD.PER = OLD.PER + 10
+DVALS = "Building Data on Host ... ":DONE.PER:"%"; ERR = 0
+CALL ROC.MAIN_443(ROC.SET.ATTRIB, H.HOST2PC, DATTR, DVALS, ERR)
+END
+END
+REPEAT
+IF STATUS THEN RETURN
+GOSUB 510; * Flush Buffer
+GOSUB 575; * Write Header Record
+GOSUB 900; * Send Data
+IF REC.CNT = 0 THEN STATUS = FTE.NO.ITEMS.FOUND
+RETURN
+*
+900 *   Send data
+*
+STATUS = 0
+DVALS = "Transmitting Data to Client ..."; ERR = 0; DATTR = "prog_status"
+CALL ROC.MAIN_443(ROC.SET.ATTRIB, H.HOST2PC, DATTR, DVALS, ERR)
+IF CONVERSION THEN
+IF TRIM(HEADER) = "" THEN HEADER = DEFHEADER
+CALL TU.CONVERT_443(VM:AM, SVM:VM, HEADER)
+TXDATA = "SBFTP.XSB":VM:HEADER
+END ELSE TXDATA = "MIKE IS SILLY"
+*
+F.RXFILE = ""; MAX.ITEM.SIZE = 0; RXITEM = ""
+RTN.STR = FILENAME; OPTIONS = OPTIONS
+CALL TU.SBZ_443(TXDATA, PCFILENAME, F.RXFILE, MAX.ITEM.SIZE, RXITEM, OPTIONS, RTN.STR, DESCRIPTION, STATUS.REC)
+RETURN
+*
+10 * CREATEACCOUNT:*
+MD.FILE = 'VOC'; !*PI/O,PR1ME,UDT,UDTVMS,UP,UV*!
+!@!MD.FILE = 'MD'; !*ADDS,ALTOS,AP,GA,MRX,PICK,SEQ,ULT*!
+OPEN MD.FILE TO MDFL ELSE
+MD.FILE = 'MD'
+OPEN MD.FILE TO MDFL ELSE
+IF DEBUGFLAG THEN CRT 'UNABLE TO OPEN MD'; * wheres MD
+STATUS = FTE.FILE.OPEN.ERROR
+RETURN
+END
+END
+QREC = ''
+QREC<1> = 'Q'
+QREC<2> = ACCOUNT
+QREC<3> = HOSTFILENAME
+WRITE QREC ON MDFL,'QFILE'
+RETURN
+*
+*-* Write Record to Xfer File
+*
+500 *
+IF TRIM(PCLIST:HOSTLIST)#'' THEN GOSUB 600; * Swap strings
+IF DATA.OUT = "" THEN DATA.OUT = TREC ELSE DATA.OUT = DATA.OUT:AM:TREC
+REC.CNT = REC.CNT + 1
+IF LEN(DATA.OUT) > BLK.SIZE THEN
+GOSUB 510; * Flush Buffer
+END
+RETURN
+*
+*-* Flush Buffer
+*
+510 *
+BLK.CNT = BLK.CNT + 1
+WRITE DATA.OUT ON TUXFER.DATA,"XFER.DATA.":BLK.CNT
+TOTAL.XFER.SIZE = TOTAL.XFER.SIZE + LEN(DATA.OUT)
+DATA.OUT = ""
+RETURN
+*
+*-* Open Xfer File
+*
+550 *
+FILENAME = "TUXFER.DATA.":PORTNO
+OPEN '',FILENAME TO TUXFER.DATA ELSE
+MOD = 101
+ INCLUDE TU443BP EXEC.CREATE.FILE.H
+OPEN '',FILENAME TO TUXFER.DATA ELSE
+OPEN '','TUSTATE' TO TUSTATE ELSE STATUS = FTE.TUSTATE.OPEN.ERROR; RETURN
+WRITE (FTE.TUXFER.DATA.FILE.OPEN.ERROR:AM:'TUXFER.DATA.':PORTNO) ON TUSTATE,'ERROR.':PORTNO
+STATUS = FTE.TUXFER.DATA.FILE.OPEN.ERROR
+RETURN
+END
+END
+EXECUTE 'CLEAR-FILE DATA ':FILENAME CAPTURING RUBBISH
+RETURN
+*
+*-* Write Header
+*
+575 *
+HEADER = DEFHEADER
+HEADER<HED.HOSTFILENAME> = HOSTFILENAME
+HEADER<HED.IDCOUNT> = BLK.CNT
+HEADER<HED.RECORDCOUNT> = REC.CNT
+HEADER<HED.XFERSIZE> = TOTAL.XFER.SIZE
+WRITE HEADER ON TUXFER.DATA,"XFER.HEADER"
+RETURN
+*
+*-* Swap Strings
+*
+600 *
+RECLEN = DCOUNT(HOSTLIST,VM)
+FOR S = 1 TO RECLEN
+WORD = HOSTLIST<1,S>; GOSUB 601; OLDWORD = WORD
+WORD = PCLIST<1,S>; GOSUB 601; NEWWORD = WORD
+IF INDEX(TREC,OLDWORD,1) THEN CALL TU.CHANGE_443(OLDWORD, NEWWORD,TREC)
+NEXT S
+RETURN
+*
+*-*  Swap Chars
+*
+601 *
+PARANC = COUNT(WORD, "(")
+IF PARANC = FALSE THEN RETURN
+FOR PARANLOOP = PARANC TO 1 STEP -1
+BIT1 = FIELD(WORD, "(", PARANLOOP)
+BIT2 = FIELD(WORD, "(", PARANLOOP+1)
+NUMBER = FIELD(BIT2, ")", 1)
+BIT2 = FIELD(BIT2, ")", 2)
+IF LEN(NUMBER) AND LEN(NUMBER) <= 3 AND NUM(NUMBER) THEN
+MIDDLEBIT = CHAR(NUMBER)
+WORD = BIT1:MIDDLEBIT:BIT2
+END
+NEXT PARANLOOP
+RETURN
+***************************************************************************
+END

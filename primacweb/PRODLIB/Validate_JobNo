@@ -1,0 +1,205 @@
+SUBROUTINE Validate_JobNo
+********************************************************************************
+*   Program name :- Validate_JobNo
+*   Created:- 5/31/2005
+*   Author:- Ravi Kishore Adidam
+*   Description: - This program validates the Job Number
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE PMC.CPYLIB COMPANY
+$INCLUDE JCS.CPYLIB JOB
+$INCLUDE PMC.CPYLIB CUSTOMER
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB WAREHOUSE
+$INCLUDE OPS.CPYLIB DAILY_FNGD_RECEIPT
+$INCLUDE OPS.CPYLIB JOB.FNGD.STATS
+$INCLUDE ICS.CPYLIB CATEGORY
+$INCLUDE ICS.CPYLIB INV.WHSE
+$INCLUDE CPYLIB CHAR
+
+
+* Insert method code here
+ERRMSG=''
+MAT DFR.REC=''
+STATUS=RBO.getProperty('','ID',ID)
+STATUS=RBO.getProperty('','Job',JOBID)
+CONO = ID[1,3]
+RCPTNO = ID[4,99]
+
+   OPEN "","DAILY_FNGD_RECEIPT" TO DAILY_FNGD_RECEIPT ELSE
+      ERRMSG="DAILY_FNGD_RECEIPT"; GOTO 91000
+   END
+   OPEN "","INV_RECEIPTS" TO INV_RECEIPTS ELSE
+      ERRMSG="INV_RECEIPTS"; GOTO 91000
+   END
+   OPEN "","COMPANY" TO COMPANY ELSE
+      ERRMSG="COMPANY"; GOTO 91000
+   END
+   OPEN "","CUSTOMER" TO CUSTOMER ELSE
+      ERRMSG="CUSTOMER"; GOTO 91000
+   END
+   OPEN "","JOB" TO JOB ELSE
+      ERRMSG="JOB"; GOTO 91000
+   END
+   OPEN "","JOB.FNGD.STATS" TO JOB.FNGD.STATS ELSE
+      ERRMSG="JOB.FNGD.STATS"; GOTO 91000
+   END
+   OPEN "","CONTROL" TO CONTROL ELSE
+      ERRMSG="CONTROL"; GOTO 91000
+   END
+   OPEN "","INVENTORY" TO INVENTORY ELSE
+      ERRMSG="INVENTORY"; GOTO 91000
+   END
+   OPEN "","CATEGORY" TO CATEGORY ELSE
+      ERRMSG = "CATEGORY";GOTO 91000
+   END
+   OPEN "","WAREHOUSE" TO WAREHOUSE ELSE
+      ERRMSG = "WAREHOUSE";GOTO 91000
+   END
+   OPEN "","INV.WHSE" TO INV.WHSE ELSE
+      ERRMSG = "INV.WHSE";GOTO 91000
+   END
+
+   MATREAD JOB.REC FROM JOB, CONO:JOBID ELSE
+      ERRMSG="Cannot locate Job # ":JOBID
+      GOTO 91000
+   END
+
+   MATREAD CUST.REC FROM CUSTOMER, CONO:JOB.CUST ELSE
+      ERRMSG="Cannot locate customer (":JOB.CUST:") for Job # ":JOBID
+      GOTO 91000
+   END
+
+   MATREAD JFS.REC FROM JOB.FNGD.STATS, CONO:JOBID ELSE
+      MAT JFS.REC=""
+   END
+
+   GOSUB CHECK.LINKS
+   GOSUB GET.PRODUCT
+   STATUS = RBO.setProperty('','JFS_PROD',JFS.PROD)
+   RETURN 
+*************
+CHECK.LINKS: 
+*************
+*
+   PDNOS=""; WHNOS=""; REFNOS="";WLOC = "";PLOC = ""
+   FLINES=DCOUNT(JFS.PROD,VM)
+   IF FLINES < 1 THEN
+      ERRMSG="Cannot locate any Finished Goods for Job # ":JOBID
+      GOTO 91000
+   END ELSE
+      FOR P=1 TO FLINES
+         PROD=JFS.PROD<1,P>
+         WHSE=JFS.WHSE<1,P>
+         LOCATE PROD IN PDNOS,1 SETTING PLOC THEN
+            ;* i don't get this logic prod/whse is one to one
+            ;* relationship. There can never be more  then one
+            ;* whse in the same multivalue according to cpylib
+            LOCATE WHSE IN WHNOS<PLOC>,1 SETTING WLOC ELSE
+               WHNOS<PLOC,WLOC>=WHSE
+               REFNOS<PLOC,WLOC>=P
+            END
+         END ELSE
+            PDNOS<PLOC>=PROD
+            WHNOS<PLOC>=WHSE
+            REFNOS<PLOC>=P
+         END
+      NEXT P
+
+      IF DFR.PROD="" THEN
+         FLN=1
+      END ELSE
+         LOCATE DFR.PROD IN PDNOS,1 SETTING PLOC THEN
+            LOCATE DFR.WHSE IN WHNOS<PLOC>,1 SETTING WLOC THEN
+               FLN=REFNOS<PLOC,WLOC>
+               OCNT=DCOUNT(DFR.ORDER,VM)
+               FOR OPTR=OCNT TO 1 STEP -1
+                  ORDNO=DFR.ORDER<1,OPTR>
+                  IF ORDNO # "*FNGD*" THEN
+                     LOCATE ORDNO IN JFS.ORDER<1,FLN>,1 SETTING OLOC ELSE
+                        ERRMSG="Order ":ORDNO:" is de-linked from product "
+                        ERRMSG:=DFR.PROD:"!"
+                        GOSUB 91000
+                        DFR.ORDER=DELETE(DFR.ORDER,1,OPTR,0)
+                        DFR.QTY=DELETE(DFR.QTY,1,OPTR,0)
+                        DFR.SQTY=DELETE(DFR.SQTY,1,OPTR,0)
+*              DFR.UN.SALE=DELETE(DFR.UN.SALE,1,OPTR,0)
+                        DFR.SHIP.TO=DELETE(DFR.SHIP.TO,1,OPTR,0)
+*              DFR.EX.SALE=DELETE(DFR.EX.SALE,1,OPTR,0)
+                     END
+                  END
+               NEXT OPTR
+            END ELSE
+               ERRMSG="Warehouse ":DFR.WHSE:" is de-linked from Job # ":JOBID
+               GOSUB 91000
+            END
+         END ELSE
+            ERRMSG="Product (":DFR.PROD:") is de-linked from Job # ":JOBID
+            GOSUB 91000
+         END
+      END
+   END
+   RETURN
+*
+GET.PRODUCT:
+   IF FLINES = 1 THEN
+      MATREAD INV.REC FROM INVENTORY, CONO:JFS.PROD ELSE
+         ERRMSG="Cannot locate Product # ":JFS.PROD
+         GOTO 91000
+      END
+      IF INV.SUBS # "" THEN
+         ERRMSG="Cannot receive finished goods for a Master Product"
+         GOTO 91000
+      END
+      MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE ELSE
+         ERRMSG="Cannot locate Product Line # ":INV.LINE
+         GOTO 91000
+      END
+      IF CATG.TRK.LVL="S" THEN
+         ERRMSG="Cannot use this function to receive palletized goods"
+         GOTO 91000
+      END
+      * LOCATE DFR.WHSE IN WHNOS<PLOC>,1 SETTING WLOC ELSE
+      *    ERRMSG="Warehouse (":DFR.WHSE:") is not valid for product (":DFR.PROD:") on this order"
+      *    GOSUB 91000; GOTO 5020
+      * END
+      FLN=REFNOS<PLOC,WLOC>
+      MATREAD IWH.REC FROM INV.WHSE, CONO:JFS.PROD:"!":JFS.WHSE ELSE
+        ERRMSG="Cannot locate warehouse (":JFS.WHSE:") for product # ":JFS.PROD
+        GOTO 91000
+      END
+      MATREAD WHSE.REC FROM WAREHOUSE, CONO:JFS.WHSE ELSE MAT WHSE.REC=''
+      DIV.CODE=WHS.DIV; USER.ID=UPCASE(@LOGNAME); ERRMSG=''
+      CALL CK_DIV_SEC_SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+      IF ERRMSG # '' THEN
+         GOTO 91000
+      END
+      *GOSUB 8500
+      *IF ERRMSG#'' THEN GOTO 5020
+      *MATREAD WHSE.REC FROM WAREHOUSE, CONO:DFR.WHSE ELSE MAT WHSE.REC=''
+      *IF WHS.DIV # JOB.DIV AND WHS.DIV # "00" THEN
+      *   ERRMSG="INVENTORY WAREHOUSE DIVISION DOES NOT MATCH JOB DIVISION"
+      *   GOSUB 91000; GOTO 5020
+      *END
+      *ECD.NUM=7; SCV.REC(ECD.NUM)<ESN>=DFR.WHSE
+      *ECD.ACTION=5; CALL SCRN.EDIT
+      *GOSUB DISP.PROD.INFO
+   END
+
+RETURN
+
+
+91000:
+     STATUS = RBO.setProperty("","ServerStatus",1)	
+     STATUS=RBO.setProperty('','ServerMessage',ERRMSG)
+RETURN

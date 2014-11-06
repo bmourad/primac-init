@@ -1,0 +1,199 @@
+SUBROUTINE COAM_READ_COA_BAL
+********************************************************************************
+*   Program name :- COAM_READ_COA_BAL
+*   Created:- 7/2/2003
+*------------------------------------------------------------------------------*
+*
+*
+* In Properties:
+* --------------
+*  DIV_CODE,DEPT_CODE,CCTR_CODE,ID,Cono,CO_ACCT_PIC,TAPE_FLG,CURR_MONTH,NUM_PERIODS
+*
+* Out Properties:
+* ---------------
+*  DIV_CODE,DEPT_CODE,CCTR_CODE,ID,COA_DESC,MODE,THIS_Y_OPEN_BAL,LAST_Y_OPEN_BAL,BUD_OPEN_BAL
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE GLS.CPYLIB COA.BAL
+$INCLUDE PMC.CPYLIB COA
+
+* Insert method code here
+ERRMSG = ""
+OPEN '','COA' TO COA ELSE
+	ERRMSG = 'COA FILE IS MISSING'
+	GOTO 99999
+END
+OPEN '','CO.COA.BAL' TO CO.COA.BAL ELSE 
+	ERRMSG = 'CO.COA.BAL FILE IS MISSING'
+	GOTO 99999
+END
+OPEN '','DV.COA.BAL' TO DV.COA.BAL ELSE 
+	ERRMSG = 'DV.COA.BAL FILE IS MISSING'
+	GOTO 99999
+END
+OPEN '','DP.COA.BAL' TO DP.COA.BAL ELSE 
+	ERRMSG = 'DP.COA.BAL FILE IS MISSING'
+	GOTO 99999
+END
+OPEN '','CC.COA.BAL' TO CC.COA.BAL ELSE 
+	ERRMSG = 'CC.COA.BAL FILE IS MISSING'
+	GOTO 99999
+END
+OPEN 'CONTROL' TO CONTROL ELSE ERRMSG = 'CANNOT OPEN CONTROL FILE'
+
+EQV.FLG = 1
+OPEN "","COA.EQUIV" TO COA.EQUIV ELSE 
+	EQV.FLG = 0
+END
+
+DIM OCOA.REC(20)
+DIM OLD.CB(300)
+
+STATUS = RBO.getProperty('','Cono',CONO)
+STATUS = RBO.getProperty('','ID',ACCT.NO) ;*ACCT.NO - WITHOUT CONO APPENDED
+STATUS = RBO.getProperty('','CO_ACCT_PIC',CO.ACCT.PIC)
+STATUS = RBO.getProperty('','DIV_CODE',DIVSN.CODE)
+STATUS = RBO.getProperty('','DEPT_CODE',DEPT.CODE)
+STATUS = RBO.getProperty('','CCTR_CODE',CCTR.CODE)
+STATUS = RBO.setProperty('','TAPE_FLG',TAPE.FLG)
+STATUS = RBO.getProperty('','CURR_MONTH',CURR)
+STATUS = RBO.getProperty('','NUM_PERIODS',NUM.PERIODS)
+
+PERIOD.REC = ""
+PERIOD.REC<1> = NUM.PERIODS
+
+NUM.PERIODS = NUM.PERIODS + 1
+MODE = ""
+MAT COA.REC = ""
+IN.ACCT.LEN = LEN(CO.ACCT.PIC)
+MAT CB.REC = ""
+NEW.REC = 0
+THIS.Y.OPEN.BAL = ""
+LAST.Y.OPEN.BAL = ""
+BUD.OPEN.BAL = ""
+
+MATREAD COA.REC FROM COA, CONO:ACCT.NO ELSE
+	ERRMSG = 'RECORD MISSING'
+       GOSUB 99999
+END
+
+STATUS = RBO.getProperty('','COA_NORM',COA.NORM)
+
+MAT OCOA.REC = MAT COA.REC
+
+BEGIN CASE
+	CASE DIVSN.CODE = "S"
+      		MATREAD CB.REC FROM CO.COA.BAL, CONO:ACCT.NO ELSE MAT CB.REC = ""
+      		DIVSN.CODE = ""
+      		DEPT.CODE = ""
+      		CCTR.CODE = ""
+    	CASE DEPT.CODE = "S"
+      		MATREAD CB.REC FROM DV.COA.BAL, CONO:DIVSN.CODE:ACCT.NO ELSE MAT CB.REC = ""
+      		DEPT.CODE = ""
+      		CCTR.CODE = ""
+    	CASE CCTR.CODE = "S"
+      		MATREAD CB.REC FROM DP.COA.BAL, CONO:DIVSN.CODE:DEPT.CODE:ACCT.NO ELSE MAT CB.REC = ""
+      		CCTR.CODE = ""
+    	CASE 1
+		IF EQV.FLG THEN
+			READ ACCT.NUM FROM COA.EQUIV, CONO:DIVSN.CODE:DEPT.CODE:CCTR.CODE:ACCT.NO ELSE
+          			ACCT.NUM = ACCT.NO
+        		END
+			IF ACCT.NUM # ACCT.NO THEN
+          			MATREAD COA.REC FROM COA, CONO : ACCT.NUM[11,IN.ACCT.LEN] ELSE
+            				ACCT.NUM = ACCT.NO
+            				MAT COA.REC = MAT OCOA.REC
+          			END
+          			DIVSN.CODE = ACCT.NUM[4,2]
+            			DEPT.CODE = ACCT.NUM[6,2]
+            			CCTR.CODE = ACCT.NUM[8,3]
+            			ACCT.NUM = ACCT.NUM[11,IN.ACCT.LEN]
+          		END
+        	END
+      		MATREAD CB.REC FROM CC.COA.BAL, CONO:DIVSN.CODE:DEPT.CODE:CCTR.CODE:ACCT.NO ELSE NEW.REC = 1
+END CASE
+
+
+* IF RECORD DOEN'T EXIST IN CC.COA.BAL FILE THEN
+IF NEW.REC THEN
+	MAT CB.REC = ""
+    	MAT OLD.CB = ""
+    	*CLEAR ALL THE 3 GRIDS
+	*IF A RECORD DOEN'T EXIST IN CONTROL WITH ID AS CONO:FISCAL.YEAR-1:"GLS.TAPE" AND FISCAL MONTH IS 01
+    	IF TAPE.FLG = "N" AND CURR = "01" THEN
+		* ALLOW ENTERING VALUES IN THIS YEAR OPEN BALANCE
+      		MODE = "INPUT"     		
+    	END
+END ELSE
+	MAT OLD.CB = MAT CB.REC
+    	FOR PR.LN = 1 TO NUM.PERIODS
+		TEMP = CB.REC(CB.OPN+PR.LN) + 0
+		IF PR.LN = (PERIOD.REC<1> + 1) THEN
+        		TEMP = CB.REC(55) + 0
+      		END
+		IF TEMP <> 0 THEN
+        		IF COA.NORM = "CR" THEN TEMP = TEMP * (-1)
+        		THIS.Y.OPEN.BAL<1,PR.LN> = OCONV(TEMP,"MD2")
+      		END ELSE
+        		THIS.Y.OPEN.BAL<1,PR.LN> = ""
+      		END
+    	NEXT PR.LN
+	FOR PR.LN = 1 TO NUM.PERIODS
+      		TEMP = CB.REC(CB.LYR+PR.LN) + 0
+      		IF PR.LN = (PERIOD.REC<1> + 1) THEN
+        		TEMP = CB.REC(108) + 0
+      		END
+      		IF TEMP <> 0 THEN
+        		IF COA.NORM = "CR" THEN TEMP = TEMP * (-1)
+        		LAST.Y.OPEN.BAL<1,PR.LN> = OCONV(TEMP,"MD2")
+      		END ELSE
+        		LAST.Y.OPEN.BAL<1,PR.LN> = ""
+      		END
+*ERRMSG  = " THE TEST IS GOING  " : TEMP : "      " : COA.NORM : " JJUJJJ " : LAST.Y.OPEN.BAL : " kkkk " : BUD.OPEN.BAL
+*GOTO 99999
+    	NEXT PR.LN	
+	FOR PR.LN = 1 TO NUM.PERIODS
+      		TEMP = CB.REC(CB.BUD+PR.LN) + 0
+      		IF PR.LN = (PERIOD.REC<1> + 1) THEN
+        		TEMP = CB.REC(161) + 0
+      		END
+      		IF TEMP <> 0 THEN
+        		IF COA.NORM = "CR" THEN TEMP = TEMP * (-1)
+        		BUD.OPEN.BAL<1,PR.LN> = OCONV(TEMP,"MD2")
+      		END ELSE
+        		BUD.OPEN.BAL<1,PR.LN> = ""
+      		END
+    	NEXT PR.LN
+END
+
+DUMMY_REC = ""
+*FOR I=1 TO CB.REC.SIZE
+FOR I=1 TO 161
+	DUMMY_REC<1,I> = OCONV(CB.REC(I),"MD2") ;* WHILE SAVE DO ICONV AGAIN
+NEXT I
+
+STATUS = RBO.setProperty('','DIV_CODE',DIVSN.CODE)
+STATUS = RBO.setProperty('','DEPT_CODE',DEPT.CODE)
+STATUS = RBO.setProperty('','CCTR_CODE',CCTR.CODE)
+STATUS = RBO.setProperty('','ID',ACCT.NUM)
+STATUS = RBO.setProperty('','COA_DESC',COA.DESC)
+STATUS = RBO.setProperty('','MODE',MODE)
+STATUS = RBO.setProperty('','THIS_Y_OPEN_BAL',THIS.Y.OPEN.BAL)
+STATUS = RBO.setProperty('','LAST_Y_OPEN_BAL',LAST.Y.OPEN.BAL)
+STATUS = RBO.setProperty('','BUD_OPEN_BAL',BUD.OPEN.BAL)
+STATUS = RBO.setProperty('','DUMMY_REC',DUMMY_REC)
+STATUS = RBO.setProperty('','CB_OPN',CB.OPN)
+STATUS = RBO.setProperty('','CB_LYR',CB.LYR)
+STATUS = RBO.setProperty('','CB_BVD',CB.BVD)
+STATUS = RBO.setProperty('','COA_NORM',COA.NORM)
+
+* End of method code
+99999
+  IF (TRIM(ERRMSG) # "") THEN
+       STATUS = RBO.setProperty('','ServerStatus','1')
+       STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+  END ELSE
+       STATUS = RBO.setProperty('','ServerStatus','')
+       STATUS = RBO.setProperty('','ServerMessage','')
+  END 
+RETURN

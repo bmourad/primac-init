@@ -1,0 +1,213 @@
+*********************************************************************
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - ICSBP
+* PROGRAM     - TRAN.REC.RPT
+* DATE        - FEB,24,1987
+* BY          - CURTIS WILLIAMS,CBA
+* DESCRIPTION -
+* T26556 cmykleb 06/21/2002 * Correct qty display problem.
+*T27705 lross 10/24/2003 * Increase length SERIAL to 15.
+*********************************************************************
+*
+*---- INSERT EQUATE FROM CPYLIB
+*
+*COPY>ICS.CPYLIB>TRANSFER
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+*
+*---- INITIALIZATION
+*
+   LINE.COUNT = 99
+   PAGE.NO = 0
+   PREV.M.P.LINE = ""
+   SP = " "
+   TOT.QTY = 0; QTY = 0
+   WHT = 0
+*
+*---- SET UP FOR SYSCOM
+*
+   SYS.TYPE = 1; CALL SYSCOM(MAT SYSCOM.REC)
+*
+*---- OPEN FILES
+*
+   OPEN '','TRANSFER' TO TRANSFER ELSE
+      ERRMSG = 'TRANSFER FILE IS MISSING'
+      GOTO 93000
+   END
+   OPEN '', 'INVENTORY' TO INVENTORY ELSE
+      ERRMSG = 'INVENTORY FILE IS MISSING'
+      GOTO 93000
+   END
+*
+*---- GET PROC VALUES
+*
+   PROCREAD ID ELSE
+      ERRMSG = ' CANNOT PERFORM PROCREAD'
+      GOTO 93000
+   END
+   CONO = ID<1>
+   CONO.NAME = ""; *T26090
+   ST.PERIOD = ID<3>
+   ED.PERIOD = ID<4>
+   HEAD.FLG = ID<5>
+   FROM.WHSE.DIV = ID<6>
+   BEGIN CASE
+      CASE HEAD.FLG = "D"
+         REPORT.NAME = "DAILY STOCK TRANSFER JOURNAL"
+      CASE HEAD.FLG = "DF"
+         REPORT.NAME = "DAILY FINISHED GOODS TRANSFER JOURNAL"
+      CASE HEAD.FLG = "M"
+         REPORT.NAME = "PERIOD STOCK TRANSFER JOURNAL"
+      CASE 1
+         REPORT.NAME = "PERIOD FINISHED GOODS TRANSFER JOURNAL"
+   END CASE
+   REPORT.NUMBER = ID<2>
+   REPORT.NAME = ''; *T26090
+   REPORT.DATE = DATE()
+   HD1 = "" ; HD2 = ""
+   HD3 ="TRANSFER #      TRANSFER DESCRIPTION                                   TRANSFER     FROM  TO  FROM  TO"
+*T27705   HD4 ="PRODUCT NUMBER  PRODUCT DESCRIPTION                                      DATE   U/M WHSE WHSE LOC# LOC# RECEIPT #    QUANTITY"
+   HD4 ="PRODUCT NUMBER  PRODUCT DESCRIPTION                                      DATE   U/M WHSE WHSE LOC# LOC# SERIAL #         QUANTITY"
+*T27705   D.LINE ="--------------- ---------------------------------------------          -------- --- ---- ---- ---- ---- ----------- ---------"
+   D.LINE ="--------------- ---------------------------------------------          -------- --- ---- ---- ---- ---- --------------- ---------"
+*
+*---- GET HEADING
+*
+   CALL GET.PROG.HEAD(CONO,CONO.NAME,REPORT.NAME,REPORT.NUMBER,REPORT.DATE,HD1,HD2)
+*
+   PRINTER ON
+*
+*---- READ AND PROCESS FIRST RECORD
+*
+100*
+   READNEXT KEY ELSE GOTO 999999
+   MATREAD TRAN.REC FROM TRANSFER,KEY ELSE
+      MAT TRAN.REC = ''
+      GOTO 100
+   END
+*---- PROCESS THE FILE
+   GOSUB 2000
+   DATA = 0
+   LOOP
+      READNEXT KEY ELSE DATA = 1
+   WHILE DATA = 0 DO
+      MATREAD TRAN.REC FROM TRANSFER,KEY ELSE
+         MAT TRAN.REC = ''
+         GOTO 111
+      END
+*---- PROCESS THEN FILE
+      GOSUB 2000
+111*
+   REPEAT
+*---- END OF JOB
+   PRINTER OFF
+   GOTO 999999
+*
+*---- PRINT HEADINGS
+*
+1000*
+   PRINT CHAR(12)
+   PAGE.NO = PAGE.NO + 1
+   PRINT HD1:PAGE.NO
+   PRINT HD2
+   PRINT "FROM DIVISION : ":FROM.WHSE.DIV "R#3":SPACE(36):"FOR THE PERIOD ":ST.PERIOD:" THROUGH ":ED.PERIOD
+   PRINT
+   PRINT HD3
+   PRINT HD4
+   PRINT D.LINE
+   LINE.COUNT = 7
+   RETURN
+*---- PROCESS THE RECORD
+2000*
+   IF LINE.COUNT > 55 THEN GOSUB 1000
+   P.LINE = ''
+   P.LINE = KEY[4,99]"L#7":SPACE(9):TRAN.REASON.DESC"L#45":SP:SPACE(8)"L#8":SP:OCONV(TRAN.DATE.ENTER,"D2/")
+   PRINT P.LINE
+   LINE.COUNT = LINE.COUNT + 1
+   PROD.CNT = COUNT(TRAN.PROD.NO,VM) + (TRAN.PROD.NO # "")
+   FOR I = 1 TO PROD.CNT
+      MATREAD INV.REC FROM INVENTORY,CONO:TRAN.PROD.NO<1,I> ELSE MAT INV.REC = ""
+      GOSUB 6000
+      IF LINE.COUNT > 55 THEN GOSUB 1000
+      MS = COUNT(TRAN.FROM.LOC<1,I>,SVM) + (TRAN.FROM.LOC<1,I> # '')
+      FOR Z = 1 TO MS
+         IF LINE.COUNT > 55 THEN GOSUB 1000
+         WHT = 0
+         IF TRAN.QTY >= 0 THEN
+            WHT = WHT + INT((((TRAN.QTY<1,I,Z> / ICR.DV1) * ICR.MT1) / ICR.DV2) + .5)
+         END ELSE
+            WHT = WHT + INT((((TRAN.QTY<1,I,Z> / ICR.DV1) * ICR.MT1) / ICR.DV2) - .5)
+         END
+         P.LINE = ''
+         IF Z = 1 THEN
+            P.LINE = TRAN.PROD.NO<1,I>"L#15":SP:INV.FULL.DESC"L#45":SPACE(19)
+            P.LINE = P.LINE:INV.UNIT<1,2>"L#3":SP:TRAN.FROM.WHSE<1,I>"L#4":SP:TRAN.TO.WHSE<1,I>"L#4":SP
+         END ELSE
+            P.LINE = SPACE(94)
+         END
+         P.LINE = P.LINE:TRAN.FROM.LOC<1,I,Z>"L#4":SP:TRAN.TO.LOC<1,I,Z>"L#4":SP
+*T26556 v
+         IF HEAD.FLG = "D" THEN
+*T27705 v   P.LINE = P.LINE:TRAN.SERIAL<1,I,Z>"L#11":SP: OCONV(WHT,ICR.CNV)"R#9"
+            P.LINE = P.LINE:TRAN.SERIAL<1,I,Z>"L#15":SP: OCONV(WHT,ICR.CNV)"R#9"
+         END ELSE
+*T26556 ^
+*T27705 v   P.LINE = P.LINE:TRAN.SERIAL<1,I,Z>"L#11":SP: INT(WHT/100)"R#9"
+            P.LINE = P.LINE:TRAN.SERIAL<1,I,Z>"L#15":SP: INT(WHT/100)"R#9"
+         END ; * T26556
+         PRINT P.LINE
+         TOT.QTY = TOT.QTY + TRAN.QTY<1,I,Z>
+         LINE.COUNT = LINE.COUNT + 1
+         IF LINE.COUNT > 55 THEN GOSUB 1000
+      NEXT Z
+      IF LINE.COUNT + 3 > 55 THEN GOSUB 1000
+*T27705 v PRINT SPACE(116):"---------"
+      PRINT SPACE(120):"---------"
+      QTY = 0
+      QTY = QTY + INT((((TOT.QTY / ICR.DV1) * ICR.MT1) / ICR.DV2) + .5)
+*T26556 v
+      IF HEAD.FLG = "D" THEN
+*T27705 vPRINT SPACE(116):OCONV(QTY,ICR.CNV)"R#9" 
+         PRINT SPACE(120):OCONV(QTY,ICR.CNV)"R#9" 
+      END ELSE
+*T26556 ^
+*T27705 vPRINT SPACE(116):INT(QTY/100)"R#9" 
+         PRINT SPACE(120):INT(QTY/100)"R#9" 
+      END ; * T26556
+      PRINT
+      LINE.COUNT = LINE.COUNT + 3
+      TOT.QTY = 0
+   NEXT I
+   RETURN
+*----        CONVERT SHEET/WGHT/QTY
+6000*
+   MAT INV.CNV.REC = ''
+   BEGIN CASE
+      CASE INV.UNIT<1,2> = 'SHT' AND INV.UNIT<1,3> = 'LBS'
+         ICR.CNV = "MD0"
+         ICR.DV1 = INV.M.WT; ICR.MT1 = 1; ICR.DV2 = 1
+      CASE INV.UNIT<1,2> = 'PC' AND INV.UNIT<1,3> = 'MSI'
+         ICR.CNV = "MD0"
+         ICR.DV1 = INV.PAP.WIDTH/100;ICR.MT1 = 10;ICR.DV2 = 1
+      CASE INV.UNIT<1,2> = 'FT' AND INV.UNIT<1,3> = 'MSI'
+         ICR.CNV = "MD0"
+         ICR.DV1 = INV.PAP.WIDTH/100;ICR.MT1 = 100;ICR.DV2 = 12
+      CASE 1
+         ICR.CNV = "MD2"
+         ICR.DV1 = 10; ICR.MT1 = 1; ICR.DV2 = 1
+   END CASE
+   RETURN
+*----   CALLS FOR SYSCOM
+91000ERR.TYPE = 1; CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+92000ERR.TYPE = 2; CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+93000*
+   PRINTER OFF
+   ERR.TYPE = 3; CALL SYSCOM(MAT SYSCOM.REC)
+999999*
+END

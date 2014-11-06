@@ -1,0 +1,196 @@
+*COPY>CPYLIB>COM1
+*********************************************************************
+*
+* PROGRAM  - JANUS.PHANTOM.DRIVER
+*
+* AUTHOR   - Duane Green, VSI Inc.
+*
+* DATE     - 08/07/96
+*
+* DESCRIPTION
+*
+* This program is used to start the JANUS.PHANTOM phantom.
+*
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+*
+*---- PRE-INITIALIZATION
+*
+   PROCREAD PARAM ELSE PARAM = ""
+   ACTION = PARAM<1>[1,1]
+*
+*---- INITIALIZATION
+*
+   PROMPT ""
+   DASHES = STR("-",80)
+* MOD FOR REV11
+   CURRDIR = @PATH
+   X = COUNT(CURRDIR,'/')
+   X += 1
+   W = FIELD(CURRDIR,'/',X)
+*
+*
+   SLINE = @(-1)
+   SLINE = SLINE:@(0,0):"PRIMAC"
+   SLINE = SLINE:@(18,0):"J A N U S   C O M M U N I C A T I O N S"
+   SLINE = SLINE:@(72,0):OCONV(DATE(),"D2/")
+   SLINE = SLINE:@(0,1):DASHES
+   SLINE = SLINE:@(0,20):DASHES
+   SLINE = SLINE:@(0,22):DASHES
+   PRINT SLINE:
+*
+*---- OPEN ALL FILES
+*
+   OPEN "","JANUS.CONTROL" TO JANUS.CONTROL ELSE
+      ERRMSG = "CANNOT OPEN JANUS.CONTROL FILE"
+      GOSUB 90000
+      GOTO 99999
+   END
+*
+   OPEN '','COMPANY' TO COMPANY ELSE
+      ERRMSG = 'COMPANY FILE IS MISSING'
+      GOSUB 90000
+      GOTO 99999
+   END
+*
+   OPEN '','CONTROL' TO CONTROL ELSE
+      ERRMSG = 'CONTROL FILE IS MISSING'
+      GOSUB 90000
+      GOTO 99999
+   END
+*
+   CALL GET.CONO(CONO,MAT COMP.REC)
+   IF CONO = 'END' THEN GOTO 99999
+*
+10 *
+   PRINT @(25,8):@(-4):"Unit Number : ###":
+   PRINT @(39,8):
+   INPUT CPORT,3:_
+   BEGIN CASE
+      CASE CPORT = "END" OR CPORT = CHAR(27) OR CPORT = "^"
+         GOTO 99999
+      CASE 1
+         READ JANUS.REC FROM JANUS.CONTROL,CONO:CPORT ELSE
+            ERRMSG = "Invalid Unit Number. Try again! "
+            GOSUB 90000
+            GOTO 10
+         END
+         PORTNO = JANUS.REC<1>
+         PRINT @(39,8):@(-4):CPORT:
+   END CASE
+*
+   BEGIN CASE
+      CASE ACTION = "I"
+      CASE 1
+         READU TREC FROM JANUS.CONTROL, "JANUS.SERVER.LOCK.":PORTNO LOCKED
+            PRINT @(15,10):"Janus Communications process is ACTIVE! ":
+         END ELSE
+            PRINT @(15,10):"Janus Communications process is INACTIVE! ":
+            RELEASE JANUS.CONTROL, "JANUS.SERVER.LOCK.":PORTNO
+         END
+         LOOP
+            PRINT @(0,21):@(-4):"Enter (I)nitiate, (E)xit: ":
+            INPUT ACTION,3:_
+            BEGIN CASE
+               CASE ACTION = "E" OR ACTION = "END" OR ACTION = CHAR(27) OR ACTION = "^"
+                  GOTO 99999
+               CASE ACTION = "I"
+               CASE 1
+                  ACTION = ""
+            END CASE
+         WHILE ACTION = "" DO
+         REPEAT
+         PRINT @(0,12):@(-4):
+   END CASE
+*
+*---- MAIN PROCESSING
+*
+   BEGIN CASE
+      CASE ACTION = "I"
+         PORTNO = JANUS.REC<1>
+         READU TREC FROM JANUS.CONTROL,"JANUS.SERVER.LOCK.":PORTNO LOCKED
+            PRINT @(15,10):"Janus Communications phantom is already running! "
+         END ELSE
+            DELETE JANUS.CONTROL,PORTNO:"TRACE"
+            RELEASE JANUS.CONTROL,"JANUS.SERVER.LOCK.":PORTNO
+            DPORT = "/dev/tty":PORTNO
+            CMD = 'cd ../':W:'-ICS':CHAR(10)
+            CMD=CMD:"udt < ":DPORT:" > ":DPORT:" &":CHAR(10)
+            OSWRITE CMD ON "janusproc"
+            READU JNK FROM JANUS.CONTROL,"MYPORT" ELSE NULL
+            WRITEV PORTNO ON JANUS.CONTROL,"MYPORT",1
+            WRITEV CONO ON JANUS.CONTROL,"MYPORT",2
+            CMD = "!at now < janusproc"
+            CDATE = DATE()
+            CTIME = TIME()
+            IF CTIME < 10 THEN CDATE = DATE()
+            XREC = ""
+            XREC<1> = CDATE
+            XREC<2> = CTIME
+            XREC<3> = PORTNO
+            XPORT = 'tty':PORTNO
+            WRITE XREC ON JANUS.CONTROL, "JANUS.SERVER.CHECK.":XPORT
+            UDTEXECUTE CMD
+            PRINT @(0,21):@(-4):"Please Stand-by ":
+            SLEEP 1
+            DONE=0; CNT=0
+            LOOP
+               READU TREC FROM JANUS.CONTROL,"JANUS.SERVER.LOCK.":PORTNO LOCKED
+                  DONE = 1
+               END ELSE
+                  RELEASE JANUS.CONTROL,"JANUS.SERVER.LOCK.":PORTNO
+               END
+            UNTIL CNT = 15 OR DONE DO
+               SLEEP 1
+               CNT = CNT + 1
+               PRINT ".":
+            REPEAT
+            IF DONE THEN
+               PRINT @(15,10):"Janus Communications phantom initiated successfully! "
+            END ELSE
+               PRINT @(15,10):"Janus Communications phantom initiation failed! "
+               DELETE JANUS.CONTROL,"MYPORT"
+               SLEEP 5
+               GOTO 99999
+            END
+         END
+   END CASE
+   RELEASE
+   PRINT @(0,21):@(-4):"Press <RETURN> to continue":
+   INPUT REPLY,1:
+   GOSUB 80000
+   GOTO 99999
+*
+80000 *
+   READ TREC FROM JANUS.CONTROL,PORTNO:"TRACE" ELSE TREC = ''
+*  IF X = 'XFER.COMPLETE' THEN
+   IF TREC<2> = 'XFER.COMPLETE' THEN
+      PRINT @(0,21):@(-4):'Processing Complete':
+      INPUT JUNK:
+      RETURN
+   END ELSE
+      PRINT @(0,21):@(-4):'Please Wait':
+      SLEEP 1
+      GOTO 80000
+   END
+*
+*---- ERROR ROUTINE
+*
+90000 *
+   PRINT @(0,23):ERRMSG:
+   PRINT @(0,23):@(-4):ERRMSG:
+   INPUT REPLY,1:_
+   PRINT @(0,23):@(-4):
+   RETURN
+*
+*---- END OF PROGRAM
+*
+99999 *
+   PRINT @(-1):
+END

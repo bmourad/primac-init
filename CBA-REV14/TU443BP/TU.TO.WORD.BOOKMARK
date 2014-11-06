@@ -1,0 +1,160 @@
+SUBROUTINE TU.TO.WORD.BOOKMARK(HOSTFILENAME, FIELDLIST, SELECTION, OPTIONS, DOCUMENTNAME, STATUS)
+ INCLUDE TUBP USER.INCLUDE.H
+*
+** SBClient Host 3GL API
+** Copyright (C) Ardent Software Inc. 1998
+** Copyright (C) UniData, Inc. 1996, 1997
+** Copyright (C) System Builder Corporation. 1995
+**
+**      This software is the proprietary property and contains
+**      trade secrets of Ardent Software, Inc. Any unauthorized use,
+**      disclosure or duplication is strictly prohibited.
+**      All rights reserved.
+*
+***************************************************************************
+*-* TU.TO.WORD.BOOKMARK(Pickfilename, Fieldlist, Selection, Options, Documentname,
+*-* Status)
+*-*
+*-*       This function will download formatted pick data into a WINWORD document
+*-* at a WINWORD bookmark using DDE. The bookmark names are the HEADING fields of the pick
+*-* dictionary definitions.
+*-*
+*-* [P] Pickfilename	The name of the pick file to be downloaded.
+*-*
+*-* [P] Fieldlist	List of dictionary definitions of fields to be
+*-* downloaded.
+*-*
+*-* [P] Selection	Selection criteria to locate items to be downloaded.
+*-*
+*-* [P] Options	This is an array of characters to indicate minor details
+*-* of the transfer. Possible values INCLUDE :-
+*-*
+*-*  C Clear the destination before downloading
+*-*  F Use file transfer protocol to send data
+*-*  M Transfer field MASKS (spreadsheets only)
+*-*  H Transfer Heading
+*-*
+*-* [P] Documentname	This the name of the PC file to store the data.
+*-*
+*-* [R] Status	This is an indication of the success or failure of the
+*-* subroutine. A successful call will return with zero
+*-* Status and failure will return with a non-zero value.
+***************************************************************************
+*
+ INCLUDE TUBP SPECIAL.H
+ INCLUDE TUBP TU.API.H
+ INCLUDE TUBP HEADER.H
+ INCLUDE TUBP TU.ERRORCODES.H
+*
+IF TU.TRACE THEN
+OPEN '','TUSTATE' TO TUSTATE THEN
+WRITEV ('TO.WORD.BOOKMARK':VM:HOSTFILENAME:VM:FIELDLIST:VM:SELECTION:VM:OPTIONS:VM:DOCUMENTNAME) ON TUSTATE,('TRACE.':PORTNO),-1
+END
+END
+*
+SIMPLENAME = DOCUMENTNAME
+P = INDEX(SIMPLENAME, '.', 1)
+IF P THEN
+SIMPLENAME = SIMPLENAME[1, P - 1]
+END
+IF INDEX(SIMPLENAME, '\', 1) THEN
+SIMPLENAME = FIELD(SIMPLENAME, '\', COUNT(SIMPLENAME, '\') + 1)
+END
+SIMPLENAME = OCONV(SIMPLENAME, 'MCU')
+TIMEOUT = 60
+HANDLE = ''
+SYSTEMHANDLE = ''
+DESCRIPTION = 'WINWORD'
+CALL TU.BUILD.XFER.DATA(HOSTFILENAME, FIELDLIST, SELECTION, DESCRIPTION, STATUS)
+IF STATUS THEN RETURN
+OPEN '','TUXFER.DATA.':PORTNO TO TUXFER.DATA ELSE
+OPEN '','TUSTATE' TO TUSTATE ELSE STATUS = FTE.TUSTATE.OPEN.ERROR; RETURN
+WRITE (FTE.TUXFER.DATA.FILE.OPEN.ERROR:AM:'TUXFER.DATA.':PORTNO) ON TUSTATE,'ERROR.':PORTNO
+STATUS = FTE.TUXFER.DATA.FILE.OPEN.ERROR
+RETURN
+END
+READ HEADER FROM TUXFER.DATA,'XFER.HEADER' ELSE
+OPEN '','TUSTATE' TO TUSTATE ELSE STATUS = FTE.TUSTATE.OPEN.ERROR; RETURN
+WRITE (FTE.ITEM.READ.ERROR:AM:'WORD.BOOKMARK':AM:'TUXFER.DATA.':PORTNO:' XFER.HEADER') ON TUSTATE,'ERROR.':PORTNO
+STATUS = FTE.ITEM.READ.ERROR
+RETURN
+END
+FIELDCOUNT = COUNT(HEADER<HED.DICTNAME>, VM) + (HEADER<HED.DICTNAME> # '')
+*
+*-* first establish a link with the SYSTEM topic
+*
+CALL TU.DDE.CONNECT('WINWORD', 'System', SYSTEMHANDLE, STATUS)
+IF STATUS THEN
+WINWORD = "WINWORD.EXE"
+CALL TU.LAUNCH.APP(WINWORD, APP.SHOWMINNOACTIVE, STATUS)
+IF STATUS THEN RETURN
+CALL TU.CHECK.APP(WINWORD, STATUS)
+IF STATUS THEN RETURN
+CALL TU.DDE.CONNECT('WINWORD', 'System', SYSTEMHANDLE, STATUS)
+IF STATUS THEN RETURN
+END
+*
+*-* now see if WINWORD is already looking at the document we are interested in
+*
+CALL TU.DDE.READ(SYSTEMHANDLE, 'Topics', TIMEOUT, DATA, STATUS)
+IF STATUS THEN GOTO 999
+LOOP
+P = INDEX(DATA, TAB, 1)
+WHILE (P>0) DO
+DATA = DATA[1,P - 1]:' ':DATA[P + 1, LEN(DATA)]
+REPEAT
+IF TU.TRACE THEN
+OPEN '','TUSTATE' TO TUSTATE THEN
+WRITEV ('WINWORD.TOPICS':VM:DATA) ON TUSTATE,('TRACE.':PORTNO),-1
+END
+END
+D = COUNT(DATA, ' ') + (DATA # '')
+F = 0
+FOR I = 1 TO D
+IF INDEX(OCONV(FIELD(DATA, ' ', I), 'MCU'), SIMPLENAME, 1) THEN F = I
+NEXT I
+IF NOT(F) THEN
+CALL TU.DDE.EXEC.MACRO(SYSTEMHANDLE, TIMEOUT, '[FileOpen .Name ="':DOCUMENTNAME:'"]', STATUS)
+IF STATUS THEN GOTO 999
+END
+*
+*-* now try and connect to the document we are interested in
+*
+CALL TU.DDE.CONNECT('WINWORD', DOCUMENTNAME, HANDLE, STATUS)
+IF STATUS THEN GOTO 999
+READ DATA FROM TUXFER.DATA,'XFER.DATA.1' ELSE
+OPEN '','TUSTATE' TO TUSTATE ELSE STATUS = FTE.TUSTATE.OPEN.ERROR; RETURN
+WRITE (FTE.ITEM.READ.ERROR:AM:'WORD.BOOKMARK':AM:'TUXFER.DATA.':PORTNO:' XFER.DATA.1') ON TUSTATE,'ERROR.':PORTNO
+STATUS = FTE.ITEM.READ.ERROR
+RETURN
+END
+BOOKMARK.COUNT = COUNT(HEADER<HED.HEADING>, VM) + (HEADER<HED.HEADING> # '')
+*
+*-* send the data to the bookmarks
+*
+FOR I = 1 TO BOOKMARK.COUNT
+VALUE = DATA<1,I>
+IF HEADER<HED.OCONV, I> # '' THEN
+VALUE = OCONV(ICONV(VALUE, HEADER<HED.OCONV, I>), HEADER<HED.OCONV, I>)
+END
+CALL TU.DDE.WRITE(HANDLE, HEADER<HED.HEADING,I>, TIMEOUT, VALUE, STATUS)
+IF STATUS THEN GOTO 998
+NEXT I
+!      IF OCONV(DOCUMENTNAME, 'MCL') # 'document1' THEN
+!         DOCUMENTNAME = DOCUMENTNAME:'.DOC'
+!         CALL TU.DDE.EXEC.BOOKMARK(HANDLE, TIMEOUT, '[Save.As("':DOCUMENTNAME:'",1)]', STATUS)
+!      END
+!      CALL TU.DELETE.FILE(PCFILENAME, STATUS)    ;* assume OK
+CALL TU.DDE.DISCONNECT(HANDLE, STATUS)
+CALL TU.DDE.DISCONNECT(SYSTEMHANDLE, STATUS)
+RETURN
+*
+*-* error exits
+*
+998 *
+CALL TU.DDE.DISCONNECT(HANDLE, DUMMY)
+999 *
+DUMMY = ''
+CALL TU.DDE.DISCONNECT(SYSTEMHANDLE, DUMMY)
+RETURN
+END

@@ -1,0 +1,1117 @@
+   SUBROUTINE QPL.PROD.MAINT(CONO, ACTION, EST.KEY, STATUS)
+*********************************************************************
+*
+* PROGRAM  - QPL.PROD.MAINT
+*
+* AUTHOR   - NICK AMENDOLA, NASTech, Inc.
+*
+* DATE     - 10/11/93
+*
+* DESCRIPTION
+*
+* This program is used to capture component definition data for the
+* QUIK-PLAN estimating system.
+*
+*T21924 julie 05/12/1997 * FIX CALC OF PAGES PER FORM
+*T22310 julie 10/22/1997 * Fix number up problem
+*T22310 rick 12/12/1997 * Modify loop that recalcs the PQTY to always
+*                         have a min of 1
+*T22424 gat 01/16/1998 * FIX MISSING PROD DESC
+*T22816 renee 05/01/1998 * Extend decimal place position on the PIECE
+*                          SIZE field to four decimals rather than two
+*T26556 cmykleb 05/02/2002 * Correct GUI problem.
+*T26651 cmykleb 06/05/2002 * On entry of a new estimate and the user
+*                            goes to the (MO) screen the price fields
+*                            for all but the first qty are blank.
+*T26693 cmykleb 06/20/2002 * When choosing the (D)etail option then
+*                            Prod Def screen does not display, only
+*                            the prompt line (GUI only).
+*T26922 cmykleb 10/18/2002 * Do not override user input.
+*T27432 cmykleb 05/14/2003 * In Inquiry mode user appears to be able
+*                            to change the stock $ amount.
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>JES.CPYLIB>SCOMMON.ESTIMATE.QP
+*COPY>JES.CPYLIB>ESTIMATE
+*COPY>JES.CPYLIB>ESTIMATE.QP
+*COPY>JES.CPYLIB>EQUIPMENT
+*COPY>JES.CPYLIB>ESTIMATE.PAPER.GROUP
+*COPY>JES.CPYLIB>ESTIMATE.MATL
+*COPY>JES.CPYLIB>ESTIMATE.PRESS.SPOIL
+*COPY>JES.CPYLIB>JES.FILE.VARS
+*COPY>PMC.CPYLIB>COST.CNTR
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>JES.CPYLIB>QPL.SCRIPT
+*COPY>JES.CPYLIB>QPL.SCREEN
+*COPY>CPYLIB>GEN.XREF.SUB
+*COPY>CPYLIB>SCREEN.COM
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+*
+*---- SETUP SYSTEM ERROR MESSAGES
+*
+   SYS.TYPE = 1
+   CALL SI_SYSCOM(MAT SYSCOM.REC)
+*
+*---- OPEN ALL FILES
+*
+   OPEN "","QPL.PROMPT" TO QPL.PROMPT ELSE
+      ERRMSG = "CANNOT OPEN QPL.PROMPT FILE"
+      GOTO 93000
+   END
+   OPEN "","QPL.SCREEN" TO QPL.SCREEN ELSE
+      ERRMSG = "CANNOT OPEN QPL.SCREEN FILE"
+      GOTO 93000
+   END
+   OPEN "","QPL.SCRIPT" TO QPL.SCRIPT ELSE
+      ERRMSG = "CANNOT OPEN QPL.SCRIPT FILE"
+      GOTO 93000
+   END
+   OPEN "","QPL.SCREENS" TO QPL.SCREENS ELSE
+      ERRMSG = "CANNOT OPEN QPL.SCREENS FILE"
+      GOTO 93000
+   END
+*
+*---- INITIALIZATION
+*
+   SCREEN DEFINE;QPL.PROD.MAINT;QPL.SCREENS
+   SCREEN FORMAT
+   SCREEN COUNT;;11
+   LINE.COUNT = S$LCNT
+   LINE.SPACE = S$LSPC
+   LINE.CNT = 0
+   COMP = ""
+   TMSG = ""
+   CURR.REF.NO = ""
+   MAT GEN.XREF.REC = ""
+   GXR.CO = CONO
+*
+*---- MAIN PROCESSING
+*
+   S$DATA(1)<S$SCR> = DATE()
+   SCREEN DISPLAY;;1
+   IF ACTION = "M" AND EST.PROD.DESC<1,1> = "" THEN
+      LINE.CNT = 0
+      OPT = "A"
+      GOTO 510
+   END ELSE
+      GOSUB 80000
+      GOSUB 81000
+      LINE.CNT = DCOUNT(EST.PROD.DESC, VM)
+      COMP = 1
+      CURR.REF.NO = ""
+      GOSUB 50000
+   END
+*
+*---- GET OPERATOR REPLY
+*
+500 *
+   BEGIN CASE
+      CASE ACTION = "M"
+         SCREEN FIELD;;31
+         SCREEN INPUT;;31
+      CASE 1
+         SCREEN FIELD;;33
+         SCREEN INPUT;;33
+   END CASE
+   OPT = S$VALUE
+510 *
+   BEGIN CASE
+      CASE OPT = "E" OR OPT = "END"
+         GOTO 99999
+      CASE OPT = "A" AND LINE.CNT < 16
+         MODE = "A"
+         DONE = 0
+         FOR COMP = LINE.CNT+1 TO 16 UNTIL DONE
+            GOSUB 50000
+            GOSUB 85000
+            GOSUB 10000
+            IF S$VALUE = "END" THEN
+               DONE = 1
+               GOSUB 700
+            END ELSE
+               LINE.CNT = LINE.CNT + 1
+               EST.RECALC.FLAG = 1
+            END
+            GOSUB 86000
+         NEXT COMP
+         COMP = LINE.CNT
+         CURR.REF.NO = ""
+         GOSUB 50000
+      CASE OPT = "C" AND LINE.CNT > 0
+         MODE = "C"
+         GOSUB 600
+         IF S$VALUE # "" AND S$VALUE # "END" THEN
+            COMP = S$VALUE
+            GOSUB 85000
+            GOSUB 10000
+            IF S$VALUE = "END" THEN
+               CURR.REF.NO = ""
+               GOSUB 50000
+            END ELSE
+               EST.RECALC.FLAG = 1
+            END
+            GOSUB 86000
+         END
+      CASE OPT = "D" AND LINE.CNT > 0
+         MODE = "D"
+         GOSUB 600
+         IF S$VALUE # "" AND S$VALUE # "END" THEN
+            COMP = S$VALUE
+            GOSUB 700
+            LINE.CNT = LINE.CNT - 1
+            IF COMP > LINE.CNT THEN COMP = COMP - 1
+            CURR.REF.NO = ""
+            GOSUB 50000
+*           EST.COMPONENT.CNT = LINE.CNT
+            EST.RECALC.FLAG = 1
+         END
+      CASE OPT[1,1] = "R"
+         MODE = "R"
+         IF OPT[1,2] = "RD" OR OPT[1,2] = "RS" THEN
+            S$VALUE = OPT[2,1]
+         END ELSE
+            SCREEN FIELD;;34
+            SCREEN INPUT;;34
+         END
+         IF S$VALUE # "" AND S$VALUE # "END" THEN
+            RTYPE = S$VALUE
+            GOSUB 600
+            IF S$VALUE # "" AND S$VALUE # "END" THEN
+               COMP = S$VALUE
+               BEGIN CASE
+                  CASE RTYPE = "D"
+*T26693 v
+*                    S$SCR = S$SCR + 1
+                     S$SCR = S$SCR + 2
+*T26693 ^
+                     CALL QPL.PROD.DETAIL(CONO,ACTION,EST.KEY,COMP,STATUS)
+*T26693 v
+*                    S$SCR = S$SCR - 1
+                     S$SCR = S$SCR - 2
+*T26693 ^
+                     SCREEN FORMAT
+                     GOSUB 80050
+                     GOSUB 81000
+                     CURR.REF.NO = ""
+                     GOSUB 50000
+                  CASE RTYPE = "S"
+                     SID = EST.PROD.SCRIPT<1,COMP>
+                     MATREAD QPSPT.REC FROM QPL.SCRIPT, CONO:SID THEN
+                        GOSUB 85000
+                        S$SCR = S$SCR + 1
+                        ESTATUS = ""
+                        SCNT = DCOUNT(QPSPT.SID,VM)
+                        FOR SPTR = 1 TO SCNT WHILE ESTATUS = ""
+                           SID = QPSPT.SID<1,SPTR>
+                           MATREAD QPSCN.REC FROM QPL.SCREEN, CONO:SID THEN
+                              CALL QPL.SCREEN.INPUT(ACTION,CONO,COMP,SID,MAT QPSCN.REC,QPL.PROMPT,ESTATUS)
+                           END
+                        NEXT SPTR
+                        S$SCR = S$SCR - 1
+                        GOSUB 86000 ; * T26556
+                        IF ACTION = 'I' THEN GOTO 500 ; * T27432
+                        PGRP = EST.PROD.OS.TYPE<1,COMP>:EST.PROD.OS.USAGE<1,COMP,1>
+                        MATREAD ESTM.REC FROM ESTIMATE.MATL,CONO:PGRP ELSE MAT ESTM.REC=""
+                        PRS = EST.PROD.PRESS.ID<1,COMP>
+                        MATREAD EQUIPMENT.REC FROM EQUIPMENT, CONO:PRS ELSE MAT EQUIPMENT.REC=""
+                        GOSUB 19000
+*T26556                 GOSUB 86000
+                     END ELSE
+                        ERRMSG = "Invalid script ID on selected line"
+                        GOSUB 91000
+                     END
+               END CASE
+               EST.RECALC.FLAG = 1
+            END
+         END
+      CASE OPT = "G"
+         CALL QPL.GEN.DETAIL(CONO,ACTION,EST.KEY,STATUS)
+         GOSUB 26000
+         EST.RECALC.FLAG = ""
+      CASE OPT = "S" OR OPT = "SF"
+         COMP = CURR.REF.NO + LINE.COUNT
+         IF COMP > LINE.CNT THEN COMP = 1
+         GOSUB 50000
+      CASE OPT = "SR"
+         COMP = CURR.REF.NO - LINE.COUNT
+         IF COMP < 1 THEN COMP = 1
+         GOSUB 50000
+      CASE OPT = "ST"
+         COMP = 1
+         GOSUB 50000
+      CASE OPT = "SB"
+         COMP = LINE.CNT
+         IF COMP < 1 THEN COMP = 1
+         GOSUB 50000
+   END CASE
+   GOTO 500
+*
+*---- GET LINE NUMBER
+*
+600 *
+   SCREEN FIELD;;32
+   S$MINV = CURR.REF.NO
+   S$MAXV = S$MINV + LINE.COUNT - 1
+   IF S$MAXV > LINE.CNT THEN S$MAXV = LINE.CNT
+   SCREEN INPUT;;32
+   RETURN
+*
+*---- DELETE MULTI-LINE DATA
+*
+700 *
+   CALL EST.COMP.DEL(CONO, "", EST.KEY, COMP)
+   FOR N = 1 TO EST.QP.DATA.CNT
+      EST.QP.REC(N) = DELETE(EST.QP.REC(N),1,COMP,0)
+   NEXT N
+   GOSUB 81000
+   RETURN
+*
+*---- INSERT MULTI-LINE DATA
+*
+800 *
+   GOSUB 81000
+   RETURN
+*
+*---- GET MULTI-LINE DATA
+*
+10000 *
+   S$VAL = COMP
+   SCREEN DISPLAY;;11
+10100 *
+* T22816 v
+*     PREV.MF1 = INT(EST.PROD.TS.WIDTH<1,COMP,1> / 100)
+   PREV.MF1 = INT(EST.PROD.TS.WIDTH<1,COMP,1>)
+* T22816 ^
+   S$VAL = COMP
+   SCREEN FIELD;;13
+   SCREEN INPUT;;13;GOTO 19950
+   TEMP.MF1 = S$VALUE
+   S$VAL = COMP
+   S$DATA(14)<S$SCR,COMP> = "x"
+   SCREEN DISPLAY;;14
+10200 *
+* T22816 v
+*     PREV.MF2 = INT(EST.PROD.TS.LENGTH<1,COMP,1> / 100)
+   PREV.MF2 = INT(EST.PROD.TS.LENGTH<1,COMP,1>)
+* T22816 ^
+   S$VAL = COMP
+   SCREEN FIELD;;15
+   SCREEN INPUT;;15;GOTO 19950
+   TEMP.MF2 = S$VALUE
+10300 *
+   PREV.MF3 = EST.PROD.OS.TYPE<1,COMP>:EST.PROD.OS.USAGE<1,COMP,1>
+   S$DATA(16)<S$SCR,COMP> = PREV.MF3
+10310 *
+   S$VAL = COMP
+   SCREEN FIELD;;16
+   SCREEN INPUT;;16;GOTO 19950
+   IF S$VALUE = "S??" OR S$VALUE = "R??" THEN
+      GXR.NAME = "ESTIMATE.PAPER.GROUP"
+      GXR.FILE = ESTIMATE.PAPER.GROUP
+      CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+      SCREEN FORMAT
+      GOSUB 80050
+      CURR.REF.NO = ""
+      GOSUB 50000
+      IF GXR.ID = "" THEN GOTO 10300
+      S$VALUE = S$VALUE[1,1]:GXR.ID
+      S$DATA(16)<S$SCR,COMP> = S$VALUE
+      S$VAL = COMP
+      SCREEN DISPLAY;;16
+   END
+   MATREAD ESTPG.REC FROM ESTIMATE.PAPER.GROUP, CONO:S$VALUE[2,2] ELSE
+      ERRMSG = "Invalid Paper Group. Try again! "
+      GOSUB 91000
+      GOTO 10300
+   END
+   MATREAD ESTM.REC FROM ESTIMATE.MATL, CONO:S$VALUE ELSE
+      ERRMSG = "Invalid Estimate Material. Try again! "
+      GOSUB 91000
+      GOTO 10300
+   END
+   TEMP.MF3 = S$VALUE
+10400 *
+   PREV.MF4 = EST.PROD.OS.PROD<1,COMP,1>
+   S$DATA(17)<S$SCR,COMP> = PREV.MF4
+   S$VAL = COMP
+   SCREEN FIELD;;17
+   SCREEN INPUT;;17;GOTO 10310
+   IF S$VALUE="???" THEN
+      S$SCR=S$SCR+1
+      CALL EST.PAPER.XREF(CONO,"S",TEMP.MF3[1,1],TEMP.MF3[2,99],SELECTION)
+      S$SCR=S$SCR-1
+      SCREEN FORMAT
+      S$VALUE = SELECTION
+      S$DATA(17)<S$SCR,COMP> = SELECTION
+      GOSUB 80050
+      CURR.REF.NO = ""
+      GOSUB 50000
+      IF SELECTION="" THEN GOTO 10400
+   END
+   LOCATE S$VALUE IN ESTM.PROD<1>,1 SETTING MP ELSE
+      ERRMSG = "Invalid Product for specified paper group. Try again! "
+      GOSUB 91000
+      GOTO 10400
+   END
+   TEMP.MF4 = S$VALUE
+* T22424
+   TEMP.MF10 = ESTM.DESC<1,MP>
+* T22424
+   IF TEMP.MF3 # PREV.MF3 OR TEMP.MF4 # PREV.MF4 THEN
+      GOSUB 20000
+      IF S$VALUE = "END" THEN GOTO 10400
+      EST.PROD.PCST<1,COMP,1> = ""
+      EST.PROD.INV.ID<1,COMP,1> = ""
+   END
+10500 *
+   IF ESTM.WIDTH<1,MP> = "" THEN
+      PREV.MF5 = EST.PROD.OS.WIDTH<1,COMP,1>
+      S$VAL = COMP
+      SCREEN FIELD;;18
+      IF ESTM.WIDTH<1,MP> # "" THEN
+         S$O.R = "O"; S$DEFAULT = INT(ESTM.WIDTH<1,MP>/100+0.5)
+      END
+      SCREEN INPUT;;18;GOTO 19950
+      TEMP.MF5 = S$VALUE
+   END ELSE
+      S$VAL = COMP
+      TEMP.MF5 = INT(ESTM.WIDTH<1,MP>/100+0.5)
+      S$DATA(18)<S$SCR,COMP> = TEMP.MF5
+      SCREEN DISPLAY;;18
+   END
+   TEMP.MF5P = TEMP.MF5
+10600 *
+   PREV.MF6 = EST.PROD.OS.LENGTH<1,COMP,1>
+   IF TEMP.MF3[1,1] = "R" THEN
+      S$VAL = COMP
+      S$DATA(19)<S$SCR,COMP> = ""
+      SCREEN DISPLAY;;19
+      TEMP.MF6 = ""
+      S$VAL = COMP
+      S$DATA(20)<S$SCR,COMP> = TEMP.MF6
+      SCREEN DISPLAY;;20
+   END ELSE
+      S$VAL = COMP
+      S$DATA(19)<S$SCR,COMP> = "x"
+      SCREEN DISPLAY;;19
+      IF ESTM.LENGTH<1,MP> = "" THEN
+         S$VAL = COMP
+         SCREEN FIELD;;20
+         IF ESTM.LENGTH<1,MP> # "" THEN
+            S$O.R = "O"; S$DEFAULT = INT(ESTM.LENGTH<1,MP>/100+0.5)
+         END
+         SCREEN INPUT;;20;GOTO 19950
+         TEMP.MF6 = S$VALUE
+      END ELSE
+         S$VAL = COMP
+         TEMP.MF6 = INT(ESTM.LENGTH<1,MP>/100+0.5)
+         S$DATA(20)<S$SCR,COMP> = TEMP.MF6
+         SCREEN DISPLAY;;20
+      END
+   END
+   TEMP.MF6P = TEMP.MF6
+   TEMP.MF6G = ESTM.GRAIN<1,MP>
+10700 *
+*T26556   PRINT @(0,23):@(-4):
+   IF EST.PROD.DC.CODE<1,COMP> = "" THEN
+      PREV.MF7 = EST.PROD.PRESS.ID<1,COMP>
+      S$DATA(21)<S$SCR,COMP> = PREV.MF7
+   END ELSE
+      PREV.MF7 = EST.PROD.PRESS.ID<1,COMP>:"-":EST.PROD.DC.CODE<1,COMP>
+      S$DATA(21)<S$SCR,COMP> = PREV.MF7
+   END
+   S$VAL = COMP
+   SCREEN FIELD;;21
+   SCREEN INPUT;;21;GOTO 19950
+   IF S$VALUE="???" THEN
+      CALL EST.EQUIP.XREF(CONO,"01",EQUIPMENT,COST.CNTR,XCODE)
+      SCREEN FORMAT
+      S$VALUE=XCODE
+      S$DATA(21)<S$SCR,COMP>=XCODE
+      GOSUB 80050
+      CURR.REF.NO = ""
+      GOSUB 50000
+      IF XCODE="" THEN GOTO 10700
+   END
+   PRS=FIELD(S$VALUE,"-",1)
+   CNF=FIELD(S$VALUE,"-",2)
+   MATREAD CCTR.REC FROM COST.CNTR,CONO:PRS ELSE
+      ERRMSG="Invalid Cost Center ID. Try again! "
+      GOSUB 91000
+      GOTO 10700
+   END
+   MATREAD EQUIPMENT.REC FROM EQUIPMENT, CONO:PRS ELSE
+      ERRMSG = "Invalid Press ID. Try again! "
+      GOSUB 91000
+      GOTO 10700
+   END
+   IF EQP.TYPE # "01" THEN
+      ERRMSG = "Invalid Equipment Type. Try again! "
+      GOSUB 91000
+      GOTO 10700
+   END
+   IF CNF # "" THEN
+      LOCATE CNF IN EQP.PRESS.DC.CODE<1>,1 SETTING FND ELSE
+         ERRMSG = "Invalid configuration code for specified press. Try again! "
+         GOSUB 91000
+         GOTO 10700
+      END
+   END
+   TEMP.MF7 = S$VALUE
+   IF EQP.PRESS.TYPE = "S" THEN
+      PW = EQP.PRESS.MAX.WIDTH
+      PL = EQP.PRESS.CUTOFF.LEN
+10750 BEGIN CASE
+         CASE PW >= (TEMP.MF5P*100) AND PL >= (TEMP.MF6P*100)
+         CASE PW >= (TEMP.MF6P*100) AND PL >= (TEMP.MF5P*100)
+         CASE 1
+            IF EST.PROD.PS.WIDTH<1,COMP,1>+0 = 0 THEN
+               S$DATA(29)<S$SCR> = ""
+            END ELSE
+               S$DATA(29)<S$SCR> = INT(EST.PROD.PS.WIDTH<1,COMP,1>/100)
+            END
+            SCREEN FIELD;;29
+            S$TYP=4; S$MAXL=5; S$SCALER=2
+            S$PMSG="Press Sheet Width :"
+            SCREEN INPUT;;29;GOTO 10700
+            TEMP.MF5P=S$VALUE
+            IF EST.PROD.PS.LENGTH<1,COMP,1>+0 = 0 THEN
+               S$DATA(29)<S$SCR> = ""
+            END ELSE
+               S$DATA(29)<S$SCR> = INT(EST.PROD.PS.LENGTH<1,COMP,1>/100)
+            END
+            SCREEN FIELD;;29
+            S$TYP=4; S$MAXL=5; S$SCALER=2
+            S$PMSG="Press Sheet Length :"
+            SCREEN INPUT;;29;GOTO 10700
+            TEMP.MF6P=S$VALUE
+            S$DATA(29)<S$SCR> = EST.PROD.PS.GRAIN<1,COMP,1>
+            SCREEN FIELD;;29
+            S$TYP=1; S$MAXL=1
+            S$PMSG="Press Sheet Grain (L,S) :"
+            S$VALDAT="L,S"
+            SCREEN INPUT;;29;GOTO 10700
+            TEMP.MF6G=S$VALUE
+            GOTO 10750
+      END CASE
+   END ELSE
+      PW = EQP.PRESS.MAX.WIDTH
+      IF (TEMP.MF5*100) > EQP.PRESS.MAX.WIDTH THEN
+         ERRMSG = "Paper width exceeds maximum for Press."
+         GOSUB 91000
+         GOTO 10700
+      END
+      TEMP.MF6 = INT(EQP.PRESS.CUTOFF.LEN/100+0.5)
+      TEMP.MF6P = TEMP.MF6
+      TEMP.MF6G = ESTM.GRAIN<1,MP>
+      S$VAL = COMP
+      S$DATA(19)<S$SCR,COMP> = "x"
+      SCREEN DISPLAY;;19
+      S$VAL = COMP
+      S$DATA(20)<S$SCR,COMP> = TEMP.MF6
+      SCREEN DISPLAY;;20
+   END
+10800 *
+   PREV.MF8 = EST.PROD.NO.UP<1,COMP,1>
+   S$VAL = COMP
+   SCREEN FIELD;;22
+   SCREEN INPUT;;22;GOTO 19950
+   TEMP.MF8 = S$VALUE
+10900 *
+   PREV.MF9 = EST.PROD.SCRIPT<1,COMP>
+   S$DATA(23)<S$SCR,COMP> = PREV.MF9
+   S$VAL = COMP
+   SCREEN FIELD;;23
+   SCREEN INPUT;;23;GOTO 19950
+   IF S$VALUE = "" OR S$VALUE = "???" THEN
+      GXR.NAME = "QPL.SCRIPT"
+      GXR.FILE = QPL.SCRIPT
+      CALL GEN.XREF.SUB(MAT GEN.XREF.REC, PREFIX, XREF.DATA)
+      SCREEN FORMAT
+      GOSUB 80050
+      CURR.REF.NO = ""
+      GOSUB 50000
+      IF GXR.ID = "" THEN GOTO 10900
+      S$VALUE = GXR.ID
+      S$DATA(23)<S$SCR,COMP> = S$VALUE
+      S$VAL = COMP
+      SCREEN DISPLAY;;23
+   END
+   MATREAD QPSPT.REC FROM QPL.SCRIPT, CONO:S$VALUE ELSE
+      ERRMSG = "Invalid script ID. Try again! "
+      GOSUB 91000
+      S$DATA(23)<S$SCR,COMP> = EST.PROD.SCRIPT<1,COMP>
+      GOTO 10900
+   END
+   TEMP.MF9 = S$VALUE
+19900 *
+   DETFLAG = 0
+   IF EST.PROD.DESC<1,COMP> = "" THEN EST.PROD.DESC<1,COMP> = COMP
+   IF FIELD(TEMP.MF7,"-",1) # FIELD(PREV.MF7,"-",1) THEN
+      BEGIN CASE
+         CASE EQP.PRESS.TYPE = "S"
+            EST.PROD.MODE<1,COMP,1> = "WT"
+            EST.PROD.WEB.CNT<1,COMP> = 1
+         CASE EQP.PRESS.PERFECTOR = "Y"
+            EST.PROD.MODE<1,COMP,1> = "P"
+            EST.PROD.WEB.CNT<1,COMP> = 1
+         CASE 1
+            EST.PROD.MODE<1,COMP,1> = "SS"
+            EST.PROD.WEB.CNT<1,COMP> = 1
+      END CASE
+      EST.PROD.SIGS<1,COMP,1> = 1
+      EST.PROD.FORMS<1,COMP,1> = 1
+      EST.PROD.PG.CNT<1,COMP,1> = 1
+      EST.PROD.PRESS.SPOIL<1,COMP,1> = EQP.PRESS.RUN.SPOIL
+      IF NUM(EQP.PRESS.RUN.SPOIL) THEN
+         EST.PROD.INIT.MR.IMP<1,COMP,1> = 0
+         EST.PROD.SUBS.MR.IMP<1,COMP,1> = 0
+      END ELSE
+         MATREAD PST.REC FROM ESTIMATE.PRESS.SPOIL, CONO:EQP.PRESS.RUN.SPOIL ELSE
+            MAT PST.REC = ""
+         END
+         EST.PROD.INIT.MR.IMP<1,COMP,1> = PST.INIT.QTY+0
+         EST.PROD.SUBS.MR.IMP<1,COMP,1> = PST.SUB.QTY+0
+      END
+   END
+   IF EST.PROD.BIND.SPOIL<1,COMP,1>="" THEN EST.PROD.BIND.SPOIL<1,COMP,1>=5
+   IF EST.PROD.INIT.MR.CNT<1,COMP,1>="" THEN EST.PROD.INIT.MR.CNT<1,COMP,1>=1
+   IF EST.PROD.SUBS.MR.CNT<1,COMP,1>="" THEN EST.PROD.SUBS.MR.CNT<1,COMP,1>=0
+   IF EST.PROD.PASSES<1,COMP,1>="" THEN EST.PROD.PASSES<1,COMP,1>=1
+*
+   IF TEMP.MF3 # PREV.MF3 OR TEMP.MF4 # PREV.MF4 THEN
+      EST.PROD.OS.GRAIN<1,COMP,1> = ESTM.GRAIN<1,MP>
+      EST.PROD.PS.GRAIN<1,COMP,1> = ESTM.GRAIN<1,MP>
+      EST.PROD.BASIS.WT<1,COMP,1> = ESTM.BASIS.WT<1,MP>
+      EST.PROD.M.WT<1,COMP,1> = ESTM.M.WEIGHT<1,MP>
+      EST.PROD.COATING<1,COMP,1> = ESTM.COAT.CD<1,MP>
+      EST.PROD.PLINE<1,COMP,1> = ESTM.PLINE<1,MP>
+      EST.PROD.FINISH<1,COMP,1> = ESTM.FINISH.CD<1,MP>
+      EST.PROD.COLOR<1,COMP,1> = ESTM.CLR.CD<1,MP>
+      EST.PROD.CALIPER<1,COMP,1> = ESTM.CALIPER<1,MP>
+      EST.PROD.PPI<1,COMP,1> = ESTM.PPI<1,MP>
+   END
+*
+* T22816 v
+*     EST.PROD.TS.WIDTH<1,COMP,1> = TEMP.MF1 * 100
+*     EST.PROD.TS.LENGTH<1,COMP,1> = TEMP.MF2 * 100
+   EST.PROD.TS.WIDTH<1,COMP,1> = TEMP.MF1 
+   EST.PROD.TS.LENGTH<1,COMP,1> = TEMP.MF2 
+* T22816 ^
+   EST.PROD.OS.TYPE<1,COMP> = TEMP.MF3[1,1]
+   EST.PROD.OS.USAGE<1,COMP,1> = TEMP.MF3[2,2]
+   EST.PROD.OS.PROD<1,COMP,1> = TEMP.MF4
+* T22424
+   EST.PROD.OS.DESC<1,COMP,1> = TEMP.MF10
+* T22424
+   EST.PROD.OS.WIDTH<1,COMP,1> = TEMP.MF5 * 100
+   EST.PROD.PS.WIDTH<1,COMP,1> = TEMP.MF5P * 100
+   IF TEMP.MF6 = "" THEN
+      EST.PROD.OS.LENGTH<1,COMP,1> = ""
+      EST.PROD.PS.LENGTH<1,COMP,1> = ""
+      EST.PROD.PS.GRAIN<1,COMP,1> = ""
+   END ELSE
+      EST.PROD.OS.LENGTH<1,COMP,1> = TEMP.MF6 * 100
+      EST.PROD.PS.LENGTH<1,COMP,1> = TEMP.MF6P * 100
+      EST.PROD.PS.GRAIN<1,COMP,1> = TEMP.MF6G
+   END
+   EST.PROD.PRESS.ID<1,COMP> = FIELD(TEMP.MF7,"-",1)
+   EST.PROD.DC.CODE<1,COMP> = FIELD(TEMP.MF7,"-",2)
+   EST.PROD.NO.UP<1,COMP,1> = TEMP.MF8
+* T21924
+*     EST.PROD.PGS.PER.FORM<1,COMP,1> = TEMP.MF8
+*T22310 v
+   IF EST.PROD.PGS.PER.FORM<1,COMP,1> = "" THEN
+      EST.PROD.PGS.PER.FORM<1,COMP,1> = TEMP.MF8 * EST.PROD.PG.CNT<1,COMP,1>
+   END
+*T22310 ^      
+   EST.PROD.PGS.ALL.WEBS<1,COMP> = TEMP.MF8
+   EST.PROD.SCRIPT<1,COMP> = TEMP.MF9
+   EST.PROD.MGROUP<1,COMP> = QPSPT.MGROUP
+*
+*---- GET SUPPLEMENTARY DATA
+*
+   IF PREV.MF9 # "" AND TEMP.MF9 # PREV.MF9 THEN
+      FOR N = 1 TO EST.QP.DATA.CNT
+         EST.QP.REC(N)<1,COMP> = ""
+      NEXT N
+   END
+   S$SCR = S$SCR + 1
+   SCNT = DCOUNT(QPSPT.SID,VM)
+   FOR SPTR = 1 TO SCNT
+      SID = QPSPT.SID<1,SPTR>
+      MATREAD QPSCN.REC FROM QPL.SCREEN, CONO:SID THEN
+         CALL QPL.SCREEN.INPUT(ACTION,CONO,COMP,SID,MAT QPSCN.REC,QPL.PROMPT,ESTATUS)
+      END
+   NEXT SPTR
+   S$SCR = S$SCR - 1
+   PGRP = EST.PROD.OS.TYPE<1,COMP>:EST.PROD.OS.USAGE<1,COMP,1>
+   MATREAD ESTM.REC FROM ESTIMATE.MATL,CONO:PGRP ELSE MAT ESTM.REC=""
+*
+*---- POST ENTRY PROCESSING
+*
+19000 *
+   WEB.CNT = EST.PROD.WEB.CNT<1,COMP>
+   IF WEB.CNT < 1 THEN WEB.CNT = 1
+*
+*---- FORCE MULTIWEB DATA
+*
+   FOR MPTR = 2 TO WEB.CNT
+      EST.PROD.COLORS.1<1,COMP,MPTR>=EST.PROD.COLORS.1<1,COMP,1>
+      EST.PROD.COLORS.2<1,COMP,MPTR>=EST.PROD.COLORS.2<1,COMP,1>
+      EST.PROD.INK.ID<1,COMP,MPTR> = EST.PROD.INK.ID<1,COMP,1>
+      EST.PROD.INK.SIDES<1,COMP,MPTR> = EST.PROD.INK.SIDES<1,COMP,1>
+      EST.PROD.INK.COVER<1,COMP,MPTR> = EST.PROD.INK.COVER<1,COMP,1>
+   NEXT MPTR
+*
+*---- DETERMINE SIDES TO CONTAIN INK
+*
+   FOR MPTR = 1 TO WEB.CNT
+      IF EST.PROD.INK.ID<1,COMP,MPTR> = "" THEN
+         EST.PROD.INK.SIDES<1,COMP,MPTR> = ""
+         EST.PROD.INK.COVER<1,COMP,MPTR> = ""
+      END ELSE
+         IF EST.PROD.COLORS.2<1,COMP,MPTR>+0 = 0 THEN
+            MACRO REPVAL;EST.PROD.INK.SIDES<1,COMP,MPTR>;"!";1;1
+         END ELSE
+            MACRO REPVAL;EST.PROD.INK.SIDES<1,COMP,MPTR>;"!";1;2
+         END
+      END
+*
+*---- CALCULATE PLATES REQUIRED
+*
+      PMODE=EST.PROD.MODE<1,COMP,MPTR>
+      C1=EST.PROD.COLORS.1<1,COMP,MPTR>+0
+      C2=EST.PROD.COLORS.2<1,COMP,MPTR>+0
+      BEGIN CASE
+         CASE PMODE="WT" OR PMODE="WR"
+            EST.PROD.PLATES<1,COMP,MPTR>=C1
+         CASE 1
+            EST.PROD.PLATES<1,COMP,MPTR>=C1+C2
+      END CASE
+      EST.PROD.PLATES<1,COMP,MPTR>=EST.PROD.PLATES<1,COMP,MPTR>*EST.PROD.FORMS<1,COMP,MPTR>
+*
+*---- CALCULATE NUMBER OF PASSES AND M/R REQUIREMENTS
+*
+      PMODE=EST.PROD.MODE<1,COMP,MPTR>
+      C1=EST.PROD.COLORS.1<1,COMP,MPTR>+0
+      C2=EST.PROD.COLORS.2<1,COMP,MPTR>+0
+      CC=EQP.PRESS.CLR.CNT+0
+      BEGIN CASE
+         CASE CC=0
+            PP=1
+         CASE EQP.PRESS.TYPE="W"
+            PP=1
+         CASE PMODE="SS"
+            PP=INT(C1/CC+0.99)
+         CASE PMODE="WT" OR PMODE="WR"
+            PP=INT(C1/CC+0.99)*2
+         CASE PMODE="SW"
+            PP=INT(C1/CC+0.99)+INT(C2/CC+0.99)
+         CASE 1
+            IF C1 > C2 THEN
+               PP=INT(C1/CC+0.99)
+            END ELSE
+               PP=INT(C2/CC+0.99)
+            END
+      END CASE
+      EST.PROD.PASSES<1,COMP,MPTR>=PP
+      EST.PROD.SUBS.MR.CNT<1,COMP,MPTR>=EST.PROD.PASSES<1,COMP,1>*EST.PROD.FORMS<1,COMP,1>-EST.PROD.INIT.MR.CNT<1,COMP,1>
+*
+   NEXT MPTR
+*
+   CALL QPL.POST.SCRIPT(ACTION, CONO, COMP, DIR, ERRMSG)
+*
+   PCOSTS = EST.PROD.PCST<1,COMP,1>
+   PCOST = FIELD(PCOSTS,"!",1)
+   MACRO REPVAL;EST.PROD.PCST<1,COMP,1>;"!";1;""
+   PQTY = 0
+*T22310  fix loop cntr below to be a minimum of 1
+   LOOPCTR = WEB.CNT
+   IF LOOPCTR < 1 THEN LOOPCTR = 1
+   FOR MPTR = 1 TO LOOPCTR
+*T22310 ^
+      IF EST.PROD.OS.TYPE<1,COMP> = "S" THEN
+         CALL EST.PROD.SUB.1A(CONO,ACTION,COMP,MPTR)
+      END ELSE
+         CALL EST.PROD.SUB.1B(CONO,ACTION,COMP,MPTR)
+      END
+      PQTY = PQTY + FIELD(EST.PROD.PQTY<1,COMP,MPTR>,"!",1)
+   NEXT MPTR
+   S$DATA(24)<S$SCR,COMP> = PQTY
+   S$VAL = COMP
+   SCREEN DISPLAY;;24
+*
+   CCOST = FIELD(EST.PROD.PCST<1,COMP,1>,"!",1)
+   IF CCOST = "" THEN
+      S$DATA(25)<S$SCR,COMP> = PCOST
+      S$VAL = COMP
+      SCREEN FIELD;;25
+      SCREEN INPUT;;25
+      IF S$VALUE = "END" THEN S$VALUE = PCOST
+      IF S$VALUE = PCOST THEN
+         EST.PROD.PCST<1,COMP,1> = PCOSTS
+      END ELSE
+         EST.PROD.PCST<1,COMP,1> = S$VALUE
+         PCOST = S$VALUE
+      END
+   END ELSE
+      S$VALUE = CCOST
+      S$DATA(25)<S$SCR,COMP> = S$VALUE
+      S$VAL = COMP
+      SCREEN DISPLAY;;25
+   END
+*     CALL EST.CALC.STK.PRICE(CONO,"")
+   FOR QPTR = 2 TO DCOUNT(EST.QTY,VM)
+      IF FIELD(EST.PROD.PCST<1,COMP,1>,"!",QPTR)+0 = 0 THEN
+         MACRO REPVAL;EST.PROD.PCST<1,COMP,1>;"!";QPTR;PCOST
+      END
+      PCOST = FIELD(EST.PROD.PCST<1,COMP,1>,"!",QPTR)
+   NEXT QPTR
+   WEB.CNT = EST.PROD.WEB.CNT<1,COMP>
+   FOR MPTR = 2 TO WEB.CNT
+      EST.PROD.PCST<1,COMP,MPTR> = EST.PROD.PCST<1,COMP,1>
+   NEXT MPTR
+   RETURN
+19950 *
+   GOSUB 81000
+   RETURN
+*
+*---- GET MISSING PAPER DATA
+*
+20000 *
+   IF ESTM.BASIS.WT<1,MP> = "" THEN
+      S$DATA(29)<S$SCR> = ""
+      SCREEN FIELD;;29
+      S$PMSG = "Basis Weight :"
+      S$MAXL = 6
+      S$TYP = 7; S$PATRN = "0N,0N.2N"
+      SCREEN INPUT;;29;RETURN
+      ESTM.BASIS.WT<1,MP> = S$VALUE
+   END
+20030 IF ESTM.PLINE<1,MP> = "" THEN
+      S$DATA(29)<S$SCR> = ""
+      SCREEN FIELD;;29
+      S$PMSG = "Product Line :"
+      S$MAXL = 6
+      S$TYP = 1
+      SCREEN INPUT;;29;RETURN
+      READ REC FROM CATEGORY, CONO:S$VALUE ELSE
+         ERRMSG = "Invalid Product Line. Try again! "
+         GOSUB 91000
+         GOTO 20030
+      END
+      ESTM.PLINE<1,MP> = S$VALUE
+   END
+20040 IF ESTM.CLR.CD<1,MP> = "" THEN
+      S$DATA(29)<S$SCR> = ""
+      SCREEN FIELD;;29
+      S$PMSG = "Paper Color :"
+      S$MAXL = 6
+      S$TYP = 1
+      SCREEN INPUT;;29;RETURN
+      READ REC FROM COLOR, CONO:S$VALUE ELSE
+         ERRMSG = "Invalid Color Code. Try again! "
+         GOSUB 91000
+         GOTO 20040
+      END
+      ESTM.CLR.CD<1,MP> = S$VALUE
+   END
+20050 IF ESTM.FINISH.CD<1,MP> = "" THEN
+      S$DATA(29)<S$SCR> = ""
+      SCREEN FIELD;;29
+      S$PMSG = "Paper Finish :"
+      S$MAXL = 6
+      S$TYP = 1
+      SCREEN INPUT;;29;RETURN
+      READ REC FROM FINISH, CONO:S$VALUE ELSE
+         ERRMSG = "Invalid Finish Code. Try again! "
+         GOSUB 91000
+         GOTO 20050
+      END
+      ESTM.FINISH.CD<1,MP> = S$VALUE
+   END
+   IF ESTM.COAT.CD<1,MP> = "" THEN
+      S$DATA(29)<S$SCR> = ""
+      SCREEN FIELD;;29
+      S$PMSG = "Coating Code (0,1,2) :"
+      S$MAXL = 1
+      S$TYP = 1; S$TYPE = 1
+      S$VALDAT = "0,1,2"
+      SCREEN INPUT;;29;RETURN
+      ESTM.COAT.CD<1,MP> = S$VALUE
+   END
+   IF ESTM.GRAIN<1,MP> = "" THEN
+      S$DATA(29)<S$SCR> = ""
+      SCREEN FIELD;;29
+      S$PMSG = "Paper Grain (L,S) :"
+      S$MAXL = 1
+      S$TYP = 1; S$VALDAT = "L,S"
+      SCREEN INPUT;;29;RETURN
+      ESTM.GRAIN<1,MP> = S$VALUE
+   END
+   RETURN
+*
+*---- CALCULATE OTHER MARKUP PERCENT BASED ON FINAL PRICE
+*
+26000 *
+   EST.BASE.QTY = EST.QTY<1,1> ; * T26651
+   CALL EST.QTY.GEN (CONO,"A",EST.KEY,"ALL")
+   EST.OM.PCT = ''
+   EST.PRICE.THOU = ''
+   EST.COST.THOU = ''
+   EST.OM.PRICE.M = ''
+   TOTAL.TCOST = ''
+   TOTAL.VCOST = ''
+   TOTAL.FCOST = ''
+   TOTAL.TSALE = ''
+   TOTAL.VSALE = ''
+   TOTAL.FSALE = ''
+   QC = DCOUNT(EST.QTY,VM)
+   DC=COUNT(EST.DEPT.COMP,VM)+(EST.DEPT.COMP#"")
+   FOR DP = 1 TO DC
+      ESTD.ID=EST.DEPT.COMP<1,DP>
+      EQTY=FIELD(ESTD.ID,"!",3)
+      LOCATE EQTY IN EST.QTY<1>,1 SETTING EP THEN
+         TOTAL.TCOST<1,EP>=TOTAL.TCOST<1,EP>+EST.DEPT.COMP.COST<1,DP>
+         TOTAL.VCOST<1,EP>=TOTAL.VCOST<1,EP>+EST.DEPT.COMP.VCOST<1,DP>
+         TOTAL.FCOST<1,EP>=TOTAL.TCOST<1,EP>-TOTAL.VCOST<1,EP>
+         TOTAL.TSALE<1,EP>=TOTAL.TSALE<1,EP>+EST.DEPT.COMP.TSALE<1,DP>
+         TOTAL.VSALE<1,EP>=TOTAL.VSALE<1,EP>+EST.DEPT.COMP.VSALE<1,DP>
+         TOTAL.FSALE<1,EP>=TOTAL.TSALE<1,EP>-TOTAL.VSALE<1,EP>
+      END
+   NEXT DP
+   EST.PRT.PRICE.THOU = 'Y'
+   EST.PRT.PRICE.UOM = 'M'
+   ECNT=COUNT(EST.QTY,VM)+1
+   FOR EP = 1 TO ECNT
+* Need to setup final price if new qty added.
+      IF (EST.FINAL.PRICE<1,EP> + 0 = 0) OR (EST.OM.ENTERED # 'Y') THEN
+         EST.OM.PCT<1,EP> = '00000'
+         EST.FINAL.PRICE<1,EP> = TOTAL.TSALE<1,EP>
+         EST.PRICE.THOU<1,EP>=INT(TOTAL.VSALE<1,EP>/(EST.QTY<1,EP>/1000)+0.5)
+         EST.COST.THOU<1,EP>=INT(TOTAL.VCOST<1,EP>/(EST.QTY<1,EP>/1000)+0.5)
+         EST.OM.PRICE.M<1,EP> = INT(EST.FINAL.PRICE<1,EP> / EST.QTY<1,EP> * 1000)
+         EST.PRICE.UOM<1,EP> = ''
+         GOSUB 26500
+      END ELSE
+         IF TOTAL.TSALE<1,EP> = "" OR TOTAL.TSALE<1,EP> = 0 THEN
+            TOTTSALE = 1   ;* FIX DIVDE BY 0 ERRORS
+         END ELSE
+            TOTTSALE = TOTAL.TSALE<1,EP>
+         END
+         EST.OM.PCT<1,EP> = INT(((EST.FINAL.PRICE<1,EP> - TOTAL.TSALE<1,EP>) / TOTTSALE) * 1000000 + .5)
+         PRICE.THOU.MKUP = TOTAL.VSALE<1,EP> + (INT(OCONV(TOTAL.VSALE<1,EP>,'MD2') * OCONV(EST.OM.PCT<1,EP>,'MD4') + .005 / 100))
+         EST.PRICE.THOU<1,EP>=INT(PRICE.THOU.MKUP/(EST.QTY<1,EP>/1000)+0.5)
+         EST.COST.THOU<1,EP>=INT(TOTAL.VCOST<1,EP>/(EST.QTY<1,EP>/1000)+0.5)
+         EST.OM.PRICE.M<1,EP> = INT(EST.FINAL.PRICE<1,EP> / EST.QTY<1,EP> * 1000)
+      END
+   NEXT EP
+   RETURN
+*
+*---- Calculate Price per UOM
+*
+26500 *
+   BEGIN CASE
+      CASE EST.PRT.PRICE.UOM = 'EA'
+*            EST.PRICE.UOM<1,EP> = INT(EST.FINAL.PRICE<1,EP> / EST.QTY<1,EP> + .5)
+         EST.PRICE.UOM<1,EP> = INT(EST.FINAL.PRICE<1,EP> / EST.QTY<1,EP> * 100 + .5)
+      CASE EST.PRT.PRICE.UOM = 'MSF'
+         WIDTH = EST.PROD.TS.WIDTH<1,1,1>
+         XXLENGTH = EST.PROD.TS.LENGTH<1,1,1>
+         PGS=EST.PROD.PG.CNT<1,1,1>
+*      SQ.FT=INT(WIDTH/10000 * XXLENGTH/10000 / 144 * PGS * 100 + 0.99)
+         SQ.FT=OCONV(WIDTH,'MD4') * OCONV(XXLENGTH,'MD4') / 144 * PGS
+         EST.PRICE.UOM<1,EP> = INT(OCONV(EST.FINAL.PRICE<1,EP>,'MD2') / (EST.QTY<1,EP> * SQ.FT / 1000) * 100 + .5)
+      CASE EST.PRT.PRICE.UOM = 'CWT'
+         PROD.QTY = EST.QTY<1,EP>
+         TOT.WGT = 0
+         FOR C = 1 TO EST.COMPONENT.CNT
+            IF EST.PROD.OS.TYPE<1,C> = "" THEN GOTO 26590
+            IF EST.PROD.OS.TYPE<1,C> # "S" THEN
+               MATREAD EQUIPMENT.REC FROM EQUIPMENT, CONO:EST.PROD.PRESS.ID<1,C> ELSE
+                  ERRMSG = "Invalid press ID - ":EST.PROD.PRESS.ID<1,C>
+                  GOSUB 91000
+                  GOTO 26590
+               END
+            END
+            WEB.CNT = EST.PROD.WEB.CNT<1,C>+0
+            IF WEB.CNT = 0 THEN WEB.CNT = 1
+            FOR MPTR = 1 TO WEB.CNT
+               MATREAD ESTPG.REC FROM ESTIMATE.PAPER.GROUP, CONO:EST.PROD.OS.USAGE<1,C,MPTR> ELSE
+                  ERRMSG = "Invalid paper group"
+                  GOSUB 91000
+                  GOTO 26580
+               END
+               BW = EST.PROD.BASIS.WT<1,C,MPTR>
+               BSW = ESTPG.WIDTH/10000
+               BSL = ESTPG.LENGTH/10000
+               PSW = EST.PROD.PS.WIDTH<1,C,MPTR>/10000
+               IF EST.PROD.OS.TYPE<1,C> = "S" THEN
+                  MAT EQUIPMENT.REC = ""
+                  PSL = EST.PROD.PS.LENGTH<1,C,MPTR>/10000
+               END ELSE
+                  PSL = EQP.PRESS.CUTOFF.LEN/10000
+               END
+               M.WEIGHT = 2 * BW * (PSW * PSL) / (BSW * BSL)
+               M.WEIGHT = INT(M.WEIGHT * 100 + 0.5) / 100
+*
+               NUMBER.UP = EST.PROD.NO.UP<1,C,1>+0
+               IF NUMBER.UP = 0 THEN NUMBER.UP = 1
+*
+               FORMS = EST.PROD.FORMS<1,C,1>+0
+               IF FORMS = 0 THEN FORMS = 1
+*
+**           NUMBER.SHEETS = EST.PROD.FIN.NO.SHT<1,C,1>+0
+**           IF NUMBER.SHEETS = 0 THEN NUMBER.SHEETS = '10000'
+*
+**           TOT.SHT = PROD.QTY * OCONV(NUMBER.SHEETS,'MD4')
+*
+**           FSL = EST.PROD.TS.LENGTH<1,C,MPTR>/10000
+**           FSW = EST.PROD.TS.WIDTH<1,C,MPTR>/10000
+**           F.WEIGHT = (M.WEIGHT * FSL * FSW) / (PSL * PSW)
+**           TOT.WGT = TOT.WGT + (TOT.SHT / 1000 * F.WEIGHT)
+               TOT.SHT = INT(PROD.QTY / NUMBER.UP * FORMS + 0.99)
+               TOT.WGT = TOT.WGT + (TOT.SHT / 1000 * M.WEIGHT)
+26580       NEXT MPTR
+26590    NEXT C
+         EST.PRICE.UOM<1,EP> = INT(EST.FINAL.PRICE<1,EP> / (TOT.WGT / 100))
+      CASE EST.PRT.PRICE.UOM = 'M'
+         EST.PRICE.UOM<1,EP> = EST.OM.PRICE.M<1,EP>
+   END CASE
+   RETURN
+*
+*
+*---- MULTI-LINE SCROLL ROUTINE
+*
+50000 *
+   START.REF.NO = 1 + INT((COMP - 1) / LINE.COUNT) * LINE.COUNT
+   IF START.REF.NO = CURR.REF.NO THEN RETURN
+   CURR.REF.NO = START.REF.NO
+   S$VAL = START.REF.NO
+   S$CNT = DCOUNT(S$DATA(13)<S$SCR>,VM)
+   S$DATA(12)<S$SCR> = ""
+   SCREEN MULTI;;C;11;12;13;14;15;16;17;18;19;20;21;22;23;24;25
+   RETURN
+*
+*---- LOAD SCREEN DATA
+*
+80000 *
+   S$DATA(1)<S$SCR> = DATE()
+80050 *
+   SCREEN DISPLAY;;ALL
+   RETURN
+*
+*---- LOAD SCREEN DATA (MULTI-LINE)
+*
+81000 *
+   S$DATA(13)<S$SCR> = ""
+   S$DATA(14)<S$SCR> = ""
+   S$DATA(15)<S$SCR> = ""
+   S$DATA(16)<S$SCR> = ""
+   S$DATA(17)<S$SCR> = ""
+   S$DATA(18)<S$SCR> = ""
+   S$DATA(19)<S$SCR> = ""
+   S$DATA(20)<S$SCR> = ""
+   S$DATA(21)<S$SCR> = ""
+   S$DATA(22)<S$SCR> = ""
+   S$DATA(23)<S$SCR> = ""
+   S$DATA(24)<S$SCR> = ""
+   S$DATA(25)<S$SCR> = ""
+   CCNT = DCOUNT(EST.PROD.DESC, VM)
+   FOR REF = 1 TO CCNT
+* T22816 v
+*        S$DATA(13)<S$SCR,REF> = INT(EST.PROD.TS.WIDTH<1,REF,1>/100+0.5)
+      S$DATA(13)<S$SCR,REF> = INT(EST.PROD.TS.WIDTH<1,REF,1>+0.5)
+      S$DATA(14)<S$SCR,REF> = "x"
+*        S$DATA(15)<S$SCR,REF> = INT(EST.PROD.TS.LENGTH<1,REF,1>/100+0.5)
+      S$DATA(15)<S$SCR,REF> = INT(EST.PROD.TS.LENGTH<1,REF,1>+0.5)
+* T22816 ^
+      S$DATA(16)<S$SCR,REF> = EST.PROD.OS.TYPE<1,REF> : EST.PROD.OS.USAGE<1,REF,1>
+      S$DATA(17)<S$SCR,REF> = EST.PROD.OS.PROD<1,REF,1>
+      S$DATA(18)<S$SCR,REF> = INT(EST.PROD.OS.WIDTH<1,REF,1>/100+0.5)
+*        IF EST.PROD.OS.TYPE<1,REF> = "R" THEN
+*           S$DATA(19)<S$SCR,REF> = ""
+*           S$DATA(20)<S$SCR,REF> = ""
+*        END ELSE
+      S$DATA(19)<S$SCR,REF> = "x"
+      S$DATA(20)<S$SCR,REF> = INT(EST.PROD.OS.LENGTH<1,REF,1>/100+0.5)
+*        END
+      IF EST.PROD.DC.CODE<1,REF> = "" THEN
+         S$DATA(21)<S$SCR,REF> = EST.PROD.PRESS.ID<1,REF>
+      END ELSE
+         S$DATA(21)<S$SCR,REF> = EST.PROD.PRESS.ID<1,REF> : "-" : EST.PROD.DC.CODE<1,REF>
+      END
+      S$DATA(22)<S$SCR,REF> = EST.PROD.NO.UP<1,REF,1>
+      S$DATA(23)<S$SCR,REF> = EST.PROD.SCRIPT<1,REF>
+* 24360      v
+      IF EST.PROD.OS.TYPE<1,COMP> = "S" THEN
+         WEB.CNT = 1 
+      END ELSE
+         WEB.CNT = EST.PROD.WEB.CNT<1,REF>+0
+      END
+      IF WEB.CNT = 0 THEN WEB.CNT = 1
+* 24360 ^
+      PQTY = 0
+      FOR MPTR = 1 TO WEB.CNT
+         PQTY = PQTY + FIELD(EST.PROD.PQTY<1,REF,MPTR>,"!",1)
+      NEXT MPTR
+      S$DATA(24)<S$SCR,REF> = PQTY
+      S$DATA(25)<S$SCR,REF> = FIELD(EST.PROD.PCST<1,REF,1>, "!", 1)
+   NEXT REF
+   RETURN
+*
+*---- FLAG ACTIVE COMPONENT
+*
+85000 *
+   IF S$DATA(12)<S$SCR,COMP> = "*" THEN RETURN
+   START.REF.NO = 1 + INT((COMP - 1) / LINE.COUNT) * LINE.COUNT
+   S$VAL = START.REF.NO
+   S$CNT = DCOUNT(S$DATA(13)<S$SCR>,VM)
+   S$DATA(12)<S$SCR> = ""
+   S$DATA(12)<S$SCR,COMP> = "*"
+   SCREEN MULTI;;S;12
+   RETURN
+*
+*---- UN-FLAG ACTIVE COMPONENT
+*
+86000 *
+*T26556 v
+*  LOCATE "*" IN S$DATA(12)<S$SCR>,1 SETTING FPTR THEN
+*     START.REF.NO = 1 + INT((FPTR - 1) / LINE.COUNT) * LINE.COUNT
+*     S$VAL = START.REF.NO
+*     S$CNT = DCOUNT(S$DATA(13)<S$SCR>,VM)
+*     S$DATA(12)<S$SCR> = ""
+*     SCREEN MULTI;;S;12
+*  END
+*  FOR L = 9 TO 19
+*     PRINT @(0,L):@(-4):
+*  NEXT L
+   SCREEN FORMAT
+   GOSUB 80050
+   GOSUB 81000
+   CURR.REF.NO = ""
+   GOSUB 50000
+*T26556 ^
+   RETURN
+*
+*---- ERROR ROUTINE
+*
+91000 *
+   ERR.TYPE = 1;CALL SI_SYSCOM(MAT SYSCOM.REC); RETURN
+92000 *
+   ERR.TYPE = 2;CALL SI_SYSCOM(MAT SYSCOM.REC); RETURN
+93000 *
+   ERR.TYPE = 3;CALL SI_SYSCOM(MAT SYSCOM.REC)
+*
+*---- END OF PROGRAM
+*
+99999 *
+   SCREEN CLEAR;;D
+   SCREEN CLOSE
+   RETURN
+END

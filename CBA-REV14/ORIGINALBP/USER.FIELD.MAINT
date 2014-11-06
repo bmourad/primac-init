@@ -1,0 +1,478 @@
+*COPY>CPYLIB>COM1
+**********************************************
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - PSSBP
+* PROGRAM     - USER.FIELD.MAINT
+* BY          - EDVARD PITKA; CBA
+* DATE        - 03/30/01
+* DESCRIPTION -
+*
+* T25704
+* T26126 adelgado 02/27/2002 * Implement the LOCKED clause for rev12.
+*ENDDOC
+**********************************************
+*
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PSS.CPYLIB>USER.FIELDS
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>GEN.XREF.SUB
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+   MAT SYSCOM.REC =  ""; SYS.TYPE = 2
+*
+*Open files
+*
+   OPEN '','VOC' TO VOC ELSE 
+      ERRMSG = "CANNOT OPEN VOC FILE"
+      GOSUB 93000
+   END
+   OPEN '','PSS.CONTROL' TO PSS.CONTROL ELSE 
+      ERRMSG = "CANNOT OPEN PSS.CONTROL FILE" 
+      GOSUB 93000
+   END
+   OPEN '','CONTROL' TO CONTROL ELSE 
+      ERRMSG = "CANNOT OPEN CONTROL FILE" 
+      GOSUB 93000
+   END
+   OPEN '','PREFIX' TO PREFIX ELSE 
+      ERRMSG = "CANNOT OPEN PREFIX FILE" 
+      GOSUB 93000
+   END
+   OPEN '','XREF.DATA' TO XREF.DATA ELSE 
+      ERRMSG = "CANNOT OPEN XREF.DATA FILE" 
+      GOSUB 93000
+   END
+   OPEN '','PSS.SCREENS' TO M.SCREENS ELSE
+      ERRMSG = "CANNOT OPEN PSS.SCREENS FILE"
+      GOSUB 93000
+   END
+   OPEN '','COMPANY' TO COMPANY ELSE
+      ERRMSG = 'CANNOT OPEN COMPANY FILE'
+      GOSUB 93000
+   END
+*
+* Get company
+*
+   CONO = ""; MAT COMP.REC = ""     
+   CALL GET.CONO(CONO,MAT COMP.REC) 
+   IF CONO = "END" THEN GOTO 99999  
+*
+* Setup SCRN.EDIT
+*
+   MAT EDIT.COM.DRIVER = ""
+   ECD.SCRN.CNT = 1
+   ECD.SCRN.NAME = "USER.FIELD.MAINT"
+   ECD.SCRN.NO = 1
+   ECD.ACTION = 1 ; CALL SCRN.EDIT
+   ESN = 1
+   MAT SCV.REC = ""
+   MAX = 7; *number or data fields
+   MAXFIELDS = 10; *number of user fields
+   OLD.START.LINE = 1
+   FLD = 1
+   BEGIN.PAGE = 5
+   LINE.SPACE = 1
+   PAGE.SIZE = 14
+*
+* MAIN PROGRAM
+*
+*
+   OLD.ARR = ""
+*T26126 v
+   MATREADU UFIELD.REC FROM PSS.CONTROL,CONO:"USER.FIELDS" LOCKED
+      ERRMSG = 'USER FIELD record is locked by user - ':GETUSERNAME(STATUS())
+      GOSUB 91000 ; GOTO 99999
+   END THEN
+*T26126 ^
+      FOR FLD=1 TO MAXFIELDS
+         SCV.REC(1)<ESN,FLD> = FLD
+         IF UF.PROCESSED<1,FLD> # "" THEN
+            OLD.ARR<1,FLD> = 1
+         END
+      NEXT FLD
+      GOSUB LOAD.SCRN.DATA
+      ECD.ACTION = 3 ; CALL SCRN.EDIT
+      FLD = 1
+      GOSUB OPTION.PROMPT
+   END ELSE
+      MAT UFIELD.REC = ""
+      DONE = 0
+      FOR FLD = 1 TO MAXFIELDS UNTIL (DONE)
+         GOSUB SCROLL.SCREEN
+         FOR PP = 1 TO MAX  UNTIL (DONE)
+            ECD.NUM = 1 ; SCV.REC(1)<ESN,FLD>=FLD
+            ECD.ACTION=5 ; ECD.SUB.NUM = FLD ; CALL SCRN.EDIT
+            ON PP GOSUB ENT.FILE,ENT.ATT,ENT.MV,ENT.SMV,ENT.CODE,ENT.CONV,ENT.ACTIVE
+         NEXT PP
+      NEXT FLD
+      IF (DONE) THEN
+         FLD -= 1
+         GOSUB CLEAR.LINE.DATA
+         GOSUB LOAD.SCRN.DATA
+         FLD = DCOUNT(UF.FILE<1>,VM)
+         GOSUB SCROLL.SCREEN
+      END
+      GOSUB OPTION.PROMPT
+   END
+*
+   GOTO 99999
+*
+**************************************************************************
+*
+*****************
+OPTION.PROMPT: 
+*****************
+*
+   PROMPT = 10
+   EOP = 0
+   LOOP
+      ECD.NUM = PROMPT ; ECD.ACTION = 4
+      CALL SCRN.EDIT
+      BEGIN CASE
+         CASE ECD.RET.VALUE = "E" OR ECD.RET.VALUE = "END"
+            EOP = 1
+         CASE ECD.RET.VALUE = "F"
+            MATWRITE UFIELD.REC ON PSS.CONTROL,CONO:"USER.FIELDS"
+            EOP = 1
+         CASE ECD.RET.VALUE = "D"
+            ECD.NUM=11 ; ECD.ACTION = 4 ; CALL SCRN.EDIT
+            IF ECD.RET.VALUE # "END" THEN
+               FLD = ECD.RET.VALUE
+               IF UF.PROCESSED#"" THEN
+                  IF FLD > DCOUNT(OLD.ARR,VM) THEN
+*              IF UF.PROCESSED<1,FLD> = "" THEN
+                     GOSUB CLEAR.LINE.DATA
+                     GOSUB LOAD.SCRN.DATA
+                     OLD.START.LINE = 0
+                     LINES = DCOUNT(UF.FILE<1>,VM)
+                     IF FLD > LINES THEN FLD = LINES
+                     IF FLD = 0 THEN FLD = 1
+                     GOSUB SCROLL.SCREEN
+                  END ELSE
+                     ERRMSG = "This field has been already processed. Deletion not allowed."
+                     GOSUB 91000
+                  END
+               END ELSE
+                  GOSUB CLEAR.LINE.DATA          
+                  GOSUB LOAD.SCRN.DATA           
+                  OLD.START.LINE = 0
+                  LINES = DCOUNT(UF.FILE<1>,VM)
+                  IF FLD > LINES THEN FLD = LINES
+                  IF FLD = 0 THEN FLD = 1
+                  GOSUB SCROLL.SCREEN
+               END
+            END 
+         CASE ECD.RET.VALUE = "A"
+            CNT = DCOUNT(UF.FILE,VM)+1
+            DONE = 0 
+            FOR FLD = CNT TO MAXFIELDS UNTIL DONE
+               GOSUB SCROLL.SCREEN
+               FOR PP = 1 TO MAX UNTIL (DONE)
+                  ON PP GOSUB ENT.FILE,ENT.ATT,ENT.MV,ENT.SMV,ENT.CODE,ENT.CONV,ENT.ACTIVE
+               NEXT PP
+            NEXT FLD
+            IF (DONE) THEN                
+               FLD -= 1
+               GOSUB CLEAR.LINE.DATA       
+               GOSUB LOAD.SCRN.DATA        
+               FLD = DCOUNT(UF.FILE<1>,VM)
+               OLD.START.LINE = 0
+               GOSUB SCROLL.SCREEN
+            END                           
+         CASE ECD.RET.VALUE = "S" OR ECD.RET.VALUE = "SF"
+            FLD = 1 + INT((FLD-1)/PAGE.SIZE)*PAGE.SIZE + PAGE.SIZE
+            IF FLD > DCOUNT(UF.FILE<1>,VM) THEN FLD = 1
+            GOSUB SCROLL.SCREEN
+         CASE ECD.RET.VALUE = "SR"
+            FLD = 1 + INT((FLD-1)/PAGE.SIZE)*PAGE.SIZE - PAGE.SIZE
+            IF FLD < 1 THEN FLD = DCOUNT(UF.FILE<1>,VM)
+            IF FLD < 1 THEN FLD = 1
+            GOSUB SCROLL.SCREEN
+         CASE ECD.RET.VALUE = "ST"
+            FLD = 1
+            GOSUB SCROLL.SCREEN
+         CASE ECD.RET.VALUE = "SB"
+            FLD = DCOUNT(UF.FILE<1>,VM)
+            IF FLD < 1 THEN FLD = 1
+            GOSUB SCROLL.SCREEN
+         CASE NUM(ECD.RET.VALUE)
+            LINES = DCOUNT(UF.FILE<1>,VM)
+            IF ECD.RET.VALUE <= (LINES+1) THEN
+               FLD = ECD.RET.VALUE
+               GOSUB SCROLL.SCREEN
+               IF UF.PROCESSED<1,FLD> = "" THEN
+                  DONE = 0 
+                  FOR PP = 1 TO MAX UNTIL (DONE)
+                     ON PP GOSUB ENT.FILE,ENT.ATT,ENT.MV,ENT.SMV,ENT.CODE,ENT.CONV,ENT.ACTIVE
+                  NEXT PP
+               END ELSE
+                  ERRMSG = "This field has been already processed. You can only de/activate it."
+                  GOSUB 91000
+                  GOSUB ENT.ACTIVE
+               END
+            END
+      END CASE
+   UNTIL (EOP) DO REPEAT
+   RETURN
+*
+***************
+ENT.FILE: 
+***************
+*
+   READ JLINKS.ARR FROM PSS.CONTROL,"JOB.LINKS" THEN
+      ECD.NUM = 2 ;  ECD.SUB.NUM = FLD
+      ECD.ACTION = 4 ; CALL SCRN.EDIT
+      BEGIN CASE
+         CASE ECD.RET.VALUE = "END"
+            DONE = 1
+         CASE ECD.RET.VALUE = "INPUT"
+            UF.FILE<1,FLD> = ECD.RET.VALUE
+            UF.ATTRIBUTE<1,FLD>= ""
+            UF.VM<1,FLD>= ""
+            UF.SVM<1,FLD>= ""
+            UF.CONV<1,FLD>= ""
+            UF.ACTIVE<1,FLD>= ""
+            GOSUB LOAD.SCRN.DATA
+            ECD.ACTION = 6 ; CALL SCRN.EDIT
+            ECD.ACTION = 3 ; CALL SCRN.EDIT
+            PP = MAX
+         CASE ECD.RET.VALUE = "???"
+            MAT GEN.XREF.REC = ""
+            GXR.NAME = "JOB.LINKS"
+            GXR.FILE = PSS.CONTROL
+            GXR.IDLIST = JLINKS.ARR
+            CALL GEN.XREF.SUB(MAT GEN.XREF.REC,PREFIX,XREF.DATA)
+            ECD.ACTION = 2 ; CALL SCRN.EDIT
+            ECD.ACTION = 3 ; CALL SCRN.EDIT
+            IF GXR.ID # "" THEN
+               UF.FILE<1,FLD> = GXR.ID
+               SCV.REC(2)<ESN,FLD> = UF.FILE<1,FLD>
+               ECD.NUM = 2 ; ECD.SUB.NUM = FLD 
+               ECD.ACTION = 5 ; CALL SCRN.EDIT
+            END ELSE
+               PP -=1
+            END
+         CASE 1
+            LOCATE  ECD.RET.VALUE IN JLINKS.ARR<1> SETTING JUNK THEN
+               UF.FILE<1,FLD> = ECD.RET.VALUE
+            END ELSE
+               ERRMSG = ECD.RET.VALUE:" IS NOT A VALID FILE."
+               GOSUB 91000
+               PP -=1
+            END
+      END CASE
+   END ELSE
+      ERRMSG = "PSS.CONTROL RECORD JOB.LINKS IS MISSING."
+      GOSUB 93000
+   END
+   RETURN
+*
+***************
+ENT.ATT: 
+***************
+*
+   ECD.NUM=4 ; ECD.SUB.NUM=FLD
+   ECD.ACTION = 4 ; CALL SCRN.EDIT
+   BEGIN CASE
+      CASE ECD.RET.VALUE = "END"                                  
+         ECD.NUM = 4 ; ECD.SUB.NUM = FLD                           
+         SCV.REC(4)<ESN,FLD> = ""; ECD.ACTION = 5; CALL SCRN.EDIT  
+         PP = 0
+      CASE NUM(ECD.RET.VALUE)
+         UF.ATTRIBUTE<1,FLD> = ECD.RET.VALUE
+   END CASE
+*
+   RETURN
+*
+***************
+ENT.MV: 
+***************
+*
+   ECD.NUM=5 ; ECD.SUB.NUM=FLD
+   ECD.ACTION = 4 ; CALL SCRN.EDIT
+   BEGIN CASE
+      CASE ECD.RET.VALUE = "END"                                  
+         ECD.NUM = 5 ; ECD.SUB.NUM = FLD                           
+         SCV.REC(5)<ESN,FLD> = ""; ECD.ACTION = 5; CALL SCRN.EDIT  
+         PP = 0
+      CASE NUM(ECD.RET.VALUE)
+         UF.VM<1,FLD> = ECD.RET.VALUE
+   END CASE
+   RETURN
+*
+***************
+ENT.SMV: 
+***************
+*
+   ECD.NUM=6 ; ECD.SUB.NUM=FLD
+   ECD.ACTION = 4 ; CALL SCRN.EDIT
+   BEGIN CASE
+      CASE ECD.RET.VALUE = "END"                                  
+         ECD.NUM = 6 ; ECD.SUB.NUM = FLD                           
+         SCV.REC(6)<ESN,FLD> = ""; ECD.ACTION = 5; CALL SCRN.EDIT  
+         PP = 0
+      CASE NUM(ECD.RET.VALUE)
+         UF.SVM<1,FLD> = ECD.RET.VALUE
+   END CASE
+   RETURN
+*
+*****************
+ENT.CODE: 
+*****************
+*
+   DO.PROMPT = 0
+   ECD.NUM = 12 ; ECD.SUB.NUM = FLD
+*
+* add a file and attribute combination as necesary
+*
+   BEGIN CASE
+      CASE UF.FILE<1,FLD> = "JOB"
+         BEGIN CASE
+            CASE UF.ATTRIBUTE<1,FLD> = 31
+               DO.PROMPT = 1
+               ECD.VALDAT = "W,S"
+               ECD.HMSG = "Please enter W for web item or S for sheet item."
+            CASE 1
+         END CASE
+      CASE 1
+   END CASE
+   IF (DO.PROMPT) THEN
+      ECD.ACTION = 4 ; CALL SCRN.EDIT
+      BEGIN CASE
+         CASE ECD.RET.VALUE = "END"
+            ECD.NUM = 12 ; ECD.SUB.NUM = FLD
+            SCV.REC(12)<ESN,FLD> = "" ; ECD.ACTION = 5; CALL SCRN.EDIT
+            PP = 0
+         CASE 1
+            UF.CODE<1,FLD> = ECD.RET.VALUE
+      END CASE
+   END
+   RETURN
+*
+***************
+ENT.CONV: 
+***************
+*
+   ECD.NUM=7 ; ECD.SUB.NUM=FLD
+   ECD.ACTION = 4 ; CALL SCRN.EDIT
+   BEGIN CASE
+      CASE ECD.RET.VALUE = "END"                                  
+         ECD.NUM = 7 ; ECD.SUB.NUM = FLD                           
+         SCV.REC(7)<ESN,FLD> = ""; ECD.ACTION = 5; CALL SCRN.EDIT  
+         PP = 0
+      CASE ECD.RET.VALUE = "" OR ECD.RET.VALUE = " "
+         UF.CONV<1,FLD>=""
+      CASE 1
+         UF.CONV<1,FLD> = ECD.RET.VALUE
+   END CASE
+   RETURN
+*
+****************
+ENT.ACTIVE: 
+****************
+*
+   ECD.NUM=8 ; ECD.SUB.NUM=FLD
+   ECD.ACTION = 4 ; CALL SCRN.EDIT
+   BEGIN CASE
+      CASE ECD.RET.VALUE = "END"                                  
+         ECD.NUM = 8 ; ECD.SUB.NUM = FLD                           
+         SCV.REC(8)<ESN,FLD> = ""; ECD.ACTION = 5; CALL SCRN.EDIT  
+         PP = 0
+      CASE 1
+         UF.ACTIVE<1,FLD> = ECD.RET.VALUE
+   END CASE
+   RETURN
+*
+****************
+CLEAR.LINE.DATA: 
+****************
+*
+   UF.FILE<1> = DELETE(UF.FILE<1>,1,FLD)
+   UF.ATTRIBUTE<1>= DELETE(UF.ATTRIBUTE<1>,1,FLD) 
+   UF.VM = DELETE(UF.VM<1>,1,FLD)
+   UF.SVM = DELETE(UF.SVM<1>,1,FLD)
+   UF.CONV = DELETE(UF.CONV<1>,1,FLD)
+   UF.ACTIVE  = DELETE(UF.ACTIVE<1>,1,FLD)
+   UF.PROCESSED  = DELETE(UF.PROCESSED<1>,1,FLD)
+   UF.CODE = DELETE(UF.CODE<1>,1,FLD)
+   RETURN
+*
+*******************
+LOAD.SCRN.DATA: 
+*******************
+*
+   SCV.REC(2)<ESN> = UF.FILE
+   SCV.REC(4)<ESN> = UF.ATTRIBUTE
+   SCV.REC(5)<ESN> = UF.VM
+   SCV.REC(6)<ESN> = UF.SVM
+   SCV.REC(7)<ESN> = UF.CONV
+   SCV.REC(8)<ESN> = UF.ACTIVE
+   SCV.REC(9)<ESN> = UF.PROCESSED
+   SCV.REC(12)<ESN> = UF.CODE
+   RETURN
+******************
+SCROLL.SCREEN: 
+******************
+   START.LINE = 1 + INT((FLD-1)/PAGE.SIZE)*PAGE.SIZE
+   LAST.LINE = START.LINE + PAGE.SIZE - 1
+*  LINES = DCOUNT(SCV.REC(2)<ESN>,VM)
+   IF LAST.LINE > MAXFIELDS THEN LAST.LINE = MAXFIELDS
+   IF START.LINE = OLD.START.LINE THEN RETURN
+   OLD.START.LINE = START.LINE
+   CNT = 1
+   FOR N = START.LINE TO LAST.LINE
+      SCV.REC(1)<ECD.SCRN.NO,N> = N
+      ECD.NUM = 1
+      ECD.SUB.NUM = N
+      ECD.ACTION = 5
+      CALL SCRN.EDIT
+      ECD.NUM = 2
+      ECD.SUB.NUM = N
+      ECD.ACTION = 5
+      CALL SCRN.EDIT
+      ECD.NUM = 4
+      ECD.SUB.NUM = N
+      ECD.ACTION = 5
+      CALL SCRN.EDIT
+      ECD.NUM = 5
+      ECD.SUB.NUM = N
+      ECD.ACTION = 5
+      CALL SCRN.EDIT
+      ECD.NUM = 6
+      ECD.SUB.NUM = N
+      ECD.ACTION = 5
+      CALL SCRN.EDIT
+      ECD.NUM = 7
+      ECD.SUB.NUM = N
+      ECD.ACTION = 5
+      CALL SCRN.EDIT
+      ECD.NUM = 8
+      ECD.SUB.NUM = N
+      ECD.ACTION = 5
+      CALL SCRN.EDIT
+      ECD.NUM = 9
+      ECD.SUB.NUM = N
+      ECD.ACTION = 5
+      CALL SCRN.EDIT
+      ECD.NUM = 12
+      ECD.SUB.NUM = N
+      ECD.ACTION = 5
+      CALL SCRN.EDIT
+      CNT = CNT + 1
+   NEXT N
+   FOR M = CNT TO PAGE.SIZE
+      SLN = BEGIN.PAGE + LINE.SPACE * MOD(M-1,PAGE.SIZE)
+      P_X  = 0 ; P_Y = SLN ; P_VALUE = "" ; P_OPT = "CL"
+      CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+   NEXT M
+   RETURN
+*
+91000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+93000 ERR.TYPE=3;CALL SYSCOM(MAT SYSCOM.REC)
+99999 *
+   ECD.ACTION=99;CALL SCRN.EDIT
+END

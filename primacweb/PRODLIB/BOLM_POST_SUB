@@ -1,0 +1,564 @@
+SUBROUTINE BOLM_POST_SUB(CONO,BOLNO,MAT BOL.REC)
+********************************************************************************
+*   Program name :- BOLM_POST_SUB
+*   Created:- 12/30/2002
+*   Author:- L. Ross
+*   REV12 - POST.BOL.SUB
+*T27917 lross 02/02/2004 * Error in handling INV errors - causes loop
+*                           error.
+* BY FAHEEM 3/3/05 FOR REV12- T27917
+*------------------------------------------------------------------------------*
+*
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE OPS.CPYLIB ORDER
+$INCLUDE PMC.CPYLIB COMP.OPS
+$INCLUDE ICS.CPYLIB FNGD.BOM
+$INCLUDE PMC.CPYLIB FISCAL
+$INCLUDE ICS.CPYLIB FNGD.ORDER.STATS
+$INCLUDE OPS.CPYLIB ORDER.DETAIL
+$INCLUDE OPS.CPYLIB BOL
+$INCLUDE OPS.CPYLIB PICK.TICKET
+$INCLUDE OPS.CPYLIB ORDER.RELEASE
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB INV.WHSE
+$INCLUDE ICS.CPYLIB INV.HIST
+$INCLUDE ICS.CPYLIB INV_AUDIT_HIST
+$INCLUDE ICS.CPYLIB CATEGORY
+$INCLUDE ICS.CPYLIB INV.CNV    
+$INCLUDE ICS.CPYLIB ICS.ID    
+$INCLUDE CPYLIB CHAR
+DIM ORG.IWH.REC(IWH.REC.SIZE)
+MAT ORG.IWH.REC = ''
+MAT IID.REC = ''
+MAT INAH.REC = ''
+*---- SETUP UNIT MEASURE CONVERSION AND DISPLAY
+ICR.CNV = "MD0"; ICR.CNV1 = "MD0,"
+ICR.DV1 = 1; ICR.MT1 = 1; ICR.DV2 = 1000
+ICR.TYPE = 3; ICR.SCAL = 0
+IF FILEINFO(CONTROL,0)=0 THEN
+  OPEN '','CONTROL' TO CONTROL ELSE
+    ERRMSG='CONTROL file is missing!'
+    GOTO 93000
+  END
+END
+IF FILEINFO(ORDER,0)=0 THEN
+  OPEN '','ORDER' TO ORDER ELSE
+    ERRMSG='ORDER file is missing!'
+    GOTO 93000
+  END
+END
+OPEN "","DAILY.BOL" TO DAILY.BOL ELSE
+  ERRMSG = "Cannot locate the DAILY.BOL file"; GOTO 93000
+END
+OPEN "","BOL" TO BOL ELSE
+  ERRMSG = "Cannot locate the BOL file"; GOTO 93000
+END
+OPEN "","PICK.TICKET" TO PICK.TICKET ELSE
+  ERRMSG = "Cannot locate the PICK.TICKET file"; GOTO 93000
+END
+OPEN "","BOL_TAG" TO BOL_TAG ELSE
+  ERRMSG = "Cannot locate the BOL_TAG file"; GOTO 93000
+END
+OPEN "","FNGD.BOM" TO FNGD.BOM ELSE
+  ERRMSG = "Cannot locate the FNGD.BOM file"; GOTO 93000
+END
+OPEN "","ORDER.DETAIL" TO ORDER.DETAIL ELSE
+  ERRMSG = "Cannot locate the ORDER.DETAIL file"; GOTO 93000
+END
+OPEN "","INV.HIST" TO INV.HIST ELSE
+  ERRMSG = "Cannot locate the INV.HIST file"; GOTO 93000
+END
+OPEN "","INVENTORY" TO INVENTORY ELSE
+  ERRMSG = "Cannot locate the INVENTORY file"; GOTO 93000
+END
+OPEN "","INV.WHSE" TO INV.WHSE ELSE
+  ERRMSG = "Cannot locate the INV.WHSE file"; GOTO 93000
+END
+OPEN "","CATEGORY" TO CATEGORY ELSE
+  ERRMSG = "Cannot locate the CATEGORY file"; GOTO 93000
+END
+OPEN "","SECURITY" TO SECURITY ELSE ERRMSG = "SECURITY FILE MISSING"; GOTO 93000
+OPEN "","CONTROL" TO CONTROL ELSE ERRMSG = "CONTROL FILE MISSING"; GOTO 93000
+OPEN "","FNGD.ORDER.STATS" TO FNGD.ORDER.STATS ELSE ERRMSG = "FNGD.ORDER.STATS FILE MISSING"; GOTO 93000
+OPEN "","ORDER.RELEASE" TO ORDER.RELEASE ELSE ERRMSG = "ORDER.RELEASE FILE MISSING"; GOTO 93000
+PKT.ID=''
+DELIM = '^'
+*
+*---- INITIALIZATION
+*
+  TODAY=DATE()
+  BOL.STATUS=""
+  OPEN.FLAG=1
+  O.R.NO=''
+  ACTION.ONE.FLG = 0      ;* T26556
+   ERRFLG=0 ;*T27917
+   BOL.ERR.LINE='' ;*T27917
+  ERRMSG=''
+  EDITMODE=1 ; UPDMODE=0
+
+*
+*---- MAIN PROCESSING
+*
+  GOSUB 1000
+*  IF ERRMSG='' THEN
+   IF ERRFLG = 0 THEN ;*T27917
+    EDITMODE=0 ; UPDMODE=1
+    GOSUB 1000
+  END ELSE
+    * T26556 v
+    IF (ACTION.ONE.FLG) THEN
+      ACTION=9 
+      CALL BOLM_OPS_UPDATE(CONO,O.R.NO,SOURCE,PERIOD,ACTION,OPEN.FLAG,ERRMSG,MAT INAH.REC,MAT ORG.IWH.REC,MAT IWH.REC,MAT IID.REC,PKT.ID)
+    END
+    * T26556 ^
+  END
+*  IF ERRMSG # '' THEN
+   IF ERRFLG THEN ;*T27917
+    GOSUB 80000
+*  BOL.STATUS=ERRMSG
+      BOL.STATUS = BOL.ERR.LINE ;*T27917
+STATUS = RBO.setProperty('','BOL_STATUS',BOL.ERR.LINE)
+  END ELSE
+    IF UPDMODE THEN GOSUB 81000
+  END
+  GOTO 99999
+*
+**************************************************************************
+***** S U B R O U T I N E S **********************************************
+**************************************************************************
+*
+  ;* update all data
+*
+1000 *
+  BCNT=DCOUNT(BOL.PROD,VM)
+*T27917 v  FOR BPTR=1 TO BCNT WHILE ERRMSG=""
+   FOR BPTR=1 TO BCNT WHILE ERRFLG=0 
+    ORD.NO=BOL.ORDER<1,BPTR>
+    ORR.ID=BOL.RELEASE<1,BPTR>
+    O.R.NO<1,1>=ORD.NO ; O.R.NO<1,2>=ORR.ID
+    PKT.ID=BOL.PKTKT<1,BPTR>
+    PROD=BOL.PROD<1,BPTR>
+    WHSE=BOL.WHSE<1,BPTR>
+    KIT =BOL.KIT<1,BPTR>
+    PROD.SEQ=BOL.SEQ<1,BPTR>
+    FIRST.TIME=1
+    LCNT=DCOUNT(BOL.LOC<1,BPTR>,SM)
+*T27917 v FOR LPTR=1 TO LCNT WHILE ERRMSG=""
+      FOR LPTR=1 TO LCNT WHILE ERRFLG=0 
+     IF BOL.POST.FLAG<1,BPTR,LPTR>="Y" THEN GOTO 1080
+      IF BOL.QTY<1,BPTR,LPTR>+0=0 THEN GOTO 1080
+      INV.ID="";IWH.ID="";IWLO.ID="";OSD.ID="";FOS.ID=""
+      SQTY=BOL.QTY<1,BPTR,LPTR>
+      RECP=BOL.RECP.NO<1,BPTR,LPTR>
+      IF PKT.ID="" THEN
+        PT=0
+        MAT PKT.REC=""
+      END ELSE
+        MATREAD PKT.REC FROM PICK.TICKET, CONO:PKT.ID ELSE
+*T27917 v ERRMSG="Cannot locate Picking Ticket#":PKT.ID; GOTO 1080
+               ERRMSG="Cannot locate Picking Ticket#":PKT.ID; GOSUB SET.ERRFLG; GOTO 1080
+        END
+        IF PKT.REL.NO="" THEN ORR.ID=PKT.REL.NO
+        PTR=DCOUNT(PKT.PROD<1>,VM) ; PT=0
+        FOR X=1 TO PTR UNTIL (PT)
+          IF (PKT.WHSE<1,X>=WHSE) AND (PKT.KIT<1,X>=KIT) AND (PKT.SEQ<1,X>=PROD.SEQ) AND (PKT.PROD<1,X>=PROD) THEN PT=X
+        NEXT X
+        IF PT THEN PKT.SHIP.QTY<1,PT>=PKT.SHIP.QTY<1,PT> + SQTY
+      END
+      IF ORR.ID="" THEN
+        MAT ORR.REC=""
+      END ELSE
+        MATREAD ORR.REC FROM ORDER.RELEASE, CONO:ORR.ID ELSE
+*T27917 v ERRMSG="Cannot locate Release#":ORR.ID; GOTO 1080
+               ERRMSG="Cannot locate Release#":ORR.ID; GOSUB SET.ERRFLG; GOTO 1080
+        END
+      END
+      MATREAD ORD.REC FROM ORDER, CONO:ORD.NO ELSE
+*T27917 v ERRMSG="Cannot locate Order#":ORD.NO; GOTO 1080
+            ERRMSG="Cannot locate Order#":ORD.NO; GOSUB SET.ERRFLG; GOTO 1080
+      END
+      IF ORD.STATUS<1,1>="CLOSED" OR ORD.STATUS<1,1>="CANCEL" THEN
+        ERRMSG="Order ":ORD.NO:" has either been closed or cancelled"
+            GOSUB SET.ERRFLG ;*T27917
+        GOTO 1080
+      END
+*
+      GOSUB UPDATE.INVENTORY
+*     GOSUB UPDATE.ORDER
+*     GOSUB UPDATE.STATISTICS
+*T27917 v
+         IF BOL.ERR.LINE<1,BPTR,LPTR> = '' THEN
+            GOSUB UPDATE.ORDER
+         END
+         IF BOL.ERR.LINE<1,BPTR,LPTR> = '' THEN
+            GOSUB UPDATE.STATISTICS
+         END
+*T27917 ^
+*
+      BEGIN CASE
+        CASE EDITMODE
+          ;*delete temporary inventory records so they would not
+          ;*be reprocessed when in update mode.
+          * T26556 v
+          IF (ACTION.ONE.FLG) THEN
+            ACTION=9
+            CALL BOLM_OPS_UPDATE(CONO,O.R.NO,SOURCE,PERIOD,ACTION,OPEN.FLAG,ERRMSG,MAT INAH.REC,MAT ORG.IWH.REC,MAT IWH.REC,MAT IID.REC,PKT.ID)
+            IF ERRMSG#"" THEN GOTO 1080
+          END
+          * T26556 ^
+*T27917 v CASE UPDMODE
+        CASE UPDMODE AND BOL.ERR.LINE<1,BPTR,LPTR> = ''
+          BOL.POST.FLAG<1,BPTR,LPTR>="Y"
+          IF OSD.FI.QTY<1,PPTR,RPTR> <= 0 THEN
+            OSD.RECP.NO=DELETE(OSD.RECP.NO,1,PPTR,RPTR)
+            OSD.FI.QTY=DELETE(OSD.FI.QTY,1,PPTR,RPTR)
+            OSD.REL.NO=DELETE(OSD.REL.NO,1,PPTR,RPTR)
+            OSD.REL.QTY=DELETE(OSD.REL.QTY,1,PPTR,RPTR)
+            OSD.P.QTY  =DELETE(OSD.P.QTY<1,PPTR,RPTR)
+          END ELSE
+            IF OSD.REL.NO<1,PPTR,RPTR>#"" AND OSD.REL.QTY<1,PPTR,RPTR> <= 0 THEN
+              OSD.REL.NO<1,PPTR,RPTR>=""
+              OSD.REL.QTY<1,PPTR,RPTR>=""
+            END
+            IF OSD.P.QTY<1,PPTR,RPTR> < 0 THEN OSD.P.QTY<1,PPTR,RPTR>=0
+          END
+          ACTION=3
+          CALL BOLM_OPS_UPDATE(CONO,O.R.NO,SOURCE,PERIOD,ACTION,OPEN.FLAG,ERRMSG,MAT INAH.REC,MAT ORG.IWH.REC,MAT IWH.REC,MAT IID.REC,PKT.ID)
+          IF ERRMSG#"" THEN GOTO 1080
+          MATWRITE FOS.REC ON FNGD.ORDER.STATS, CONO:FOS.ID
+          MATWRITE ORD.DET.REC ON ORDER.DETAIL, CONO:OSD.ID
+          MATWRITE ORD.REC ON ORDER, CONO:ORD.NO
+          MATWRITE INV.REC ON INVENTORY, CONO:INV.ID
+          IH.ID=CONO : PROD
+          MATREAD IH.REC FROM INV.HIST, IH.ID ELSE MAT IH.REC=""
+          LOCATE TODAY IN IH.DATE<1>,1 SETTING PP ELSE
+            IH.DATE<PP>=TODAY
+          END
+          IH.AMOUNT<PP>=IH.AMOUNT<PP> - SQTY
+          MATWRITE IH.REC ON INV.HIST, IH.ID
+          IF PKT.ID#"" THEN
+            MATWRITE PKT.REC ON PICK.TICKET, CONO:PKT.ID
+          END
+          IF ORR.ID#"" THEN
+            RELEASE ORDER.RELEASE, CONO:ORR.ID
+          END
+*T27917 v
+       CASE 1
+          ACTION=9
+          CALL BOLM_OPS_UPDATE(CONO,O.R.NO,SOURCE,PERIOD,ACTION,OPEN.FLAG,ERRMSG,MAT INAH.REC,MAT ORG.IWH.REC,MAT IWH.REC,MAT IID.REC,PKT.ID)
+      END CASE
+1080 *
+    NEXT LPTR
+  NEXT BPTR
+  RETURN
+80000 *
+  IF PKT.ID#"" THEN RELEASE PICK.TICKET, CONO:PKT.ID
+  IF ORR.ID#"" THEN RELEASE ORDER.RELEASE, CONO:ORR.ID
+  IF INV.ID #"" THEN RELEASE INVENTORY, CONO:INV.ID
+  IF IWH.ID #"" THEN RELEASE INV.WHSE, CONO:IWH.ID
+  IF ORD.NO #"" THEN RELEASE ORDER, CONO:ORD.NO
+  IF OSD.ID #"" THEN RELEASE ORDER.DETAIL, CONO:OSD.ID
+  IF FOS.ID #"" THEN RELEASE FNGD.ORDER.STATS, CONO:FOS.ID
+  RETURN
+*
+81000 *
+*
+  ;*
+  ;* update kit ship to one time 
+  ;*
+  MATREAD ORD.DET.REC FROM ORDER.DETAIL, CONO:OSD.ID ELSE NULL
+  KIT.ERROR=0
+  NUM.PRODS=DCOUNT(BOL.PROD,VM)
+  FOR P=1 TO NUM.PRODS
+    IF BOL.KIT<1,P>="K" THEN
+      ACTUAL.SHIP=0
+      PROD.STR=""
+      SHIP.AMT=""
+      RATIO.AMT=""
+      KITS.SHIP=BOL.QTY<1,P>
+      BILL.NUM=BOL.BOM.NUM<1,P>
+      MATREAD BOM.REC FROM FNGD.BOM, CONO:BILL.NUM ELSE
+        MAT BOM.REC=""
+      END
+      FOR P2=P+1 TO NUM.PRODS WHILE BOL.KIT<1,P2>='M'
+        IF BOL.KIT<1,P2>="M" THEN
+          IF BOL.BOM.NUM<1,P2>=BILL.NUM THEN
+            TMP.RATIO=1
+            IF BOL.KIT<1,P2>="M" THEN
+              LOCATE BOL.PROD<1,P2> IN BOM.PROD<1>,1 SETTING BOM.FND THEN
+                TMP.RATIO=BOM.Q.RATIO<1,BOM.FND> / 10000
+              END ELSE
+                TMP.RATIO=1
+              END
+            END
+            LOCATE BOL.PROD<1,P2> IN PROD.STR<1>,1 SETTING INDX THEN
+              SHIP.AMT<1,INDX>=SHIP.AMT<1,INDX> + BOL.QTY<1,P2>
+            END ELSE
+              PROD.STR=INSERT(PROD.STR,1,INDX,0,BOL.PROD<1,P2>)
+              RATIO.AMT=INSERT(RATIO.AMT,1,INDX,0,TMP.RATIO)
+              SHIP.AMT=INSERT(SHIP.AMT,1,INDX,0,BOL.QTY<1,P2>)
+            END
+          END
+        END
+      NEXT P2
+      NUM.KIT=DCOUNT(PROD.STR,VM)
+      COMPONENT.SHIP=0
+      FOR K=1 TO NUM.KIT
+        COMPONENT.SHIP=SHIP.AMT<1,K> / RATIO.AMT<1,K>
+        IF ACTUAL.SHIP=0 THEN
+          ACTUAL.SHIP=COMPONENT.SHIP
+        END
+      NEXT K
+      PTR=1
+      LOOP
+        LOCATE BOL.PROD<1,P> IN OSD.PROD<1>,PTR SETTING PFND ELSE PFND=0
+        BEGIN CASE
+          CASE PFND=0
+          CASE BOL.PROD<1,P>#OSD.PROD<1,PFND>
+            PTR=PFND+1
+          CASE BOL.WHSE<1,P>#OSD.WHSE<1,PFND>
+            PTR=PFND+1
+          CASE BOL.SEQ<1,P>#OSD.PROD.SEQ<1,PFND>
+            PTR=PFND+1
+          CASE 1
+            OSD.KIT.S.QTY<1,PFND>=OSD.KIT.S.QTY<1,PFND> + (ACTUAL.SHIP + KITS.SHIP)
+            OSD.KIT.R.QTY<1,PFND>=OSD.KIT.R.QTY<1,PFND> - (ACTUAL.SHIP + KITS.SHIP)
+            PFND=0
+        END CASE
+      WHILE PFND DO REPEAT
+    END
+  NEXT P
+  MATWRITE ORD.DET.REC ON ORDER.DETAIL, CONO:OSD.ID
+  RETURN
+*
+******************
+UPDATE.INVENTORY: 
+******************
+*
+  INV.ID=PROD
+  MATREAD INV.REC FROM INVENTORY, CONO:INV.ID ELSE
+*T27917 v ERRMSG="Cannot locate Product#":INV.ID; GOTO 1080
+      ERRMSG="Cannot locate Product#":INV.ID; GOSUB SET.ERRFLG;GOTO UPD.INV.EXIT
+  END
+  IF INV.LA.SALE < TODAY THEN
+    INV.LA.SALE=TODAY
+  END
+  MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE ELSE
+*T27917 v ERRMSG="Cannot locate Product Line#":INV.LINE; GOTO 1080
+      ERRMSG="Cannot locate Product Line#":INV.LINE; GOSUB SET.ERRFLG;GOTO UPD.INV.EXIT
+  END
+  IWH.ID=INV.ID:"!":WHSE
+  MATREAD IWH.REC FROM INV.WHSE, CONO:IWH.ID THEN
+    ;* build FIFO buckets
+    INAH.PROD=PROD ; INAH.WHSE=WHSE
+    ACTION=1
+    PERIOD=BOL.PERIOD
+    MAT ORG.IWH.REC = MAT IWH.REC
+    CALL BOLM_OPS_UPDATE(CONO,O.R.NO,SOURCE,PERIOD,ACTION,OPEN.FLAG,ERRMSG,MAT INAH.REC,MAT ORG.IWH.REC,MAT IWH.REC,MAT IID.REC,PKT.ID)
+    IF ERRMSG#"" THEN GOTO 1080
+    ACTION.ONE.FLG = 1          ;* T26556
+  END ELSE
+*T27917 v ERRMSG="Cannot locate Product/Warehouse#":IWH.ID; GOTO 1080
+      ERRMSG="Cannot locate Product/Warehouse#":IWH.ID; GOSUB SET.ERRFLG;GOTO UPD.INV.EXIT
+  END
+  IF IWH.RESV < SQTY THEN
+*T27917 v ERRMSG="Invalid Reserve quantity for Product/Warehouse#":IWH.ID; GOTO 1080
+      ERRMSG="Invalid Reserve quantity for Product/Warehouse#":IWH.ID; GOSUB SET.ERRFLG;GOTO UPD.INV.EXIT
+  END
+  LOCATE RECP IN IWH.RECP.NO<1>,1 SETTING RPOS ELSE
+    ERRMSG="Cannot locate Receipt ":RECP:" in INV.WHSE ":IWH.ID
+      GOSUB SET.ERRFLG ;*T27917
+*    GOTO 1080
+      GOTO UPD.INV.EXIT
+  END
+  IF IWH.QTY.FI<1,RPOS> < SQTY THEN
+ *T27917 v ERRMSG="Receipt Bucket quantity mismatch for Product/Warehouse#":IWH.ID; GOTO 1080
+      ERRMSG="Receipt Bucket quantity mismatch for Product/Warehouse#":IWH.ID; GOSUB SET.ERRFLG;GOTO UPD.INV.EXIT
+  END
+  IF IWH.RSV.FI<1,RPOS> > (IWH.QTY.FI<1,RPOS>-SQTY) THEN
+*T27917 v ERRMSG="Receipt Bucket Reserve quantity mismatch for Product/Warehouse#":IWH.ID; GOTO 1080
+      ERRMSG="Receipt Bucket Reserve quantity mismatch for Product/Warehouse#":IWH.ID; GOSUB SET.ERRFLG;GOTO UPD.INV.EXIT
+  END
+  RPERIOD=IWH.RECP.PERIOD<1,RPOS> ;* receipt period
+  IF RPERIOD > BOL.PERIOD THEN
+    ERRMSG="Receipt (":RECP:") was posted to period ":RPERIOD
+      GOSUB SET.ERRFLG; GOTO UPD.INV.EXIT ;*T27917
+  END
+  ;*
+  IWH.ON.HAND=IWH.ON.HAND - SQTY
+  IWH.RESV=IWH.RESV - SQTY
+  IWH.QTY.FI<1,RPOS>=IWH.QTY.FI<1,RPOS> - SQTY
+  IF IWH.LA.SALE < TODAY THEN
+    IWH.LA.SALE=TODAY
+  END
+  PICK.QTY=0
+  IF PKT.ID # "" THEN                                                  
+    IF PT THEN                                                         
+      FCNT = DCOUNT(PKT.RECP.NO<1,PT>,SVM)                               
+      FOR F = 1 TO FCNT                                                
+        IF RECP = PKT.RECP.NO<1,PT,F> THEN                               
+          IF PKT.SERIAL.LOC<1,PT,F> = BOL.LOC<1,BPTR,LPTR> THEN
+            PICK.QTY= PKT.R.QTY<1,PT,F>                                 
+          END
+        END                                                            
+      NEXT F                                                           
+    END                                                                
+  END                                                           
+  GOSUB SET.INAH
+  ACTION=2 ; SOURCE='B'
+  CALL BOLM_OPS_UPDATE(CONO,O.R.NO,SOURCE,PERIOD,ACTION,OPEN.FLAG,ERRMSG,MAT INAH.REC,MAT ORG.IWH.REC,MAT IWH.REC,MAT IID.REC,PKT.ID)
+*T27917 v
+UPD.INV.EXIT: 
+  RETURN
+*
+***************
+SET.INAH: 
+***************
+*
+  INAH.PROD=PROD
+  INAH.WHSE=WHSE
+  INAH.DATE=BOL.SHP.DATE
+  INAH.PERIOD=BOL.PERIOD
+  INAH.RECP.NO=RECP
+  INAH.LOC=BOL.LOC<1,BPTR,LPTR>
+  INAH.TRAN=BOLNO
+  INAH.SERIAL="R":INAH.RECP.NO:"!":INAH.WHSE:"!":INAH.LOC
+  INAH.QTY=-SQTY
+  INAH.ACCT=CATG.INV
+  INAH.ADJ.ACCT=CATG.ADJ
+  INAH.TYPE="S"
+  INAH.SRC="U"
+  RETURN
+*
+*******************
+UPDATE.ORDER: 
+*******************
+*
+  IF ORD.STATUS<1,1>="SHIP" AND ORD.STAT.DATE<1,1> >= TODAY THEN
+    NULL
+  END ELSE
+    ORD.STATUS=INSERT(ORD.STATUS,1,1,0,"SHIP")
+    ORD.STAT.DATE=INSERT(ORD.STAT.DATE,1,1,0,TODAY)
+  END
+  LOCATE BOLNO IN ORD.BOL<1>,1 SETTING PTR ELSE
+    ORD.BOL<1,PTR>=BOLNO
+  END
+  OSD.ID=ORD.NO:"!":BOL.SHIP.TO
+  MATREAD ORD.DET.REC FROM ORDER.DETAIL, CONO:OSD.ID ELSE
+*T27917 v ERRMSG="Cannot locate Order/Ship to#":OSD.ID; GOTO 1080
+      ERRMSG="Cannot locate Order/Ship to#":OSD.ID; GOSUB SET.ERRFLG;GOTO UPD.ORD.EXIT
+  END
+  PPTR=0
+  PCNT=DCOUNT(OSD.PROD,VM)
+  FOR PP=1 TO PCNT WHILE PPTR=0
+    BEGIN CASE
+      CASE OSD.PROD<1,PP>#PROD
+      CASE OSD.WHSE<1,PP>#WHSE
+      CASE OSD.KIT<1,PP> #KIT
+      CASE OSD.PROD.SEQ<1,PP>#PROD.SEQ
+      CASE 1
+        PPTR=PP
+    END CASE
+  NEXT PP
+  IF PPTR=0 THEN
+*T27917 v ERRMSG="Cannot locate Product/Warehouse ":IWH.ID:" for Order/Ship to#":OSD.ID; GOTO 1080
+      ERRMSG="Cannot locate Product/Warehouse ":IWH.ID:" for Order/Ship to#":OSD.ID; GOSUB SET.ERRFLG;GOTO UPD.ORD.EXIT
+  END
+  IF OSD.R.QTY<1,PPTR> < SQTY THEN
+*T27917 v ERRMSG="Reserve quantity mismatch for Order/Ship to#":OSD.ID; GOTO 1080
+      ERRMSG="Reserve quantity mismatch for Order/Ship to#":OSD.ID; GOSUB SET.ERRFLG;GOTO UPD.ORD.EXIT
+  END
+  OSD.S.QTY<1,PPTR>=OSD.S.QTY<1,PPTR> + SQTY
+  BEGIN CASE
+    CASE ORR.ID#""
+      RPOS=1
+      LOOP
+        LOCATE ORR.ID IN OSD.REL.NO<1,PPTR>,RPOS SETTING RPTR ELSE
+*T27917 v ERRMSG="Cannot locate release (":ORR.ID:") for Order/Ship to#":OSD.ID; GOTO 1080
+               ERRMSG="Cannot locate release (":ORR.ID:") for Order/Ship to#":OSD.ID; GOSUB SET.ERRFLG;GOTO UPD.ORD.EXIT
+        END
+        IF OSD.RECP.NO<1,PPTR,RPTR>#RECP THEN
+          RPOS=RPTR + 1
+        END ELSE
+          RPOS=0
+        END
+      WHILE RPOS DO REPEAT
+      IF OSD.REL.QTY<1,PPTR,RPTR> < SQTY THEN
+*T27917 v  ERRMSG="Insufficient quantity for release (":ORR.ID:") for Order/Ship to#":OSD.ID; GOTO 1080
+            ERRMSG="Insufficient quantity for release (":ORR.ID:") for Order/Ship to#":OSD.ID; GOSUB SET.ERRFLG;GOTO UPD.ORD.EXIT
+      END
+      OSD.FI.QTY<1,PPTR,RPTR>=OSD.FI.QTY<1,PPTR,RPTR> - SQTY
+      OSD.REL.QTY<1,PPTR,RPTR>=OSD.REL.QTY<1,PPTR,RPTR> - SQTY
+      IF PKT.ID#"" THEN
+        OSD.P.QTY<1,PPTR,RPTR>=OSD.P.QTY<1,PPTR,RPTR> - PICK.QTY
+      END
+    CASE 1
+      LOCATE RECP IN OSD.RECP.NO<1,PPTR>,1 SETTING RPTR ELSE
+        ERRMSG="Cannot locate receipt ":RECP:" for Order ":OSD.ID
+            GOSUB SET.ERRFLG ;*T27917
+            GOTO UPD.ORD.EXIT
+      END
+      IF OSD.FI.QTY<1,PPTR,RPTR> < SQTY THEN
+*T27917 v  ERRMSG="Insufficient quantity for receipt (":RECP:") for Order/Ship to#":OSD.ID; GOTO 1080
+            ERRMSG="Insufficient quantity for receipt (":RECP:") for Order/Ship to#":OSD.ID; GOSUB SET.ERRFLG;GOTO UPD.ORD.EXIT
+      END
+      OSD.FI.QTY<1,PPTR,RPTR>=OSD.FI.QTY<1,PPTR,RPTR> - SQTY
+      IF PKT.ID#"" THEN
+        OSD.P.QTY<1,PPTR,RPTR>=OSD.P.QTY<1,PPTR,RPTR> - PICK.QTY
+      END
+  END CASE
+UPD.ORD.EXIT: 
+  RETURN
+*
+*******************
+UPDATE.STATISTICS: 
+*******************
+*
+  ;*
+  ;* update statistics
+  ;*
+  FOS.ID=IWH.ID:"!":ORD.NO:"!":OSD.PROD.SEQ<1,PPTR>:"!":OSD.KIT<1,PPTR>
+  MATREAD FOS.REC FROM FNGD.ORDER.STATS, CONO:FOS.ID ELSE
+*T27917 v ERRMSG="Cannot locate FNGD.ORDER.STATS record#":FOS.ID; GOTO 1080
+      ERRMSG="Cannot locate FNGD.ORDER.STATS record#":FOS.ID; GOSUB SET.ERRFLG;GOTO UPD.STAT.EXIT
+  END
+  IF FOS.R.QTY < SQTY THEN
+ *T27917 v ERRMSG="Reserve quantity mismatch for FNGD.ORDER.STATS record#":FOS.ID; GOTO 1080
+      ERRMSG="Reserve quantity mismatch for FNGD.ORDER.STATS record#":FOS.ID; GOSUB SET.ERRFLG;GOTO UPD.STAT.EXIT
+  END
+  FOS.R.QTY=FOS.R.QTY - SQTY
+  FOS.S.QTY=FOS.S.QTY + SQTY
+  LOCATE RECP IN FOS.RECP.NO<1>,1 SETTING FP ELSE
+*T27917 v ERRMSG="Cannot locate Receipt Reference (":RECP:") for FNGD.ORDER.STATS record#":FOS.ID; GOTO 1080
+      ERRMSG="Cannot locate Receipt Reference (":RECP:") for FNGD.ORDER.STATS record#":FOS.ID; GOSUB SET.ERRFLG;GOTO UPD.STAT.EXIT
+  END
+  FOS.FI.ORG<1,FP>=FOS.FI.ORG<1,FP> - SQTY
+  FOS.FI.QTY<1,FP>=FOS.FI.QTY<1,FP> - SQTY
+UPD.STAT.EXIT: 
+  RETURN
+
+*
+*T27917 v
+*
+SET.ERRFLG: 
+*
+   BOL.ERR.LINE<1,BPTR,LPTR> = ERRMSG
+   ERRFLG=1
+   ERRMSG=''
+RETURN
+
+93000
+STATUS = RBO.setProperty('','ServerStatus',1)        
+STATUS = RBO.setProperty('','ServerMessage',ERRMSG) 
+
+99999 *
+RETURN
+

@@ -1,0 +1,152 @@
+   FUNCTION RECORD2XML(REC,REC.ID,CPYLIB.PATH,RETURN.LIST,MULTI.VAL.LIST)
+********************************************************************
+* REVISION - [12.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM   - PRIMAC
+* SOURCE   - XMLBP
+* PROGRAM  - RECORD2XML
+* BY       - Abdullah Jibaly, COMPUTER BUSINESS ASSOCIATES
+* DATE     - 08/06/02
+*
+* DESCRIPTION
+*
+* This function returns a record converted to xml
+* 
+* ARGUMENTS
+*
+* - REC           : Record which contains data to convert to XML format
+* - REC.ID        : (OPTIONAL) record id
+* - CPYLIB.PATH   : Path to the cpylib used in XML conversion
+*                   Can also contain the cpylib itself
+* - RETURN.LIST   : (OPTIONAL) If not null, then only return data 
+*                   that matches these cpylib field names
+* - MULTI.VAL.LIST: (OPTIONAL) Defines multi-value XML tag names
+*                   These are iterated through when outputting mv fields
+*
+*********************************************************************
+*
+   ;*
+   ;* Initialization
+   ;*
+   DEFFUN XML_FORMAT_CDATA(STR)
+   DEFFUN GET_XML_CPYLIB(PATH)
+   XML.REC  = ''
+   ;*
+   ;* Create XML root element
+   ;*
+   FINDSTR "CPYLIB" IN CPYLIB.PATH SETTING LOC ELSE
+     CPYLIB.REC = CPYLIB.PATH
+     GOSUB PARSE_XML_CPYLIB
+     GOSUB CONVERT_FIELDS_TO_XML
+     RETURN XML.REC
+   END
+   REC.NAME = FIELD(CPYLIB.PATH,"/",2)
+   SWAP "." WITH "-" IN REC.NAME
+   SWAP "_" WITH "-" IN REC.NAME
+   REC.NAME = DOWNCASE(REC.NAME)
+   IF REC.ID = '' THEN
+     XML.REC<-1> = '<':REC.NAME:'>'
+   END ELSE IF DCOUNT(REC.ID,@AM) = 1 THEN
+     XML.REC<-1> = '<':REC.NAME:' id=':QUOTE(REC.ID):'>'
+   END ELSE
+     XML.REC<-1> = '<':REC.NAME:' id=':QUOTE(REC.ID<1>):' ':REC.ID<2>:'>'
+   END
+   ;*
+   ;* Retrieve the field names from the cpylib
+   ;*
+   CPYLIB.REC = GET_XML_CPYLIB(CPYLIB.PATH)
+   GOSUB PARSE_XML_CPYLIB
+   GOSUB CONVERT_FIELDS_TO_XML
+   ;*
+   ;* Return the converted record
+   ;*
+   XML.REC<-1> = '</':REC.NAME:'>'
+   RETURN XML.REC
+*
+PARSE_XML_CPYLIB:
+   ;*
+   ;* See if any constraining field names exist, and trim the cpylib
+   ;* See if any multi value field tag names are defined and add them
+   ;*
+   FOR CPYLIB.IDX = 1 TO DCOUNT(CPYLIB.REC,@AM)
+      IF RETURN.LIST # '' THEN
+         FIND CPYLIB.REC<CPYLIB.IDX> IN RETURN.LIST SETTING LOC ELSE
+            CPYLIB.REC<CPYLIB.IDX> = ''
+         END
+      END
+      IF MULTI.VAL.LIST # '' THEN
+         FIND CPYLIB.REC<CPYLIB.IDX> IN MULTI.VAL.LIST SETTING F,V,S THEN
+            IF V = 1 THEN
+              CPYLIB.REC<CPYLIB.IDX,2> = MULTI.VAL.LIST<F,2>
+            END
+         END
+      END
+   NEXT CPYLIB.IDX
+RETURN
+*
+CONVERT_FIELDS_TO_XML:
+   ;*
+   ;* Convert each field to XML
+   ;*
+   FOR REC.IDX = 1 TO DCOUNT(REC,@AM)
+      IF REC<REC.IDX> = '' THEN CONTINUE
+      IF CPYLIB.REC<REC.IDX> = '' THEN CONTINUE
+      ;*
+      ;* See if multivalue field names are assigned,
+      ;* then use those for XML conversion
+      ;*
+      MULTI.VAL.CNT = DCOUNT(CPYLIB.REC<REC.IDX,2>,@SVM)
+      MULTI.VAL.LN = 0
+      MULTI.VAL.TO.ELEMENT = CPYLIB.REC<REC.IDX,2,1>
+      IF MULTI.VAL.CNT > 1 AND MULTI.VAL.TO.ELEMENT # '' THEN
+        ;*
+        ;* Convert multivalues to XML elements
+        ;*
+        XML.REC<-1> = '<':CPYLIB.REC<REC.IDX,1>:'>'
+        FOR VM.IDX = 1 TO DCOUNT(REC<REC.IDX>,@VM)
+          MULTI.VAL.LN = MULTI.VAL.LN + 1
+          IF MULTI.VAL.LN > MULTI.VAL.CNT THEN
+            MULTI.VAL.LN = 1
+            XML.REC<-1> = '</':CPYLIB.REC<REC.IDX,1>:'>'
+            XML.REC<-1> = '<':CPYLIB.REC<REC.IDX,1>:'>'
+          END
+          START.TAG = '<':CPYLIB.REC<REC.IDX,2,MULTI.VAL.LN>:'>'
+          END.TAG   = '</':CPYLIB.REC<REC.IDX,2,MULTI.VAL.LN>:'>'
+          XML.REC<-1> = START.TAG:XML_FORMAT_CDATA(REC<REC.IDX,VM.IDX>):END.TAG
+        NEXT VM.IDX
+        XML.REC<-1> = '</':CPYLIB.REC<REC.IDX,1>:'>'
+      END ELSE IF MULTI.VAL.CNT > 1 AND MULTI.VAL.TO.ELEMENT = '' THEN
+        ;*
+        ;* Convert multivalues to XML attributes
+        ;*
+        START.TAG = '<':CPYLIB.REC<REC.IDX,1>
+        END.TAG   = '</':CPYLIB.REC<REC.IDX,1>:'>'
+        XML.VALUE = ''
+        FOR VM.IDX = 1 TO DCOUNT(REC<REC.IDX>,@VM)
+          MULTI.VAL.LN = MULTI.VAL.LN + 1
+          IF MULTI.VAL.LN = 1 THEN
+            XML.REC<-1> = START.TAG
+            XML.VALUE   = REC<REC.IDX,VM.IDX>
+          END ELSE IF MULTI.VAL.LN > MULTI.VAL.CNT THEN
+            MULTI.VAL.LN = 1
+            XML.REC<-1> = '>':XML_FORMAT_CDATA(XML.VALUE):END.TAG
+            XML.REC<-1> = START.TAG
+            XML.VALUE   = REC<REC.IDX,VM.IDX>
+          END ELSE
+            XML.REC<-1> = ' ':CPYLIB.REC<REC.IDX,2,MULTI.VAL.LN>:'='
+            XML.REC<-1> = QUOTE(XML_FORMAT_CDATA(REC<REC.IDX,VM.IDX>))
+          END
+        NEXT VM.IDX
+        XML.REC<-1> = '>':XML_FORMAT_CDATA(XML.VALUE):END.TAG
+      END ELSE
+        ;*
+        ;* Otherwise, every multivalue uses the attribute tag
+        ;*
+        START.TAG = '<':CPYLIB.REC<REC.IDX,1>:'>'
+        END.TAG   = '</':CPYLIB.REC<REC.IDX,1>:'>'
+        FOR VM.IDX = 1 TO DCOUNT(REC<REC.IDX>,@VM)
+          XML.REC<-1> = START.TAG:XML_FORMAT_CDATA(REC<REC.IDX,VM.IDX>):END.TAG
+        NEXT VM.IDX
+      END
+   NEXT REC.IDX
+RETURN

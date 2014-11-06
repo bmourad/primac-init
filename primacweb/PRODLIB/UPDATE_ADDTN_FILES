@@ -1,0 +1,333 @@
+SUBROUTINE UPDATE_ADDTN_FILES
+********************************************************************************
+*   Program name :- 
+*   Created:- 1/12/2004
+*------------------------------------------------------------------------------*
+*
+*  Server event triggered after the database has been updated. Note that the - *
+*  API function RBO.getDBVals() should be used to retrieve values from the da- *
+*  tabase image, as values from the uObject data aware properties may have be- *
+*  en amended via the {m:WW:uObject=PreWrite} server event.
+*  
+*                                                        - *
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE ICS.CPYLIB COM.INV.MAIN  
+$INCLUDE ICS.CPYLIB COM.INV.SERIAL
+$INCLUDE ICS.CPYLIB COM.INV.LINK  
+$INCLUDE POS.CPYLIB COM.PO.INTRF
+$INCLUDE CPYLIB CHAR
+
+$DEFINE PO
+$INCLUDE PMC.CPYLIB PO
+
+$DEFINE INVENTORY
+$INCLUDE ICS.CPYLIB INVENTORY
+
+$INCLUDE ICS.CPYLIB INV.HIST
+$INCLUDE PMC.CPYLIB COMPANY
+$INCLUDE PMC.CPYLIB FISCAL
+$INCLUDE PMC.CPYLIB VEND
+$INCLUDE JCS.CPYLIB JOB
+
+$DEFINE INVRECPWHSE
+$INCLUDE ICS.CPYLIB INV_RECP_WHSE
+
+ERRMSG = ''
+OPEN '', 'CONTROL' TO CONTROL ELSE 
+	ERRMSG = 'CONTROL FILE IS MISSING';GOTO 99999
+END
+OPEN '', 'COMPANY' TO COMPANY ELSE 
+	ERRMSG = 'COMPANY FILE IS MISSING';GOTO 99999
+END
+OPEN '', 'INV.WHSE' TO INV.WHSE ELSE 
+	ERRMSG = 'INV.WHSE FILE IS MISSING';GOTO 99999
+END
+OPEN '','INVENTORY' TO INVENTORY ELSE
+	ERRMSG = 'INVENTORY FILE IS MISSING';GOTO 99999
+END
+OPEN '','INV.STATS' TO INV.STATS ELSE
+	ERRMSG = 'INV.STATS FILE IS MISSING'; GOTO 99999
+END
+OPEN '','INV.HIST' TO INV.HIST ELSE
+	ERRMSG = 'INV.HIST IS MISSING'; GOTO 99999
+END
+OPEN '','ACCRUED.LIAB.HIST' TO ACCRUED.LIAB.HIST ELSE
+	ERRMSG = 'ACCRUED.LIAB.HIST FILE IS MISSING'; GOTO 99999
+END
+OPEN '','PO' TO PO ELSE
+	ERRMSG = 'PO FILE IS MISSING'; GOTO 99999
+END
+OPEN '','JOB' TO JOB ELSE
+	ERRMSG = 'JOB FILE IS MISSING'; GOTO 99999
+END
+OPEN '','VEND' TO VEND ELSE
+	ERRMSG = 'VEND FILE IS MISSING'; GOTO 99999
+END
+OPEN '','INV.JOB.STATS' TO INV.JOB.STATS ELSE
+	ERRMSG = 'INV.JOB.STATS FILE IS MISSING' ; GOTO 99999
+END
+OPEN '','INV_RECP_WHSE' TO INV_RECP_WHSE ELSE
+	ERRMSG = 'INV_RECP_WHSE IS MISSING'; GOTO 99999
+END
+OPEN '','SHIP_VIA' TO SHIP.VIA ELSE
+	ERRMSG = 'SHIP.VIA IS MISSING'; GOTO 99999
+END
+* Insert method code here
+*DEFFUN CALC_STK_QTY(COST.QTY,MAT INV.CNV.REC,ROND,LN) ; * FOR READING 
+*DEFFUN CALC_COST_QTY(STK.QTY,MAT INV.CNV.REC,ROND,LN) ; * FOR WRITING
+
+*CALC_STK_QTY(PHS.CUR.WGHT<1,I,S>,MAT INV.CNV.REC,ROND,'')
+*CALC_COST_QTY(PHS.NEW.WGHT<1,I,S>,MAT INV.CNV.REC,ROND,'')
+
+PRODUCT_ID = ''
+Whse = ''
+QtyOnHand = ''
+SSTK.JOB.REC = ''
+*MAT INV.CNV.REC = ''
+
+STATUS = RBO.getProperty('','PMCProperty',PMCPROPERTY)
+CONO = PMCPROPERTY<1,4>
+
+MATREAD COMP.REC FROM COMPANY,CONO ELSE
+	ERRMSG = "CANNOT READ COMPANY RECORD.." : CONO
+	GOTO 99999
+END
+
+IF CO.POS = 'Y' THEN
+	OPEN '','PO' TO PO ELSE
+       	ERRMSG = 'PO FILE IS MISSING'; GOTO 99999
+      	END
+END
+IF CO.APS.R.INTRF > 1 THEN
+	OPEN '','VEND.STATS' TO VEND.STATS ELSE
+       	ERRMSG = "VEND.STATS FILE IS MISSING" ; GOTO 99999
+      	END
+      	OPEN '','VEND.PO.STATS' TO VEND.PO.STATS ELSE
+       	ERRMSG = 'VEND.PO.STATS FILE IS MISSING' ; GOTO 99999
+      	END
+      	OPEN '','VEND.PROD.STATS' TO VEND.PROD.STATS ELSE
+       	ERRMSG = 'VEND.PROD.STATS FILE IS MISSING' ; GOTO 99999
+	END
+END
+
+
+READ DIVISION.REC FROM CONTROL, CONO:"DIVISIONS" ELSE
+	ERRMSG = "DIVISION CONTROL RECORD IS MISSING" ; GOTO 99999
+END
+READ SECURITY.REC FROM CONTROL, CONO:"DIV.SECURITY" ELSE
+	ERRMSG = "DIV.SECURITY CONTROL RECORD IS MISSING"; GOTO 99999
+END
+MATREAD FISCAL.REC FROM CONTROL,CONO:"ICFISCAL" ELSE
+	ERRMSG = "CONTROL ":CONO:"'ICFISCAL' RECORD IS MISSING" ; GOTO 99999
+END
+READ PERIOD.REC FROM CONTROL,"ACCT.PERIODS" ELSE
+	PERIOD.REC = ""      
+      	PERIOD.REC<1> = "12"
+END
+NUM.PERIODS = PERIOD.REC<1>
+******************************GET ALL PO ATTRIBUTE VALUES***************************************
+**********************CHECK FOR DIVISION LEVEL SECURITY AT ASP PAGE ITSELF**********************
+STATUS = RBO.getProperty('','Req_Type',REQ.TYPE)
+STATUS = RBO.getProperty('','Period',PERIOD)
+STATUS = RBO.getProperty('','ID',ID)
+STATUS = RBO.getProperty('','DIV_OWNER',PO.DIV.OWNER)
+STATUS = RBO.getProperty('','PODate',PO.DATE)
+STATUS = RBO.getProperty('','PO_VEND_NO',PO.VEND.NO)
+*****************************GET VENDOR DETAILS***************************************
+MATREAD VEND.REC FROM VEND, CONO:PO.VEND.NO ELSE
+	MAT VEND.REC = ''
+END
+
+PO.VEND.ADD1 = VEND.ADDR1
+PO.VEND.PHONE = VEND.PHONE
+PO.VEND.ADD2 = VEND.ADDR2
+PO.VEND.ADD3 = VEND.ADDR2
+PO.VEND.ADD4 = VEND.ADDR2
+PO.VEND.PHONE = VEND.PHONE
+**************************************************************************************
+STATUS = RBO.getProperty('','PO_SHIP_WHSE',PO.SHIP.WHSE)
+STATUS = RBO.getProperty('','ShipName',PO.SHIP.NAME)
+STATUS = RBO.getProperty('','ShipAdd1',PO.SHIP.ADD1)
+STATUS = RBO.getProperty('','ShipAdd2',PO.SHIP.ADD2)
+STATUS = RBO.getProperty('','ShipAdd3',PO.SHIP.ADD3)
+STATUS = RBO.getProperty('','ShipAdd4',PO.SHIP.ADD4)
+
+STATUS = RBO.getProperty('','DUE_DATE',PO.DUE.DATE)
+STATUS = RBO.getProperty('','Requestor',PO.REQUESTOR)
+STATUS = RBO.getProperty('','PO_VDR_ORD',PO.VDR.ORD)
+STATUS = RBO.getProperty('','PO_WRIT_BY',PO.WRIT.BY)
+STATUS = RBO.getProperty('','PO_CONTACT',PO.CONTACT)
+STATUS = RBO.getProperty('','PO_SHIP_VIA',PO.SHIP.VIA) ;*DESC NOT REQUIRED
+STATUS = RBO.getProperty('','PO_FOB',PO.FOB)
+STATUS = RBO.getProperty('','PO_TERMS_DESC',PO.TERMS.DESC)
+STATUS = RBO.getProperty('','PO_TERMS_DIS',PO.TERMS.DIS)
+
+STATUS = RBO.getProperty('','PO_TERMS_DATE',PO.TERMS.DATE)
+STATUS = RBO.getProperty('','Accrue',PO.ACCRUE)
+STATUS = RBO.getProperty('','PrtFlg',PO.PRT.FLG)
+
+STATUS = RBO.getProperty('','PO_INTRAL_INT',PO.INTRAL.INT)
+STATUS = RBO.getProperty('','StDate',PO.ST.DATE)
+STATUS = RBO.getProperty('','PrevApp',PO.PREV.APP)
+
+STATUS = RBO.getProperty('','ProdNum',PO.PROD.NUM)
+STATUS = RBO.getProperty('','DelDate',PO.DEL.DATE)
+
+STATUS = RBO.getProperty('','UnitFlg',PO.UNIT.FLG)
+STATUS = RBO.getProperty('','NoOfRolls',PO.NO.OF.ROLLS)
+STATUS = RBO.getProperty('','ItemComm',PO.ITEM.COMM)
+STATUS = RBO.getProperty('','JobNo',PO.JOB.NO)
+STATUS = RBO.getProperty('','JBOnOrd',PO.JB.ONORD)
+
+STATUS = RBO.getProperty('','JBReceved',PO.JB.RECEVED)
+STATUS = RBO.getProperty('','JBOpen',PO.JB.OPEN)
+STATUS = RBO.getProperty('','ReceiptsDate',PO.DATE.RECVD)
+
+STATUS = RBO.getProperty('','BAL_RES',NEXT_SCRN_VISITED)
+
+IF NEXT_SCRN_VISITED = 1 THEN ;* THEN GET ALL CHILD CONTENT
+	PO.UNIT.FLG = ""
+	*****************THESE ARE THE VALUES IN THE NEXT SCREEN GETS UPDATED***************************
+	STATUS = RBO.getProperty('','PDT_ID',PO.PROD.NUM)
+	STATUS = RBO.getProperty('','Whse',PO.WHSE)
+	STATUS = RBO.getProperty('','GrosPrice',PO.GROS.PRICE)
+	STATUS = RBO.getProperty('','Discount',PO.DISCOUNT)
+	STATUS = RBO.getProperty('','TotOnOrd',PO.TOT.ONORD)
+	STATUS = RBO.getProperty('','TotReceived',PO.TOT.RECEVED)
+	STATUS = RBO.getProperty('','PrevReceved',PO.PREV.RECEVED)
+	STATUS = RBO.getProperty('','QtyOpen',PO.QTY.OPEN)
+	STATUS = RBO.getProperty('','TotCancel',PO.TOT.CANCEL)
+	STATUS = RBO.getProperty('','Loc',SSTK.LOC)
+	STATUS = RBO.getProperty('','RollSkid',SSTK.SERIAL)
+	STATUS = RBO.getProperty('','RecQtyStk',SSTK.QTY)
+	STATUS = RBO.getProperty('','RecQty',SSTK.QTY)
+	STATUS = RBO.getProperty('','Diameter',SSTK.DIAM)
+	SSTK.QTY = ""
+	SSTK.SHEET = ""
+	FOR I = 1 TO DCOUNT(PO.PROD.NUM,VM)
+		MATREAD INV.REC FROM INVENTORY, CONO:PO.PROD.NUM<1,I> ELSE
+			MAT INV.REC = ''
+		END
+		$INCLUDE ICS.CPYLIB INV.CNV
+		PO.UNIT.FLG<1,I> = INV.UNIT<1,1>
+		PO.DEL.DATE<1,I> = DATE()
+		PRT.INV.DESC<1,I> = INV.FULL.DESC
+		PO.PROD.TYPE<1,I> = ""
+		SSTK.TOT.REC<1,I> = 0
+		FOR J = 1 TO DCOUNT(SSTK.QTY<1,I>,SM)
+			WT.VALUE = INT(((SSTK.QTY<1,I,J>/ICR.MT1<1>)*ICR.DV1<1>)*ICR.DV2<1>+.5)
+			RQ.VALUE = INT(((WT.VALUE/ICR.DV1<1>)*ICR.MT1<1>)/ICR.DV2<1>+.5)
+			SSTK.QTY<1,I,J> = WT.VALUE
+			SSTK.SHEET<1,I,J> = RQ.VALUE
+			SSTK.TOT.REC<1,I> = SSTK.TOT.REC<1,I> + WT.VALUE
+		NEXT J
+		ALOC.TO.PROD = SSTK.TOT.REC<1,I> - SSTK.JOB.REC<1,I>
+		
+	NEXT I
+	*SSTK.JOB.QTY = DELETE(SSTK.JOB.QTY,1,LN,0)
+	*SSTK.JOB.REC = DELETE(SSTK.JOB.REC,1,LN,0)
+	*PO.PROD.TYPE = DELETE(PO.PROD.TYPE,1,LN,0)
+	***************************************************************************************************
+END
+
+SSTK.DATE = PO.DATE.RECVD
+SSTK.PERIOD = PERIOD
+
+*STATUS = RBO.getProperty('','PDT_ID',PO.ORIG.DATE)
+*STATUS = RBO.getProperty('','PDT_ID',PO.CONFIRM)
+*STATUS = RBO.getProperty('','PDT_ID',PO.JB.DEPT)
+*STATUS = RBO.getProperty('','PDT_ID',PO.JB.CCTR)
+*STATUS = RBO.getProperty('','PDT_ID',PO.ONORD.ENTER)
+*STATUS = RBO.getProperty('','PDT_ID',PO.COMMTS)
+*STATUS = RBO.getProperty('','PDT_ID',PO.PROD.TYPE)
+*STATUS = RBO.getProperty('','PDT_ID',PO.JB.UNITS)
+*STATUS = RBO.getProperty('','PDT_ID',PO.DEPT)
+*STATUS = RBO.getProperty('','PDT_ID',PO.TAXABLE)
+*STATUS = RBO.getProperty('','PDT_ID',PO.TAX.ID)
+*STATUS = RBO.getProperty('','PDT_ID',PO.REVISE)
+*STATUS = RBO.getProperty('','PDT_ID',PO.COST.ADJ)
+*STATUS = RBO.getProperty('','PDT_ID',PO.COST.CNTR)
+*STATUS = RBO.getProperty('','PDT_ID',PO.PCKSLIP)
+*STATUS = RBO.getProperty('','PDT_ID',PO.CMT.DSG)
+*STATUS = RBO.getProperty('','PDT_ID',PO.CMT.TEXT)
+*STATUS = RBO.getProperty('','PDT_ID',PO.VEND.ADD1)
+*STATUS = RBO.getProperty('','PDT_ID',PO.VEND.ADD2)
+*STATUS = RBO.getProperty('','PDT_ID',PO.VEND.ADD3)
+*STATUS = RBO.getProperty('','PDT_ID',PO.VEND.ADD4)
+*STATUS = RBO.getProperty('','PDT_ID',PO.COA.DEPT)
+*STATUS = RBO.getProperty('','PDT_ID',PO.COA.CCTR)
+*STATUS = RBO.getProperty('','PDT_ID',PO.COA)
+*STATUS = RBO.getProperty('','PDT_ID',PO.VND.PRT.DSC)
+*STATUS = RBO.getProperty('','PDT_ID',PO.VEND.ONORD)
+*STATUS = RBO.getProperty('','PDT_ID',PO.VEND.UNIT.COST)
+*STATUS = RBO.getProperty('','PDT_ID',PO.VEND.OPEN)
+*STATUS = RBO.getProperty('','PDT_ID',PO.VEND.CANCEL)
+*STATUS = RBO.getProperty('','PDT_ID',PO.VEND.RECEVED)
+*STATUS = RBO.getProperty('','PDT_ID',PO.LN.DELETE)
+*STATUS = RBO.getProperty('','PDT_ID',PO.PRICE.FLG)
+*STATUS = RBO.getProperty('','PDT_ID',PO.MAN)
+*STATUS = RBO.getProperty('','PDT_ID',PO.LAST.MAN)
+*STATUS = RBO.getProperty('','PDT_ID',PO.REQ.DATE)
+*STATUS = RBO.getProperty('','PDT_ID',PO.LOG.ROLL.FLG)
+*STATUS = RBO.getProperty('','PDT_ID',PO.SAV.ONORD)
+*STATUS = RBO.getProperty('','PDT_ID',PO.SAV.OPEN)
+*STATUS = RBO.getProperty('','PDT_ID',PO.SAV.CANCEL)
+*STATUS = RBO.getProperty('','PDT_ID',PO.REFERENCE)
+*STATUS = RBO.getProperty('','PDT_ID',PO.PPF)
+*STATUS = RBO.getProperty('','PDT_ID',PO.ACCOUNT)
+*STATUS = RBO.getProperty('','PDT_ID',PO.CORE.SIZE)
+*STATUS = RBO.getProperty('','PDT_ID',PO.STATUS)
+*STATUS = RBO.getProperty('','PDT_ID',PO.APPROVER)
+
+*STATUS = RBO.getProperty('','PDT_ID',PO.APP.LEVEL)
+*STATUS = RBO.getProperty('','PDT_ID',PO.LEVEL.STATUS)
+
+STATUS = RBO.getProperty('','PDT_ID',PRODUCT_ID)
+STATUS = RBO.getProperty('','PDT_Whse',Whse)
+STATUS = RBO.getProperty('','PDT_QtyOnHand',QtyOnHand)
+
+*STATUS = RBO.setProperty('','ServerMessage','PRODUCT ID -' : PRODUCT_ID : '--WHSE - ' : Whse : 'QTY ON HAND-' : QtyOnHand)
+*RETURN
+**********************PO.DEL.DATE IS PART OF 1ST GRID IN NEXT SCREEN, IT IS TODAYS DATE IF VISITED ELSE OLD DATE VALUE.**********
+
+
+MCNT = COUNT(PO.JOB.NO,VM) + (PO.JOB.NO # '')
+FOR M = 1 TO MCNT
+	SCNT = COUNT(PO.JOB.NO<1,M>,SVM) + (PO.JOB.NO<1,M> # '')
+      	FOR S = 1 TO SCNT
+       	MATREAD JOB.REC FROM JOB, CONO : PO.JOB.NO<1,M,S> ELSE
+            		JOB.CUST = STR('?',8)
+         	END
+         	SSTK.CUST<1,M,S> = JOB.CUST
+         	SSTK.JOB.ALC<1,M> = SSTK.JOB.ALC<1,M> + PO.JB.OPEN<1,M,S>
+	NEXT S
+NEXT M
+
+MATREAD VEND.REC FROM VEND , CONO : PO.VEND.NO ELSE
+	MAT VEND.REC = ''
+      	VEND.DESC = 'UNKNOWN'
+END
+
+
+
+*STATUS = RBO.setProperty('','ServerMessage','IWH.ON.HAND---' : VALUE)
+
+99999*
+IF ERRMSG # '' THEN 
+	STATUS = RBO.setProperty('','ServerStatus','1')
+	STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+END ELSE
+	STATUS = RBO.setProperty('','ServerStatus','')
+END
+
+* End of method code
+RETURN

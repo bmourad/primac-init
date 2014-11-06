@@ -1,0 +1,333 @@
+*********************************************************************
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - PRSBP
+* PROGRAM     - POST.DAILY.HOURS
+* AUTHOR      - NICK AMENDOLA, COMPUTER BUSINESS ASSOCIATES
+* DATE        - 08/19/85
+* DESCRIPTION -
+* Post hours captured by Job Costing to the payroll input files. Overtime
+* is calculated if the appropriate flag is set in the Company file.
+*ENDDOC
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>EMPLOYEE
+*COPY>PRS.CPYLIB>DAILY.HOURS
+*COPY>PRS.CPYLIB>PAYREG
+*COPY>CPYLIB>CHAR
+*
+*---- DEFINE VARIABLES
+*
+      DIM SAVE.TBL(20)
+      EQU SAVE.DIV                     TO SAVE.TBL(1)
+      EQU SAVE.DEPT                    TO SAVE.TBL(2)
+      EQU SAVE.REG                     TO SAVE.TBL(3)
+      EQU SAVE.OT                      TO SAVE.TBL(4)
+      EQU SAVE.DT                      TO SAVE.TBL(5)
+      EQU SAVE.REG.NON                 TO SAVE.TBL(6)
+      EQU SAVE.OT.NON                  TO SAVE.TBL(7)
+      EQU SAVE.DT.NON                  TO SAVE.TBL(8)
+      EQU SAVE.REG.TOT                 TO SAVE.TBL(9)
+      EQU SAVE.OT.TOT                  TO SAVE.TBL(10)
+      EQU SAVE.DT.TOT                  TO SAVE.TBL(11)
+      EQU SAVE.REG.TOT.NON             TO SAVE.TBL(12)
+      EQU SAVE.OT.TOT.NON              TO SAVE.TBL(13)
+      EQU SAVE.DT.TOT.NON              TO SAVE.TBL(14)
+      EQU SAVE.CCTR                    TO SAVE.TBL(15)
+*
+*---- SET-UP
+*
+      PROMPT ""
+      DETAIL.BY.DEPT.WORKED = 1        ;********  MAY CHANGE FOR CBA CUSTOMER
+      PROCREAD X ELSE
+         ERRMSG = "MUST BE EXECUTED FROM A PROC"
+         GOSUB 90000
+         STOP
+      END
+      CONO = X<1>
+      CO.NAME = X<2>
+      END.DATE = X<3>
+      BATCH.NO = X<4>
+      BATCH.DAYS = X<5>
+      BATCH.CYCLE = X<6>
+      BEGIN CASE
+      CASE BATCH.CYCLE = "W"
+         BATCH.WEEKS = 1000
+      CASE BATCH.CYCLE = "B"
+         BATCH.WEEKS = 2000
+      CASE BATCH.CYCLE = "S"
+         BATCH.WEEKS = 2167
+      CASE BATCH.CYCLE = "M"
+         BATCH.WEEKS = 4334
+      CASE 1
+         ERRMSG = "INVALID PAY CYCLE ENTERED"
+         GOSUB 90000
+         STOP
+      END CASE
+      ERROR.FLG = 0
+*
+*---- OPEN ALL FILES
+*
+      OPEN "","COMPANY" TO COMPANY ELSE
+         ERRMSG = "CANNOT OPEN COMPANY FILE"
+         GOSUB 90000
+         STOP
+      END
+      OPEN "","DAILY.HOURS" TO DAILY.HOURS ELSE
+         ERRMSG = "CANNOT OPEN DAILY.HOURS FILE"
+         GOSUB 90000
+         STOP
+      END
+      OPEN "","EMPLOYEE" TO EMPLOYEE ELSE
+         ERRMSG = "CANNOT OPEN EMP FILE"
+         GOSUB 90000
+         STOP
+      END
+      OPEN "","PAYREG" TO PAYREG ELSE
+         ERRMSG = "CANNOT OPEN PAYREG FILE"
+         GOSUB 90000
+         STOP
+      END
+*
+*---- INITIALIZATION
+*
+      MATREAD COMP.REC FROM COMPANY, CONO ELSE
+         ERRMSG = "CANNOT LOCATE COMPANY RECORD - ":CONO
+         GOSUB 90000
+         STOP
+      END
+      EMP = ""
+      DIV = ""
+      DEPT = ""
+      CCTR = ""
+      MAT SAVE.TBL = ""
+      SAVE.CNT = 0
+*
+*---- MAIN PROCESSING
+*
+100*
+      READNEXT ID ELSE
+         IF SAVE.CNT > 0 THEN GOSUB 1000
+         IF ERROR.FLG THEN ERRMSG = "YOU NEED TO RUN THE POSTING ERROR REPORT"; GOSUB 90000
+         GOTO 99999
+      END
+      MATREADU DHR.REC FROM DAILY.HOURS, ID ELSE
+         RELEASE DAILY.HOURS, ID
+         GOTO 100
+      END
+      IF EMP # FIELD(ID,"!",1)[4,99] THEN
+         IF SAVE.CNT > 0 THEN GOSUB 1000
+         MAT SAVE.TBL = ""
+         SAVE.CNT = 0
+         POST.ERROR = ""
+         EMP = FIELD(ID,"!",1)[4,99]
+         MATREAD EMP.REC FROM EMPLOYEE, CONO:EMP ELSE
+            POST.ERROR = "EMPLOYEE NOT ON FILE"
+         END
+         BEGIN CASE
+         CASE POST.ERROR  # ''
+         CASE EMP.STATUS = "S"
+            POST.ERROR = "SALARIED EMPLOYEE"
+         CASE EMP.STATUS = "H"
+            NULL
+         CASE 1
+            POST.ERROR = "INVALID EMPLOYEE TYPE"
+         END CASE
+         IF POST.ERROR # '' THEN
+            DHR.STATUS = POST.ERROR
+            MATWRITE DHR.REC ON DAILY.HOURS,ID
+            ERROR.FLG = 1
+            GOTO 100
+         END
+         GOSUB 500
+         IF POST.ERROR = "" AND PRIOR.BATCH # "" AND PRIOR.BATCH # BATCH.NO THEN
+            POST.ERROR = "BATCH MISMATCH"
+         END
+         IF POST.ERROR = "" THEN
+            PRINT @(0,21):"PROCESSING EMPLOYEE NUMBER : ":EMP:
+         END
+      END
+      IF EMP.PAY.CYCLE # BATCH.CYCLE THEN GOTO 100
+      IF DETAIL.BY.DEPT.WORKED THEN
+         DIV = FIELD(ID,"!",2)
+         DEPT = FIELD(ID,"!",3)
+         CCTR = FIELD(ID,"!",4)
+      END ELSE
+         DIV = EMP.DIV
+         DEPT = EMP.DEPT
+         CCTR = EMP.COST.CNTR
+      END
+      IF POST.ERROR = "" THEN
+         DHR.STATUS = "POSTED"
+      END ELSE
+         DHR.STATUS = POST.ERROR
+         ERROR.FLG = 1
+      END
+      MATWRITE DHR.REC ON DAILY.HOURS, ID
+      IF DHR.STATUS # "POSTED" THEN GOTO 100
+*
+*---- ACCUMULATE EMPLOYEE HOURS
+*
+200*
+      SV = 0
+      FOR S = 1 TO SAVE.CNT UNTIL SV > 0
+         IF SAVE.DIV<S> = DIV AND SAVE.DEPT<S> = DEPT AND SAVE.CCTR<S> = CCTR THEN SV = S
+      NEXT S
+      IF SV = 0 THEN
+         SAVE.CNT = SAVE.CNT + 1
+         SV = SAVE.CNT
+         SAVE.DIV<SV> = DIV
+         SAVE.DEPT<SV> = DEPT
+         SAVE.CCTR<SV> = CCTR
+      END
+      SAVE.REG<SV> = SAVE.REG<SV> + DHR.REG
+      SAVE.OT<SV> = SAVE.OT<SV> + DHR.OT
+      SAVE.DT<SV> = SAVE.DT<SV> + DHR.DT
+      SAVE.REG.NON<SV> = SAVE.REG.NON<SV> + DHR.REG.NON
+      SAVE.OT.NON<SV> = SAVE.OT.NON<SV> + DHR.OT.NON
+      SAVE.DT.NON<SV> = SAVE.DT.NON<SV> + DHR.DT.NON
+      SAVE.REG.TOT<SV> = SAVE.REG.TOT<SV> + DHR.REG
+      SAVE.OT.TOT<SV> = SAVE.OT.TOT<SV> + DHR.OT
+      SAVE.DT.TOT<SV> = SAVE.DT.TOT<SV> + DHR.DT
+      GOTO 100
+*
+*---- ACCUMULATE PRIOR PAYROLL HOURS
+*
+500*
+      AVAL.ISSUE = ""
+      UPD.ISSUE = 0
+      PRIOR.HRS = 0
+      PRIOR.BATCH = ""
+      FOR ISSUE = 1 TO 20
+         MATREAD PAY.REC FROM PAYREG, CONO:EMP:ISSUE ELSE
+            AVAL.ISSUE<-1> = ISSUE
+            GOTO 588
+         END
+         IF PAY.STATUS = "" THEN
+            BEGIN CASE
+            CASE UPD.ISSUE = 0
+               UPD.ISSUE = ISSUE
+               PRIOR.BATCH = PAY.BATCH.NO
+            CASE PRIOR.BATCH # BATCH.NO AND PAY.BATCH.NO = BATCH.NO
+               PRIOR.BATCH = PAY.BATCH.NO
+               UPD.ISSUE = ISSUE
+            END CASE
+            FOR R = 1 TO PAY.RECORDS
+               PRIOR.HRS = PRIOR.HRS + PAY.HOURS<1,R,1>
+               PRIOR.HRS = PRIOR.HRS + PAY.HOURS<1,R,2>
+               PRIOR.HRS = PRIOR.HRS + PAY.HOURS<1,R,3>
+               PRIOR.HRS = PRIOR.HRS + PAY.HOURS<1,R,4>
+               PRIOR.HRS = PRIOR.HRS + PAY.HOURS<1,R,5>
+               PRIOR.HRS = PRIOR.HRS + PAY.HOURS<1,R,6>
+               PRIOR.HRS = PRIOR.HRS + PAY.HOURS<1,R,7>
+               PRIOR.HRS = PRIOR.HRS + PAY.HOURS<1,R,8>
+               PRIOR.HRS = PRIOR.HRS + PAY.HOURS<1,R,9>
+               PRIOR.HRS = PRIOR.HRS + PAY.HOURS<1,R,10>
+               PRIOR.HRS = PRIOR.HRS + PAY.HOURS<1,R,11>
+            NEXT R
+         END
+588*
+      NEXT II
+      IF UPD.ISSUE = 0 THEN
+        ACNT = COUNT(AVAL.ISSUE,AM) + (AVAL.ISSUE # "")
+        FOR II = 1 TO ACNT UNTIL UPD.ISSUE > 0
+          IF AVAL.ISSUE<II> > 0 AND AVAL.ISSUE<II> < 21 THEN UPD.ISSUE = AVAL.ISSUE<II>
+        NEXT II
+        IF UPD.ISSUE = 0 THEN POST.ERROR = "NO AVAILABLE CHECKS"
+      END
+      RETURN
+*
+*---- CALCULATE OVERTIME IF REQUIRED
+*
+1000*
+      IF CO.CALC.JCS.OT = "Y" THEN
+         TOT.HRS = PRIOR.HRS
+         FOR SV = 1 TO SAVE.CNT
+            HRS = SAVE.REG<SV>+SAVE.OT<SV>+SAVE.DT<SV>
+            HRS = HRS + SAVE.REG.NON<SV>+SAVE.OT.NON<SV>+SAVE.DT.NON<SV>
+            SAVE.REG<SV>="";SAVE.OT<SV>="";SAVE.DT<SV>=""
+            SAVE.REG.NON<SV>="";SAVE.OT.NON<SV>="";SAVE.DT.NON<SV>=""
+            BEGIN CASE
+            CASE TOT.HRS >= 4000
+               SAVE.OT<SV> = HRS
+            CASE TOT.HRS + HRS > 4000
+               SAVE.REG<SV> = 4000 - TOT.HRS
+               SAVE.OT<SV> = TOT.HRS + HRS - 4000
+            CASE 1
+               SAVE.REG<SV> = HRS
+            END CASE
+            TOT.HRS = TOT.HRS + HRS
+         NEXT SV
+      END
+*
+*---- UPDATE PAYROLL INPUT FILE
+*
+1400*
+      MATREADU PAY.REC FROM PAYREG, CONO:EMP:UPD.ISSUE ELSE
+         MAT PAY.REC = ""
+         PAY.CONO = CONO
+         PAY.DIV = DIV
+         PAY.DEPT = DEPT
+         PAY.EMP = EMP
+         PAY.ISSUE = UPD.ISSUE
+         PAY.BATCH.NO = BATCH.NO
+         PAY.DAYS = BATCH.DAYS
+         PAY.WEEKS = BATCH.WEEKS
+         PAY.RATE = EMP.RATE
+         PAY.TOT.INC = 0
+         PAY.MISC.DED = "Y"
+         PAY.SHIFT = EMP.SHIFT
+         PAY.COST.CNTR = CCTR
+      END
+*
+      FOR SV = 1 TO SAVE.CNT
+         DIV = SAVE.DIV<SV>
+         DEPT = SAVE.DEPT<SV>
+         CCTR = SAVE.CCTR<SV>
+         FND = 0
+         FOR R = 1 TO PAY.RECORDS UNTIL FND
+            IF PAY.DIV<1,R> = DIV AND PAY.DEPT<1,R> = DEPT AND PAY.COST.CNTR<1,R> = CCTR THEN FND = R
+         NEXT R
+         IF FND > 0 THEN
+            R = FND
+         END ELSE
+            PAY.RECORDS = PAY.RECORDS + 1
+            R = PAY.RECORDS
+            PAY.DIV<1,R> = DIV
+            PAY.DEPT<1,R> = DEPT
+            PAY.RATE<1,R> = EMP.RATE
+            PAY.SHIFT<1,R> = EMP.SHIFT
+            PAY.COST.CNTR<1,R> = CCTR
+         END
+         PAY.HOURS<1,R,1> = PAY.HOURS<1,R,1> + SAVE.REG<SV>
+         PAY.HOURS<1,R,2> = PAY.HOURS<1,R,2> + SAVE.OT<SV> + SAVE.DT<SV>
+         PAY.HOURS<1,R,8> = PAY.HOURS<1,R,8> + SAVE.REG.NON<SV>
+         PAY.HOURS<1,R,9> = PAY.HOURS<1,R,9> + SAVE.OT.NON<SV> + SAVE.DT.NON<SV>
+         PAY.TOT.HRS<1,R> = PAY.TOT.HRS<1,R> + SAVE.REG<SV>+SAVE.OT<SV>+SAVE.DT<SV>
+         PAY.TOT.HRS<1,R> = PAY.TOT.HRS<1,R> + SAVE.REG.NON<SV>+SAVE.OT.NON<SV>+SAVE.DT.NON<SV>
+         N2 = COUNT(PAY.HOURS<1,R>,SM) + 1
+         FOR N = 1 TO N2
+            IF PAY.HOURS<1,R,N> = 0 THEN PAY.HOURS<1,R,N> = ""
+         NEXT N
+      NEXT SV
+*
+      MATWRITE PAY.REC ON PAYREG, CONO:EMP:UPD.ISSUE
+      RETURN
+*
+*---- ERROR ROUTINE
+*
+90000*
+      PRINT @(0,23):ERRMSG:
+      INPUT REPLY:
+      PRINT @(0,23):CL:
+      RETURN
+*
+*---- END OF PROGRAM
+*
+99999*
+      STOP
+   END

@@ -1,0 +1,138 @@
+SUBROUTINE ARMCRM_UPDATE
+********************************************************************************
+*   Program name :- ARMCRM_UPDATE
+*   Created:- 01/09/2003
+*   Performs the updates to DAILY.CASH & CASH.HIST files for MISC CASH REC.
+*------------------------------------------------------------------------------*
+*
+* In Properties:
+* --------------
+*
+*
+* Out Properties:
+* ---------------
+*
+********************************************************************************
+
+* Insert method code here
+$INCLUDE WWINSERT RBO.H
+$INCLUDE ARS.CPYLIB DAILY.CASH
+$INCLUDE ARS.CPYLIB CASH.HIST
+$INCLUDE CPYLIB CHAR
+
+ERRMSG = ''
+
+
+* Open files
+OPEN '','CONTROL' TO CONTROL ELSE
+   ERRMSG='Cannot open CONTROL file!'
+   GOTO 93000
+END
+OPEN '','DAILY.CASH' TO DAILY.CASH ELSE
+   ERRMSG='Cannot open DAILY.CASH file!'
+   GOTO 93000
+END
+OPEN '','DAILY.CASH.TAG' TO DAILY.CASH.TAG ELSE
+   ERRMSG='Cannot open DAILY.CASH.TAG file!'
+   GOTO 93000
+END
+OPEN '','CASH.HIST' TO CASH.HIST ELSE
+   ERRMSG='Cannot open CASH.HIST file!'
+   GOTO 93000
+END
+
+* Get ID
+STATUS = RBO.getProperty('','ID',ID)
+
+* Get CONO
+CONO=ID[1,3]
+
+READ DIVISION.REC FROM CONTROL, CONO:"DIVISIONS" ELSE
+   ERRMSG = "DIVISIONS CONTROL RECORD IS MISSING"
+   GOTO 93000
+END
+READ SECURITY.REC FROM CONTROL, CONO:"DIV.SECURITY" ELSE
+   SECURITY.REC = ''
+END
+*
+READ ARCMON FROM CONTROL, CONO:"ARCFISCAL" ELSE
+   ERRMSG = "ARCFISCAL RECORD IS MISSING FROM CONTROL"; GOTO 93000
+END
+STATUS = RBO.getProperty('','DC_DIV',DC.DIV)
+DIV.CODE = DC.DIV<1,1>
+IF SECURITY.REC<1> = "Y" AND SECURITY.REC<2> = "Y" THEN
+   LOCATE '00' IN DC.DIV<1>,1 SETTING FND ELSE FND = 0
+   IF FND THEN
+      ERRMSG = " DIVISION '00' INVALID WHEN DIVISION-LEVEL POSTING & CLOSING IS SELECTED"
+      GOTO 93000
+   END
+   LOCATE DIV.CODE IN DIVISION.REC<1>,1 SETTING POS ELSE
+      ERRMSG = "Division ":DIV.CODE:" not found in DIVISIONS Control Record"
+      GOTO 93000
+   END
+END ELSE
+   POS = 1
+END
+
+PERIOD = ARCMON<1,POS>
+SAVE.DV = DC.DIV
+* Get all properties
+STATUS = RBO.getProperty('','CH_AMT',CH.AMT)
+CH.AMT = ICONV(CH.AMT,'MD2')
+STATUS = RBO.getProperty('','CH_BALANCE',APPLY.AMT)
+APPLY.AMT = ICONV(APPLY.AMT,'MD2')
+MATREAD DC.REC FROM DAILY.CASH, ID THEN
+   ERRMSG='DAILY.CASH record ':ID:' already exists - cannot File!'
+   GOTO 93000
+END ELSE
+   MAT DC.REC = ''; MAT CHR.REC = ''
+END
+IF APPLY.AMT+0 = 0 AND CH.AMT+0 # 0 THEN
+   STATUS = RBO.getProperty('','DC_BANK_ACCT',DC.BANK.ACCT)
+   STATUS = RBO.getProperty('','DC_CASH_APPL',DC.CASH.APPL)
+   STATUS = RBO.getProperty('','DC_AMT',DC.AMT)
+   STATUS = RBO.getProperty('','DC_ACCT',DC.ACCT)
+   STATUS = RBO.getProperty('','DC_DESC',DC.DESC)
+   STATUS = RBO.getProperty('','CH_NUM',DC.CHECK)
+   STATUS = RBO.getProperty('','DC_DEPT',DC.DEPT)
+   STATUS = RBO.getProperty('','DC_CCTR',DC.CCTR)
+   DC.INVOICE = 'MISC'
+   DC.CASH = CH.AMT
+   DC.DIV = SAVE.DV
+   FOR I = 1 TO DCOUNT(DC.CASH.APPL,VM)
+     DC.CASH.APPL<1,I> = ICONV(DC.CASH.APPL<1,I>,'MD2')
+     DC.AMT<1,I> = ICONV(DC.AMT<1,I>,'MD2')
+   NEXT I
+   MATWRITE DC.REC ON DAILY.CASH , ID
+   TAG = ''
+   WRITE TAG ON DAILY.CASH.TAG , ID
+   CHR.CUST = 'MISC'
+   CHR.CASH = DC.CASH
+   CHR.INVOICE = DC.INVOICE
+   CHR.CASH.APPL = DC.CASH.APPL
+   CHR.GL.AMT = DC.AMT
+   CHR.GL.NO = DC.ACCT
+   CHR.MON = PERIOD
+   CHR.DIV = DC.DIV
+   CHR.DEPT = DC.DEPT
+   CHR.CCTR = DC.CCTR
+   CHR.MISC.DESC = DC.DESC
+   CHR.BANK.NO  = DC.BANK.ACCT
+   CH.NUM = DC.CHECK 'R%6'
+   CHR.KEY = OCONV(ID,'G0!2')
+   CHR.KEY := "!":CH.NUM:"!":FIELD(ID,"!",3)
+   MATWRITE CHR.REC ON CASH.HIST, CHR.KEY
+END ELSE
+   ERRMSG = "CAN'T FILE WHEN BALANCE IS NOT EQUAL TO ZERO";GOTO 93000
+END
+GOTO 99999
+*
+
+93000 
+IF ERRMSG THEN
+   CALL RBO_ERROR_SUB(ERRMSG)
+END
+
+* End of method code
+99999 
+RETURN

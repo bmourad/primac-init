@@ -1,0 +1,132 @@
+  SUBROUTINE INVINQ_J_FNGD_READ
+*********************************************************************
+*
+* REVISION - [12.0]
+*
+* PROGRAM  - INVINQ_J_FNGD_READ
+*
+* AUTHOR   - ALEJANDRO DELGADO
+*
+* DATE     - 09/30/2002
+*
+* DESCRIPTION
+*
+* This program builds the data from INVENTORY file to load into 
+* Jobs Manufacture / Allocated Inquiry screen.
+*
+*********************************************************************
+*
+*---- FILE COPY STATEMENTS
+*
+  $INCLUDE WWINSERT RBO.H
+  $INCLUDE PMC.CPYLIB CUSTOMER
+  $INCLUDE ICS.CPYLIB INVENTORY
+  $INCLUDE ICS.CPYLIB FNGD.STATS
+  $INCLUDE ICS.CPYLIB FNGD.JOB.STATS
+  $INCLUDE ICS.CPYLIB INV.CNV
+  $INCLUDE CPYLIB>FILE.VARS
+  $INCLUDE CPYLIB CHAR
+*
+*---- INITIALIZATION
+*
+ * TEST = '#'
+
+  ERRMSG = RBO.getProperty('','ID',PRODUCT.ID)
+  ERRMSG = RBO.getProperty('','WHSE_ID',WHSE.ID)
+  CONO = PRODUCT.ID[1,3]
+  PRODUCT.ID = PRODUCT.ID[4,99]
+
+*T499 $INCLUDE ICSBP INV.UM.CNV
+
+  ERRMSG = ''
+  *
+  ERRMSG = "" ; IN_PARAM = "" ; OUT_PARAM = ""
+  IN_PARAM<1,1> = 'INVENTORY'
+  IN_PARAM<1,2> = 'FNGD.STATS'
+  IN_PARAM<1,3> = 'FNGD.JOB.STATS'
+  IN_PARAM<1,4> = 'JOB'
+  IN_PARAM<1,5> = 'CUSTOMER'
+  CALL GetInvOpenFiles(ERRMSG,IN_PARAM,OUT_PARAM,MAT FILE.VARS)
+  IF ERRMSG # "" THEN GOTO SET.ERROR
+  MATREAD INV.REC FROM INVENTORY, CONO:PRODUCT.ID ELSE
+    ERRMSG = 'Inventory is not on file.  Try again'
+    GOTO SET.ERROR
+  END
+$INCLUDE ICSBP INV.UM.CNV ;*T499
+  IWH.ID = CONO:PRODUCT.ID:'!':WHSE.ID
+* TEST = TEST : "~" : IWH.ID
+* STATUS = RBO.setProperty('','ServerMessage',TEST )
+*RETURN
+
+
+  MATREAD FGS.REC FROM FNGD.STATS, IWH.ID ELSE MAT FGS.REC = ''
+  ERRMSG = "" ; IN_PARAM = "" ; OUT_PARAM = "" ; MAT INV.CNV.REC = ""
+  CALL GetInvUMCnv(ERRMSG,IN_PARAM,OUT_PARAM,MAT INV.CNV.REC,MAT INV.REC)
+*
+*---- PROCESSING
+*
+  FNGD.JOB = '' ; FNGD.CUST = '' ; FNGD.DATE = ''
+  FNGD.CUST.NAME = '' ; FNGD.ORD = ''
+  FNGD.M.QTY = '' ; FNGD.A.QTY = '' ; FNGD.V.QTY = ''
+  TOT.M.QTY = '' ; TOT.A.QTY = '' ; TOT.V.QTY = ''
+  LN.CNT = DCOUNT(FGS.JOB,VM) 
+  FOR I = 1 TO LN.CNT
+    MATREAD FJS.REC FROM FNGD.JOB.STATS, IWH.ID:"!":FGS.JOB<1,I> ELSE MAT FJS.REC = ""
+    FNGD.CUST<1,I> = FJS.CUST
+    MATREAD CUST.REC FROM CUSTOMER,CONO:FJS.CUST THEN
+      FNGD.CUST.NAME<1,I> = CUST.NAME
+    END ELSE
+      FNGD.CUST.NAME<1,I> = STR("?",30)
+    END
+    FNGD.DATE<1,I> = OCONV(FJS.DATE,"D4/")
+    FNGD.M.QTY<1,I>=OCONV(INT(((FJS.M.QTY/ICR.DV1)*ICR.MT1)/ICR.DV2+.5),ICR.CNV1)
+    FNGD.A.QTY<1,I>=OCONV(INT(((FJS.A.QTY/ICR.DV1)*ICR.MT1)/ICR.DV2+.5),ICR.CNV1)
+    IF FJS.F.QTY > FJS.M.QTY THEN                     
+      FNGD.V.QTY<1,I> = 0 ;* T23748                       
+    END ELSE                                          
+      FNGD.V.QTY<1,I> = FJS.M.QTY - FJS.F.QTY - FJS.A.QTY 
+ 
+      IF FNGD.V.QTY<I> < 0 THEN FNGD.V.QTY<I> = 0          
+    END                                               
+    READV JSTAT FROM JOB,CONO:FGS.JOB<1,I>,2 ELSE JSTAT=''
+    IF JSTAT<1,1> > 3 AND JSTAT<1,1> # 5 THEN FNGD.V.QTY<I> = 0
+    IF FJS.ORD<1,2> = "" THEN
+      FNGD.ORD<1,I> = FJS.ORD
+    END ELSE
+      FNGD.ORD<1,I> = "MULTI"
+    END
+    TOT.M.QTY +=FJS.M.QTY
+    TOT.A.QTY +=FJS.A.QTY
+    TOT.V.QTY +=FNGD.V.QTY
+*T499
+    FNGD.V.QTY<1,I>=OCONV(INT(((FNGD.V.QTY/ICR.DV1)*ICR.MT1)/ICR.DV2+.5),ICR.CNV1)
+
+  NEXT I
+  TOT.M.QTY = OCONV(INT(((TOT.M.QTY/ICR.DV1) * ICR.MT1) / ICR.DV2 +.5),ICR.CNV1)
+  TOT.A.QTY = OCONV(INT(((TOT.A.QTY/ICR.DV1) * ICR.MT1) / ICR.DV2 +.5),ICR.CNV1)
+  TOT.V.QTY = OCONV(INT(((TOT.V.QTY/ICR.DV1) * ICR.MT1) / ICR.DV2 +.5),ICR.CNV1)
+  FNGD.JOB = FGS.JOB
+*
+*---- BUILD RBO RECORD
+*
+  STATUS = RBO.setProperty('','FNGD_JOB',FNGD.JOB)
+  STATUS = RBO.setProperty('','FNGD_CUST',FNGD.CUST)
+  STATUS = RBO.setProperty('','FNGD_DATE',FNGD.DATE)
+  STATUS = RBO.setProperty('','FNGD_ORD',FNGD.ORD)
+  STATUS = RBO.setProperty('','FNGD_CUST_NAME',FNGD.CUST.NAME)
+  STATUS = RBO.setProperty('','FNGD_M_QTY',FNGD.M.QTY)
+  STATUS = RBO.setProperty('','FNGD_A_QTY',FNGD.A.QTY)
+  STATUS = RBO.setProperty('','FNGD_V_QTY',FNGD.V.QTY)
+  STATUS = RBO.setProperty('','FNGD_TOT_M_QTY',TOT.M.QTY)
+  STATUS = RBO.setProperty('','FNGD_TOT_A_QTY',TOT.A.QTY)
+  STATUS = RBO.setProperty('','FNGD_TOT_V_QTY',TOT.V.QTY)
+  RETURN
+*
+SET.ERROR: 
+*
+  STATUS = RBO.setProperty('','ServerStatus',1)
+  STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+  RETURN
+
+
+

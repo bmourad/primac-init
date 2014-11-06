@@ -1,0 +1,202 @@
+SUBROUTINE WSE_GETPAPEROPTIONS(CONO, JOBID,  ERRMSG, PAPERXML)
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB INV.WHSE
+$INCLUDE ICS.CPYLIB INV.CNV
+$INCLUDE ICS.CPYLIB CATEGORY
+$INCLUDE JCS.CPYLIB JOB
+$INCLUDE ICS.CPYLIB FNGD.STATS
+$INCLUDE ICS.CPYLIB INV.STATS
+PAPERXML = "<PaperData>"
+INV.DATA = ''
+OPEN '','INVENTORY' TO INVENTORY ELSE
+  ERRMSG = 'INVENTORY FILE IS MISSING'
+  RETURN
+END
+OPEN '','INV.WHSE' TO INV.WHSE ELSE
+  ERRMSG = 'INV.WHSE FILE IS MISSING'
+  RETURN
+END
+OPEN '','CATEGORY' TO CATEGORY ELSE
+  ERRMSG = 'CATEGORY FILE IS MISSING'
+  RETURN
+END
+OPEN '','JOB' TO JOB ELSE
+  ERRMSG = 'JOB FILE IS MISSING'
+  RETURN
+END
+OPEN '','FNGD.STATS' TO FNGD.STATS ELSE
+  ERRMSG = 'FNGD.STATS FILE IS MISSING'
+  RETURN
+END
+OPEN '','INV.STATS' TO INV.STATS ELSE
+  ERRMSG = 'INV.STATS FILE IS MISSING'
+  RETURN
+END
+MATREAD JOB.REC FROM JOB, CONO:JOBID ELSE
+  MAT JOB.REC = ""
+END
+
+SELLIST = "SSELECT INVENTORY WITH INV_PAP_TYPE = 'LROLL' OR INV_PAP_TYPE = 'ROLL'"
+IF CONO # "" THEN SELLIST := " AND @ID LIKE '" : CONO : "...'"
+UDTEXECUTE SELLIST CAPTURING JUNK
+DATA = 1
+LOOP
+  READNEXT CODE ELSE DATA = 0
+WHILE DATA DO     
+  MATREAD INV.REC FROM INVENTORY, CODE THEN
+    IF (INV.PAP.TYPE = 'LROLL' OR INV.PAP.TYPE = 'ROLL') AND INV.UNIT<1,1> = 'LBS' THEN
+*  IF INV.M.LINE # "FNGD" THEN
+      IF INV.M.LINE # "FNGD" AND INV.M.LINE # "SFNGD" THEN
+        MATREAD CATG.REC FROM CATEGORY, CONO : INV.LINE THEN
+          IF CATG.TRACK.QOH = "Y" THEN
+*        IF INV.CUST # "" THEN
+*  IF "X":INV.CUST = "X":JOB.CUST THEN
+            ECD.SCALER = "MD0"
+*GOSUB 70000
+*ECD.SCALER = ICR.CNV
+            $INCLUDE ICSBP INV.UM.CNV
+            ECD.SCALER = ICR.CNV1
+            SWAP "," WITH "" IN ECD.SCALER
+            INV.ON.HAND = ""; INV.RESV = ""
+            INV.ON.PO = ""; INV.ALLOC = ""
+            INV.UNIT.COST = ""; STOCK.PRICE = ""
+            COST.WEIGHT = ""
+            FNGD.FLG = 0
+            IF INV.M.LINE = "FNGD" THEN FNGD.FLG = 1
+            WHSE.CNT = DCOUNT(INV.WHSE.CODE<1>,@VM)
+            FOR I = WHSE.CNT TO 1 STEP -1
+              IWH.ID = CODE:"!":INV.WHSE.CODE<1,I>
+              MATREAD IWH.REC FROM INV.WHSE, IWH.ID THEN
+                NCTR = DCOUNT(IWH.COST.FI,@VM)
+                INV.UNIT.COST<I> = IWH.COST.FI<1,NCTR> ;*GET THE LAST FIFO COST
+                COST.WEIGHT<I> = INV.COST.WT
+                BEGIN CASE
+                  CASE CATG.COST.TYPE = "SD"
+                    STOCK.PRICE<I> = IWH.STD.COST
+                  CASE CATG.COST.TYPE = "AV"
+                    STOCK.PRICE<I> = IWH.AVG.COST
+                  CASE CATG.COST.TYPE = "LC"
+                    STOCK.PRICE<I> = IWH.LIST.COST
+                  CASE CATG.COST.TYPE = "FI"
+                    STOCK.PRICE<I> = IWH.COST.FI<1,1>
+                  CASE CATG.COST.TYPE = "LT"
+                    STOCK.PRICE<I> = IWH.COST.FI<1,NCTR>
+                  CASE 1
+                    STOCK.PRICE<I> = ""
+                END CASE
+                IF FNGD.FLG THEN
+                  MATREAD FGS.REC FROM FNGD.STATS,IWH.ID THEN
+                    INV.ON.PO<I> = SUM(FGS.M.QTY)
+                    INV.ALLOC<I> = SUM(FGS.A.QTY)
+                  END ELSE
+                    INV.ON.PO<I> = 0
+                    INV.ALLOC<I> = 0
+                  END
+                END ELSE
+                  MATREAD INV.STAT.REC FROM INV.STATS, IWH.ID THEN
+                    INV.ON.PO<I> = SUM(ISTAT.PO.QTY)
+                    INV.ALLOC<I> = 0; PO.CNT = DCOUNT(ISTAT.PO,@VM)
+                    FOR J = 1 TO PO.CNT
+                      INV.ALLOC<I> = INV.ALLOC<I> + SUM(ISTAT.PO.JOB.QTY<1,J>)
+                    NEXT J
+                  END ELSE
+                    INV.ON.PO<I> = 0
+                    INV.ALLOC<I> = 0
+                  END
+                END
+                IF INV.ON.PO<I> < 0 THEN
+                  INV.ON.PO<I>=INT(((INV.ON.PO<I>/ICR.DV1)*ICR.MT1)/ICR.DV2-.5)
+                END ELSE
+                  INV.ON.PO<I>=INT(((INV.ON.PO<I>/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+                END
+                IF INV.ALLOC<I> < 0 THEN
+                  INV.ALLOC<I>=INT(((INV.ALLOC<I>/ICR.DV1)*ICR.MT1)/ICR.DV2-.5)
+                END ELSE
+                  INV.ALLOC<I>=INT(((INV.ALLOC<I>/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+                END
+                IF IWH.ON.HAND < 0 THEN
+                  INV.ON.HAND<I>=INT(((IWH.ON.HAND/ICR.DV1)*ICR.MT1)/ICR.DV2-.5)
+                END ELSE
+                  INV.ON.HAND<I>=INT(((IWH.ON.HAND/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+                END
+                IF IWH.RESV < 0 THEN
+                  INV.RESV<I>=INT(((IWH.RESV/ICR.DV1)*ICR.MT1)/ICR.DV2-.5)
+                END ELSE
+                  INV.RESV<I>=INT(((IWH.RESV/ICR.DV1)*ICR.MT1)/ICR.DV2+.5)
+                END
+                GOSUB BUILD.XML
+              END ELSE
+                INV.ON.HAND = DELETE(INV.ON.HAND,I,0,0)
+                INV.RESV = DELETE(INV.RESV,I,0,0)
+                INV.ON.PO = DELETE(INV.ON.PO,I,0,0)
+                INV.ALLOC = DELETE(INV.ALLOC,I,0,0)
+                INV.UNIT.COST = DELETE(INV.UNIT.COST,I,0,0)
+                STOCK.PRICE = DELETE(STOCK.PRICE,I,0,0)
+                COST.WEIGHT = DELETE(COST.WEIGHT,I,0,0)
+              END
+            NEXT I
+*                END
+*      END
+          END
+        END
+      END
+    END
+  END
+REPEAT
+PAPERXML := INV.DATA
+PAPERXML := "</PaperData>"
+SWAP "&" WITH "&amp;" IN PAPERXML
+RETURN
+
+*
+*---- BUILD.XML
+*
+BUILD.XML: 
+INV.AVAILABLE<I> = INV.ON.HAND<I> - INV.RESV<I>
+*   IF INV.AVAILABLE<I> > 0 THEN
+IF INV.ON.HAND<I> > 0 THEN
+  INV.DATA :=  "<Paper_Row>"
+  INV.DATA := "<ProductId>" : CODE[4,99] : "</ProductId>"
+  INV.DATA := "<ProductDescription>" : INV.DESC : "</ProductDescription>"
+  INV.DATA := "<Weight>" : OCONV(INV.BAS.WT,"MD2") : "</Weight>"
+  INV.DATA := "<Color>" : INV.COLOR : "</Color>"
+  INV.DATA := "<Width>" : OCONV(INV.PAP.WIDTH,"MD4") : "</Width>"
+  INV.DATA := "<Warehouse>" : INV.WHSE.CODE<1,I> : "</Warehouse>"
+  INV.DATA := "<OnHand>" : OCONV(INV.ON.HAND<I>,ECD.SCALER) : "</OnHand>"
+  INV.DATA := "<OnOrder>" : OCONV(INV.ON.PO<I>,ECD.SCALER) : "</OnOrder>"
+  INV.DATA := "<Allocated>" : OCONV(INV.ALLOC<I>,ECD.SCALER) : "</Allocated>"
+  INV.DATA := "<Reserved>" : OCONV(INV.RESV<I>,ECD.SCALER) : "</Reserved>"
+  INV.DATA := "<OpenAdj></OpenAdj>"
+  INV.DATA := "<Available>" : OCONV(INV.AVAILABLE<I>,ECD.SCALER) : "</Available>"
+  INV.DATA := "<UnitCost>" : OCONV(INV.UNIT.COST<I>,"MD4") : "</UnitCost>"
+  INV.DATA := "<StockPrice>" : OCONV(STOCK.PRICE<I>,"MD4") : "</StockPrice>"
+  INV.DATA := "<CostWeight>" : OCONV(COST.WEIGHT<I>,"MD2") : "</CostWeight>"
+  INV.DATA := "<EffectiveAvailable></EffectiveAvailable>"
+  INV.DATA := "<EffectiveRequired></EffectiveRequired>"
+  INV.DATA := "<TrimCost></TrimCost>"
+  INV.DATA := "</Paper_Row>"
+END
+RETURN
+*
+
+*
+*---- CONVERSION
+*
+70000*
+MAT INV.CNV.REC = ''
+BEGIN CASE
+  CASE INV.UNIT<1,2> = 'SHT' AND INV.UNIT<1,3> = 'LBS'
+    ICR.CNV = "MD0"
+    ICR.DV1 = INV.M.WT; ICR.MT1 = 1; ICR.DV2 = 1
+  CASE INV.UNIT<1,2> = 'PC' AND INV.UNIT<1,3> = 'MSI'
+    ICR.CNV = "MD0"
+    ICR.DV1 = INV.PAP.WIDTH/100; ICR.MT1 = 10; ICR.DV2 = 1
+  CASE INV.UNIT<1,2> = 'FT' AND INV.UNIT<1,3> = 'MSI'
+    ICR.CNV = "MD0"
+    ICR.DV1 = INV.PAP.WIDTH/100; ICR.MT1 = 100; ICR.DV2 = 12
+  CASE 1
+    ICR.CNV = "MD2"
+    ICR.DV1 = 10; ICR.MT1 = 1; ICR.DV2 = 1
+END CASE
+RETURN
+*

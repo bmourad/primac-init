@@ -1,0 +1,164 @@
+OPEN '','INV_AUDIT_HIST' TO INV_AUDIT_HIST ELSE STOP 201 INV_AUDIT_HIST
+OPEN '','INV_AUDIT_BAL' TO INV_AUDIT_BAL ELSE STOP 201 INV_AUDIT_BAL
+OPEN '','INV_SERIAL' TO INV_SERIAL ELSE STOP 201 INV_AUDIT_HIST
+OPEN '','INV_RECEIPTS' TO INV_RECEIPTS ELSE STOP 201 INV_RECEIPTS
+OPEN '','INV.WHSE' TO INV.WHSE ELSE STOP 201 INV.WHSE
+OPEN '','INV_AUDIT_TAG' TO INV_AUDIT_TAG ELSE STOP 201 INV_AUDIT_TAG
+OPEN '','WAREHOUSE' TO WAREHOUSE ELSE STOP 201 WAREHOUSE
+OPEN '','CONTROL' TO CONTROL ELSE STOP 201 CONTROL
+*
+*COPY>ICS.CPYLIB>INV_SERIAL
+*COPY>ICS.CPYLIB>INV_RECEIPTS
+*COPY>ICS.CPYLIB>INV_AUDIT_HIST
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>ICS.CPYLIB>WAREHOUSE
+*COPY>ICS.CPYLIB>INV_AUDIT_BAL
+*
+DEFFUN DIVISION.POSITION(CONO,CONTROL.FILE,DIV.CODE)        
+DEFFUN CURRENT.PERIOD(CONO,CONTROL.FILE,DIV.POS,FISCAL.FLAG)
+*
+GEN.DIV='00'
+PRINT @(-1)
+PRINT @(1,5):'SELECTING INV_AUDIT_TAG':@(-4)
+*
+SELECT INV_AUDIT_TAG
+PRINT @(1,5):'PROCESSING INV_AUDIT_TAG RECORD':@(-4)
+*
+DONE=0 ; CNT=0
+LOOP
+  READNEXT INAH.ID ELSE DONE=1
+  CONO=INAH.ID[1,3]
+UNTIL DONE DO
+  CNT+=1                        
+  IF REM(CNT,100)=0 THEN        
+    PRINT @(45,5):CNT:@(-4)     
+  END                           
+  MATREAD INAH.REC FROM INV_AUDIT_HIST,INAH.ID THEN
+    GOSUB GET.CURRENT.PERIOD
+    IF NOT(ERR) THEN
+      IF CUR.PERIOD#INAH.PERIOD THEN
+        GOSUB FIX.INV.WHSE
+        GOSUB FIX.INV.RECEIPTS
+        GOSUB FIX.INV.SERIAL
+        GOSUB FIX.INV.AUDIT.BAL
+        INAH.PERIOD=CUR.PERIOD
+        MATWRITE INAH.REC ON INV_AUDIT_HIST,INAH.ID
+      END
+    END
+  END
+REPEAT
+GOTO 99999
+*
+**************************************************************************
+**** S U B R O U T I N E S ***********************************************
+**************************************************************************
+*
+*******************
+GET.CURRENT.PERIOD: 
+*******************
+*
+ERR=''
+WHSE.ID=CONO:INAH.WHSE
+MATREAD WHSE.REC FROM WAREHOUSE,WHSE.ID THEN
+  IF WHS.DIV='' THEN WHS.DIV=GEN.DIV
+  DIV.POS=DIVISION.POSITION(CONO,CONTROL,WHS.DIV)        
+  IF DIV.POS<1,1>='' THEN
+    DIV.POS=DIV.POS<1,2>                               
+    CUR.PERIOD=CURRENT.PERIOD(CONO,CONTROL,DIV.POS,"IC")
+    IF CUR.PERIOD<1,1>='' THEN                         
+      CUR.PERIOD=CUR.PERIOD<1,2>                       
+    END ELSE                                           
+      ERR=1
+    END
+  END
+END
+RETURN
+*
+*********************
+FIX.INV.WHSE: 
+*********************
+*
+IWH.ID=CONO:INAH.PROD:"!":INAH.WHSE
+MATREAD IWH.REC FROM INV.WHSE,IWH.ID THEN
+  LOCATE INAH.RECP.NO IN IWH.RECP.NO<1> SETTING RPOS THEN
+    IWH.RECP.PERIOD<1,RPOS>=CUR.PERIOD
+    ;* resort receipts
+    SRN=IWH.RECP.NO<1>       
+    SRP=IWH.RECP.PERIOD<1>   
+    SRD=IWH.RECP.ENT.DATE<1> 
+    IWH.RECP.NO=''                                                       
+    IWH.RECP.PERIOD=''                                                   
+    IWH.RECP.ENT.DATE=''                                                 
+    RCNT=DCOUNT(SRN,@VM)                                                  
+    SSQ='' ; SST=''                                                      
+    FOR R=1 TO RCNT                                                      
+      SSQ<1,R>=SRP<1,R>"R%6":SRD<1,R>"R%5":SRN<1,R>"R%9"                 
+    NEXT R                                                               
+    FOR R=1 TO RCNT                                                      
+      LOCATE SSQ<1,R> IN SST<1> BY 'AR' SETTING RPOS ELSE NULL           
+      SST<1> = INSERT(SST<1>,1,RPOS,0,SSQ<1,R>)                          
+      IWH.RECP.NO<1>=INSERT(IWH.RECP.NO<1>,1,RPOS,0,SRN<1,R>)            
+      IWH.RECP.PERIOD<1>=INSERT(IWH.RECP.PERIOD<1>,1,RPOS,0,SRP<1,R>)    
+      IWH.RECP.ENT.DATE<1>=INSERT(IWH.RECP.ENT.DATE<1>,1,RPOS,0,SRD<1,R>)
+    NEXT R                                                               
+  END
+END
+RETURN
+*
+*****************
+FIX.INV.RECEIPTS: 
+*****************
+*
+INVR.ID=CONO:INAH.RECP.NO
+MATREAD INVR.REC FROM INV_RECEIPTS,INVR.ID THEN
+  INVR.PERIOD=CUR.PERIOD
+  MATWRITE INVR.REC ON INV_RECEIPTS,INVR.ID
+END
+RETURN
+*
+*******************
+FIX.INV.SERIAL: 
+*******************
+*
+ISTK.ID=CONO:INAH.SERIAL
+MATREAD ISTK.REC FROM INV_SERIAL,ISTK.ID THEN
+  ISTK.PERIOD=CUR.PERIOD
+  MATWRITE ISTK.REC ON INV_SERIAL,ISTK.ID
+END
+RETURN
+*
+*******************
+FIX.INV.AUDIT.BAL: 
+*******************
+*
+;* current period
+ITB.ID=CONO:INAH.PROD:"!":INAH.WHSE:"!":CUR.PERIOD
+MATREAD ITB.REC FROM INV_AUDIT_BAL,ITB.ID THEN
+  ITB.BEG+=INAH.QTY
+  ITB.BEG.AMT+=INAH.EXT.COST
+  MATWRITE ITB.REC ON INV_AUDIT_BAL,ITB.ID
+END
+ITB.ID=CONO:INAH.PROD:"!":INAH.WHSE:"!":INAH.PERIOD
+MATREAD ITB.REC FROM INV_AUDIT_BAL,ITB.ID THEN
+  BEGIN CASE
+    CASE INAH.TYPE = "R"                                 
+      ITB.RECV = ITB.RECV - INAH.QTY                     
+      ITB.RECV.AMT = ITB.RECV.AMT - INAH.EXT.COST        
+    CASE INAH.TYPE = "S"                                 
+      ITB.SALE = ITB.SALE - INAH.QTY                     
+      ITB.SALE.AMT = ITB.SALE.AMT - INAH.EXT.COST        
+    CASE INAH.TYPE = "A"                                 
+      ITB.SHRNK = ITB.SHRNK - INAH.QTY                   
+      ITB.SHRNK.AMT = ITB.SHRNK.AMT - INAH.EXT.COST      
+    CASE INAH.TYPE = "I"                                 
+      ITB.TRAN.IN = ITB.TRAN.IN - INAH.QTY               
+      ITB.TRAN.IN.AMT = ITB.TRAN.IN.AMT - INAH.EXT.COST  
+    CASE INAH.TYPE = "O"                                 
+      ITB.TRAN.OUT = ITB.TRAN.OUT - INAH.QTY             
+      ITB.TRAN.OUT.AMT = ITB.TRAN.OUT.AMT - INAH.EXT.COST
+  END CASE
+  MATWRITE ITB.REC ON INV_AUDIT_BAL,ITB.ID 
+END
+RETURN
+99999 
+END

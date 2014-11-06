@@ -1,0 +1,459 @@
+   SUBROUTINE JCS_EOM_POST_SA(MAT EOM.ACCT.REC,MAT GLTABLE.REC,MAT JOB.REC,TRANFILE,REJECTFILE,WIPFILE,ERRMSG,MAT COMP.REC)
+*********************************************************************
+* REVISION    - [12.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - JCSBP
+* PROGRAM     - JCS.EOM.POST.SA
+* BY          - ZIAD YAMOUT, C.B.A
+* DATE        - 02/28/87
+* DESCRIPTION -
+*********************************************************************
+$INCLUDE PMC.CPYLIB GLTABLE
+$INCLUDE JCS.CPYLIB EOM.ACCT
+$INCLUDE JCS.CPYLIB JOB
+$INCLUDE PMC.CPYLIB POST.REJECTS
+$INCLUDE JCS.CPYLIB INVOICE
+$INCLUDE PMC.CPYLIB SALES.CODE
+$INCLUDE PMC.CPYLIB TAX
+$INCLUDE PMC.CPYLIB SHIP.VIA
+$INCLUDE PMC.CPYLIB EOM.TRANS
+$INCLUDE PMC.CPYLIB COA
+$INCLUDE PMC.CPYLIB COMPANY
+$INCLUDE CPYLIB CHAR
+*
+*---- INITIALIZATION
+*
+      MAT ETR.REC = ""
+OPEN 'JOB' TO JOB ELSE ERRMSG='Cannot open JOB File'; GOTO 99999
+OPEN 'TAX' TO TAX ELSE ERRMSG='Cannot open TAX File'; GOTO 99999
+OPEN 'SHIP.VIA' TO SHIP.VIA ELSE ERRMSG='Cannot open SHIP.VIA File'; GOTO 99999
+OPEN 'COA' TO COA ELSE ERRMSG='Cannot open COA File'; GOTO 99999
+OPEN 'SALES.CODE' TO SALES.CODE ELSE ERRMSG='Cannot open SALES.CODE File'; GOTO 99999
+OPEN 'INVOICE' TO INVOICE ELSE ERRMSG='Cannot open INVOICE File'; GOTO 99999
+OPEN 'OPEN.RECV' TO OPEN.RECV ELSE ERRMSG='Cannot open OPEN.RECV File'; GOTO 99999
+OPEN '',TRANFILE TO EOM.TRANS ELSE ERRMSG=TRANFILE:' FILE MISSING';GOTO 99999
+OPEN '',REJECTFILE TO POST.REJECTS ELSE ERRMSG=REJECTFILE:' FILE IS MISSING';GOTO 99999
+OPEN '',WIPFILE TO WIP.SALES.STATS ELSE ERRMSG=WIPFILE:' FILE IS MISSING';GOTO 99999
+      IF JOB.SALES.CODE = "" THEN
+         MAT SLC.REC = ""
+      END ELSE
+         MATREAD SLC.REC FROM SALES.CODE, CONO:JOB.SALES.CODE ELSE
+            MAT SLC.REC = ""
+         END
+      END
+      BEGIN CASE
+         CASE SLC.GL.ACCT = SA.SAL.ACCT
+         CASE SLC.GL.ACCT # ""
+            SLC.GL.ACCT = SLC.GL.ACCT : STR("0",IN.ACCT.LEN-LEN(SLC.GL.ACCT))
+            SLC.GL.ACCT = SLC.GL.ACCT[1,IN.ACCT.LEN]
+            MATREAD COA.REC FROM COA, CONO : SLC.GL.ACCT ELSE COA.LEVEL = 0
+            SA.SAL.ACCT = SLC.GL.ACCT
+            SA.SAL.LEVEL = COA.LEVEL
+         CASE GLTB.SALES = SA.SAL.ACCT
+         CASE 1
+            MATREAD COA.REC FROM COA, CONO : GLTB.SALES ELSE COA.LEVEL = 0
+            SA.SAL.ACCT = GLTB.SALES
+            SA.SAL.LEVEL = COA.LEVEL
+      END CASE
+      BEGIN CASE
+         CASE SLC.RT.ACCT = SA.RET.ACCT
+         CASE SLC.RT.ACCT # ""
+            SLC.RT.ACCT = SLC.RT.ACCT : STR("0",IN.ACCT.LEN-LEN(SLC.RT.ACCT))
+            SLC.RT.ACCT = SLC.RT.ACCT[1,IN.ACCT.LEN]
+            MATREAD COA.REC FROM COA, CONO : SLC.RT.ACCT ELSE COA.LEVEL = 0
+            SA.RET.ACCT = SLC.RT.ACCT
+            SA.RET.LEVEL = COA.LEVEL
+         CASE GLTB.RET.ALLOW = SA.RET.ACCT
+         CASE 1
+            MATREAD COA.REC FROM COA, CONO : GLTB.RET.ALLOW ELSE COA.LEVEL = 0
+            SA.RET.ACCT = GLTB.RET.ALLOW
+            SA.RET.LEVEL = COA.LEVEL
+      END CASE
+      BEGIN CASE
+         CASE SLC.DS.ACCT = SA.DSC.ACCT
+         CASE SLC.DS.ACCT # ""
+            SLC.DS.ACCT = SLC.DS.ACCT : STR("0",IN.ACCT.LEN-LEN(SLC.DS.ACCT))
+            SLC.DS.ACCT = SLC.DS.ACCT[1,IN.ACCT.LEN]
+            MATREAD COA.REC FROM COA, CONO : SLC.DS.ACCT ELSE COA.LEVEL = 0
+            SA.DSC.ACCT = SLC.DS.ACCT
+            SA.DSC.LEVEL = COA.LEVEL
+         CASE GLTB.TRADE.DISC = SA.DSC.ACCT
+         CASE 1
+            MATREAD COA.REC FROM COA, CONO : GLTB.TRADE.DISC ELSE COA.LEVEL = 0
+            SA.DSC.ACCT = GLTB.TRADE.DISC
+            SA.DSC.LEVEL = COA.LEVEL
+      END CASE
+      NEW.REC = 0
+*
+*---- MAIN PROCESSING
+*
+      MCNT = COUNT(JOB.INV.NO,VM) + (JOB.INV.NO # "")
+      FOR M = 1 TO MCNT
+         INV.NO = JOB.INV.NO<1,M>
+         INV.TP = INV.NO[LEN(INV.NO)-1,2]
+         IVC.ID = CONO : INV.NO
+         MATREADU IVC.REC FROM INVOICE, IVC.ID ELSE
+            INVOICE.AMOUNT=SUM(JOB.INV.AMT<1,M>)
+            BEGIN CASE
+               CASE INVOICE.AMOUNT + 0 = 0 OR JOB.INV.BAL<1,M> + 0 = 0
+                  GOTO 199
+               CASE INV.TP = "PP"
+                  GOTO 199
+               CASE JOB.INV.DATE<1,M> = ""
+                  GOTO 199
+               CASE CO.ARS # "Y"
+                  GOTO 199
+               CASE 1
+                  READ DUMMY FROM OPEN.RECV,IVC.ID ELSE GOTO 199
+            END CASE
+            MAT PRR.REC = ""
+            PRR.JOB = JOBNO
+            PRR.FILE = "INVOICE"
+            PRR.ID = INV.NO
+            PRR.ERR = "CANNOT LOCATE"
+            PRR.SEQ = PRR.SEQ + 1
+            MATWRITE PRR.REC ON POST.REJECTS, PRR.SEQ
+            GOTO 199
+         END
+         IF INV.TP = "PB" THEN
+            P.B = 1
+         END ELSE
+            P.B = 0
+         END
+         IF IVC.PROC.MON <> PERIOD THEN GOTO 150
+         IF IVC.GLA.DATE<1,1> # "" AND IVC.GLA.DATE<1,1> # "P" THEN
+             GOTO 150
+         END
+         INV.CNTR = 0
+         GOSUB 500
+         BEGIN CASE
+            CASE SA.INV.LEVEL < 1
+               T.ACCT = GEN.DIV : GEN.DEPT : GEN.CCTR : SA.INV.ACCT
+            CASE 1
+               T.ACCT = JOB.DIV : GEN.DEPT : GEN.CCTR : SA.INV.ACCT
+         END CASE
+         INV.AMT = TOT.AMT
+         BEGIN CASE
+            CASE INV.TP = "CM"
+               INV.CNTR = 1
+               GOSUB 2000
+            CASE INV.TP = "PB"
+               GOSUB 1000
+            CASE 1
+               INV.CNTR = 1
+               GOSUB 1000
+         END CASE
+         IVC.GLA.DATE<1,1> = "P"
+         MATWRITE IVC.REC ON INVOICE,IVC.ID
+         IF NEW.REC > 99 THEN NEW.REC = NEW.REC + 1
+150      IF IVC.PRE.BILL.MON <> PERIOD THEN GOTO 199
+         IF IVC.GLA.DATE<1,2> # "" AND IVC.GLA.DATE<1,2> # "P" THEN
+            GOTO 199
+         END
+         IF P.B = 0 THEN GOTO 199
+         P.B = 0
+         INV.CNTR = 0
+         GOSUB 500
+         BEGIN CASE
+            CASE SA.PBL.LEVEL < 1
+               T.ACCT = GEN.DIV : GEN.DEPT : GEN.CCTR : SA.PBL.ACCT
+            CASE 1
+               T.ACCT = JOB.DIV : GEN.DEPT : GEN.CCTR : SA.PBL.ACCT
+         END CASE
+         INV.AMT = TOT.AMT
+         INV.CNTR = 1
+         GOSUB 1000
+         IVC.GLA.DATE<1,2> = "P"
+         MATWRITE IVC.REC ON INVOICE,IVC.ID
+199      RELEASE INVOICE, IVC.ID
+      NEXT M
+      GOTO 99999
+*
+*---- PROCESS INVOICE
+*
+500   TOT.AMT = 0
+      SCNT = COUNT(IVC.AMOUNT,VM) + (IVC.AMOUNT # "")
+      FOR S = 1 TO SCNT
+         BEGIN CASE
+            CASE IVC.CHG.CODE<1,S> = "SUB"
+            CASE IVC.CHG.CODE<1,S> = "SUBT"
+            CASE IVC.CHG.CODE<1,S> = "TOT"
+            CASE IVC.CHG.CAT<1,S> = "CMT"
+            CASE JOBNO # IVC.CHG.JOB<1,S> AND IVC.CHG.JOB<1,S> # ""
+            CASE P.B
+               IF CO.ALLOC.FLG = "Y" AND IVC.ALLOC.DIV<1,S> # "" THEN
+                  HOLD.ACCT = SA.PBL.ACCT
+                  HOLD.LEVEL = SA.PBL.LEVEL
+                  GOSUB 700
+                  GOTO 510
+               END
+               BEGIN CASE
+                  CASE SA.PBL.LEVEL < 1
+                     T.ACCT = GEN.DIV : GEN.DEPT : GEN.CCTR : SA.PBL.ACCT
+                  CASE 1
+                     T.ACCT = JOB.DIV : GEN.DEPT : GEN.CCTR : SA.PBL.ACCT
+               END CASE
+               INV.AMT = IVC.AMOUNT<1,S>
+               TOT.AMT = TOT.AMT + INV.AMT
+               GOSUB 2000
+510*
+            CASE IVC.CHG.CAT<1,S> = "MSC"
+               MATREAD SLC.REC FROM SALES.CODE, CONO:IVC.TAX.JURS<1,S> ELSE
+                  MAT SLC.REC = ""
+               END
+               BEGIN CASE
+                  CASE SLC.GL.ACCT = SA.MSC.ACCT
+                  CASE SLC.GL.ACCT # ""
+                     SLC.GL.ACCT = SLC.GL.ACCT : STR("0",IN.ACCT.LEN-LEN(SLC.GL.ACCT))
+                     SLC.GL.ACCT = SLC.GL.ACCT[1,IN.ACCT.LEN]
+                     MATREAD COA.REC FROM COA, CONO : SLC.GL.ACCT ELSE COA.LEVEL = 0
+                     SA.MSC.ACCT = SLC.GL.ACCT
+                     SA.MSC.LEVEL = COA.LEVEL
+                  CASE GLTB.MSC.SALE = SA.MSC.ACCT
+                  CASE 1
+                     MATREAD COA.REC FROM COA, CONO : GLTB.MSC.SALE ELSE COA.LEVEL = 0
+                     SA.MSC.ACCT = GLTB.MSC.SALE
+                     SA.MSC.LEVEL = COA.LEVEL
+               END CASE
+               IF CO.ALLOC.FLG = "Y" AND IVC.ALLOC.DIV<1,S> # "" THEN
+                  HOLD.ACCT = SA.MSC.ACCT
+                  HOLD.LEVEL = SA.MSC.LEVEL
+                  GOSUB 700
+                  GOTO 520
+               END
+               BEGIN CASE
+                  CASE SA.MSC.LEVEL < 1
+                     T.ACCT = GEN.DIV : GEN.DEPT : GEN.CCTR : SA.MSC.ACCT
+                  CASE 1
+                     T.ACCT = JOB.DIV : GEN.DEPT : GEN.CCTR : SA.MSC.ACCT
+               END CASE
+               IF INV.TP = "CM" THEN
+                  INV.AMT = 0 - IVC.AMOUNT<1,S>
+                  TOT.AMT = TOT.AMT + INV.AMT
+                  GOSUB 1000
+               END ELSE
+                  INV.AMT = IVC.AMOUNT<1,S>
+                  TOT.AMT = TOT.AMT + INV.AMT
+                  GOSUB 2000
+               END
+520*
+            CASE IVC.CHG.CAT<1,S> = "TAX"
+               MATREAD TAX.REC FROM TAX, CONO :IVC.TAX.JURS<1,S> ELSE
+                  MAT TAX.REC = ""
+               END
+               BEGIN CASE
+                  CASE TAX.ACCT = SA.TAX.ACCT
+                  CASE TAX.ACCT # ""
+                     TAX.ACCT = TAX.ACCT : STR("0",IN.ACCT.LEN-LEN(TAX.ACCT))
+                     TAX.ACCT = TAX.ACCT[1,IN.ACCT.LEN]
+                     MATREAD COA.REC FROM COA, CONO : TAX.ACCT ELSE COA.LEVEL = 0
+                     SA.TAX.ACCT = TAX.ACCT
+                     SA.TAX.LEVEL = COA.LEVEL
+                  CASE GLTB.SALES.TAX = SA.TAX.ACCT
+                  CASE 1
+                     MATREAD COA.REC FROM COA, CONO : GLTB.SALES.TAX ELSE COA.LEVEL = 0
+                     SA.TAX.ACCT = GLTB.SALES.TAX
+                     SA.TAX.LEVEL = COA.LEVEL
+               END CASE
+               BEGIN CASE
+                  CASE SA.TAX.LEVEL < 1
+                     T.ACCT = GEN.DIV : GEN.DEPT : GEN.CCTR : SA.TAX.ACCT
+                  CASE 1
+                     T.ACCT = JOB.DIV : GEN.DEPT : GEN.CCTR : SA.TAX.ACCT
+               END CASE
+               IF INV.TP = "CM" THEN
+                  INV.AMT = 0 - IVC.AMOUNT<1,S>
+                  TOT.AMT = TOT.AMT + INV.AMT
+                  GOSUB 1000
+               END ELSE
+                  INV.AMT = IVC.AMOUNT<1,S>
+                  TOT.AMT = TOT.AMT + INV.AMT
+                  GOSUB 2000
+               END
+            CASE IVC.CHG.CAT<1,S> = "SHP"
+               MATREAD SHIP.VIA.REC FROM SHIP.VIA, CONO:IVC.TAX.JURS<1,S> ELSE
+                  MAT SHIP.VIA.REC = ""
+               END
+               BEGIN CASE
+                  CASE SHPV.GL.NO = SA.FRT.ACCT
+                  CASE SHPV.GL.NO # ""
+                     SHPV.GL.NO = SHPV.GL.NO : STR("0",IN.ACCT.LEN-LEN(SHPV.GL.NO))
+                     SHPV.GL.NO = SHPV.GL.NO[1,IN.ACCT.LEN]
+                     MATREAD COA.REC FROM COA, CONO : SHPV.GL.NO ELSE COA.LEVEL = 0
+                     SA.FRT.ACCT = SHPV.GL.NO
+                     SA.FRT.LEVEL = COA.LEVEL
+                  CASE GLTB.FRT = SA.FRT.ACCT
+                  CASE 1
+                     MATREAD COA.REC FROM COA, CONO : GLTB.FRT ELSE COA.LEVEL = 0
+                     SA.FRT.ACCT = GLTB.FRT
+                     SA.FRT.LEVEL = COA.LEVEL
+               END CASE
+               BEGIN CASE
+                  CASE SA.FRT.LEVEL < 1
+                     T.ACCT = GEN.DIV : GEN.DEPT : GEN.CCTR : SA.FRT.ACCT
+                  CASE 1
+                     T.ACCT = JOB.DIV : GEN.DEPT : GEN.CCTR : SA.FRT.ACCT
+               END CASE
+               IF INV.TP = "CM" THEN
+                  INV.AMT = 0 - IVC.AMOUNT<1,S>
+                  TOT.AMT = TOT.AMT + INV.AMT
+                  GOSUB 1000
+               END ELSE
+                  INV.AMT = IVC.AMOUNT<1,S>
+                  TOT.AMT = TOT.AMT + INV.AMT
+                  GOSUB 2000
+               END
+            CASE IVC.CHG.CAT<1,S> = "DSC"
+               MATREAD SLC.REC FROM SALES.CODE, CONO:IVC.TAX.JURS<1,S> ELSE
+                  MAT SLC.REC = ""
+               END
+               BEGIN CASE
+                  CASE SLC.DS.ACCT = SA.DSC.ACCT
+                  CASE SLC.DS.ACCT # ""
+                     SLC.DS.ACCT = SLC.DS.ACCT : STR("0",IN.ACCT.LEN-LEN(SLC.DS.ACCT))
+                     SLC.DS.ACCT = SLC.DS.ACCT[1,IN.ACCT.LEN]
+                     MATREAD COA.REC FROM COA, CONO : SLC.DS.ACCT ELSE COA.LEVEL = 0
+                     SA.DSC.ACCT = SLC.DS.ACCT
+                     SA.DSC.LEVEL = COA.LEVEL
+                  CASE GLTB.TRADE.DISC = SA.DSC.ACCT
+                  CASE 1
+                     MATREAD COA.REC FROM COA, CONO : GLTB.TRADE.DISC ELSE COA.LEVEL = 0
+                     SA.DSC.ACCT = GLTB.TRADE.DISC
+                     SA.DSC.LEVEL = COA.LEVEL
+               END CASE
+               IF CO.ALLOC.FLG = "Y" AND IVC.ALLOC.DIV<1,S> # "" THEN
+                  HOLD.ACCT = SA.DSC.ACCT
+                  HOLD.LEVEL = SA.DSC.LEVEL
+                  GOSUB 700
+                  GOTO 525
+               END
+               BEGIN CASE
+                  CASE SA.DSC.LEVEL < 1
+                     T.ACCT = GEN.DIV : GEN.DEPT : GEN.CCTR : SA.DSC.ACCT
+                  CASE 1
+                     T.ACCT = JOB.DIV : GEN.DEPT : GEN.CCTR : SA.DSC.ACCT
+               END CASE
+               IF INV.TP = "CM" THEN
+                  INV.AMT = 0 - IVC.AMOUNT<1,S>
+                  TOT.AMT = TOT.AMT + INV.AMT
+                  GOSUB 1000
+               END ELSE
+                  INV.AMT = IVC.AMOUNT<1,S>
+                  TOT.AMT = TOT.AMT + INV.AMT
+                  GOSUB 2000
+               END
+525 *
+            CASE INV.TP = "CM"
+                  IF CO.ALLOC.FLG = "Y" AND IVC.ALLOC.DIV<1,S> # "" THEN
+                     HOLD.ACCT = SA.RET.ACCT
+                     HOLD.LEVEL = SA.RET.LEVEL
+                     GOSUB 700
+                     GOTO 530
+                     END
+               BEGIN CASE
+                  CASE SA.RET.LEVEL < 1
+                     T.ACCT = GEN.DIV : GEN.DEPT : GEN.CCTR : SA.RET.ACCT
+                  CASE 1
+                     T.ACCT = JOB.DIV : GEN.DEPT : GEN.CCTR : SA.RET.ACCT
+               END CASE
+               INV.AMT = 0 - IVC.AMOUNT<1,S>
+               TOT.AMT = TOT.AMT + INV.AMT
+               GOSUB 1000
+530 *
+            CASE 1
+               IF CO.ALLOC.FLG = "Y" AND IVC.ALLOC.DIV<1,S> # "" THEN
+                  HOLD.ACCT = SA.SAL.ACCT
+                  HOLD.LEVEL = SA.SAL.LEVEL
+                  GOSUB 700
+                  GOTO 540
+               END
+               BEGIN CASE
+                  CASE SA.SAL.LEVEL < 1
+                     T.ACCT = GEN.DIV : GEN.DEPT : GEN.CCTR : SA.SAL.ACCT
+                  CASE 1
+                     T.ACCT = JOB.DIV : GEN.DEPT : GEN.CCTR : SA.SAL.ACCT
+               END CASE
+               INV.AMT = IVC.AMOUNT<1,S>
+               TOT.AMT = TOT.AMT + INV.AMT
+               GOSUB 2000
+540 *
+         END CASE
+      NEXT S
+      RETURN
+*
+700 * PROCESS REVENUE ALLOCATION 
+      PCNT = DCOUNT(IVC.ALLOC.DIV<1,S>,SVM)
+      FOR P = 1 TO PCNT
+          IF HOLD.LEVEL = 0 THEN
+             T.ACCT = GEN.DIV:GEN.DEPT:GEN.CCTR:HOLD.ACCT
+          END
+          IF HOLD.LEVEL = 1 THEN
+             T.ACCT = IVC.ALLOC.DIV<1,S,P>[1,2]:GEN.DEPT:GEN.CCTR:HOLD.ACCT
+          END
+          IF HOLD.LEVEL = 2 THEN
+             T.ACCT = IVC.ALLOC.DIV<1,S,P>[1,4]:GEN.CCTR:HOLD.ACCT
+          END
+          IF HOLD.LEVEL = 3 THEN
+             T.ACCT = IVC.ALLOC.DIV<1,S,P>:HOLD.ACCT
+          END
+          IF INV.TP = "CM" THEN
+             INV.AMT = 0 - IVC.ALLOC.AMT<1,S,P>
+             TOT.AMT = TOT.AMT - INV.AMT
+             GOSUB 2000
+          END ELSE
+             INV.AMT = IVC.ALLOC.AMT<1,S,P>
+             TOT.AMT = TOT.AMT + INV.AMT
+             GOSUB 2000
+          END
+       NEXT P
+    RETURN
+*
+*---- DEBIT
+*
+1000  BEGIN CASE
+         CASE INV.AMT > 0
+            ETR.ID = CONO : T.ACCT : JOBNO : "!SA-D*" : NEW.REC
+         CASE INV.AMT + 0 < 0
+            ETR.ID = CONO : T.ACCT : JOBNO : "!SA-C*" : NEW.REC
+         CASE 1
+            GOTO 1999
+      END CASE
+      MATREAD ETR.REC FROM EOM.TRANS, ETR.ID ELSE
+         MAT ETR.REC = ""
+         ETR.AMT = 0
+         ETR.REF = JOB.CUST
+      END
+      ETR.CNTR = ETR.CNTR + INV.CNTR
+      ETR.AMT = ETR.AMT + INV.AMT
+      LOCATE INV.NO IN ETR.TRAN<1>,1 BY "AR" SETTING PTR ELSE NULL
+      INS INV.NO BEFORE ETR.TRAN<1,PTR>
+      INS IVC.DATE BEFORE ETR.DATE<1,PTR>
+      INS INV.AMT BEFORE ETR.TAMT<1,PTR>
+      MATWRITE ETR.REC ON EOM.TRANS, ETR.ID
+1999  RETURN
+*
+*---- CREDIT
+*
+2000  BEGIN CASE
+         CASE INV.AMT > 0
+            ETR.ID = CONO : T.ACCT : JOBNO : "!SA-C*" : NEW.REC
+         CASE INV.AMT + 0 < 0
+            ETR.ID = CONO : T.ACCT : JOBNO : "!SA-D*" : NEW.REC
+         CASE 1
+            GOTO 2999
+      END CASE
+      MATREAD ETR.REC FROM EOM.TRANS, ETR.ID ELSE
+         MAT ETR.REC = ""
+         ETR.AMT = 0
+         ETR.REF = JOB.CUST
+      END
+      ETR.AMT = ETR.AMT - INV.AMT
+      LOCATE INV.NO IN ETR.TRAN<1>,1 BY "AR" SETTING PTR ELSE NULL
+      INS INV.NO BEFORE ETR.TRAN<1,PTR>
+      INS IVC.DATE BEFORE ETR.DATE<1,PTR>
+      INS (0 - INV.AMT) BEFORE ETR.TAMT<1,PTR>
+      MATWRITE ETR.REC ON EOM.TRANS, ETR.ID
+2999  RETURN
+99999 RETURN
+

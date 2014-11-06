@@ -1,0 +1,291 @@
+**********************************************
+* REVISION    - [07.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - JCSBP
+* PROGRAM     - INP.JTIME.RPT
+* DATE        - SEP, 29, 83
+* DESCRIPTION - THIS PROGRAM GET JOB FILE AND PRINT
+*               THE CUST NAME, HRS TO DATE
+*T20938 gat 09/04/1996 * FIX PROBLEM WITH JOB NUMBER LENGTH
+*T26493 cmykleb 03/22/2002 * Change report to use rpt # from proc.
+*T26598 cmykleb 05/31/2002 * Expand individual line HRS to allow same as
+*                            grand total.
+************************************************
+*
+*--- INSERT FILE EQUATE
+*
+*COPY>JCS.CPYLIB>JOB
+*COPY>JCS.CPYLIB>JOB.TIME
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>CHAR
+*
+*--- GET COMPANY NAME
+*
+   PROCREAD ID ELSE GOTO 999999
+   CONO = ID<1>
+*T26493 v
+*  CONO.NAME = ID<2>
+*  REPORT.NAME = "WORK & IN PROCESS JOBS FOR PRODUCTION TIME"
+*  REPORT.NUMBER = "XXXX"
+   CONO.NAME = ""
+   REPORT.NAME = ""
+   REPORT.NUMBER = ID<2>
+*T26493 ^
+   REPORT.DATE = DATE()
+   HD1 = "" ; HD2 = ""
+*--- GET HEADING
+   CALL GET.PROG.HEAD(CONO,CONO.NAME,REPORT.NAME,REPORT.NUMBER,REPORT.DATE,HD1,HD2)
+   POS = 51 - INT(LEN(CONO.NAME)/2)
+   POS2 = 70 - POS
+*
+*--- INITALIZATION
+*
+   LINE.COUNT = 99
+   PAGE.NO = 0
+   TOTALS = 0
+   PURGE.STATUS = 7
+   SP1 = SPACE(1)
+*
+*--- SET UP ERRMSG ROUTINE FOR CPYLIB SYSCOM
+*
+   SYS.TYPE = 1
+   CALL SYSCOM(MAT SYSCOM.REC)
+*
+*--- OPEN FILE
+*
+   OPEN '','JOB' TO JOB ELSE
+      ERRMSG = ' FILE JOB IS MISSING '
+      GOTO 93000
+   END
+   OPEN '','JOB.TIME' TO JOB.TIME ELSE
+      ERRMSG = ' FILE JOB.TIME IS MISSING '
+      GOTO 93000
+   END
+   OPEN '','CUSTOMER' TO CUSTOMER ELSE
+      ERRMSG = 'FILE CUSTOMER IS MISSING '
+      GOTO 93000
+   END
+*
+*--- READING ALL FILES AND PROCESS ONE AT A TIME
+*
+   PRINTER ON
+100*
+   READNEXT ID ELSE GOTO 199
+   MAT JOB.REC = ''
+   MAT CUST.REC = ""
+   MATREAD JOB.REC FROM JOB , ID ELSE GOTO 100
+   LOCATE PURGE.STATUS IN JOB.STATUS<1>,1 SETTING DUMMY ELSE DUMMY = 0
+   IF DUMMY # 0 THEN GOTO 100
+   MATREAD CUST.REC FROM CUSTOMER , CONO:JOB.CUST ELSE CUST.NAME = "NOT ON FILE"
+*
+*--- PROCESS THE RECORD
+*
+   SUM.HRS = 0
+   X = COUNT(JOB.LB.DEPT,VM) + (JOB.LB.DEPT #"")
+   BEGIN CASE
+      CASE JOB.LB.WIP<1,2,1> + JOB.LB.WIP<1,2,2> + JOB.LB.WIP<1,2,3> + JOB.LB.WIP<1,2,4> = 0
+         GOTO 100
+      CASE JOB.LB.WIP<1,3,1> + JOB.LB.WIP<1,3,2> + JOB.LB.WIP<1,3,3> + JOB.LB.WIP<1,3,4> = 0
+         FOR I = 1 TO X
+            SUM.HRS = SUM.HRS + JOB.LB.HRS<1,I>
+         NEXT I
+      CASE 1
+         FOR I = 1 TO X
+*        XX = COUNT(JOB.LB.SEQ<1,I>,SVM) + (JOB.LB.SEQ<1,I> # "")
+            LB.ID = ID:"!":JOB.LB.DEPT<1,I>:"!":JOB.LB.CCTR<1,I>:"!"
+*        FOR II = 1 TO XX
+            FOR II = 1 TO JOB.LB.SEQ<1,I>
+*          MAT JLB.REC = ""
+*          MATREAD JLB.REC FROM JOB.TIME, CONO:JOB.LB.SEQ<1,I,II> ELSE GOTO 200
+               MATREAD JLB.REC FROM JOB.TIME, LB.ID:II ELSE GOTO 200
+               SUM.WIP = 0
+               W = COUNT(JLB.WIP,VM) + (JLB.WIP # "")
+               FOR WW = 1 TO W
+                  SUM.WIP = SUM.WIP + JLB.WIP<1,WW,1> + JLB.WIP<1,WW,2> + JLB.WIP<1,WW,3> + JLB.WIP<1,WW,4>
+               NEXT WW
+               BEGIN CASE
+                  CASE SUM.WIP = 0
+                     GOTO 200
+                  CASE SUM.WIP = JLB.COST
+                     SUM.HRS = SUM.HRS + JLB.HRS
+                  CASE JLB.COST > 0
+                     SUM.HRS = SUM.HRS + INT((JLB.HRS * SUM.WIP / JLB.COST) + .5)
+                  CASE JLB.COST < 0
+                     SUM.HRS = SUM.HRS + INT((JLB.HRS * SUM.WIP / JLB.COST) - .5)
+               END CASE
+200*
+            NEXT II
+         NEXT I
+   END CASE
+   TOTALS = TOTALS + SUM.HRS
+*
+*--- STARTING CASE TO SET A STATUS
+*
+   BEGIN CASE
+      CASE JOB.STATUS<1,1> = ''
+         STATUS.CASE = 'BKD'
+      CASE JOB.STATUS<1,1> = '1'
+         STATUS.CASE = 'I/P'
+      CASE JOB.STATUS<1,1> = '2'
+         STATUS.CASE = 'SHP'
+      CASE JOB.STATUS<1,1> = '3'
+         STATUS.CASE = 'INV'
+      CASE JOB.STATUS<1,1> = '4'
+         STATUS.CASE = 'FIN'
+      CASE JOB.STATUS<1,1> = '5'
+         STATUS.CASE = 'REO'
+      CASE JOB.STATUS<1,1> = '9'
+         STATUS.CASE = 'CAN'
+      CASE 1
+         STATUS.CASE = 'N/A'
+   END CASE
+*
+*--- PRINT A RECORD
+*
+   GOSUB 2000
+*
+*--- LOOP TO PRINT THE DESCRIPTION
+*
+   D = COUNT(JOB.DESC,VM) + (JOB.DESC # '')
+   FOR J = 2 TO D
+      IF LINE.COUNT > 53 THEN GOSUB 1000
+      LINE.COUNT = LINE.COUNT + 1
+      PRINT SPACE(55) : JOB.DESC<1,J> "L#30"
+   NEXT J
+*
+*--- GO BACK AND READ ANOTHER RECORD
+*
+   GOTO 100
+199*
+*
+*--- PRINTING THE TOTAL VALUES
+*
+   IF LINE.COUNT + 3 > 53 THEN GOSUB 1000
+   H.LINE = ''
+*T26598 v
+*  H.LINE = H.LINE : SPACE(122) : '---------'
+   H.LINE = H.LINE : SPACE(122) : '----------'
+*T26598 ^
+   PRINT H.LINE
+   T.LINE = ''
+   T.LINE = T.LINE : ' TOTAL WORK INPROCESS HOURS :'
+*T26598 v
+*  T.LINE = T.LINE : SPACE(93) : OCONV(TOTALS, 'MD2') "R#9"
+   T.LINE = T.LINE : SPACE(93) : OCONV(TOTALS, 'MD2') "R#10"
+*T26598 ^
+   PRINT T.LINE
+   PRINT H.LINE
+*
+*--- END OF JOB
+*
+   GOTO 999999
+*-------------*
+* SUBROUTINES *
+*-------------*
+*
+*--- PRINT HEADING
+*
+1000*
+   PRINT CHAR(12)
+   PRINT
+   PAGE.NO = PAGE.NO + 1
+   PRINT HD1:PAGE.NO
+   PRINT HD2
+   H.LINE = ''
+   H.LINE = H.LINE : SPACE(65) : 'SEQUENCED BY JOB #'
+   PRINT H.LINE
+   PRINT
+   H.LINE = ''
+   H.LINE = H.LINE : '<--------------------------------------'
+   H.LINE = H.LINE : ' JOB INFORMATION '
+   H.LINE = H.LINE : '------------------------------------->'
+   H.LINE = H.LINE : SPACE(1) : '<------ LAST WORKING ----->'
+*T26598 v
+*  H.LINE = H.LINE : SPACE(3) : 'HOURS'
+   H.LINE = H.LINE : SPACE(4) : 'HOURS'
+*T26598 ^
+   PRINT H.LINE
+   H.LINE = ''
+* T20938
+   H.LINE = H.LINE : '  JOB #' : SP1:SP1 : 'STA' : SP1 : 'DATE-BKD'
+   H.LINE = H.LINE : SP1 : 'SA#': SPACE(9) : 'CUSTOMER NAME'
+* T20938
+   H.LINE = H.LINE : SPACE(18) : 'DESCRIPTION'
+   H.LINE = H.LINE : SPACE(10) : 'DATE-DUE'
+   H.LINE = H.LINE : SP1 : '  DATE  ' : SP1 : 'DV' : SP1
+   H.LINE = H.LINE : 'DEPT.' : SP1 : 'CCTR' : SP1 : 'OPER'
+*T26598 v
+*  H.LINE = H.LINE : SP1:SP1 : 'TO DATE'
+   H.LINE = H.LINE : SPACE(3): 'TO DATE'
+*T26598 ^
+   PRINT H.LINE
+   H.LINE = ''
+* T20938
+   H.LINE = H.LINE : '--------'
+   H.LINE = H.LINE : SP1 : '---'
+   H.LINE = H.LINE : SP1 : '--------'
+   H.LINE = H.LINE : SP1 : '---'
+   H.LINE = H.LINE : SP1 : '-----------------------------'
+* T20938
+   H.LINE = H.LINE : SP1 : '-----------------------------'
+   H.LINE = H.LINE : SP1 : '--------'
+   H.LINE = H.LINE : SP1 : '--------'
+   H.LINE = H.LINE : SP1 : '--'
+   H.LINE = H.LINE : SP1 : '-----'
+   H.LINE = H.LINE : SP1 : '----'
+   H.LINE = H.LINE : SP1 : '----'
+*T26598 v
+*  H.LINE = H.LINE : SP1:SP1 : '-------'
+   H.LINE = H.LINE : SP1:SP1 : '--------'
+*T26598 ^
+   PRINT H.LINE
+   LINE.COUNT = 7
+   RETURN
+*
+*--- PRINT THE VALUES
+*
+2000*
+   IF LINE.COUNT > 53 THEN GOSUB 1000
+   LINE.COUNT = LINE.COUNT + 1
+   KEY = ID[4,99]
+   V.LINE = ''
+   V.LINE = V.LINE : KEY "L#8"
+   V.LINE = V.LINE : SP1 : STATUS.CASE "L#3"
+   V.LINE = V.LINE : SP1 : OCONV(JOB.TRACK.DATE<1,2>, 'D2-') "R#8"
+   V.LINE = V.LINE : SP1 : JOB.SLSMN "R#3"
+   V.LINE = V.LINE : SP1 : CUST.NAME "L#29"
+   V.LINE = V.LINE : SP1 : JOB.DESC<1,1> "L#29"
+   V.LINE = V.LINE : SP1 : OCONV(JOB.TRACK.DATE<1,4>, 'D2-') "R#8"
+*CSF 25907 v
+*    V.LINE = V.LINE : SP1 : OCONV(JOB.LB.DATE<1,X>[1,4], 'D2-') "R#8"
+   V.LINE = V.LINE : SP1 : OCONV(JOB.LB.DATE<1,X,1>, 'D2-') "R#8"
+*CSF 25907 ^
+   V.LINE = V.LINE : SP1 : JOB.DIV "R#2"
+   V.LINE = V.LINE : SP1 : JOB.LB.DEPT<1,X> "L#5"
+   V.LINE = V.LINE : SP1 : JOB.LB.CCTR<1,X> "R#4"
+   V.LINE = V.LINE : SP1 : JOB.LB.OPER<1,X> "L#4"
+*T26598 v
+*  V.LINE = V.LINE : SP1:SP1 : OCONV(SUM.HRS, 'MD2') "R#7"
+   V.LINE = V.LINE : SP1 : OCONV(SUM.HRS, 'MD2') "R#9"
+*T26598 ^
+   PRINT V.LINE
+   RETURN
+*
+*--- CALLS FOR SYSCOM
+*
+91000*
+   ERR.TYPE = 1
+   CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+92000*
+   ERR.TYPE = 2
+   CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+93000*
+   ERR.TYPE = 3
+   CALL SYSCOM(MAT SYSCOM.REC)
+999999*
+   PRINTER OFF
+END

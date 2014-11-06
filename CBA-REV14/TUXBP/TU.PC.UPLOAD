@@ -1,0 +1,199 @@
+SUBROUTINE TU.PC.UPLOAD(HOSTFILENAME, FIELDLIST, PCFILENAME, RECORDTYPE, SEPARATORS, OPTIONS, DESCRIPTION, STATUS)
+*
+** SBClient Host 3GL API
+** Copyright (C) Ardent Software Inc. 1998
+** Copyright (C) UniData, Inc. 1996, 1997
+** Copyright (C) System Builder Corporation. 1995
+**
+**      This software is the proprietary property and contains
+**      trade secrets of Ardent Software, Inc. Any unauthorized use,
+**      disclosure or duplication is strictly prohibited.
+**      All rights reserved.
+*
+***************************************************************************
+*-* TU.PC.UPLOAD(Pickfilename, Fieldlist, Dosfilename, Recordtype,
+*-* Separators, Options. Description, Status)
+*-*
+*-*  This subroutine uploads pick items from PC.
+*-*
+*-* [P] Pickfilename The name of the pick file to be uploaded.
+*-*
+*-* [P] Fieldlist List of dictionary definitions of fields to be uploaded.
+*-*
+*-* [P] Dosfilename This the name of the PC file that will supply the
+*-* data.
+*-*
+*-* [P] Recordtype A flag indicating how the pick item is to be
+*-* constructed,
+*-*
+*-*  0 use Dosfilename as item id
+*-*  1 use sequential number as id
+*-*  2 use first field of record as id
+*-*
+*-* [P] Separators Flag indicating what field separators were used in the
+*-* PC file.
+*-*  0 No delimiters, fixed length based on dictionary
+*-*  1 Strings in quotes, commas between data
+*-*  2 Tabs between fields
+*-*  3 Spaces between fields
+*-*  4 no field separators - single item transfer
+*-*
+*-* [P] Options This is an array of characters to indicate minor details
+*-* of the transfer. Possible values INCLUDE TUBP :-
+*-*
+*-*  B Data is in binary
+*-*  D Debug mode
+*-*  E error free protocol
+*-*  H Host initiated transfer
+*-*  L Local connect, use simple protocol
+*-*  R Non resilient, use complex protocol
+*-*  S or P Spooler output
+*-*  T Text - raw line by line, no protocol
+*-*  X Hex output
+*-*  Z No status window
+*-*
+*-* [P] Description This is a description of the data being transferred and
+*-* will be displayed in the dialog box by Termulator.
+*-*
+*-* [R] Status This is the result of the transfer. Possible return
+*-* values are :-
+*-*  0 file has been transfered successfully
+*-*  1 user abort
+*-*  2 unable to open PC file
+*-*  3 PC read error
+*-*  4 communications error
+*-*  5 retry limit exceeded
+*-*  6 PC write error
+*-*  7 File transfer not supported
+*-*  10 unknown error
+***************************************************************************
+*
+ INCLUDE TUBP SPECIAL.H
+ INCLUDE TUBP TU.API.H
+ INCLUDE TUBP CASE.INVERT.OFF.H
+ INCLUDE TUBP TU.ERRORCODES.H
+ INCLUDE TUBP ROC.MAIN.H
+ INCLUDE TUBP TRANSFER.OPTIONS.H
+ INCLUDE TUBP DOS.PATH.H
+ INCLUDE TUBP HEADER.H
+ INCLUDE TUBP USER.INCLUDE.H
+*
+DEBUGFLAG = FALSE; DEFAULT.CONVTYPE = 'ascii'
+DOSDIR = DEFT.DOS.PATH
+DATAFILE = HOSTFILENAME<1>
+DICTFILE = HOSTFILENAME<2>
+IF DICTFILE = "" THEN DICTFILE = DATAFILE
+*
+IF TU.TRACE THEN
+OPEN '','TUSTATE' TO TUSTATE THEN
+TRACE.O = 'PC.UPLOAD':VM:HOSTFILENAME:VM:FIELDLIST:VM:PCFILENAME
+TRACE.O = TRACE.O:VM:RECORDTYPE:VM:SEPARATORS:VM:OPTIONS:VM:DESCRIPTION
+WRITEV TRACE.O ON TUSTATE,('TRACE.':PORTNO),-1
+END
+END
+*
+OVERWRITE = INDEX(OPTIONS,'O',1)
+OPEN '',DATAFILE TO HOSTFILE ELSE
+OPEN '','TUSTATE' TO TUSTATE ELSE STATUS = FTE.TUSTATE.OPEN.ERROR; RETURN
+WRITE (FTE.HOSTFILE.OPEN.ERROR:AM:DATAFILE) ON TUSTATE,'ERROR.':PORTNO
+STATUS = FTE.HOSTFILE.OPEN.ERROR
+RETURN
+END
+*
+BEGIN CASE
+CASE SEPARATORS = 0; CONVTYPE = "flf"
+CASE SEPARATORS = 1; CONVTYPE = "csv"
+CASE SEPARATORS = 2; CONVTYPE = "tab"
+CASE SEPARATORS = 3; CONVTYPE = "spc"
+CASE SEPARATORS = 4; CONVTYPE = "ascii"
+CASE INDEX(OPTIONS, "B", 1); CONVTYPE = "bin"
+CASE INDEX(OPTIONS, "X", 1); CONVTYPE = "hex"
+CASE TRUE; CONVTYPE = DEFAULT.CONVTYPE
+END CASE
+*
+BEGIN CASE
+CASE RECORDTYPE = 0
+ID = FIELD(PCFILENAME, "\", COUNT(PCFILENAME,"\")+1)
+CASE RECORDTYPE = 1
+ID = "#########"
+CASE RECORDTYPE = 2
+ID = ""
+END CASE
+HEADER = ""
+IF ICONV(CONVTYPE, 'MCU') = "FLF" THEN CALL TU.BUILD.HEADER(DICTFILE, FIELDLIST, HEADER, "DOWNLOAD", STATUS)
+IF STATUS THEN RETURN
+*
+*-* Create the definition for the RPC transfer srt
+*
+CONVCLASS = ICONV(TRIM(CONVTYPE):'CLASS','MCL')
+DEFN = ''
+DEFN<1> = 'PCHOSTDEFN'; * Direction control for class
+DEFN<2> = DATAFILE; * Pick host file name
+DEFN<3> = PCFILENAME; * DOS file name
+DEFN<6> = FIELDLIST; * dict item(s) (if any)
+DEFN<5> = ID; * NO selection crit  ONLY item(s)
+DEFN<7> = DICTFILE; * Pick dict name
+DEFN<8> = 0; * Indicates DOS to Pick (flag)
+DEFN<9> = OPTIONS; * TCL Transfer options
+DEFN<10> = -1; * this is the MV pos in the TXDEFN rec
+DEFN<15> = ''; * Description  (not used)
+DEFN<17> = DOSDIR; * sbopath need to get this from SB api
+DEFN<18> = 'SBFTP.TMP'; * Temp file name in sbopath
+DEFN<22> = OCONV(CONVTYPE,"MCU"); * File conversion object name
+DEFN<24> = 'HOST'; * Client Handle for the class (N/A)
+DEFN<30> = HEADER<HED.LENGTH>; * Dictionary length for FLF class
+*
+*-* Initialise the ROC object handler
+*
+CALL TU.INIT(STATUS)
+IF STATUS THEN
+GOTO 20; * Error
+END
+*
+CALL ROC.GETHANDLE("this", ROC.HANDLE, STATUS)
+IF STATUS THEN
+GOTO 20; * Error
+END
+*
+*-* Create the file transfer object in DATA/C
+*
+CONV.HANDLE = 0
+*
+CALL ROC.CREATE(CONVCLASS, NUL, NUL, CONV.HANDLE, STATUS)
+IF STATUS THEN
+GOTO 20; * Error
+END
+*
+*-* Pass the DEFN record to the file conversion object
+*
+SDEFN = DEFN
+CALL ROC.SET(CONV.HANDLE, "defn_rec", SDEFN, STATUS)
+IF STATUS THEN
+GOTO 20; * Error
+END
+*
+*-* Execute the conversion object
+*
+CALL ROC.GET(CONV.HANDLE, "execute", NUL, STATUS)
+IF STATUS THEN
+GOTO 20; * Error
+END
+*
+*-* Upload the converted file
+*
+VALS = NUL; STATUS = 0
+CALL RPC.TU.PC.UPLOAD(DEFN, VALS, STATUS)
+*
+20 *  ERROR:*
+*-* Destroy the created object(s)
+IF CONV.HANDLE THEN
+ERR = NUL
+CALL ROC.DESTROY(CONV.HANDLE, ERR)
+IF ERR THEN CRT 'Error destroying ':CONVCLASS
+END
+IF PTERM THEN EXECUTE "PTERM CASE INVERT"
+RETURN
+*
+*-* The END
+*
+END

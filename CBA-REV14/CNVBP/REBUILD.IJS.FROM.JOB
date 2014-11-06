@@ -1,0 +1,137 @@
+*COPY>CPYLIB>COM1
+********************************************************************
+* REVISION - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM   - PRIMAC
+* SOURCE   - CNVBP
+* PROGRAM  - REBUILD.IJS.FROM.JOB
+* LMR 01/18/2005 Rebuild the usage in INV.JOB.STATS from JOB data.
+*ENDDOC
+********************************************************************
+*COPY>JCS.CPYLIB>JOB
+*COPY>JCS.CPYLIB>JOB.MATL
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>INV.STATS
+*COPY>ICS.CPYLIB>INV.JOB.STATS
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>CHAR
+   SYS.TYPE = 1; CALL SYSCOM(MAT SYSCOM.REC)
+   OPEN.FLAG=1
+   OPEN 'JOB' TO JOB ELSE ERRMSG='JOB file missing!'; GOTO 93000
+   OPEN 'JOB.MATL' TO JOB.MATL ELSE ERRMSG='JOB.MATL file missing!'; GOTO 93000
+   OPEN 'INV.STATS' TO INV.STATS ELSE ERRMSG='INV.STATS file missing!'; GOTO 93000
+   OPEN 'INV.JOB.STATS' TO INV.JOB.STATS ELSE ERRMSG='INV.JOB.STATS file missing!'; GOTO 93000
+PROMPT''
+MAT INV.STAT.REC = ''
+CRT @(-1)
+1 CRT @(0,5):CL:'Enter Company # : ':;INPUT CONO:
+  IF CONO='END' THEN STOP
+  IF NOT(NUM(CONO)) THEN GOTO 1
+  IF LEN(CONO) # 3 THEN GOTO 1
+2 CRT @(0,7):CL:'Enter JOB No. : ':;INPUT JOBNO:
+  IF JOBNO='END' THEN STOP
+  MATREAD JOB.REC FROM JOB,CONO:JOBNO ELSE
+    ERRMSG='Invalid JOB '; GOSUB 91000; GOTO 2
+  END
+2000 HIGH.PER = 0
+   BEGIN CASE
+      CASE SUM(JOB.MT.WIP<1,2>) = 0 
+         GOTO 2999
+   END CASE
+   DCNT = COUNT(JOB.MT.SEQ,VM) + (JOB.MT.SEQ # '')
+   FOR D = 1 TO DCNT
+      PDNO = JOB.MT.PROD<1,D>; WHNO = JOB.MT.WHSE<1,D>
+      MATREAD INV.REC FROM INVENTORY, CONO:PDNO ELSE
+         GOTO 2090
+      END
+      DPNO = JOB.MT.DEPT<1,D>; CCNO = JOB.MT.CCTR<1,D>
+      MT.ID = CONO:JOBNO:"!":DPNO:"!":CCNO:"!":PDNO:"!":WHNO:"!"
+      FOR S = 1 TO JOB.MT.SEQ<1,D>
+         JMT.ID = MT.ID:S
+         MATREAD JMT.REC FROM JOB.MATL, JMT.ID ELSE
+            ERRMSG = 'CANNOT LOCATE JOB.MATL, ': JMT.ID
+            GOSUB 91000
+            GOTO 2080
+         END
+         IF JMT.WIP<1,1> = '' THEN
+            GOTO 2080
+         END
+         WIPIN = SUM(SUM(JMT.WIP))
+         ABSWIP=ABS(WIPIN)
+         IF ABSWIP < 2 THEN GOTO 2080
+         IWH.ID = CONO:PDNO:"!":WHNO
+         IJS.ID = IWH.ID:"!":JOBNO
+         MATREADU INV.JS.REC FROM INV.JOB.STATS, IJS.ID ELSE
+           MAT INV.JS.REC = ''
+           IJS.JOB.CUST = JOB.CUST
+         END
+         MATREADU INV.STAT.REC FROM INV.STATS, IWH.ID ELSE
+           MAT INV.STAT.REC = ''
+         END
+         LOCATE JOBNO IN ISTAT.JOB<1>,1 SETTING JPTR ELSE
+            ISTAT.JOB<1,JPTR> = JOBNO
+         END
+         MT.NO = DPNO:"!":CCNO:"!":S
+         FIND MT.NO IN IJS.JMT.SEQ SETTING I1,I2,I3 THEN GOTO 2080
+         ABSCOST=ABS(JMT.COST)
+         IF ABSWIP < ABSCOST THEN
+           PCT = ABSWIP / ABSCOST
+         END ELSE PCT = 1
+         WIP.QTY = ICONV(JMT.QTY * PCT,'MD0')
+         FOR F = DCOUNT(JMT.PTR<1,1>,SVM) TO 1 STEP -1 WHILE WIP.QTY # 0
+           BEGIN CASE
+           CASE WIPIN > 0
+             BEGIN CASE
+             CASE WIP.QTY <= JMT.PTR<1,2,F>
+               LQTY = WIP.QTY
+               WIP.QTY = 0
+             CASE 1
+               LQTY = JMT.PTR<1,2,F>
+               WIP.QTY -= JMT.PTR<1,2,F>
+             END CASE
+           CASE 1
+             BEGIN CASE
+             CASE WIP.QTY >= JMT.PTR<1,2,F>
+               LQTY = WIP.QTY
+               WIP.QTY = 0
+             CASE 1
+               LQTY = JMT.PTR<1,2,F>
+               WIP.QTY -= JMT.PTR<1,2,F>
+             END CASE
+           END CASE
+           LOCATE JMT.PTR<1,1,F> IN IJS.FI.NO<1>,1 BY 'AR' SETTING FN ELSE
+             IJS.FI.NO<1,FN>=''
+             IJS.FI.ORG<1,FN>=''
+             IJS.FI.QTY<1,FN>=0
+             IJS.FI.AMT<1,FN>=''
+             IJS.JMT.SEQ<1,FN>=''
+             IJS.JMT.QTY<1,FN>=''
+           END
+           IJS.FI.NO<1,FN>=JMT.PTR<1,1,F>
+           IJS.FI.ORG<1,FN>+=LQTY
+           IJS.FI.AMT<1,FN>=JMT.PTR<1,4,F>
+           IJS.JMT.SEQ<1,FN,-1>=MT.NO
+           IJS.JMT.QTY<1,FN,-1>=LQTY
+           IJS.JOB.USED += LQTY
+         NEXT F
+         IF WIP.QTY # 0 THEN
+            CRT @(0,10):CL:'WIP.QTY = ':WIP.QTY:' FOR ':JMT.ID
+            INPUT X
+         END
+         MATWRITE INV.JS.REC ON INV.JOB.STATS, IJS.ID
+2080  NEXT S
+      IF ISTAT.JOB # '' THEN
+        MATWRITE INV.STAT.REC ON INV.STATS, IWH.ID
+      END ELSE RELEASE INV.STATS, IWH.ID
+2090 *
+   NEXT D
+   GOTO 9999
+2999
+   CRT @(0,21):CL:'JOB HAS NO WIP'
+   INPUT X:
+   GO 9999
+91000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+93000 ERR.TYPE=3;CALL SYSCOM(MAT SYSCOM.REC)
+9999
+STOP

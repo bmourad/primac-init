@@ -1,0 +1,207 @@
+SUBROUTINE GetFiscalPeriods
+********************************************************************************
+*   Program name :- GetFiscalPeriods
+*   Created:- 6/10/2003
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*T00001 Jaweed 09/30/2003 * making the UserID in UPCASE before reading the SECURITY file
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE PMC.CPYLIB COMPANY
+$INCLUDE OPS.CPYLIB ORDER
+$INCLUDE PMC.CPYLIB FISCAL
+$INCLUDE PMC.CPYLIB DIVISION
+$INCLUDE PMC.CPYLIB SECURITY
+$INCLUDE ICS.CPYLIB INV_RECEIPTS
+$INCLUDE OPS.CPYLIB ORDER.DETAIL
+$INCLUDE CPYLIB CHAR
+ERRMSG = ""
+DEF.PERIOD = ""
+NUM.PERIODS = 12
+DEFFUN DIVISION.POSITION(CONO,CONTROL.FILE,DIV.CODE)
+DEFFUN CURRENT.PERIOD(CONO,CONTROL.FILE,DIV.POS,FISCAL.FLAG)
+
+   OPEN '','CONTROL' TO CONTROL ELSE
+      ERRMSG = 'Cannot open CONTROL file!'
+      GOTO 1000
+   END
+   OPEN '','COMPANY' TO COMPANY ELSE
+      ERRMSG = 'Cannot open COMPANY file!'
+      GOTO 1000
+   END
+   OPEN '','SECURITY' TO SECURITY ELSE
+       ERRMSG = "SECURITY FILE IS MISSING"
+       GOTO 1000
+   END
+   OPEN '','ORDER' TO ORDER ELSE
+      ERRMSG = 'Cannot open ORDER file!'
+      GOTO 1000
+   END
+   OPEN '','INV_RECEIPTS' TO INV_RECEIPTS ELSE
+      ERRMSG = 'Cannot open INV_RECEIPTS file!'
+      GOTO 1000
+   END
+   OPEN '','ORDER.DETAIL' TO ORDER.DETAIL ELSE
+      ERRMSG = 'Cannot open ORDER.DETAIL file!'
+      GOTO 1000
+   END
+
+   STATUS = RBO.getProperty('', 'PMCProperty', PMCProperty)
+   STATUS = RBO.getProperty('', 'Test', Test)
+   UserID    = PMCProperty<1,3>
+   CONO      = PMCProperty<1,4>
+   SHP.DATE = FIELD(Test,"!",1)
+   ORDNO = FIELD(Test,"!",2)
+   DEFPERIOD=FIELD(Test,"!",3)
+   SHIP.TO=FIELD(Test,"!",4)
+   VAL=FIELD(Test,"!",5)
+
+*T00001 v
+   IF UserID # "" THEN
+       UserID = UPCASE(UserID)
+   END
+*T00001 ^   
+   READ DIVISION.REC FROM CONTROL, CONO:"DIVISIONS" ELSE
+      ERRMSG = "DIVISIONS CONTROL RECORD IS MISSING"; GOTO 1000
+   END
+
+   READ SECURITY.REC FROM CONTROL, CONO:"DIV.SECURITY" ELSE
+      ERRMSG = "DIV.SECURITY CONTROL RECORD IS MISSING"; GOTO 1000
+   END
+
+   MATREAD COMP.REC FROM COMPANY, CONO ELSE
+      ERRMSG = "CO.ICS.PERIOD.FLG RECORD IS MISSING FROM COMPANY"; GOTO 1000
+   END
+
+
+   MATREAD SEC.REC FROM SECURITY, CONO:UserID ELSE
+      ERRMSG = "USER ":UserID:" NOT ON FILE"
+      GOTO 1000
+   END
+
+   MATREAD FISCAL.REC FROM CONTROL, CONO:"APVFISCAL" ELSE
+      ERRMSG = "CONTROL RECORD APVFISCAL IS MISSING";GOTO 1000
+   END
+
+   MATREAD ORD.REC FROM ORDER, CONO:ORDNO ELSE
+      ERRMSG = "Cannot locate Order # ":ORDNO
+      GOTO 1000
+   END
+ *  DIV.CODE = ORD.DIV
+   
+   MATREAD ORD.DET.REC FROM ORDER.DETAIL, CONO:ORDNO:"!":SHIP.TO ELSE
+      MAT ORD.DET.REC = ""
+   END
+
+   IF SECURITY.REC<1> = "Y" AND SECURITY.REC<2> = "Y" AND SEC.DIVISION # "" THEN
+     LOCATE SEC.DIVISION<1,1> IN DIVISION.REC<1>,1 SETTING POS ELSE
+         ERRMSG = "Division ":SEC.DIVISION:"  not found in Control File DIVISIONS Record."
+         GOTO 1000
+      END
+   END ELSE
+      POS = 1
+   END
+
+	***
+	DIV.CODE = ORD.DIV
+	GOSUB 6000
+	***	
+	ERR.FLG = ""
+	
+	
+	
+
+	IF CO.ICS.PERIOD.FLG = "Y" THEN
+ 
+         BOL.PERIOD = DEFPERIOD ;*DEF.PERIOD
+	  *GOSUB CHECK.RECP.PERIOD
+	END ELSE
+		BOL.SHP.DATE = ICONV(SHP.DATE, "D2/")
+		*WRITE BOL.SHP.DATE :"~" ON CONTROL, "02DEEPAK"
+		ECD.RET.VALUE = DEFPERIOD
+		CALL CHECK.PERIOD.DATE.OPS(CONO,BOL.SHP.DATE,ECD.RET.VALUE,DIV.CODE,ERR.FLG,ERRMSG,COMPANY,CONTROL)
+		***
+	    BEGIN CASE                            
+              CASE ERRMSG = ""                    
+                 BOL.PERIOD = ECD.RET.VALUE         
+              CASE ERR.FLG = 0                    
+                 BOL.PERIOD = ECD.RET.VALUE         
+                 GOSUB 1000                       
+              CASE ERR.FLG = 1                    
+                 GOSUB 1000
+              CASE ERR.FLG = 2                    
+                 GOSUB 1000
+           END CASE                              
+		***
+		BOL.PERIOD = ECD.RET.VALUE
+		*GOSUB CHECK.RECP.PERIOD
+	END
+  	STATUS = RBO.setProperty('', 'Test', BOL.PERIOD)
+	STATUS = RBO.setProperty('', 'TestFlag',CO.ICS.PERIOD.FLG)
+	STATUS = RBO.setProperty('', 'periodVal',VAL)
+
+RETURN
+
+6000*
+   DIV.POS=DIVISION.POSITION(CONO,CONTROL,DIV.CODE)                       
+   IF DIV.POS<1,1>='' THEN                                                
+      DIV.POS=DIV.POS<1,2>
+      CUR.PERIOD=CURRENT.PERIOD(CONO,CONTROL,DIV.POS,'OP')
+      IF CUR.PERIOD<1,1>='' THEN
+         CUR.PERIOD=CUR.PERIOD<1,2>
+         ERR.FLG='' ; ERRMSG='' ; NEXT.PERIOD=''
+         CALL GET.NEXT.PERIOD(CONO,DIV.CODE,'OP',NEXT.PERIOD,ERR.FLG,ERRMSG)
+         VALDAT.PR=''
+         VALDAT.PR<1>=CUR.PERIOD:VM:NEXT.PERIOD
+         VALDAT.PR=CONVERT(VM,',',VALDAT.PR)
+         HMSG.PR="Enter Receipt Period ":VALDAT.PR
+         TODAY=DATE()
+         DEFAULT.PR=CUR.PERIOD
+      END ELSE
+         ERRMSG=CUR.PERIOD<1,2>
+         GOSUB 1000
+      END
+   END ELSE                                                               
+      ERRMSG=DIV.POS<1,2>
+      GOSUB 1000
+   END                                                                    
+RETURN
+
+
+
+
+******************
+CHECK.RECP.PERIOD: 
+******************
+*
+   ERRMSG=''
+   LCNT=DCOUNT(OSD.PROD,VM)
+   FOR L=1 TO LCNT UNTIL ERRMSG#''
+      RCNT=DCOUNT(OSD.RECP.NO<1,L>,SVM)
+      FOR R=1 TO RCNT UNTIL ERRMSG#''
+         INVR.ID=CONO:OSD.RECP.NO<1,L,R>
+         MATREAD INVR.REC FROM INV_RECEIPTS,INVR.ID THEN
+            IF INVR.PERIOD>BOL.PERIOD THEN
+               ERRMSG='PRODUCT  ':OSD.PROD<1,L>
+               ERRMSG:=' QTY UNAVAILABLE UNTIL PERIOD ':INVR.PERIOD:' FOR PROD ':OSD.PROD<1,L>
+		  GOSUB 1000
+            END
+         END
+      NEXT R
+   NEXT L
+ RETURN
+
+1000*
+   IF ERRMSG # "" THEN
+      STATUS = RBO.setProperty('', 'ServerStatus', 1)
+      STATUS = RBO.setProperty('', 'ServerMessage', ERRMSG)
+   END
+RETURN
+

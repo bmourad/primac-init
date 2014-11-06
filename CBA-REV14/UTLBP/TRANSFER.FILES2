@@ -1,0 +1,217 @@
+*COPY>CPYLIB>SCOMMON1
+**************************************************************************
+*
+* REVISION - [10.0]
+* Copyright 1994 By Vercom Software Inc.
+*
+* PROGRAM  - TRANSFER.FILES2
+*
+* AUTHOR   - DUANE GREEN
+*
+* DATE     - 06/22/94
+*
+* DESCRIPTION
+*
+* This program is used to transfer data files and directories between
+* Accounts.  It will setup the VOC entries in the destination directory
+* if they do not currently exist.
+* Rev11 Sbclient, modified to copy dictionaries also. 4/24/97
+***************************************************************************
+*
+*---- FILE COPY STATEMENTS
+*
+*COPY>CPYLIB>SCREEN.COM
+*COPY>CPYLIB>CHAR
+*
+*---- OPEN ALL FILES
+*
+      OPEN "","UTL.SCREENS" TO M.SCREENS ELSE
+         ERRMSG="CANNOT OPEN UTL.SCREENS FILE"
+         GOSUB 90000
+         STOP
+      END
+*
+      OPEN '','VOC' TO VOC ELSE
+         ERRMSG = 'CANNOT OPEN VOC FILE'
+         GOSUB 90000
+         STOP
+      END
+*
+*---- INITIALIZATION
+*
+1 *
+      RSW = 0
+      SCREEN INIT;#
+      S$SCR=1
+      SCREEN DEFINE;TRANSFER.FILES
+      SCREEN FORMAT
+      SCREEN COUNT;TRANSFER.FILES;2
+      LINE.COUNT = S$LCNT
+      LINE.SPACE = S$LSPC
+      ERRMSG = ""
+*
+*---- MAIN PROCESSING
+*
+* Get From Path
+100*
+      CURR.REF.NO = ""
+      NEW.REC = 0
+      SCREEN FIELD;TRANSFER.FILES;1
+      SCREEN INPUT;TRANSFER.FILES;1
+      IF S$VALUE = "END" THEN GOTO 99999
+      FPTH = S$VALUE
+      IF RSW THEN RETURN
+*
+* Get To Path
+200 *
+      SCREEN FIELD;TRANSFER.FILES;4
+      SCREEN INPUT;TRANSFER.FILES;4
+      IF S$VALUE = 'END' THEN GOTO 99999
+      TPTH = S$VALUE
+*
+      READ REC FROM VOC,'TEMP' ELSE
+         REC = ''
+      END
+      REC<1> = 'F'
+      REC<2> = TPTH:'/VOC'
+      REC<3> = TPTH:'/D_VOC'
+      WRITE REC ON VOC,'TEMP'
+*
+      OPEN '','TEMP' TO DEST.VOC ELSE
+         ERRMSG = 'NO VOC FILE IN DESTINATION DIRECTORY'
+         GOSUB 90000
+         GOTO 200
+      END
+*
+* Create A list of files-directories in from directory
+      CMD = '!ls ':FPTH
+      EXECUTE CMD CAPTURING RET.VALUE
+      FILE.LIST = ''
+      FOR A = 1 TO DCOUNT(RET.VALUE,AM)
+         IF RET.VALUE<A>[1,2] = 'D_' THEN
+*         IF RET.VALUE<A> # "" THEN
+            FILE.LIST<1,-1> = RET.VALUE<A>
+         END
+*         END
+      NEXT A
+*       CNT = COUNT(FILE.LIST,VM)
+      CNT = DCOUNT(FILE.LIST,VM)
+      S$DATA(3)<S$SCR> = FILE.LIST
+      REF.NO = 1
+      GOSUB 50000
+      IF RSW THEN RETURN
+*
+*---- GET OPERATOR REPLY
+*
+500*
+      S$DATA(5)<S$SCR> = ""
+      SCREEN FIELD;TRANSFER.FILES;5
+      SCREEN INPUT;TRANSFER.FILES;5
+      OPT = S$VALUE
+      BEGIN CASE
+         CASE OPT = "E" OR OPT = "END"
+            SCREEN CLEAR
+            RELEASE
+            GOTO 100
+         CASE NUM(OPT) AND OPT = 1 OR OPT = 2
+            RSW = 1
+            ON OPT GOSUB 100,200
+            RSW = 0
+         CASE OPT = "D"
+            GOSUB 20000
+         CASE OPT = "P"
+            GOSUB 1000
+            GOTO 1
+      END CASE
+      GOTO 500
+*
+1000 *
+      FOR A = 1 TO DCOUNT(FILE.LIST,VM)
+         XFER.FILE = FILE.LIST<1,A>
+         CMD = "!ls -lasi ":FPTH:'/':XFER.FILE
+         EXECUTE CMD CAPTURING FILE.INFO
+         CMD = '!cp -r ':FPTH:'/':XFER.FILE:' ':TPTH:'/':XFER.FILE
+         CRT @(0,21):@(-4):CMD'L#79':
+         UDTEXECUTE CMD
+         IF XFER.FILE[1,2] # 'D_' THEN
+            READ REC FROM DEST.VOC,XFER.FILE ELSE
+               IF FILE.INFO<1>[1,5] = 'total' THEN
+                  TPE = 'DIR'
+               END ELSE
+                  TPE = 'F'
+               END
+               REC<1> = TPE
+               REC<2> = XFER.FILE
+               REC<3> = 'D_':XFER.FILE
+               WRITE REC ON DEST.VOC,XFER.FILE
+            END
+         END
+      NEXT A
+      RETURN
+*
+*
+*---- GET DATA FILE INFO OPTION
+*
+20000*
+      S$DATA(6)<S$SCR> = ""
+      SCREEN FIELD;TRANSFER.FILES;6
+      SCREEN INPUT;TRANSFER.FILES;6
+      OPTION = S$VALUE
+      BEGIN CASE
+         CASE OPTION = "" OR OPTION = "E" OR OPTION = "END"
+            GOTO 20099
+         CASE OPTION = "D" AND CNT > 0
+            GOSUB 30000
+            IF S$VALUE # "" AND S$VALUE # "END" THEN
+               REF.NO = S$VALUE
+               S$DATA(3) = DELETE(S$DATA(3),S$SCR,REF.NO,0)
+               FILE.LIST = DELETE(FILE.LIST,1,REF.NO,0)
+               CNT = CNT - 1
+               IF REF.NO > CNT THEN REF.NO = REF.NO - 1
+               CURR.REF.NO = ""
+               GOSUB 50000
+            END
+         CASE OPTION = "S"
+            REF.NO = CURR.REF.NO + LINE.COUNT
+            IF REF.NO > CNT THEN REF.NO = 1
+            GOSUB 50000
+      END CASE
+      GOTO 20000
+20099*
+      RETURN
+*
+*---- GET LINE REFERENCE NUMBER
+*
+30000*
+      S$DATA(7)<S$SCR> = ""
+      SCREEN FIELD;TRANSFER.FILES;7
+      S$MINV = CURR.REF.NO
+      S$MAXV = S$MINV + LINE.COUNT - 1
+      SCREEN INPUT;TRANSFER.FILES;7
+      IF S$MAXV > CNT THEN S$MAXV = CNT
+      RETURN
+*
+*---- SCROLL DATA FILE INFO
+*
+50000*
+      START.REF.NO = 1 + INT((REF.NO - 1) / LINE.COUNT) * LINE.COUNT
+      IF START.REF.NO = CURR.REF.NO THEN RETURN
+      CURR.REF.NO = START.REF.NO
+      S$VAL = START.REF.NO
+      S$CNT = COUNT(S$DATA(3)<S$SCR>,VM) + (S$DATA(3)<S$SCR> # "")
+      SCREEN MULTI;TRANSFER.FILES;C;2;3
+      RETURN
+*
+*---- ERROR ROUTINE
+*
+90000*
+      PRINT @(0,23):CL:ERRMSG:
+      INPUT REPLY:
+      PRINT @(0,23):CL:
+      RETURN
+*
+*---- END OF PROGRAM
+*
+99999*
+      PRINT @(-1):
+   END

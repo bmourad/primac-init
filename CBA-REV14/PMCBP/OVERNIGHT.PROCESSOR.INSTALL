@@ -1,0 +1,186 @@
+*********************************************************************
+*
+* SYSTEM        - PRIMAC
+*
+* PROGRAM       - OVERNIGHT.PROCESSOR.INSTALL
+*
+* AUTHOR        - NICK AMENDOLA - COMPUTER BUSINESS ASSOCIATES
+*
+* DATE          - 03/27/92
+*
+* DESCRIPTION
+*
+* This program is used to install the overnight report processor
+* into a specified base account.
+*
+* The following Q-pointer are created in the relavent accounts.
+*
+*      PMC.SCREENS     - points to the CBA account
+*      OVERNIGHT.PROCS - points to the main account
+*
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>CPYLIB>CHAR
+*
+*---- OPEN ALL FILE
+*
+      OPEN "","MD" TO MD ELSE
+         ERRMSG = "CANNOT OPEN MD FILE"
+         GOSUB 90000
+         STOP
+      END
+*
+*---- INITIALIZATION
+*
+10 *
+      PROMPT ""
+      PORT = SYSTEM(18)
+      PRINT @(-1)
+      SCRN = ""
+      SCRN = SCRN:@(20,00):"OVERNIGHT PROCESSOR INSTALLATION"
+      SCRN = SCRN:@(00,01):STR("-",80)
+      SCRN = SCRN:@(00,20):STR("-",80)
+      SCRN = SCRN:@(00,22):STR("-",80)
+      SCRN = SCRN:@(05,05):"This program is used to install the Overnight Processor."
+      SCRN = SCRN:@(05,07):"The following file should be created prior to running this process:"
+      SCRN = SCRN:@(05,09):"     OVERNIGHT.PROCS - created in the base account (modulo = 3)."
+      SCRN = SCRN:@(05,12):"The following Q-pointer are created in the relevant accounts:"
+      SCRN = SCRN:@(05,14):"     PMC.SCREENS     - points to the CBA account"
+      SCRN = SCRN:@(05,15):"     OVERNIGHT.PROCS - points to the main account"
+      PRINT SCRN:
+*
+*---- MAIN PROCESSING
+*
+100 *
+      PRINT @(0,21):@(-4):"Base Account Name : ":
+      INPUT ACCT,30:_
+      WARNMSG = ""
+      BEGIN CASE
+      CASE ACCT = "END"
+      CASE ACCT = CHAR(27)
+      CASE ACCT = "^"
+      CASE ACCT = ""
+      CASE INDEX(ACCT,"-",1) > 0
+         ERRMSG = "Invalid account name format"
+         GOSUB 90000
+         GOTO 100
+      CASE 1
+         BASEACCT = FIELD(ACCT,"-",1)
+         GOSUB 1000
+         GOTO 100
+      END CASE
+      GOTO 99999
+*
+*---- BUILD ACCOUNT NAME LIST
+*
+1000 *
+      QREC = "Q"
+      QREC<2> = "SYSTEM"
+      WRITE QREC ON MD, "OVERNIGHT.INSTALL.":PORT
+      OPEN "","OVERNIGHT.INSTALL.":PORT TO QFILE ELSE
+         DELETE MD, "OVERNIGHT.INSTALL.":PORT
+         ERRMSG = "Cannot open SYSTEM MASTER DICTIONARY"
+         GOSUB 90000
+         PRINT @(0,21):@(-4):
+         RETURN
+      END
+*
+      PRINT @(0,21):@(-4):" Processing ":
+      ACCTS = ""
+      SELECT QFILE
+      MORE = 1
+      LOOP
+         READNEXT ID ELSE MORE = 0
+      WHILE MORE DO
+         IF FIELD(ID,"-",1) = BASEACCT THEN ACCTS<-1> = ID
+      REPEAT
+      IF ACCTS = "" THEN
+         ERRMSG = "Could not locate matching account names!"
+         GOSUB 90000
+         PRINT @(0,21):@(-4):
+         RETURN
+      END
+*
+*---- CREATE Q-POINTERS
+*
+      ACNT = DCOUNT(ACCTS,AM)
+      FOR APTR = 1 TO ACNT
+         ACCT = ACCTS<APTR>
+         PRINT ".":
+         QREC = "Q"
+         QREC<2> = ACCT
+         QREC<3> = "MD"
+         WRITE QREC ON MD, "OVERNIGHT.INSTALL.":PORT
+         OPEN "","OVERNIGHT.INSTALL.":PORT TO QFILE ELSE
+            DELETE MD, "OVERNIGHT.INSTALL.":PORT
+            ERRMSG = "Invalid account name - ":ACCT
+            GOSUB 90000
+            GOTO 1080
+         END
+*
+         FID = "PMC.SCREENS"
+         READU QREC FROM QFILE, FID ELSE QREC = ""
+         IF QREC = "" OR QREC<1> = "Q" THEN
+            QREC = "Q"
+            QREC<2> = SYSTEM(19)
+            QREC<3> = FID
+         END
+         WRITE QREC ON QFILE, FID
+*
+         IF ACCT = BASEACCT THEN
+            FID = "OVERNIGHT.PROCS"
+            READ MREC FROM QFILE, FID ELSE
+               WARNMSG = "WARNING - ":FID:" file not found in ":BASEACCT:" account!"
+            END
+         END ELSE
+            FID = "OVERNIGHT.PROCS"
+            READU QREC FROM QFILE, FID ELSE QREC = ""
+            IF QREC = "" OR QREC<1> = "Q" THEN
+               QREC = "Q"
+               QREC<2> = BASEACCT
+               QREC<3> = FID
+            END
+            WRITE QREC ON QFILE, FID
+         END
+*
+         IF ACCT = BASEACCT THEN
+            PID = "OVERNIGHT.PROCESSOR";      GOSUB 3000
+            PID = "OVERNIGHT.PROCESSOR.SUB";  GOSUB 3000
+            PID = "OVERNIGHT.PROCESSOR.EXEC"; GOSUB 3000
+            PID = "OVERNIGHT.REPORT.REVIEW";  GOSUB 3000
+         END
+1080  NEXT APTR
+      DELETE MD, "OVERNIGHT.INSTALL.":PORT
+      IF WARNMSG # "" THEN
+         ERRMSG = WARNMSG
+         GOSUB 90000
+      END
+      ERRMSG = "Installation complete. Press <RETURN> to continue..."
+      GOSUB 90000
+      RETURN
+*
+*---- COPY P-POINTER
+*
+3000 *
+      READ PREC FROM MD, PID THEN
+         READU MREC FROM QFILE, PID ELSE MREC = ""
+         IF MREC = "" OR MREC<1> = PREC<1> THEN MREC = PREC
+         WRITE MREC ON QFILE, PID
+      END
+      RETURN
+*
+*---- ERROR ROUTINE
+*
+90000 *
+      PRINT @(0,23):@(-4):CHAR(7):ERRMSG:
+      INPUT REPLY,1:
+      PRINT @(0,23):@(-4):
+      RETURN
+*
+*---- END OF PROGRAM
+*
+99999 *
+      PRINT @(-1)
+   END

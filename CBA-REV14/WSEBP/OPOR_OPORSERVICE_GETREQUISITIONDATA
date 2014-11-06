@@ -1,0 +1,586 @@
+SUBROUTINE OPOR_OPORSERVICE_GETREQUISITIONDATA(CONO,REQ.NO,ERRMSG,STRXML)
+************************************************************************
+$INCLUDE CPYLIB COMMON1      
+$INCLUDE POS.CPYLIB COM.OPO
+$INCLUDE PMC.CPYLIB COM.VEND
+*
+$DEFINE OUTSIDE.PO
+$INCLUDE POS.CPYLIB OUTSIDE.PO
+$DEFINE VEND
+$INCLUDE PMC.CPYLIB VEND
+$INCLUDE PMC.CPYLIB COMPANY
+$DEFINE INVENTORY
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB CATEGORY
+$INCLUDE JCS.CPYLIB CATEGORY.OSP
+$INCLUDE PMC.CPYLIB COA
+$INCLUDE ICS.CPYLIB INV.CNV
+$INCLUDE PMC.CPYLIB DIVISION
+*T040609 v
+$INCLUDE ICS.CPYLIB PO.RSKI.XREF
+$INCLUDE POS.CPYLIB APP.REQ 
+$INCLUDE JCS.CPYLIB JOB
+$INCLUDE PMC.CPYLIB CUSTOMER
+$INCLUDE APS.CPYLIB VEND.STATS
+$INCLUDE APS.CPYLIB VEND.PO.STATS
+$INCLUDE APS.CPYLIB VEND.PROD.STATS
+$INCLUDE CPYLIB CHAR
+*T040609 ^
+*
+OPEN '','OUTSIDE.PO' TO OUTSIDE.PO ELSE ERRMSG = 'OUTSIDE.PO FILE IS MISSING'; GOTO 93000
+OPEN '','VEND' TO VEND ELSE ERRMSG = 'VEND FILE IS MISSING' ; GOTO 93000
+OPEN '','INVENTORY' TO INVENTORY ELSE ERRMSG = 'INVENTORY FILE IS MISSING'; GOTO 93000
+OPEN '','CATEGORY' TO CATEGORY ELSE ERRMSG = 'CATEGORY FILE IS MISSING'; GOTO 93000
+OPEN '','COMPANY' TO COMPANY ELSE ERRMSG = 'COMPANY FILE IS MISSING'; GOTO 93000
+OPEN '','CONTROL' TO CONTROL ELSE ERRMSG = 'CONTROL FILE IS MISSING'; GOTO 93000
+*T040609 v
+OPEN '','SLIT.TRANS' TO SLIT.TRANS ELSE ERRMSG = 'SLIT.TRANS FILE IS MISSING'; GOTO 93000
+OPEN '','JOB' TO JOB ELSE ERRMSG = 'JOB FILE IS MISSING'; GOTO 93000
+OPEN '','CUSTOMER' TO CUSTOMER ELSE ERRMSG = 'CUSTOMER FILE IS MISSING'; GOTO 93000
+OPEN '','PO.RSKI.XREF' TO PO.RSKI.XREF ELSE ERRMSG = 'PO.RSKI.XREF FILE IS MISSING'; GOTO 93000
+*T040609 ^
+   OPEN '','CATEGORY.OSP' TO CATEGORY.OSP ELSE
+      ERRMSG = 'CATEGORY.OSP FILE IS MISSING'
+      GOSUB 93000
+   END
+   OPEN 'COA' TO COA ELSE
+      ERRMSG = 'COA FILE IS MISSING'
+      GOTO 93000
+   END
+   OPEN 'DIVISION' TO DIVISION ELSE
+      ERRMSG = "CANNOT OPEN DIVISION FILE"
+      GOTO 93000
+   END
+   OPEN 'DEPARTMENT' TO DEPARTMENT ELSE
+      ERRMSG = "CANNOT OPEN DEPARTMENT FILE"
+      GOTO 93000
+   END
+   OPEN 'COST.CNTR' TO COST.CNTR ELSE
+      ERRMSG = "CANNOT OPEN COST.CNTR FILE"
+      GOTO 93000
+   END
+*T25755 v
+   OPEN '','OPERATION' TO OPERATION ELSE
+      ERRMSG = 'OPERATION FILE IS MISSING'
+      GOTO 93000
+   END
+*   
+MATREAD COMP.REC FROM COMPANY,CONO ELSE MAT COMP.REC = '' ; GOTO 93000    
+*IF CO.PO.REQ.FLAG = "Y" THEN
+  OPEN '','OUT.REQ' TO OUT.REQ ELSE ERRMSG = 'OUT.REQ FILE IS MISSING'; GOTO 93000
+  OPEN '','APP.REQ' TO APP.REQ ELSE ERRMSG = 'APP.REQ FILE IS MISSING'; GOTO 93000
+  OPEN '','SECURITY' TO SECURITY ELSE ERRMSG = 'SECURITY FILE IS MISSING'; GOTO 93000
+  USER.ID = UPCASE(@LOGNAME)
+*END
+*
+   IF CO.APS.O.INTRF > 2 THEN
+      OPEN '','VEND.STATS' TO VEND.STATS ELSE
+         ERRMSG = 'VEND.STATS FILE IS MISSING'
+         GOSUB 93000
+      END
+      OPEN '','VEND.PO.STATS' TO VEND.PO.STATS ELSE
+         ERRMSG = 'VEND.PO.STATS FILE IS MISSING'
+         GOSUB 93000
+      END
+      OPEN '','VEND.PROD.STATS' TO VEND.PROD.STATS ELSE
+         ERRMSG = 'VEND.PROD.STATS FILE IS MISSING'
+         GOSUB 93000
+      END
+   END
+*T040609 v
+XYZ = ""
+BAL.ORD = 0 ; BAL.REC = 0 ; BAL.OPEN = 0
+TOT.ORD = 0 ; TOT.REC = 0 ; TOT.OPEN = 0
+PSS.FLAG = "Y"
+UNKNOWN = "??????????"
+DESC.LINE = ""
+LINE.CUST = ""
+VALUE = ""
+DIM HOLD.APP.REQ.REC(20)
+MAT APP.REQ.REC = ""
+MAT HOLD.APP.REQ.REC = ""
+DIM PROD.DEL(5)
+   *OPO.CODE = REQ.NO
+   *********
+ECD.RET.VALUE = REQ.NO
+DUPLICATED.PO = 0 ; *T25938
+NEW = 0
+FIRST.TIME = 0      ;* T26152
+PORDER = 0
+REQ = 0
+MAT OPO.REC = ''
+MAT PROD.DEL = ""
+PREV.PO.VEND=""
+TOT.ORD.AMT = ""
+POS.INQ = 0
+   IF INDEX(REQ.NO<1,1>,"!",1) > 0 THEN
+      ECD.RET.VALUE = FIELD(REQ.NO<1,1>,"!",1)
+   END ELSE
+      ECD.RET.VALUE = REQ.NO<1,1>
+   END
+POR.MODE = REQ.NO<1,2>
+MENU.FLAG = REQ.NO<1,3>
+IF MENU.FLAG # "P" THEN MENU.FLAG = "R"
+****
+STRXML="<Payload>"
+IF MENU.FLAG = "R" THEN
+STRXML:="<Requisition>"
+END ELSE
+ IF MENU.FLAG = "P" THEN
+  STRXML:="<OPO>"
+ END
+END
+STRXML:="<CompanyNo>":CONO:"</CompanyNo>"
+MAT INV.CNV.REC = ""
+*MENU.FLAG = "R"
+***
+OPO.CODE = ECD.RET.VALUE
+OPO.NO = OPO.CODE
+   BEGIN CASE
+      CASE ECD.RET.VALUE = "N" AND NOT(POS.INQ) AND POR.MODE = 1   ; * 25855
+         NEW = 1
+         LINES = 0
+         ; *24231 v                                               
+         IF MENU.FLAG = "R" THEN
+            OPO.STAT<1,-1> = "Entered"                            
+            OPO.ST.DATE<1,-1> = DATE()
+            OPO.PREV.APP<1,-1> = USER.ID
+           STRXML := "<RequisitionNo> N </RequisitionNo>"
+           STRXML := "<Status> Entered </Status>"
+           STRXML := "<StatusDate>": OCONV(DATE(),"D2/"):"</StatusDate>"
+	     GOTO 555
+         END                                                
+         ; *24231 ^                                               
+*T25938 v
+      CASE MENU.FLAG = "P" AND ECD.RET.VALUE = "D" AND NOT(POS.INQ) AND POR.MODE = 1
+ECD.RET.VALUE = FIELD(REQ.NO,"!",2)
+         DUP.PONO = ECD.RET.VALUE
+         MATREAD OPO.REC FROM OUTSIDE.PO, CONO:DUP.PONO ELSE
+            ERRMSG = "Outside PO # entered not on file"
+            GOTO 93000
+         END
+ECD.RET.VALUE = FIELD(REQ.NO<1,1>,"!",3)
+         OPO.CODE = ECD.RET.VALUE
+         BEGIN CASE
+            CASE OPO.CODE = "END" OR OPO.CODE = ""
+               GOTO 555
+            CASE OPO.CODE = "N"
+            CASE OPO.CODE # ""
+               READ REC FROM OUTSIDE.PO, CONO: OPO.CODE THEN
+                  ERRMSG = "Outside PO # already exists on file"
+                  GOTO 93000
+               END
+               MATBUILD SAVE.REC FROM OPO.REC
+         END CASE
+         JOB.CLEAR = ECD.RET.VALUE
+         DUPLICATED.PO = 1
+         OPO.DATE = DATE()
+         OPO.ST.DATE = DATE()
+         OPO.DATE.RECVD = ""
+         OPO.CANCEL.DATE = ""
+         OPO.QTY.RECVD = ""
+         OPO.EXP.DATE = ""
+         OPO.PRT.FLG = "Y"
+JOB.CLEAR = REQ.NO<1,4>
+         IF JOB.CLEAR = "Y" THEN OPO.JOB.NO = ""
+         GOTO 666
+*T25938 ^
+*T25854 v
+      CASE MENU.FLAG="R" AND ECD.RET.VALUE="D" AND NOT(POS.INQ) AND POR.MODE = 1 ; *25855
+         GOSUB DUPE.SUB
+	 GOTO 666
+*T25854 ^
+      CASE ECD.RET.VALUE # "" AND NOT(POS.INQ)   ; * 25855
+      * T26126 v
+         MATREADU OPO.REC FROM OUTSIDE.PO, CONO:OPO.CODE LOCKED
+            ERRMSG = 'P/O record is locked by user - ':GETUSERNAME(STATUS())
+            GOTO 93000
+         END THEN
+      * T26126 ^
+            ;*24231 v
+            IF MENU.FLAG = "R" THEN
+               ERRMSG = "PO with number ":OPO.CODE: " already exists"
+	       RELEASE OUTSIDE.PO,CONO:OPO.CODE
+               GOTO 93000
+            END
+            PORDER = 1  ; * this is a purchase order since found in PO file
+         END ELSE
+          *  IF CO.PO.REQ.FLAG = "Y" THEN
+          * T26126 v
+               MATREADU OPO.REC FROM OUT.REQ, CONO:OPO.CODE LOCKED
+                  ERRMSG = 'P/O record is locked by user - ':GETUSERNAME(STATUS())
+                  GOTO 93000
+               END THEN
+          * T26126 ^
+                  IF MENU.FLAG = "P" THEN
+                     ERRMSG = "Requisition with number ":OPO.CODE:" already exists"
+		     RELEASE OUT.REQ,CONO:OPO.CODE
+                     GOTO 93000 
+                  END
+                  REQ = 1 ; * this is still requisition 
+               END 
+            END
+         *END
+         IF OPO.APP.LEVEL = "C" THEN
+            IF (REQ) THEN
+               STRXML := "<WarningMessage> Requisition: ":OPO.CODE:" was rejected. Cannot make any changes. </WarningMessage>"
+            END ELSE
+               STRXML := "<WarningMessage> PO ":OPO.CODE:" was rejected. You cannot make any changes. </WarningMessage>"
+            END
+         END
+         IF NOT(PORDER) AND NOT (REQ) THEN
+            ;*24231 ^
+            X = 0; Y = 22; TYP = 8; MAXL = 1
+            PMSG = OPO.CODE:" IS NOT ON FILE. DO YOU WANT TO ADD (Y/N)"
+            VALUE = "N"
+            IF VALUE = "Y" THEN
+               NEW = 1
+               ;*24231 v
+               IF MENU.FLAG = "R" THEN
+                  REQ = 1
+               END ELSE
+                  PORDER = 1
+               END
+               ;*24231^
+            END ELSE
+               RELEASE OUTSIDE.PO, CONO:OPO.CODE
+               *IF CO.PO.REQ.FLAG = "Y" THEN  
+                  RELEASE OUT.REQ, CONO:OPO.CODE  ; *24231
+               *END
+	  IF MENU.FLAG = "R" THEN ERRMSG = "Requisition No. ":OPO.CODE:" does not exist"
+	  IF MENU.FLAG = "P" THEN ERRMSG = "PO No. ":OPO.CODE:" does not exist"
+          GOTO 93000
+            END
+         END ; *24231
+         IF NOT(NEW) THEN ;*24231
+            ;*T23278 v
+            DIV.CODE = OPO.DIV.OWNER; USER.ID = UPCASE(@LOGNAME); ERRMSG = ''
+            CALL PRIDGET_CK_DIV_SEC_SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+            IF ERRMSG # '' THEN
+               GOTO 93000
+            END
+            ;*T23278 ^
+            ;*24231 v
+            IF MENU.FLAG = "R" THEN
+               ;*25260 v
+               ;* moved the logic to subroutine so it can be reused
+*               USER= USER.ID; DIV.OWNER = OPO.DIV.OWNER; APP.REQ.ID = ""
+*               CALL CHECK.ACTIVE.STATUS (CONO,USER,DIV.OWNER,RET.FLAG,MAT APP.REQ.REC,APP.REQ.ID,YYY)
+*               VALID = RET.FLAG
+*               ;*25260 ^
+*               IF NOT(VALID) THEN                                       
+*                  ERRMSG = "Profile for user ":USER.ID:" is either missing or is inactive" 
+*                  GOTO 93000
+*                  GOTO 5
+*               END
+            END
+            ;*24231 ^
+            MATBUILD SAVE.REC FROM OPO.REC
+         END;*24231
+      CASE POS.INQ                 ; * 25855
+         OPO.CODE = ECD.RET.VALUE
+	
+	MATREAD OPO.REC FROM OUTSIDE.PO, CONO:OPO.CODE ELSE
+            MATREAD OPO.REC FROM OUT.REQ, CONO:OPO.CODE ELSE
+               ERRMSG = "PO with number ":OPO.CODE:" not found"
+               GOTO 93000
+            END
+         END
+         DIV.CODE=OPO.DIV.OWNER ; USER.ID=UPCASE(@LOGNAME) ; ERRMSG=""
+         CALL PRIDGET_CK_DIV_SEC_SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+         IF ERRMSG # '' THEN GOTO 93000
+   END CASE
+*******************
+ 666 *
+*T040609 ^
+VEND.KEY = CONO:OPO.VEND.NO
+MATREAD VEND.REC FROM VEND , VEND.KEY ELSE
+  MAT VEND.REC = "????????????????"
+END
+IF MENU.FLAG = "R" THEN
+STRXML := "<RequisitionNo>": OPO.CODE :"</RequisitionNo>"
+END ELSE
+ IF MENU.FLAG = "P" THEN
+  STRXML := "<PONo>": OPO.CODE :"</PONo>"
+ END
+END
+STRXML := "<VendorNo>": OPO.VEND.NO :"</VendorNo>"
+STRXML := "<VendorName>": VEND.PO.DESC :"</VendorName>"
+STRXML := "<VendorAddress1>": VEND.PO.ADDR1 :"</VendorAddress1>"
+STRXML := "<VendorAddress2>": VEND.PO.ADDR2 :"</VendorAddress2>"
+STRXML := "<VendorCity>": FIELD(VEND.PO.CT.ST, ",",1) :"</VendorCity>"
+STRXML := "<VendorState>": FIELD(VEND.PO.CT.ST, ",",2) :"</VendorState>"
+STRXML := "<VendorZip>": VEND.PO.ZIP :"</VendorZip>"
+STRXML := "<VendorPhone>": VEND.PHONE :"</VendorPhone>"
+STRXML := "<VendorFax>": VEND.FAX :"</VendorFax>"
+STRXML := "<VendorEmailAddress>": VEND.EMAIL.ADDR :"</VendorEmailAddress>"
+*STRXML := "<Accrue>": OPO.ACCRUE :"</Accrue>"
+*STRXML := "<DueDate>":OCONV(PO.DUE.DATE,'D2/'):"</DueDate>"
+STRXML := "<VendorOrderNo>": OPO.VDR.ORD :"</VendorOrderNo>"
+STRXML := "<ContactName>": OPO.CONTACT :"</ContactName>"
+STRXML := "<ShipViaCode>": OPO.SHIP.VIA :"</ShipViaCode>"
+STRXML := "<ShipViaName>": OPO.VIA.DESC :"</ShipViaName>"
+STRXML := "<FreightOnBoard>": OPO.FOB :"</FreightOnBoard>"
+STRXML := "<Comments>": OPO.INTRAL.INT :"</Comments>"
+STRXML := "<TermsDate>": OPO.TERMS.DATE :"</TermsDate>"
+STRXML := "<TermsDescription>": OPO.TERMS.DESC :"</TermsDescription>"
+STRXML := "<TermsPercentage>":OCONV(OPO.TERMS.DISC,'MD2') :"</TermsPercentage>"
+STRXML := "<ShipToNo>": OPO.WHSE :"</ShipToNo>"
+STRXML := "<ShipToName>": OPO.SHIP.NAME :"</ShipToName>"
+STRXML := "<ShipToAddress1>": OPO.SHIP.ADDR1 :"</ShipToAddress1>"
+STRXML := "<ShipToAddress2>": OPO.SHIP.ADDR2 :"</ShipToAddress2>"
+STRXML := "<ShipToCity>": FIELD(OPO.SHIP.ADDR3, ",",1) :"</ShipToCity>"
+STRXML := "<ShipToState>": FIELD(OPO.SHIP.ADDR3, ",",2) :"</ShipToState>"
+STRXML := "<ShipToZip>": OPO.SHIP.ADDR4 :"</ShipToZip>"
+*
+;* T25941 v
+;* SCV.REC(39)<ECD.SCRN.NO,1> = OPO.PRT.FLG
+GOSUB SHOW.PRINT.MAIL.FLAGS
+;* T25941 ^
+STRXML := "<PoDate>":OCONV(OPO.DATE,'D2/'):"</PoDate>"
+STRXML := "<Division>": OPO.DIV.OWNER :"</Division>"
+STRXML := "<WrittenBy>": OPO.ORD.BY :"</WrittenBy>"
+IF MENU.FLAG = "R" THEN
+  LAST.POS = DCOUNT(OPO.STAT<1>,@VM)
+  LAST.ST.POS = DCOUNT(OPO.ST.DATE<1>,@VM)
+  STRXML := "<Status>": OPO.STAT<1,LAST.POS> :"</Status>"
+  STRXML := "<Approver>": OPO.APPROVER :"</Approver>"
+  STRXML := "<StatusDate>": OCONV(OPO.ST.DATE<1,LAST.ST.POS>,'D2/'):"</StatusDate>"
+END
+STRXML := "<Requestor>": OPO.REQUESTOR :"</Requestor>"
+GOSUB NEXT.SCRN.DATA
+GOSUB 1021
+555*
+IF MENU.FLAG = "R" THEN
+  STRXML:="</Requisition>"
+END ELSE
+  IF MENU.FLAG = "P" THEN
+    STRXML:="</OPO>"
+  END
+END
+STRXML := "</Payload>"
+RETURN
+***********************
+SHOW.PRINT.MAIL.FLAGS: 
+   ;* Show print flag
+PRT.FLAG = "";MAIL.FLAG=""
+   BEGIN CASE
+      CASE OPO.PRT.FLG<1,1> = 'Y'
+         *PRT.FLAG = "Yes"
+	 PRT.FLAG = "Y"
+     * CASE OPO.PRT.FLG<1,1> = 'P'
+     *    PRT.FLAG = "Print"
+     * CASE OPO.PRT.FLG<1,1> = 'C'
+     *    PRT.FLAG = "Copy"
+      CASE 1
+         PRT.FLAG = "N"
+   END CASE
+STRXML := "<PrintFlag>": PRT.FLAG :"</PrintFlag>"
+   ;* Show mail flag
+   BEGIN CASE
+      CASE OPO.PRT.FLG<1,2> = 'Y'
+         MAIL.FLAG = "Yes"
+      CASE OPO.PRT.FLG<1,2> = 'M'
+         MAIL.FLAG = "Sent"
+      CASE OPO.PRT.FLG<1,2> = 'C'
+         MAIL.FLAG = "Copy"
+      CASE 1
+         MAIL.FLAG = "N"
+   END CASE
+*STRXML := "<MailFlag>": MAIL.FLAG :"</MailFlag>"
+   RETURN
+****************
+NEXT.SCRN.DATA:
+STRXML := "<Jobs>"
+JOB.CNT = DCOUNT(OPO.JOB.NO,@VM)
+FOR N = 1 TO JOB.CNT
+STRXML := "<Job>"
+      STRXML := "<JobNo>":OPO.JOB.NO<1,N>:"</JobNo>"
+      STRXML := "<DeliveredDate>":OCONV(OPO.EXP.DATE<1,N>,"D2/"):"</DeliveredDate>"
+      STRXML := "<UnitPrice>":OCONV(OPO.U.PRICE<1,N> , "MD4"):"</UnitPrice>"
+      STRXML := "<UnitFlag>":OPO.UOM<1,N>:"</UnitFlag>"
+      STRXML := "<OrderedQuantity>":OCONV(OPO.QTY<1,N> , "MD2"):"</OrderedQuantity>"
+      STRXML := "<CancelledQuantity>":OCONV(OPO.CANCEL.QTY<1,N> , "MD2"):"</CancelledQuantity>"
+      AA = N
+      GOSUB 1019
+      GOSUB 1020
+      GOSUB 1003;* CALCULATE TOTAL QUANTITY RECEIVED
+      STRXML := "<OpenedQuantity>": OCONV(OPO.TOT.OPEN<1,N> , "MD2"):"</OpenedQuantity>"
+      STRXML := "<Category>":OPO.PROD.LINE<1,N>:"</Category>"
+      MATREAD CAOS.REC FROM CATEGORY.OSP,CONO:OPO.PROD.LINE<1,N> ELSE
+         MAT CAOS.REC = ''
+      END
+      CAT.DESC = CAOS.DESC
+      STRXML := "<CategoryDescription>":CAT.DESC :"</CategoryDescription>"
+      STRXML := "<Discount>":OCONV(OPO.DISCOUNT<1,N> , "MD2"):"</Discount>"
+      READV JOB.DESCR FROM JOB,CONO:OPO.JOB.NO<1,N>,16 ELSE JOB.DESCR= ''
+      JOB.DESCR = FIELD(JOB.DESCR,CHAR(253),1)
+      STRXML := "<JobDescription>":JOB.DESCR:"</JobDescription>"
+      READV DIVSN.DESC FROM DIVISION,CONO:OPO.DVDPCC<1,1,N>,1 ELSE DIVSN.DESC = ''
+      READV DEPMT.DESC FROM DEPARTMENT,CONO:OPO.DVDPCC<1,2,N>,2 ELSE DEPMT.DESC = ''
+      READV COSTCTR.DESC FROM COST.CNTR,CONO:OPO.DVDPCC<1,3,N>,1 ELSE COSTCTR.DESC = ''
+      READV OPERT.DESC FROM OPERATION,CONO:OPO.OPER.CODE<1,1,N>,1 ELSE OPERT.DESC = ''
+      STRXML := "<CategoryDivision>":OPO.DVDPCC<1,1,N>:"</CategoryDivision>"
+      STRXML := "<CategoryDivisionDescription>":DIVSN.DESC:"</CategoryDivisionDescription>"
+      STRXML := "<Department>":OPO.DVDPCC<1,2,N>:"</Department>"
+      STRXML := "<DepartmentDescription>":DEPMT.DESC:"</DepartmentDescription>"
+      STRXML := "<CostCenter>":OPO.DVDPCC<1,3,N>:"</CostCenter>"
+      STRXML := "<CostCenterDescription>":COSTCTR.DESC:"</CostCenterDescription>"
+      STRXML := "<Operation>":OPO.OPER.CODE<1,1,N>:"</Operation>"
+      STRXML := "<OperationDescription>":OPERT.DESC:"</OperationDescription>"
+      ITEM_COMMENTS = CHANGE(OPO.ITEM.COMM<1,N>,SVM," ")
+      STRXML := "<JobComments>":ITEM_COMMENTS:"</JobComments>"
+STRXML := "</Job>"
+NEXT N
+ STRXML := "</Jobs>"
+RETURN
+*********
+**** CALCULATE ORDERD VALUE
+1019 *
+   DESC.PRICE = INT(OPO.U.PRICE<1,AA>*((OPO.DISCOUNT<1,AA>/10000)))
+   DESC.PRICE = INT(OPO.U.PRICE<1,AA> - DESC.PRICE)
+*T23319 v
+   BEGIN CASE
+      CASE OPO.UOM<1,AA> = "M" 
+*        ONORD.AMT = INT(((DESC.PRICE/1000)*(OPO.QTY<1,AA>/100)+.5)/100)
+         ONORD.AMT = INT((DESC.PRICE/100)*(OPO.QTY<1,AA>/100000)+.5)
+      CASE OPO.UOM<1,AA> = "C"
+         ONORD.AMT = INT((DESC.PRICE/100)*(OPO.QTY<1,AA>/10000)+.5)
+      CASE 1
+*        ONORD.AMT = INT(((DESC.PRICE) * (OPO.QTY<1,AA>/100)+.5)/100)
+*T27938 v
+*        ONORD.AMT = INT((DESC.PRICE/100) * (OPO.QTY<1,AA>/100)+ .5)
+
+         IF DESC.PRICE LT 0 THEN
+            ONORD.AMT = INT((DESC.PRICE/100) * (OPO.QTY<1,AA>/100) - .5)
+         END ELSE
+            ONORD.AMT = INT((DESC.PRICE/100) * (OPO.QTY<1,AA>/100) + .5)
+         END
+*T27938 ^
+   END CASE
+*T23319 ^
+   IF ONORD.AMT > 999999999 THEN
+*      ERRMSG="Extended amount cannot exceed 9,999,999.99"
+*      EXT.FLAG = 1
+*      GOTO 93000
+      STRXML := "<ExOrderedQuantity>": OCONV(0, "MD2"):"</ExOrderedQuantity>"
+   END ELSE
+      OPO.EST.COST<1,AA> = ONORD.AMT
+      STRXML := "<ExOrderedQuantity>": OCONV(ONORD.AMT, "MD2"):"</ExOrderedQuantity>"
+   END
+   *GOSUB 1021
+   RETURN
+**** CALCULATE OPEN QTY
+1020 *
+   OPO.TOT.OPEN<1,AA> = OPO.QTY<1,AA> - OPO.QTY.RECVD<1,AA> - OPO.CANCEL.QTY<1,AA>
+   IF OPO.TOT.OPEN<1,AA> < 0 THEN OPO.TOT.OPEN<1,AA> = 0
+   *STRXML := "<OpenedQuantity>": OCONV(OPO.TOT.OPEN<1,AA> , "MD2"):"</OpenedQuantity>"
+   RETURN
+**********
+****GET RECEIVED INFO
+1003 *
+   IF CO.APS.O.INTRF < 3 THEN RETURN
+   IF OPO.PROD.LINE<1,N> # '' AND OPO.JOB.NO<1,N> # '' THEN
+      VPDS.KEY=CONO:OPO.VEND.NO:"!O!":OPO.NO:"!":OPO.JOB.NO<1,N>:"!":OPO.PROD.LINE<1,N>:"@":OPO.PROD.SEQ<1,N>
+      MATREAD VPDS.REC FROM VEND.PROD.STATS,VPDS.KEY ELSE MAT VPDS.REC = ''
+      DATE.RECVD = VPDS.REC.DATE
+      IF VPDS.REC.QTY = '' THEN 
+         QTY.RECVD = 0
+      END ELSE
+         QTY.RECVD = SUM(VPDS.REC.QTY)
+      END
+   END
+   OPO.QTY.RECVD<1,N> = QTY.RECVD
+STRXML := "<QuantityReceived>":OPO.QTY.RECVD<1,N>:"</QuantityReceived>"
+   RETURN
+*********
+*** CALCULATE TotalS
+*
+1021 *
+   P.CNT = DCOUNT(OPO.JOB.NO,VM)
+   TOT.QTY = 0 ; TOT.AMT = 0
+   FOR A = 1 TO P.CNT
+      TOT.QTY = TOT.QTY + OPO.QTY<1,A> - OPO.CANCEL.QTY<1,A>
+      DESC.PRICE = INT(OPO.U.PRICE<1,A>*((OPO.DISCOUNT<1,A>/10000)))
+      DESC.PRICE = INT(OPO.U.PRICE<1,A> - DESC.PRICE)
+*T23319 v
+      BEGIN CASE
+         CASE OPO.UOM<1,A> = "M" 
+*              ONORD.AMT.TOT = INT(((DESC.PRICE) * (OPO.QTY<1,A>*10)+.5)/100)
+            ONORD.AMT.TOT = INT(((DESC.PRICE/100)*((OPO.QTY<1,A> - OPO.CANCEL.QTY<1,A>)/100000)+.5))
+*                 ONORD.AMT.TOT = INT(((DESC.PRICE/1000)*(OPO.QTY<1,A>))+.5)
+         CASE OPO.UOM<1,A> = "C"
+            ONORD.AMT.TOT = INT(((DESC.PRICE/100)*((OPO.QTY<1,A> - OPO.CANCEL.QTY<1,A>)/10000)+.5))
+         CASE 1
+            ONORD.AMT.TOT = INT((DESC.PRICE/100) * ((OPO.QTY<1,A> - OPO.CANCEL.QTY<1,A>)/100)+.5)
+*              ONORD.AMT.TOT = INT(((DESC.PRICE) * (OPO.QTY<1,A>/100)+.5)/100)
+      END CASE
+*T23319 ^
+      TOT.AMT = TOT.AMT + ONORD.AMT.TOT
+   NEXT A
+   IF OCONV(TOT.AMT, "MD2") GT "99999999.9999" THEN
+*      ERRMSG="Total Extended amount cannot exceed 99,999,999.99"
+*      EXT.FLAG = 1
+*      GOTO 93000
+*      RETURN
+     STRXML := "<TotalQuantityOrdered>":OCONV(0,"MD2"):"</TotalQuantityOrdered>"
+     STRXML := "<TotalDollarAmount>":OCONV(0,"MD2"):"</TotalDollarAmount>"
+   END ELSE
+     STRXML := "<TotalQuantityOrdered>":OCONV(TOT.QTY,"MD2"):"</TotalQuantityOrdered>"
+     STRXML := "<TotalDollarAmount>":OCONV(TOT.AMT,"MD2"):"</TotalDollarAmount>"
+   END
+   RETURN
+**
+********
+DUPE.SUB: 
+*
+ECD.RET.VALUE = FIELD(REQ.NO,"!",2)
+   MATREAD OPO.REC FROM OUT.REQ, CONO:ECD.RET.VALUE ELSE
+      ERRMSG = 'Requisition # entered not on file'
+      GOSUB 93000
+   END
+   USER= USER.ID; DIV.OWNER = OPO.DIV.OWNER; APP.REQ.ID = ""
+   CALL PRIDGET_CHECK_ACTIVE_STATUS (CONO,USER,DIV.OWNER,RET.FLAG,MAT APP.REQ.REC,APP.REQ.ID,YYY)
+ECD.RET.VALUE = FIELD(REQ.NO<1,1>,"!",3)
+   OPO.CODE = ECD.RET.VALUE
+   MATREADU OPO.REC FROM OUTSIDE.PO, CONO:OPO.CODE THEN
+      IF MENU.FLAG = "R" THEN
+         ERRMSG = "PO with number ":OPO.CODE: " already exists"
+	 RELEASE OUTSIDE.PO,CONO:OPO.CODE
+         GOSUB 93000 
+      END
+   END ELSE
+      MATREADU OPO.REC FROM OUT.REQ, CONO:OPO.CODE THEN
+         ERRMSG = "Requisition with number ":OPO.CODE:" already exists"
+	  REQ = 1 ; * this is still requisition 
+	  RELEASE OUT.REQ,CONO:OPO.CODE
+         GOSUB 93000 
+      END 
+   END
+   IF OPO.CODE = 'N' THEN
+      OPO.STAT<1> = 'Entered'
+   END ELSE
+      OPO.STAT<1> = ''
+   END
+*T25854.2 ^
+   OPO.ST.DATE<1> = DATE()
+   OPO.PREV.APP = USER.ID
+   OPO.ORD.BY = APP.NAME<1>
+   OPO.DATE = DATE()
+   OPO.APPROVER = ''
+   OPO.APP.LEVEL = ''
+   OPO.PREV.APP = ''
+   OPO.LEVEL.STATUS = ''
+   NEW = 1
+   REQ = 1
+RETURN
+********
+93000*
+*T040609 v
+WRITE "ERRMSG  ":ERRMSG ON CONTROL,'01YAA'
+IF MENU.FLAG = "R" THEN
+STRXML = "<Payload><Requisition><ErrMsg>": ERRMSG:"</ErrMsg></Requisition></Payload>"
+END ELSE
+STRXML = "<Payload><OPO><ErrMsg>": ERRMSG:"</ErrMsg></OPO></Payload>"
+END
+END

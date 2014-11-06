@@ -1,0 +1,112 @@
+*THIS IS TO CLEAR INV.JOB.STATS/INV.STATS OF RESERVE QTYS FOR JOBS
+* THAT WERE RESERVED WITH COST.TYPE = AC BUT RESV.SERIAL = N.
+* LMR 11/4/04
+*COPY>ICS.CPYLIB>INV.JOB.STATS
+*COPY>ICS.CPYLIB>INV.STATS
+*COPY>JCS.CPYLIB>JOB
+*COPY>ICS.CPYLIB>INV_RECP_WHSE
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>CPYLIB>CHAR
+*
+PROMPT''
+OPEN '','INV.JOB.STATS' TO INV.JOB.STATS ELSE STOP
+OPEN '','INV_RECP_WHSE' TO INV_RECP_WHSE ELSE STOP
+OPEN '','INV.STATS' TO INV.STATS ELSE STOP
+OPEN '','INV.WHSE' TO INV.WHSE ELSE STOP
+OPEN '','JOB' TO JOB ELSE STOP
+*SELECT INV.STATS
+* USE GET.LIST HERE E.G., "IJS"
+*
+DONE=0
+LOOP
+  READNEXT IJS.ID ELSE DONE=1
+UNTIL DONE DO
+  CONO=IJS.ID[1,3]
+  PROD=FIELD(IJS.ID,"!",1)[4,15]
+  WHSE=OCONV(IJS.ID,"G1!1")
+  JOBNO=OCONV(IJS.ID,"G2!1")
+  MATREADU INV.JS.REC FROM INV.JOB.STATS,IJS.ID THEN
+    IF IJS.JOB.QTY+0 > 0 THEN
+      MATREADU INV.STAT.REC FROM INV.STATS,CONO:PROD:"!":WHSE THEN
+        FOR I = DCOUNT(IJS.RECP.NO,VM) TO 1 STEP -1
+          IF IJS.FI.QTY<1,I>+0 > 0 THEN
+            MATREADU IRW.REC FROM INV_RECP_WHSE,CONO:IJS.RECP.NO<1,I>:"!":WHSE THEN
+              LOCATE JOBNO IN IRW.JOB<1>,1 SETTING JFND THEN
+                IRW.JRSVD.QTY<1,JFND> -= IJS.FI.QTY<1,I>
+                IF IRW.JRSVD.QTY<1,JFND> <= 0 THEN
+                  DEL IRW.JOB<1,JFND>
+                  DEL IRW.JRSVD.QTY<1,JFND>
+                END
+              END
+              IF IRW.RSVB.QTY < IRW.CUR.QTY THEN IRW.RSVB.QTY += IJS.FI.QTY<1,I>
+              MATWRITE IRW.REC ON INV_RECP_WHSE,CONO:IJS.RECP.NO<1,I>:"!":WHSE
+              IJS.FI.QTY<1,I> = 0
+              IF IJS.JMT.SEQ<1,I> = '' THEN
+                DEL IJS.RECP.NO<1,I>
+                DEL IJS.FI.ORG<1,I>
+                DEL IJS.FI.QTY<1,I>
+                DEL IJS.JMT.SEQ<1,I>
+                DEL IJS.JMT.QTY<1,I>
+                DEL IJS.FI.AMT<1,I>
+              END
+            END
+          END
+        NEXT I
+        MATREADU JOB.REC FROM JOB,CONO:JOBNO THEN
+          PTR = 1
+          LOOP
+            LOCATE PROD IN JOB.RESV.MATL<1>,PTR SETTING PFND THEN
+              IF WHSE = JOB.RESV.WHSE<1,PFND> THEN
+                IF JOB.RESV.QTY<1,PFND> <= IJS.JOB.QTY THEN
+                  JOB.RESV.QTY<1,PFND> -= IJS.JOB.QTY
+                END
+                IF JOB.RESV.QTY<1,PFND>+JOB.ALOC.QTY<1,PFND>+JOB.USED.QTY<1,PFND> = 0 THEN
+                  DEL JOB.RESV.MATL<1,PFND>
+                  DEL JOB.RESV.WHSE<1,PFND>
+                  DEL JOB.RESV.DATE<1,PFND>
+                  DEL JOB.RESV.QTY<1,PFND>
+                  DEL JOB.ALOC.QTY<1,PFND>
+                  DEL JOB.USED.QTY<1,PFND>
+                  DEL JOB.RESV.AMT<1,PFND>
+                  DEL JOB.ALOC.AMT<1,PFND>
+                  DEL JOB.USED.AMT<1,PFND>
+                  LOCATE JOBNO IN ISTAT.JOB<1>,1 SETTING JFND THEN
+                    DEL ISTAT.JOB<1,JFND>
+                  END
+                END
+                PTR = 0
+              END ELSE PTR = PFND + 1
+            END ELSE PFND = 0
+          WHILE PTR AND PFND DO REPEAT
+          IF PFND THEN
+            MATWRITE JOB.REC ON JOB,CONO:JOBNO
+          END ELSE
+            CRT 'Could not locate product ':PROD:"!":WHSE:' in JOB ':JOBNO:;INPUT X
+            RELEASE JOB,CONO:JOBNO
+          END
+          IF ISTAT.JOB # '' OR ISTAT.PO # '' THEN
+            MATWRITE INV.STAT.REC ON INV.STATS,CONO:PROD:"!":WHSE
+          END ELSE
+            DELETE INV.STATS,CONO:PROD:"!":WHSE
+          END
+        END ELSE
+          CRT 'Could not locate JOB ':JOBNO:' for product ':PROD:"!":WHSE:;INPUT X
+          RELEASE JOB,CONO:JOBNO
+        END
+      END ELSE
+        CRT 'Could not locate INV.STATS record for ':PROD:"!":WHSE:;INPUT X
+        RELEASE INV.STATS, CONO:PROD:"!":WHSE
+      END
+      IJS.JOB.QTY -= IJS.FI.QTY<1,I>
+    END
+    IF IJS.JOB.ALOC+IJS.JOB.QTY+IJS.JOB.USED = 0 AND IJS.JMT.SEQ='' AND IJS.PO='' THEN
+      DELETE INV.JOB.STATS,IJS.ID
+    END ELSE
+      MATWRITE INV.JS.REC ON INV.JOB.STATS, IJS.ID
+    END
+  END ELSE
+    CRT 'Could not locate INV.JOB.STATS record  ':IJS.ID:;INPUT X
+    RELEASE INV.JOB.STATS, IJS.ID
+  END
+REPEAT
+CRT 'DONE'

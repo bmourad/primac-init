@@ -1,0 +1,175 @@
+SUBROUTINE PostUnitPrice
+********************************************************************************
+*   Program name :- PostUnitPrice
+*   Created:- 8/11/2003
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE JCS.CPYLIB DAILY.OSP
+$INCLUDE JCS.CPYLIB FOH.TABLE
+$INCLUDE JCS.CPYLIB CATEGORY.OSP
+$INCLUDE POS.CPYLIB OUTSIDE.PO
+$INCLUDE JCS.CPYLIB JOB
+$INCLUDE PMC.CPYLIB VEND
+$INCLUDE APS.CPYLIB VEND.PROD.STATS
+$INCLUDE JCS.CPYLIB WIP.LEVEL
+VEND.TERMS = ''
+OPO.EST.COST = '';OPO.QTY= ''
+ERRMSG = ""
+COST.CHG = ''
+TST = 1
+VPDS.PRESENT = 0
+STATUS=RBO.getProperty('','PMCProperty',PMCProperty)
+CONO = PMCProperty<1,4>
+
+*OPEN FILES
+OPEN '','DAILY.OSP' TO DAILY.OSP ELSE ERRMSG='DAILY.OSP FILE IS MISSING';GOTO 91000
+OPEN '','FOH.TABLE' TO FOH.TABLE ELSE ERRMSG='FOH.TABLE FILE IS MISSING';GOTO 91000
+OPEN '','CATEGORY.OSP' TO CATEGORY.OSP ELSE ERRMSG='CATEGORY.OSP FILE IS MISSING';GOTO 91000
+OPEN '','OUTSIDE.PO' TO OUTSIDE.PO ELSE ERRMSG='OUTSIDE.PO FILE IS MISSING';GOTO 91000
+OPEN '','JOB' TO JOB ELSE ERRMSG='JOB FILE IS MISSING';GOTO 91000
+OPEN '','VEND' TO VEND ELSE ERRMSG='VEND FILE IS MISSING';GOTO 91000
+OPEN '','VEND.PROD.STATS' TO VEND.PROD.STATS ELSE ERRMSG = 'VEND.PROD.STATS FILE IS MISSING';GOSUB 91000
+OPEN '','CONTROL' TO CONTROL ELSE ERRMSG='CONTROL FILE IS MISSING';GOTO 91000
+
+
+* Insert method code here
+
+STATUS = RBO.getProperty('','DOS_U_PRICE',DOS.U.PRICE)
+STATUS = RBO.getProperty('','ByUnitCost',DOS.UOM)
+STATUS = RBO.getProperty('','GRS_AMT',DOS.GRS.AMT)
+STATUS = RBO.getProperty('','Out_Cat',DOS.PRD.LINE)
+STATUS = RBO.getProperty('','VPDS_NO',VPDS.PRESENT)
+
+MATREAD CAOS.REC FROM CATEGORY.OSP, CONO:DOS.PRD.LINE ELSE
+            MAT CAOS.REC=''
+END
+
+MATREAD WIP.LEVEL.REC FROM CONTROL, CONO : "WIP.LEVEL" ELSE
+      MAT WIP.LEVEL.REC=0
+      WLR.OS.COST=2;WLR.OS.WIP=2
+END
+ IF DOS.GRS.AMT # "" THEN
+         GOTO 9000
+ END
+ IF DOS.U.PRICE+0 # 0 THEN 
+	COST.CHG = 1
+	 GOSUB 9200	
+END
+	
+ IF COST.CHG THEN 
+ GOSUB 9500
+ COST.CHG = 0
+ END
+ 
+STATUS = RBO.setProperty('','ByUnitCost',DOS.UOM)
+STATUS = RBO.setProperty('','DOS_U_PRICE',DOS.U.PRICE)
+STATUS = RBO.setProperty('','DOS_DESC',DOS.DSC.AMT)
+STATUS = RBO.setProperty('','DOS_GRS_AMT',DOS.GRS.AMT)
+STATUS = RBO.setProperty('','DOS_MER_AMT',DOS.MER.AMT) 
+STATUS = RBO.setProperty('','DOS_SALE_AMT',DOS.SALE.AMT)
+
+RETURN
+* End of method code
+
+9200*
+   IF DOS.UOM = "" THEN
+      DOS.UOM = "EA"
+   END
+RETURN
+
+9500*
+ BEGIN CASE                     
+      CASE DOS.UOM = "M"          
+         REAL.QTY = DOS.QTY / 1000
+      CASE DOS.UOM = "C"          
+         REAL.QTY = DOS.QTY / 100 
+      CASE 1                      
+         REAL.QTY = DOS.QTY       
+   END CASE 
+   DOS.GRS.AMT = INT((DOS.U.PRICE/10000) * REAL.QTY + .5)   
+   SAV.GRS.AMT = DOS.GRS.AMT
+   DOS.MER.AMT = DOS.GRS.AMT	
+	DISC=VEND.TERMS<1,1>
+      DOS.DSC.AMT=INT((DOS.MER.AMT * DISC[1,4]) /10000 + .5)
+      IF SAV.GRS.AMT+0 # 0 AND SAV.GRS.AMT # DOS.GRS.AMT AND NOT(COST.CHG) THEN 
+         GOSUB 9000
+	END
+	IF DOS.SALE.AMT + 0 # 0 AND SAV.GRS.AMT+0 # 0 AND SAV.GRS.AMT # DOS.GRS.AMT THEN 
+	GOSUB 9900 
+   	END
+RETURN
+
+9000*
+IF VPDS.PRESENT THEN
+      DOS.U.PRICE= VPDS.ORD.UN.COST<1,1>
+   END ELSE
+        IF TST > 0 AND OPO.EST.COST<1,TST>+0 > 0 THEN
+
+         BEGIN CASE                  
+            CASE OPO.UOM<1,TST> = 'M'
+               DOS.U.PRICE = OCONV((OPO.EST.COST<1,TST> * 100) / (OPO.QTY<1,TST>/1000), 'MD0') * 100
+            CASE OPO.UOM<1,TST> = 'C'
+               DOS.U.PRICE= OCONV((OPO.EST.COST<1,TST> * 100) / (OPO.QTY<1,TST>/100), 'MD0') * 100
+            CASE 1
+		 DOS.U.PRICE= OCONV((OPO.EST.COST<1,TST> * 100) / OPO.QTY<1,TST>, "MD0") * 100
+         END CASE
+       END
+   END
+RETURN
+
+9900*
+
+BEGIN CASE
+      CASE DOS.TYPE="S" OR DOS.TYPE="N"
+         DOS.SALE.AMT=0
+      CASE WLR.OS.COST < 2
+         DOS.SALE.AMT=INT((((CAOS.MARKUP/10000)+1) * DOS.GRS.AMT) + .5)
+	CASE NUM(CAOS.FOH.PCT)
+         DOS.SALE.AMT=INT((DOS.GRS.AMT * (1+ CAOS.FOH.PCT/10000)) + .5)
+        DOS.SALE.AMT=INT((((CAOS.MARKUP/10000)+1) * DOS.SALE.AMT) + .5)
+CASE 1
+         MATREAD FTR.REC FROM FOH.TABLE, CONO : CAOS.FOH.PCT ELSE
+            MAT FTR.REC=''
+         END
+         IF FTR.QTY='' THEN
+            FOH.PCT=0
+         END ELSE
+            TOT.DCOST=DOS.GRS.AMT
+            K=1
+            LOOP
+               LOCATE DOS.PRD.LINE IN JOB.OS.PLINE<1>,K SETTING CPTR ELSE CPTR=0
+            WHILE CPTR DO
+               TOT.DCOST=TOT.DCOST + JOB.OS.DCOST<1,CPTR>
+               K=CPTR + 1
+            REPEAT
+            FTR.CNT=COUNT(FTR.QTY,@VM) + 1
+            IF TOT.DCOST >= FTR.QTY<1,FTR.CNT> THEN
+               FOH.PCT=FTR.PCT<1,FTR.CNT>
+            END ELSE
+               FOH.PCT=0
+               FOR FPR=1 TO FTR.CNT WHILE FOH.PCT=0
+                  IF TOT.DCOST <= FTR.QTY<1,FPR> THEN
+                     FOH.PCT=FTR.PCT<1,FPR>
+                  END
+               NEXT FPR
+            END
+         END
+         DOS.SALE.AMT=INT((DOS.GRS.AMT * (1+ FOH.PCT/10000)) + .5)
+         DOS.SALE.AMT=INT((((CAOS.MARKUP/10000)+1) * DOS.SALE.AMT) + .5)
+       END CASE
+   RETURN
+
+91000*
+ STATUS = RBO.setProperty('','ServerStatus',1)
+STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+RETURN

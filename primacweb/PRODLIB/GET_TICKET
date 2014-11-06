@@ -1,0 +1,364 @@
+SUBROUTINE GET_TICKET
+********************************************************************************
+*   Program name :- GET_TICKET
+*   Created:- 12/26/2005
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+
+$INCLUDE PMC.CPYLIB COMP.OPS
+$INCLUDE PMC.CPYLIB CUSTOMER
+$INCLUDE ICS.CPYLIB FNGD.BOM
+$INCLUDE PMC.CPYLIB SHIP.TO
+$INCLUDE PMC.CPYLIB TAX
+$INCLUDE PMC.CPYLIB FOB
+$INCLUDE OPS.CPYLIB ORDER
+$INCLUDE OPS.CPYLIB BOL
+$INCLUDE OPS.CPYLIB PICK.TICKET
+$INCLUDE OPS.CPYLIB ORDER.RELEASE
+$INCLUDE OPS.CPYLIB ORDER.DETAIL
+$INCLUDE OPS.CPYLIB ORDER.DETAIL.INQ
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB INV.WHSE
+$INCLUDE ICS.CPYLIB CATEGORY
+$INCLUDE ICS.CPYLIB INV.CNV
+$INCLUDE ICS.CPYLIB INV_SERIAL       
+$INCLUDE ICS.CPYLIB INV_RECEIPTS     
+$INCLUDE ICS.CPYLIB INV_RECP_WHSE    
+$INCLUDE CPYLIB GEN.XREF.SUB
+$INCLUDE CPYLIB EDIT.COM
+$INCLUDE CPYLIB XREF.DATA
+$INCLUDE CPYLIB EDIT.COM.DRIVER
+$INCLUDE CPYLIB FILE.VARS
+$INCLUDE CPYLIB CHAR
+$INCLUDE CPYLIB SYSCOM
+
+OPEN "","ORDER" TO ORDER ELSE
+	    ERRMSG = "CANNOT OPEN ORDER FILE"
+	    GOTO 4099
+END
+OPEN "","ORDER.DETAIL" TO ORDER.DETAIL ELSE
+	    ERRMSG = "CANNOT OPEN ORDER.DETAIL FILE"
+	    GOTO 4099
+END
+
+OPEN "","CUSTOMER" TO CUSTOMER ELSE
+	    ERRMSG = "CANNOT OPEN CUSTOMER FILE"
+	    GOTO 4099
+END
+
+
+OPEN "","ORDER.RELEASE" TO ORDER.RELEASE ELSE
+	    ERRMSG = "CANNOT OPEN ORDER.RELEASE FILE"
+	    GOTO 4099
+END
+
+
+OPEN "","INVENTORY" TO INVENTORY ELSE
+	    ERRMSG = "CANNOT OPEN INVENTORY FILE"
+	    GOTO 4099
+END
+OPEN "","CATEGORY" TO CATEGORY ELSE
+	    ERRMSG = "CANNOT OPEN CATEGORY FILE"
+	    GOTO 4099
+END
+
+OPEN "","SHIP.TO" TO SHIP.TO ELSE
+	    ERRMSG = "CANNOT OPEN SHIP.TO FILE"
+	    GOTO 4099
+END
+OPEN "","PICK.TICKET" TO PICK.TICKET ELSE
+	    ERRMSG = "CANNOT OPEN PICK.TICKET FILE"
+	    GOTO 4099
+END
+
+
+OPEN "","INV.WHSE" TO INV.WHSE ELSE
+	    ERRMSG = "CANNOT OPEN INV.WHSE FILE"
+	    GOTO 4099
+END
+
+OPEN "","INV_SERIAL_TEMP" TO INV_SERIAL_TEMP ELSE
+	    ERRMSG = "CANNOT OPEN INV_SERIAL_TEMP FILE"
+	    GOTO 4099
+END
+
+OPEN "","INV_RECEIPTS" TO INV_RECEIPTS ELSE
+	    ERRMSG = "CANNOT OPEN INV_RECEIPTS FILE"
+	    GOTO 4099
+END
+
+OPEN "","INV_RECP_WHSE_TEMP" TO INV_RECP_WHSE_TEMP ELSE
+	    ERRMSG = "CANNOT OPEN INV_RECP_WHSE_TEMP FILE"
+	    GOTO 4099
+END
+
+STATUS = RBO.getProperty("","PMCProperty",PMCProperty)
+STATUS=RBO.getProperty('','BOL_ORDNO',BOL.ORDNO)
+STATUS=RBO.getProperty('','BOL_PKTKT',BOL_PKTKT)
+
+CONO=PMCProperty<1,4>
+ORDNO=BOL.ORDNO
+LN=''
+CUSTNO=''
+NEWREC='1'
+PDCNT=''
+PDNO=''
+TEMP.SID=''
+BOL.ORDER=''
+BOL.PROD =''
+BOL.WHSE=''
+*TEMP.AVAIL =''
+QTYPTR=''
+RELNO=''
+FIRST='1'
+I=''
+PRODDESC=''
+PDESC=''
+POSD =''
+DEFLOC=''
+DEFAULT.FOB=''
+BOL.FOB=''
+
+*---- SETUP UNIT MEASURE CONVERSION AND DISPLAY
+   ICR.CNV = "MD0"; ICR.CNV1 = "MD0,"
+   ICR.DV1 = 1; ICR.MT1 = 1; ICR.DV2 = 1000
+   ICR.TYPE = 3; ICR.SCAL = 0
+*----
+180 *
+         NEWREC = 1; BOLNO = "N"
+         PKTKTNO = BOL_PKTKT
+         ITYPE = "T"
+         ICODE = PKTKTNO
+         GOSUB 4000
+         IF ERRMSG # "" THEN
+            GOSUB 4099
+         END
+RETURN
+
+4000*
+   ERRMSG = ""
+   
+      IF PKTKTNO # "" THEN
+         MATREAD PKT.REC FROM PICK.TICKET, CONO:PKTKTNO ELSE
+            ERRMSG = "Cannot locate Pick Ticket # ":PKTKTNO
+            GOTO 4099
+         END
+         BEGIN CASE
+            CASE SUM(PKT.SHIP.QTY) > 0
+               ERRMSG = "Ticket has already been shipped"
+               GOTO 4099
+            CASE PKT.BOL # "" AND PKT.BOL # BOLNO
+               ERRMSG = "Ticket is on Bill of Lading ":PKT.BOL
+               GOTO 4099
+         END CASE
+         IF PKT.REL.NO = "" THEN
+            DASH.FOUND = 0
+            CHARCNT = LEN(PKTKTNO)
+            FOR XX = CHARCNT TO 1 STEP (-1) UNTIL DASH.FOUND
+               IF PKTKTNO[XX,1] = "-" THEN
+                  ORDNO = PKTKTNO[1,XX-1]
+                  DASH.FOUND = 1
+               END
+            NEXT XX
+         END ELSE
+            MATREAD ORR.REC FROM ORDER.RELEASE, CONO:PKT.REL.NO ELSE
+               ERRMSG = "Cannot locate Release # ":PKT.REL.NO
+               GOTO 4099
+            END
+            IF NEWREC AND ORR.STATUS<1,1> # "" THEN
+               ERRMSG = "Release ":PKT.REL.NO:" ":ORR.STATUS<1,1>
+               GOTO 4099
+            END
+            ORDNO = ORR.ORD
+            RELNO = PKT.REL.NO
+         END
+         SHPNO = PKT.SHIP.TO
+         GOSUB 4100
+	   
+         IF ERRMSG # "" THEN GOTO 4099
+         IF PKT.REL.NO = "" THEN
+            IF ORD.REL.NO # "" THEN
+               ERRMSG = "Release required for shipment! "
+               GOTO 4099
+            END
+         END ELSE
+            LOCATE PKT.REL.NO IN ORD.REL.NO<1>,1 SETTING FND ELSE
+               ERRMSG = "Cannot locate ticket release # on order! "
+               GOTO 4099
+            END
+         END
+         AVL.PROD = ""; AVL.WHSE = ""; AVL.QTY = ""
+         FOR PDNO = PDCNT TO 1 STEP -1
+            PNO = PDPTR<PDNO>; PPOS = 1
+            LOOP
+               LOCATE OSD.PROD<1,PNO> IN PKT.PROD<1>,PPOS SETTING PLOC THEN
+                  IF (OSD.WHSE<1,PNO> = PKT.WHSE<1,PLOC>) AND (OSD.KIT<1,PNO> = PKT.KIT<1,PLOC>) AND (OSD.PROD.SEQ<1,PNO> = PKT.SEQ<1,PLOC>) THEN
+                     PPOS = 0
+                     QCNT = DCOUNT(QTYPTR<PDNO>,VM)
+			   FOR QNO = QCNT TO 1 STEP -1
+                        RNO = QTYPTR<PDNO,QNO>
+				
+                        IF OSD.REL.NO<1,PNO,RNO> # RELNO THEN
+				QTYPTR = DELETE(QTYPTR,PDNO,QNO,0)
+			    END ELSE
+                           LOCATE OSD.RECP.NO<1,PNO,RNO> IN PKT.RECP.NO<1,PLOC>,1 SETTING FND ELSE
+                              QTYPTR = DELETE(QTYPTR,PDNO,QNO,0)
+                           END
+     			   END
+                     NEXT QNO
+	
+                     IF QTYPTR<PDNO> = "" THEN
+                        PDPTR = DELETE(PDPTR,PDNO,0,0)
+                        QTYPTR = DELETE(QTYPTR,PDNO,0,0)
+                     END
+			
+                  END
+               END ELSE
+                  PDPTR = DELETE(PDPTR,PDNO,0,0)
+                  QTYPTR = DELETE(QTYPTR,PDNO,0,0)
+                  PPOS = 0
+               END
+            WHILE PPOS DO
+               PPOS = PLOC + 1
+            REPEAT
+         NEXT PDNO
+         PDCNT = DCOUNT(PDPTR,AM)
+         IF PDCNT < 1 THEN
+            ERRMSG = "Cannot locate any available quantity for this Pick Ticket":PKTKTNO 
+         END
+
+		STATUS = RBO.setProperty("","BOL_CUST",CUSTNO)
+		STATUS = RBO.setProperty("","BOL_ORDER",ORDNO) ;* CHANGED IT WAS BOL_ ORDER
+		STATUS = RBO.setProperty("","SPT_NAME",SPT.NAME)
+	       STATUS = RBO.setProperty("","SPT_ADDR1",SPT.ADDR1)
+      	 	STATUS = RBO.setProperty("","SPT_ADDR2",SPT.ADDR2)
+      		STATUS = RBO.setProperty("","SPT_CITY",SPT.CITY)
+     		STATUS = RBO.setProperty("","SPT_STATE",SPT.STATE)
+	       STATUS = RBO.setProperty("","SPT_ZIP",SPT.ZIP)
+	       STATUS = RBO.setProperty("","BOL_SHIP_TO",SHPNO)
+		STATUS = RBO.setProperty("","BOL_RELEASE",PKT.REL.NO)
+		STATUS = RBO.setProperty("","BOL_FOB",DEFAULT.FOB)
+
+	END
+
+RETURN
+
+4100*
+   MATREADU ORD.REC FROM ORDER, CONO:ORDNO ELSE
+      RELEASE ORDER, CONO:ORDNO
+      ERRMSG = "Cannot locate Order # ":ORDNO
+      GOTO 4199
+   END
+   DIV.CODE = ORD.DIV; USER.ID = UPCASE(PMCProperty<1,3>); ERRMSG = ''
+   CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+   IF ERRMSG # '' THEN GOTO 4199
+   *GOSUB 6000
+   *IF ERRMSG # '' THEN GOTO 4099
+   IF ORD.STATUS<1,1> = "CLOSED" OR ORD.STATUS<1,1> = "CANCEL" THEN
+     RELEASE ORDER, CONO:ORDNO
+     ERRMSG = "Order has either been closed or cancelled"
+     GOTO 4199
+   END
+   IF CUSTNO = "" THEN
+      CUSTNO = ORD.CUST
+   END ELSE
+      IF CUSTNO # ORD.CUST THEN
+         RELEASE ORDER, CONO:ORDNO
+         ERRMSG = "Order (":ORDNO:") belongs to customer # ":ORD.CUST :"~":CUSTNO
+         GOTO 4199
+      END
+   END
+   MATREAD CUST.REC FROM CUSTOMER, CONO:ORD.CUST ELSE
+      RELEASE ORDER, CONO:ORDNO
+      ERRMSG = "Cannot locate customer # ":ORD.CUST
+      GOTO 4199
+   END
+   LOCATE SHPNO IN ORD.SHIP.TO<1>,2 SETTING SLOC ELSE
+      ERRMSG = "Cannot associate ship to (":SHPNO:") with order # ":ORDNO
+      GOTO 4199
+   END
+   MATREAD SPT.REC FROM SHIP.TO, CONO:CUSTNO:"!":SHPNO ELSE
+      ERRMSG = "Cannot locate ship to # ":SHPNO
+      GOTO 4199
+   END
+	
+	***
+	STATUS = RBO.setProperty("","BOL_SHIP_VIA",SPT.SHIP.VIA)
+	BEGIN CASE
+	  CASE BOL.FOB # ""
+		DEFAULT.FOB=""
+	  CASE SPT.FOB # ""
+         	DEFAULT.FOB = SPT.FOB
+      	  CASE 1
+              DEFAULT.FOB= CUST.ADDL.OPS<1,2>
+   	END CASE
+	***
+
+   MATREAD ORD.DET.REC FROM ORDER.DETAIL, CONO:ORDNO:"!":SHPNO ELSE
+      ERRMSG = "Cannot locate Order / Ship to # ":ORDNO:" / ":SHPNO
+      GOTO 4199
+   END
+   PCNT = DCOUNT(OSD.PROD,VM)
+   PDPTR = ""; QTYPTR = ""
+   PRODPTR = ""
+   FOR PNO = 1 TO PCNT
+      RCNT = DCOUNT(OSD.FI.QTY<1,PNO>,SVM)
+      FOR RNO = 1 TO RCNT
+*
+         IF OSD.KIT<1,PNO> # "N" THEN
+            IF OSD.KIT<1,PNO> = "K" THEN
+               IF OSD.FI.QTY<1,PNO,RNO> > 0 THEN
+                  LOCATE PNO IN PDPTR,1 SETTING PLOC ELSE
+                     PDPTR<PLOC> = PNO
+                  END
+                  QTYPTR<PLOC,-1> = RNO
+               END ELSE
+                  LOCATE PNO IN PDPTR,1 SETTING PLOC ELSE
+                     PDPTR<PLOC> = PNO
+                  END
+                  QTYPTR<PLOC,-1> = RNO + 1
+               END
+            END ELSE
+               IF OSD.FI.QTY<1,PNO,RNO> > 0 THEN
+                  LOCATE PNO IN PDPTR,1 SETTING PLOC ELSE
+                     PDPTR<PLOC> = PNO
+                  END
+                  QTYPTR<PLOC,-1> = RNO
+               END
+            END
+         END ELSE
+            IF OSD.FI.QTY<1,PNO,RNO> > 0 THEN
+               LOCATE PNO IN PDPTR,1 SETTING PLOC ELSE
+                  PDPTR<PLOC> = PNO
+               END
+               QTYPTR<PLOC,-1> = RNO
+            END
+         END
+      NEXT RNO
+   NEXT PNO
+   PDCNT = DCOUNT(PDPTR,AM)
+   
+   IF PDCNT < 1 THEN
+      ERRMSG = "Cannot locate any available quantity for this Order/Ship to ":ORDNO:" / ":SHPNO
+   END
+4199*
+RETURN
+
+
+4099 *
+STATUS = RBO.setProperty('','ServerStatus',1)        
+STATUS = RBO.setProperty('','ServerMessage',ERRMSG) 
+RETURN
+* End of method code
+RETURN
+

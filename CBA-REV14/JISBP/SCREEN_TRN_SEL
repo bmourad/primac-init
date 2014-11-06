@@ -1,0 +1,528 @@
+      SUBROUTINE S_M_SEL(STKD_ID,MTBL_PTR,MTBL_NAME,IDLIST)
+*COPY>CPYLIB>COM1
+*COPY>JIS.CPYLIB>SYS_TKT_DEF
+*COPY>CPYLIB>FILE.VARS
+*COPY>JIS.CPYLIB>SYS_FIELDS
+*COPY>CPYLIB>GEN.XREF.SUB
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>CHAR
+*
+*---- Main Process
+*
+      IF STKD_ID = "" THEN
+         MAT STKD.REC = ""
+      END ELSE
+         MATREAD STKD.REC FROM SYS_TKT_DEF, STKD_ID ELSE
+            MAT STKD.REC = ""
+         END
+      END
+*
+CONOLEN = 3; CONO = "001"
+S_MODE = STKD_SELMODE
+*
+      BEGIN CASE
+      CASE S_MODE = "S"
+         GOSUB 100; GOSUB 3000; GOSUB 50; GOSUB 7500
+      CASE S_MODE = "E"
+         GOSUB 50; GOSUB 7000
+      CASE S_MODE = "A"
+         GOSUB 50; GOSUB 100; GOSUB 3000; GOSUB 7000
+      END CASE
+      GOTO 99999
+*
+*---- Initalization sub.
+*
+50*
+      OLD.START.LINE = 0; BEGIN.PAGE = 4; PAGE.SIZE = 16; LINES = 0
+      LN = 1; OLD.LINES = 0; LINE.SPACE = 1
+      PMSG1 = "(A)dd,(C)hange,(D)elete,(I)nsert,(S)croll,(L)oad,(U)nload,(E)nd :"
+      PMSG2 = "Line Number :"
+      PMSG_Y_L = 21
+      RETURN
+*
+*---- Selection sub.
+*
+100*
+      SELECT FILE.VARS(MTBL_PTR)
+      DATA = 1
+      LINES = 0
+      IF CONOLEN THEN
+         LOOP
+            READNEXT ID ELSE DATA = 0
+         WHILE DATA DO
+            IF ID[1,CONOLEN] = CONO THEN
+               IF LEN(ID) > CONOLEN THEN
+                  LINES = LINES + 1
+                  IDLIST<LINES> = ID
+               END
+            END
+         REPEAT
+      END ELSE
+         LOOP
+            READNEXT ID ELSE DATA = 0
+         WHILE DATA DO
+            LINES = LINES + 1
+            IDLIST<LINES> = ID
+         REPEAT
+      END
+      RETURN
+*
+*---- Build IDs
+*
+3000*
+      SET.MAX = DCOUNT(STKD_WITH_FLD,VM)
+      IF SET.MAX < 1 THEN GOTO 3700
+      SET.SEQ = 0; SET.CNT = 1; PTR = 2
+      LOOP
+         LOCATE "O" IN STKD_WITH<1>,PTR SETTING W THEN
+            SET.CNT = SET.CNT + 1
+            IF W = SET.MAX THEN
+               SET.SEQ<SET.CNT> = W - 1
+               SET.CNT = SET.CNT + 1
+               SET.SEQ<SET.CNT> = W
+               PTR = 0
+            END ELSE
+               SET.SEQ<SET.CNT> = W - 1
+               PTR = W + 1
+            END
+         END ELSE
+            BEGIN CASE
+               CASE SET.CNT = 1
+                  SET.CNT = 2
+                  SET.SEQ<SET.CNT> = SET.MAX
+               CASE SET.SEQ<SET.CNT> < SET.MAX
+                  SET.CNT = SET.CNT + 1
+                  SET.SEQ<SET.CNT> = SET.MAX
+            END CASE
+            PTR = 0
+         END
+      WHILE PTR DO REPEAT
+      OLINES = LINES
+      CNV = ""; WITH_ATT = ""
+      FOR SSO = 1 TO SET.MAX
+         MATREAD DFD.REC FROM SYS_FIELDS, STKD_WITH_FLD<1,SSO> ELSE
+           ERRMSG = "Error # 019"; GOSUB 91000
+           CNV<SSO> = ""
+           GOTO 3100
+         END
+         BEGIN CASE
+           CASE DFD_TYPE = "D"
+             CNV<SSO> = "D2/"
+           CASE DFD_TYPE = "C"
+             CNV<SSO> = "MD":DFD_DEC
+           CASE 1
+             CNV<SSO> = ""
+         END CASE
+         WITH_ATT<SSO> = DFD_ATTNO
+3100*
+      NEXT SSO
+      FOR LNO = OLINES TO 1 STEP - 1
+         READ ITEM FROM FILE.VARS(MTBL_PTR) , IDLIST<LNO> ELSE
+            IDLIST = DELETE(IDLIST,LNO,0,0)
+            LINES = LINES - 1
+            GOTO 3500
+         END
+         MAX.SET.SEQ = SET.CNT - 1
+         FOR MSS = 1 TO MAX.SET.SEQ
+            SUB.SET.NO = SET.SEQ<MSS> + 1
+            MAX.SUB.SET = SET.SEQ<MSS+1>
+            FOR SSO = SUB.SET.NO TO MAX.SUB.SET
+               OPNO = STKD_WITH_EQ<1,SSO>
+               VLNO = STKD_WITH_VAL<1,SSO>
+               BEGIN CASE
+                  CASE CNV<SSO> = ""
+                  CASE VLNO = "DATE" AND CNV<SSO> = "D2/"
+                     VLNO = DATE()
+                  CASE VLNO = "TIME" AND CNV<SSO> = "MTS"
+                     VLNO = TIME()
+               END CASE
+               CHK.FLD = IDLIST<LNO>
+*               IF CHK.FLD THEN
+*                  MVNO = STKD_WITH_MV<1,SSO> + 0
+*                  IF MVNO THEN
+*                     CHK.FLD = ITEM<CHK.FLD,MVNO>
+*                  END ELSE
+*                     CHK.FLD = ITEM<CHK.FLD>
+*                  END
+*               END ELSE
+*                  CHK.FLD = IDLIST<LNO>
+*                  MVNO = 0
+*               END
+               BEGIN CASE
+                  CASE OPNO = "EQ"
+                     IF VLNO # CHK.FLD THEN MAX.SUB.SET = 0
+                  CASE OPNO = "NE"
+                     IF VLNO = CHK.FLD THEN MAX.SUB.SET = 0
+                  CASE OPNO = "GE"
+                     IF CHK.FLD < VLNO THEN MAX.SUB.SET = 0
+                  CASE OPNO = "LE"
+                     IF CHK.FLD > VLNO THEN MAX.SUB.SET = 0
+                  CASE OPNO = "GT"
+                     IF CHK.FLD <= VLNO THEN MAX.SUB.SET = 0
+                  CASE OPNO = "LT"
+                     IF CHK.FLD >= VLNO THEN MAX.SUB.SET = 0
+                  CASE OPNO = "IX"
+                     IF NOT(INDEX(CHK.FLD,VLNO,1)) THEN MAX.SUB.SET = 0
+                  CASE OPNO = "IN"
+                     IF INDEX(CHK.FLD,VLNO,1) THEN MAX.SUB.SET = 0
+                  CASE OPNO = "LX"
+                     IF MVNO THEN
+                        LOCATE VLNO IN CHK.FLD<1,1>,1 SETTING L ELSE
+                           MAX.SUB.SET = 0
+                        END
+                     END ELSE
+                        LOCATE VLNO IN CHK.FLD<1>,1 SETTING L ELSE
+                           MAX.SUB.SET = 0
+                        END
+                     END
+                  CASE OPNO = "LN"
+                     IF MVNO THEN
+                        LOCATE VLNO IN CHK.FLD<1,1>,1 SETTING L THEN
+                           MAX.SUB.SET = 0
+                        END
+                     END ELSE
+                        LOCATE VLNO IN CHK.FLD<1>,1 SETTING L THEN
+                           MAX.SUB.SET = 0
+                        END
+                     END
+                  CASE 1
+                     MAX.SUB.SET = 0
+               END CASE
+            NEXT SSO
+            IF MAX.SUB.SET THEN MAX.SET.SEQ = 0
+         NEXT MSS
+         IF MAX.SET.SEQ THEN
+            IDLIST = DELETE(IDLIST,LNO,0,0)
+            LINES = LINES - 1
+         END
+3500*
+      NEXT LNO
+      IF LINES < 1 THEN
+         ERRMSG = "Error # 020"; GOSUB 91000
+         GOTO 3999
+      END
+3700*
+      OPEN "","SAVEDLISTS" TO SAVEDLISTS ELSE
+         ERRMSG = "Error # 021"; GOSUB 91000
+         GOTO 3999
+      END
+      OPEN "DICT",MTBL_NAME TO DICTFILE ELSE
+         ERRMSG = "Error # 023"; GOSUB 91000
+         GOTO 3999
+      END
+*      LISTNAME = "XREFL":PORT.NO
+       LISTNAME = "XREFL"
+      LISTID = LISTNAME:"000"
+      READU DLIST FROM SAVEDLISTS, LISTID ELSE NULL
+      WRITE IDLIST ON SAVEDLISTS, LISTID
+      DLIST = ""
+      GETLIST LISTNAME TO SLIST ELSE
+         ERRMSG = "Error # 024"; GOSUB 91000
+         GOTO 3999
+      END
+      STMT = "SSELECT ":MTBL_NAME
+      SCNT = DCOUNT(STKD_SORT,VM)
+      FOR SS = 1 TO SCNT
+         DICTNAME = STKD_SORT_FLD<1,SS>
+         READ REC FROM DICTFILE, DICTNAME THEN
+            IF STKD_SORT<1,SS> = "D" THEN
+               STMT = STMT:" BY-DSND ":DICTNAME
+            END ELSE
+               STMT = STMT:" BY ":DICTNAME
+            END
+         END ELSE
+            REC = "D"
+            READ XXX FROM SYS_TKT_DEF, STKD_ID:"*FLD" THEN
+              LOCATE STKD_SORT_FLD<1,SS> IN XXX,1 SETTING ATT THEN
+                 REC<2> = ATT
+              END ELSE
+                 ERRMSG = "Error # 025"; GOSUB 91000
+                 GOTO 3800
+              END
+            END ELSE
+              ERRMSG = "Error # 026"; GOSUB 91000
+              GOTO 3800
+            END
+            MATREAD DFD.REC FROM SYS_FIELDS, STKD_SORT_FLD<1,SS> ELSE
+               ERRMSG = "Error # 027"; GOSUB 91000
+            END
+            BEGIN CASE
+            CASE DFD_TYPE = "D"
+              REC<3> = "D/2"
+            CASE DFD_TYPE = "C"
+              REC<3> = "MD":DFD_DEC
+            CASE 1
+              REC<3> = ""
+            END CASE
+            REC<5> = DFD_LEN:DFD_JUSTIFY
+            REC<6> = DFD_LVL
+            WRITE REC ON DICTFILE, DICTNAME
+            IF STKD_SORT<1,SS> = "D" THEN
+               STMT = STMT : " BY.DSND ":DICTNAME
+            END ELSE
+               STMT = STMT : " BY ":DICTNAME
+            END
+         END
+3800*
+      NEXT SS
+      PERFORM STMT PASSLIST SLIST RTNLIST SYSLIST CAPTURING RESPONSE
+      DATA = 1; LINES = 0; IDLIST = ""
+      LOOP
+         READNEXT ID FROM SYSLIST ELSE DATA = 0
+      WHILE DATA DO
+         LINES = LINES + 1
+         IDLIST<LINES> = ID[CONOLEN+1,LEN(ID)-CONOLEN]
+      REPEAT
+      RESPONSE = ""
+      READU DLIST FROM SAVEDLISTS, LISTID THEN
+         DELETE SAVEDLISTS, LISTID
+      END ELSE
+         RELEASE SAVEDLISTS, LISTID
+      END
+      DLIST = ""
+      IF LINES < 1 THEN
+         ERRMSG = "Error # 028"; GOSUB 91000
+         GOTO 3999
+      END
+3999*
+      RETURN
+*
+*---- Prompt for choice of functions
+*
+7000*
+      MAX_SNO = 2; SCNO = 1; ERRMSG = ""
+      DIM SCN_HDR_CRT(MAX_SNO)
+      DIM SCN_CLR_CRT(MAX_SNO)
+      SCN_NAME = "FORM_TRN_SEL"
+      CALL SCN_CRT_BLD(SCN_NAME,MAT SCN_HDR_CRT,MAT SCN_CLR_CRT,ERRMSG)
+      IF ERRMSG # "" THEN
+         GOSUB 91000
+      END
+      X = "Job Ticket Number"
+      HDR.N = STR(" ",INT((50-LEN(X))/2)):X
+      X_X_L = 8; X_Y_L = 2
+      CRT SCN_HDR_CRT(SCNO):
+      CRT @(X_X_L,X_Y_L): HDR.N:CL:
+      IF LINES > 0 THEN
+         GOSUB 7500; GOSUB 7750
+      END ELSE
+         GOSUB 7100
+      END
+      MORE1 = 1
+      LOOP 
+         X = 1; Y = PMSG_Y_L; O.R = "O"; MAXL = 5; TYP = 1
+         PMSG = PMSG1
+         CALL EDIT.SUB; OPTION = VALUE
+         BEGIN CASE
+         CASE OPTION = "E" OR OPTION = "END"
+            MORE1 = 0
+         CASE OPTION[1,1] = "S" OR OPTION = ""
+            GOSUB 7400
+         CASE OPTION = "A"
+            GOSUB 7100
+         CASE OPTION = "D" AND LINES > 0
+            GOSUB 7300
+            IF LNO # 0 THEN
+               LN = LNO
+               IDLIST = DELETE(IDLIST,LN,0,0)
+               LINES = LINES - 1; LN = OLD.START.LINE
+               IF LN > LINES THEN LN = LINES
+               OLD.START.LINE = 0; GOSUB 7500; GOSUB 7750
+            END
+         CASE OPTION = "C" AND LINES > 0
+            MODE = "C"; GOSUB 7300
+            BEGIN CASE
+            CASE LNO = 0
+            CASE NUM(LNO)
+               LN = LNO; GOSUB 7200
+            END CASE
+         CASE OPTION = "I" AND LINES > 0
+            MODE = "B"; GOSUB 7300
+            IF LNO > 0 THEN
+               IDLIST = INSERT(IDLIST,LNO,0,0,"")
+               LINES = LINES + 1
+               OLD.START.LINE = 0; GOSUB 7500
+               GOSUB 7750; LN = LNO; GOSUB 7200
+            END
+            OLD.START.LINE = 0; GOSUB 7500
+         CASE OPTION = "L"
+            GOSUB 100; LN = 1
+            OLD.START.LINE = 0; GOSUB 7500; GOSUB 7750
+         CASE OPTION = "U"
+            IDLIST = ""
+            LINES = 0; LN = 1
+            OLD.START.LINE = 0; GOSUB 7500; GOSUB 7750
+         CASE 1
+            ERRMSG = "*** INVALID ENTRY ***"
+            GOSUB 91000
+         END CASE
+      WHILE MORE1 DO REPEAT
+      RETURN
+*
+*---- Add mode
+*
+7100*
+      MODE = "A"
+      LOOP
+         LN = LINES + 1
+         OLD.LINES = LINES
+         GOSUB 7500
+         GOSUB 7200
+      WHILE LINES > OLD.LINES DO
+         GOSUB 7700
+      REPEAT
+      LN = LINES
+      OLD.START.LINE = 0; GOSUB 7500; GOSUB 7750
+      RETURN
+*
+*---- Data entry routine
+*
+7200*
+      SSLN = BEGIN.PAGE + LINE.SPACE * MOD(LN - 1, PAGE.SIZE)
+      CRT @(1,SSLN): LN "R%5":
+      X = X_X_L;Y = SSLN; MAXL = 50; TYP = 1; O.R = "R"
+      IF MODE = "C" THEN DEFAULT = IDLIST<LN>
+      CALL EDIT.SUB
+      BEGIN CASE 
+      CASE VALUE = "END"
+         BEGIN CASE
+         CASE MODE = "A"
+            CRT @(0,SSLN):CL:
+         CASE MODE = "B"
+            DEL IDLIST<LN>
+            LINES = DCOUNT(IDLIST,AM)
+         CASE 1
+            N = LN; GOSUB 7600
+         END CASE 
+         GOTO 7299
+      CASE VALUE = "" OR VALUE = "???"
+         MAT GEN.XREF.REC = ""
+         GXR.NAME = "GEN.CODE"
+         GXR.CO = CONO
+         FILE.VARS(MTBL_PTR) = FILE.VARS(MTBL_PTR)
+         GXR.SORT.FILE = "JOB_TKT"
+         CALL GEN.XREF.SUB(MAT GEN.XREF.REC,PREFIX,XREF.DATA)
+         CRT SCN_HDR_CRT(SCNO):
+         CRT @(X_X_L,X_Y_L): HDR.N:CL:
+         OLD.START.LINE = 0; GOSUB 7500; GOSUB 7750
+         IF GXR.ID = "" THEN GOTO 7200
+         SSLN = BEGIN.PAGE + LINE.SPACE * MOD(LN - 1, PAGE.SIZE)
+         VALUE = GXR.ID
+         CRT @(1,SSLN): LN "R%5":CL:
+         CRT @(X_X_L,SSLN): VALUE "L#50":CL:
+      END CASE
+      READ XXX FROM FILE.VARS(MTBL_PTR), CONO:VALUE THEN
+         LOCATE VALUE IN IDLIST,1 SETTING QNUM THEN
+            IF QNUM # LN THEN
+               ERRMSG = "*** Entry has been entered ***"
+               GOSUB 91000; GOTO 7200
+            END
+         END
+         IDLIST<LN> = VALUE
+      END ELSE
+         ERRMSG = "Entry is not a record in FILE.VARS(":MTBL_PTR:")"
+         GOSUB 91000; GOTO 7200
+      END
+      LINES = DCOUNT(IDLIST,AM)
+7299*
+      RETURN
+*
+*---- Check line number
+*
+7300*
+      OLD.START.LINE = 0; GOSUB 7500
+      X = 1; Y = PMSG_Y_L; O.R = "O"; TYP = 1; MAXL = 3
+      PMSG = PMSG2; CALL EDIT.SUB
+      BEGIN CASE
+      CASE VALUE = "" OR VALUE = "END"
+        LNO = 0
+      CASE NOT(NUM(VALUE))
+        ERRMSG = "*** INVALID ENTRY ***"
+        GOSUB 91000; GOTO 7300
+      CASE VALUE >= START.LINE AND VALUE <= LAST.LINE
+        LNO = VALUE
+      CASE 1
+        ERRMSG = "*** OUT OF RANGE ***"
+        GOSUB 91000; GOTO 7300
+      END CASE
+      RETURN
+*
+*---- Find page of scroll
+*
+7400*
+      OPT2 = OPTION[2,1]
+      BEGIN CASE
+      CASE OPT2 = "" OR OPT2 = "F"
+        LN = LN + PAGE.SIZE
+        IF LN > LINES THEN LN = 1
+      CASE OPT2 = "R"
+        LN = LN - PAGE.SIZE
+        IF LN < 1 THEN LN = 1
+      CASE OPT2 = "T"
+        LN = 1
+      CASE OPT2 = "B"
+        LN = LINES
+        IF LN < 1 THEN LN = 1
+      CASE NUM(OPT2)
+        LN.NO = OPTION[2,99]
+        IF LN.NO < 1 OR LN.NO > LINES THEN
+          ERRMSG = "*** INVALID SELECTION ***"
+          GOSUB 91000
+        END ELSE
+          LN = LN.NO
+        END
+      END CASE
+*
+*---- Print data
+*
+7500*
+      START.LINE = 1 + INT((LN - 1)/PAGE.SIZE) * PAGE.SIZE
+      LAST.LINE = START.LINE + PAGE.SIZE - 1
+      IF LAST.LINE > LINES THEN LAST.LINE = LINES
+      IF START.LINE = OLD.START.LINE THEN GOTO 7599
+      OLD.START.LINE = START.LINE
+      PAGE.NO = INT(LAST.LINE/PAGE.SIZE+.9)
+      CRT @(70,20): PAGE.NO "R%2":
+      CNT = 1
+      FOR N = START.LINE TO LAST.LINE
+         SSLN = BEGIN.PAGE + LINE.SPACE * MOD(N-1,PAGE.SIZE)
+         GOSUB 7600
+         CNT = CNT + 1
+      NEXT N
+      FOR N = CNT TO PAGE.SIZE
+         SSLN = BEGIN.PAGE + LINE.SPACE * MOD(N-1,PAGE.SIZE)
+         CRT @(0,SSLN):CL:
+      NEXT N 
+7599*
+      RETURN
+*
+*---- Print Line
+*
+7600*
+      CRT@(1,SSLN): N "R%5":CL:
+      CRT @(8,SSLN): IDLIST<N> "L#50":CL:
+      RETURN
+*
+*---- Print page no & pages
+*
+7700*
+      PAGE.NO = INT(LN/PAGE.SIZE+.9)
+      CRT @(70,20): PAGE.NO "R%2":
+7750*
+      PAGES = INT(LINES/PAGE.SIZE+.9)
+      CRT @(76,20): PAGES "R%2":
+      RETURN
+*
+*---- Error routine
+*
+91000*
+      CRT @(0,23):ERRMSG:CL:
+      INPUT REPLY,1:
+      CRT @(0,23):CL:
+      RETURN
+93000*
+      CRT@(0,23):ERRMSG:CL:
+      INPUT REPLY,1:
+99999*
+      RETURN
+END

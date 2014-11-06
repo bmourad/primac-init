@@ -1,0 +1,110 @@
+CRT @(-1):'Rebuilding Voucher data in STATS records.'
+*COPY>APS.CPYLIB>VEND.STATS
+*COPY>APS.CPYLIB>VEND.PO.STATS
+*COPY>APS.CPYLIB>VEND.PROD.STATS
+*COPY>APS.CPYLIB>VEND.VOUCH.STATS
+*COPY>CPYLIB>CHAR
+OPEN 'VEND.STATS' TO VEND.STATS ELSE STOP
+OPEN 'VEND.PO.STATS' TO VEND.PO.STATS ELSE STOP
+OPEN 'VEND.PROD.STATS' TO VEND.PROD.STATS ELSE STOP
+OPEN 'VEND.VOUCH.STATS' TO VEND.VOUCH.STATS ELSE STOP
+*
+PROMPT''
+CNT=0
+MORE=1
+DEBUG
+LOOP
+  READNEXT ID ELSE MORE = 0
+WHILE MORE DO
+  MATREAD VVOS.REC FROM VEND.VOUCH.STATS,ID THEN
+    CNT+=1
+    IF REM(CNT,100) = 0 THEN CRT CNT
+    ID1=FIELD(ID,"!",1)
+    VOUCH=FIELD(ID,"!",2)
+    VSTAT.ID = ID1:"!":VVOS.PO.TYPE<1,1>
+    MATREADU VSTAT.REC FROM VEND.STATS,VSTAT.ID THEN
+      FOR P = 1 TO DCOUNT(VVOS.PO.NO,VM)
+        PONO=VVOS.PO.NO<1,P>
+        LOCATE PONO IN VSTAT.PO<1>,1 SETTING PFND THEN
+          LOCATE VOUCH IN VSTAT.VOUCH.NOS<1,PFND> SETTING VSFND ELSE
+            VSTAT.VOUCH.NOS<1,PFND,VSFND>= VOUCH
+*           VSTAT.PO.VOUCH<1,PFND>=''
+          END
+          IF VSTAT.PO.VOUCH<1,PFND>+0 # VVOS.PROD.COST<1,P> THEN
+            VSTAT.PO.VOUCH<1,PFND>+=VVOS.PROD.COST<1,P>
+            VPS.ID=VSTAT.ID:"!":PONO
+            MATREADU VPS.REC FROM VEND.PO.STATS,VPS.ID THEN
+              PTR=1
+              PRDFND = 1
+              PRDCNT=DCOUNT(VPS.PROD,VM)
+              LOOP
+                BEGIN CASE
+                CASE VVOS.PO.TYPE<1,P> = 'R' OR VVOS.PO.TYPE<1,P> = 'O'
+                  LOCATE VVOS.PROD<1,P> IN VPS.PROD<1>,PTR SETTING PRDF ELSE PRDFND = 0
+                CASE VVOS.PO.TYPE<1,P> = 'M'
+                  LOCATE VVOS.SEQ.NO<1,P> IN VPS.SEQ.NO<1>,PTR SETTING PRDF ELSE PRDFND = 0
+                END CASE
+                WMATCH=0
+                IF VPS.WHSE<1,PRDF>='@@@@' AND VVOS.WHSE<1,P>=VPS.WHSE<1,PRDF> THEN
+                  WMATCH = 1
+                END ELSE
+                  IF FIELD(VPS.WHSE<1,PRDF>,"@",1) = VVOS.WHSE<1,P> THEN
+                    WMATCH = 1
+                  END
+                END
+                IF PRDFND AND WMATCH THEN
+                  LOCATE VOUCH IN VPS.VOU.NO<1,PRDF> SETTING VFND ELSE
+                    VPS.VOU.NO<1,PRDF,VFND> = VOUCH
+*                   VPS.VOU.QTY<1,PRDF,VFND> = ''
+                  END
+                  IF VPS.VOU.AMT<1,PRDF>+0 # VVOS.PROD.COST<1,P> AND VPS.VOU.AMT<1,PRDF>+0 < VVOS.PROD.COST<1,P> THEN
+*                   VPS.VOU.QTY<1,PRDF,VFND> += VVOS.VOU.QTY<1,P>
+                    VPS.VOU.QTY<1,PRDF> += VVOS.VOU.QTY<1,P>
+*                   VPS.VOU.AMT<1,PRDF,VFND> += VVOS.PROD.COST<1,P>
+                    VPS.VOU.AMT<1,PRDF> += VVOS.PROD.COST<1,P>
+                  END
+                  PTR = 0
+                END ELSE 
+                  PTR = PRDF+1
+                  PRDFND = 1
+                END
+              WHILE PTR AND PRDF <= PRDCNT DO
+              REPEAT
+              IF PRDF > PRDCNT THEN
+                CRT "Couldn't update ID ":ID:" for PO ":PONO:
+                INPUT X
+                RELEASE
+                GOTO 99
+              END
+              VPDS.ID = VPS.ID:"!"
+              BEGIN CASE
+              CASE VVOS.PO.TYPE<1,P> = 'R'
+                VPDS.ID:= VVOS.PROD<1,P>:"!":VVOS.WHSE<1,P>
+              CASE VVOS.PO.TYPE<1,P> = 'M'
+                VPDS.ID:= VPS.SEQ.NO<1,PRDFND>:"!":VPS.WHSE<1,PRDFND>
+              CASE VVOS.PO.TYPE<1,P> = 'O'
+                VPDS.ID:= VVOS.PROD<1,P>:"!":VPS.WHSE<1,PRDFND>
+              END CASE
+              MATREADU VPDS.REC FROM VEND.PROD.STATS,VPDS.ID THEN
+                LOCATE VOUCH IN VPDS.VOU.NO<1,1>,1 SETTING VPFND ELSE
+                  VPDS.VOU.NO<1,1,VPFND> = VOUCH
+                  VPDS.VOU.DATE<1,1,VPFND> = VVOS.VOU.DATE
+                  VPDS.INV.NO<1,1,VPFND> = VVOS.INV.NO
+                  VPDS.INV.DATE<1,1,VPFND> = VVOS.INV.DATE
+                  VPDS.QTY<1,1,VPFND> = VVOS.VOU.QTY<1,P>
+                  VPDS.UN.COST<1,1,VPFND> = VVOS.VOU.UN.COST<1,P>
+                  VPDS.PERIOD<1,1,VPFND> = VVOS.VOU.PERIOD
+                END
+                MATWRITE VPDS.REC ON VEND.PROD.STATS, VPDS.ID
+              END ELSE RELEASE VEND.PROD.STATS, VPDS.ID
+              MATWRITE VPS.REC ON VEND.PO.STATS, VPS.ID
+            END ELSE RELEASE VEND.PO.STATS, VPS.ID
+          END
+        END
+      NEXT P
+      MATWRITE VSTAT.REC ON VEND.STATS, VSTAT.ID
+    END ELSE RELEASE VEND.STATS, VSTAT.ID
+  END
+99*
+REPEAT
+CRT 'DONE'

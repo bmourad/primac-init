@@ -1,0 +1,325 @@
+SUBROUTINE TU.TO.WORD(HOSTFILENAME, FIELDLIST, SELECTION, OPTIONS, DOCUMENTNAME, STATUS)
+*
+** SBClient Host 3GL API
+** Copyright (C) Ardent Software Inc. 1998
+** Copyright (C) UniData, Inc. 1996, 1997
+** Copyright (C) System Builder Corporation. 1995
+**
+**      This software is the proprietary property and contains
+**      trade secrets of Ardent Software, Inc. Any unauthorized use,
+**      disclosure or duplication is strictly prohibited.
+**      All rights reserved.
+*
+***************************************************************************
+*-* TU.TO.WORD(Pickfilename, Fieldlist, Selection, Options, Documentname,
+*-* Status)
+*-*
+*-* This function will download formatted pick data into a TAB delimited
+*-* Microsoft Word document using DDE for Word 7 and OLE for Word 8
+*-* or higher.
+*-*
+*-* Note: This API is only supported with Office 95 or higher.
+*-*
+*-* [P] Pickfilename    The name of the host file from which data is to
+*-*                     be downloaded.
+*-*
+*-* [P] Fieldlist       List of dictionary definitions of fields to be
+*-*                     downloaded.
+*-*
+*-* [P] Selection       Selection criteria to locate items to be downloaded.
+*-*                     A GET-LIST may be used. BY-EXP selections are not
+*-*                     supported.
+*-*
+*-* [P] Options         This is an array of characters to indicate minor
+*-*                     details of the transfer. Possible values:-
+*-*
+*-*                     C, Clear the destination before downloading
+*-*                     H, Transfer Heading
+*-*                     I, Do OEM to ANSI conversion
+*-*                     P, Print Document
+*-*                     R, Restore Application
+*-*                     S, Save Document
+*-*                     X, Close Word
+*-*                     0, Add duplicate data for correlative
+*-*                     2, Insert blank line between header an data
+*-*
+*-* [P] Documentname    This the name of the Word documnet to store data in.
+*-*
+*-* [R] Status          This is an indication of the success or failure of
+*-*                     the subroutine. A successful call will return with
+*-*                     zero Status and failure will return with a non-zero
+*-*                     value.
+***************************************************************************
+*
+ INCLUDE TUBP TU.API.H
+ INCLUDE TUBP SPECIAL.H
+ INCLUDE TUBP USER.INCLUDE.H
+ INCLUDE TUBP HEADER.H
+ INCLUDE TUBP TU.ERRORCODES.H
+ INCLUDE TUBP ROC.H
+*
+*-* Get document's path and real name
+*
+DEBUGFLAG = FALSE ; PCFILENAME = DOCUMENTNAME
+*
+*-* Get build flags
+*
+BUILD.ALL = INDEX(OPTIONS, "0", 1)
+INSERT.BLANK = INDEX(OPTIONS, "2", 1)
+IF INDEX(OPTIONS, "C" , 1) THEN
+CALL TU.DELETE.FILE(PCFILENAME, STATUS)
+IF STATUS THEN RETURN
+END
+*
+*-* Build header information
+*
+HEADER = NUL; STATUS = FALSE
+IF DEBUGFLAG THEN CRT "Building Header Information"
+CALL TU.BUILD.HEADER(HOSTFILENAME, FIELDLIST, HEADER, 'WINWORD', STATUS)
+IF STATUS THEN RETURN
+*
+*-* Download Data via File Transfer
+*-* If !HDR-SUPP then download header and data
+*
+HDR.SUPP = INDEX(HEADER<HED.DICTNAME>, "HDR-SUPP", 1) + INDEX(HEADER<HED.DICTNAME>, "HDR.SUP", 1)
+BEGIN CASE
+CASE HDR.SUPP
+COLUMN.HEADER = FALSE
+CASE INDEX(OPTIONS, "H", 1)
+COLUMN.HEADER = TRUE
+CASE INDEX(OPTIONS, "1", 1)
+COLUMN.HEADER = TRUE
+CASE TRUE
+COLUMN.HEADER = FALSE
+END CASE
+DOWNLOADOPTIONS = "HOZ"
+IF BUILD.ALL THEN DOWNLOADOPTIONS = DOWNLOADOPTIONS:"0"
+IF COLUMN.HEADER THEN DOWNLOADOPTIONS = DOWNLOADOPTIONS:"1"
+IF INSERT.BLANK THEN DOWNLOADOPTIONS = DOWNLOADOPTIONS:"2"
+DESC = "WINWORD"
+IF DEBUGFLAG THEN CRT "Downloading Data to PC"
+CALL TU.PC.DOWNLOAD(HOSTFILENAME, FIELDLIST, SELECTION, PCFILENAME, SEP.TABS, DOWNLOADOPTIONS, DESC, STATUS)
+IF STATUS THEN RETURN
+*
+*-* OEM to ANSI Conversion
+*
+IF INDEX(OPTIONS, 'I', 1) THEN
+CALL TU.OEM.TO.ANSI(PCFILENAME, PCFILENAME, STATUS)
+IF STATUS THEN RETURN
+END
+*
+*-* Load and format data into word document using OLE
+*
+OFFICE95 = FALSE; * boolean Office95 on client
+HROC = 0; * handle to ROC object
+HWA = 0; * handle to Word.Application object
+*
+GOSUB 100; * OLE Init
+IF STATUS THEN RETURN
+IF OFFICE95 THEN GOSUB 200 ELSE GOSUB 300
+GOSUB 900
+*
+RETURN
+*
+*-* OLE Init
+*
+100 *
+*
+CALL TU.INIT(STATUS)
+IF STATUS THEN RETURN
+*
+*-* create Word.Application object
+*
+CALL ROC.GETHANDLE("this", HROC, STATUS) 
+IF STATUS AND NOT(HROC) THEN RETURN
+OBJNAME = "Word.Application"; ATTR = "parent"; VALS = HROC
+IF DEBUGFLAG THEN CRT "Creating Word.Application object"
+CALL ROC.CREATE(OBJNAME, ATTR, VALS, HWA, STATUS)
+IF STATUS AND NOT(HWA) THEN
+OFFICE95 = TRUE ; STATUS = FALSE
+RETURN
+END
+*
+*-* query the "Version" attribute to get the Word release
+*
+ATTR = "Version"; VALS = ""
+IF DEBUGFLAG THEN CRT "Getting Winword version"
+CALL ROC.GET(HWA, ATTR, VALS, STATUS)
+IF STATUS THEN RETURN
+IF VALS[1,1] = '7' THEN OFFICE95 = TRUE
+RETURN
+*
+*-* Office 95, use DDE and macros
+*
+200 *
+TIMEOUT = 60; HANDLE = 0; SYSTEMHANDLE = 0
+*
+*-* first establish a link with the SYSTEM topic
+*
+IF DEBUGFLAG THEN CRT "DDE Connect to Winword"
+CALL TU.DDE.CONNECT('WINWORD', 'System', SYSTEMHANDLE, STATUS)
+IF STATUS THEN
+WINWORD = 'WINWORD.EXE'; STATUS = 0
+IF DEBUGFLAG THEN CRT "Launching Winword"
+CALL TU.LAUNCH.APP(WINWORD, APP.SHOWMINIMIZED, STATUS)
+IF STATUS THEN RETURN
+CALL TU.CHECK.APP(WINWORD, STATUS)
+IF STATUS THEN RETURN
+IF DEBUGFLAG THEN CRT "DDE Connect to Winword"
+CALL TU.DDE.CONNECT('WINWORD', 'System', SYSTEMHANDLE, STATUS)
+IF STATUS THEN RETURN
+END
+*
+*-* open document
+*
+IF DEBUGFLAG THEN CRT "Opening document"
+CALL TU.DDE.EXEC.MACRO(SYSTEMHANDLE, TIMEOUT, '[FileOpen .Name="':PCFILENAME:'", .ConfirmConversions=0]', STATUS)
+IF STATUS THEN RETURN
+IF DEBUGFLAG THEN CRT "DDE Connect to Document"
+CALL TU.DDE.CONNECT('WINWORD', PCFILENAME, HANDLE, STATUS)
+IF STATUS THEN RETURN
+*
+*-* build macros
+*
+MACRO = '[EditSelectAll]'
+COLS = COUNT(HEADER<HED.DICTNAME>, VM) + (HEADER<HED.DICTNAME> # '')
+IF HDR.SUPP THEN APPLY = 151 ELSE APPLY = 183
+MACRO = MACRO:AM:'[TextToTable .ConvertFrom = "1", .NumColumns = "'
+MACRO = MACRO:COLS:'", .NumRows = "':HEADER<HED.RECORDCOUNT>
+MACRO = MACRO:'", .InitialColWidth = "Auto", .Format = "13", '
+MACRO = MACRO:'.Apply = "':APPLY:'"]'
+MACRO = MACRO:AM:'[StartOfLine]'
+IF INDEX(OPTIONS, 'R', 1) THEN
+MACRO = MACRO:AM:'[AppRestore]'
+END
+IF INDEX(OPTIONS, 'P', 1) THEN
+MACRO = MACRO:AM:'[FilePrint .Background = 1]'
+END
+IF INDEX(OPTIONS, 'S', 1) THEN
+MACRO = MACRO:AM:'[FileSaveAll 1, 0]'
+END
+IF INDEX(OPTIONS, 'X', 1) THEN
+MACRO = MACRO:AM:'[FileQuit]'
+END
+MACRO.COUNT = COUNT(MACRO, AM) + (MACRO # '')
+*
+*-* now do the macro business
+*
+FOR I = 1 TO MACRO.COUNT
+IF DEBUGFLAG THEN CRT "Executing Macro => ":MACRO<I>
+CALL TU.DDE.EXEC.MACRO(HANDLE, TIMEOUT, MACRO<I>, STATUS)
+IF STATUS THEN RETURN
+NEXT I
+RETURN
+*
+*-* Office 97 Use OLE Automation Objects
+*
+300 *
+*
+*-* Get handle to documents collection, and load document
+*
+ATTR = "Documents"; HDOCUMENT = 0
+CALL ROC.GET(HWA, ATTR, HDOCUMENT, STATUS)
+IF STATUS AND NOT(HDOCUMENT) THEN RETURN
+*
+STRING = 'Open,':PCFILENAME:',,,,,,,,,'; VALS = ""
+OLD = ","; NEW = VM
+ INCLUDE TUBP SWAP.STRINGS.H
+ATTR = STRING; HDOC = 0
+IF DEBUGFLAG THEN CRT "Opening file ":PCFILENAME
+CALL ROC.GET(HDOCUMENT, ATTR, HDOC, STATUS)
+IF STATUS THEN RETURN
+*
+*-* Set Word document visible and minimized
+*
+ATTR = "Visible":ROC.US:"WindowState"; VALS = TRUE:ROC.US:2
+IF DEBUGFLAG THEN CRT "Setting Visible, and WindowState"
+CALL ROC.SET(HWA, ATTR, VALS, STATUS)
+IF STATUS THEN RETURN
+*
+*-* get handle to active document, and calculate range and
+*-* format into table
+*
+ATTR = "ActiveDocument"; HACTIVEDOC = 0
+IF DEBUGFLAG THEN CRT "Getting ActiveDocument Handle"
+CALL ROC.GET(HWA, ATTR, HACTIVEDOC, STATUS)
+*
+*-* Calculate default column size
+*
+FONT.SIZE = 10; MAX.COLUMN.SIZE = 0
+NUM.COLUMNS = COUNT(HEADER<HED.DICTNAME>, VM) + (HEADER<HED.DICTNAME> # '')
+FOR I = 1 TO NUM.COLUMNS
+IF HEADER<HED.LENGTH, I> > MAX.COLUMN.SIZE THEN MAX.COLUMN.SIZE = HEADER<HED.LENGTH, I>
+NEXT I
+COLUMN.SIZE = MAX.COLUMN.SIZE * FONT.SIZE
+IF STATUS AND NOT(HACTIVEDOC) THEN RETURN
+*
+STRING = 'Range,,'; HRANGE = 0; OLD = ','; NEW = VM
+ INCLUDE TUBP SWAP.STRINGS.H
+ATTR = STRING
+IF DEBUGFLAG THEN CRT "Selecting text range"
+CALL ROC.GET(HACTIVEDOC, ATTR, HRANGE, STATUS)
+IF STATUS AND NOT(HRANGE) THEN RETURN
+*
+STRING = 'ConvertToTable,1,,,':COLUMN.SIZE:',13,,,,,,,,,'; VALS = ""; OLD = ','; NEW = VM
+ INCLUDE TUBP SWAP.STRINGS.H
+ATTR = STRING
+IF DEBUGFLAG THEN CRT "Converting to table"
+CALL ROC.GET(HRANGE, ATTR, VALS, STATUS)
+IF STATUS THEN RETURN
+*
+*-* Restore Word's window state
+*
+IF INDEX(OPTIONS, "R", 1) THEN
+ATTR = "WindowState"; VALS = FALSE
+IF DEBUGFLAG THEN CRT "Setting WindowState"
+CALL ROC.SET(HWA, ATTR, VALS, STATUS)
+IF STATUS THEN RETURN
+END
+*
+*-* Print Word Document
+*
+IF INDEX(OPTIONS, "P", 1) THEN
+STRING = 'PrintOut,1,,,,,,,,,,,,,'; OLD = ','; NEW = VM; VALS = ''
+ INCLUDE TUBP SWAP.STRINGS.H
+ATTR = STRING
+IF DEBUGFLAG THEN CRT "Printing Doc"
+CALL ROC.GET(HACTIVEDOC, ATTR, VALS, STATUS)
+END
+*
+*-* Save Document
+*
+IF INDEX(OPTIONS, "S", 1) THEN
+IF DEBUGFLAG THEN CRT "Saving Doc"
+STRING = "Save,1,0" ; OLD = ','; NEW = VM; VALS = ""
+ INCLUDE TUBP SWAP.STRINGS.H
+ATTR = STRING
+CALL ROC.GET(HDOCUMENT, ATTR, VALS, STATUS)
+END
+*
+*-* Exit Word
+*
+IF INDEX(OPTIONS, "X", 1) THEN
+IF DEBUGFLAG THEN CRT "Closing Word"
+STRING = "Quit,,,"; OLD = ','; NEW = VM; VALS = ""
+ INCLUDE TUBP SWAP.STRINGS.H
+ATTR = STRING
+CALL ROC.GET(HWA, ATTR, VALS, STATUS)
+END
+RETURN
+*
+*-* Shutdown
+*
+900 *
+IF HWA THEN CALL ROC.DESTROY(HWA, STATUS); * destroy Word.Application object
+IF OFFICE95 THEN
+CALL TU.DDE.DISCONNECT(HANDLE, STATUS)
+CALL TU.DDE.DISCONNECT(SYSTEMHANDLE, STATUS)
+END
+RETURN
+*
+***********************************************************************
+* the End
+***********************************************************************
+END
+

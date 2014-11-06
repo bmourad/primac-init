@@ -1,0 +1,262 @@
+*COPY>CPYLIB>COM1
+*COPY>PMC.CPYLIB>COM.CUST
+*COPY>OPS.CPYLIB>COM.ORDER
+**************************************************************************
+* REVISION    - [00.0]
+* COPYRIGHT   - 1993 Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - OPS
+* PROGRAM     - STATUS.READY.TO.SHIP.ORDER.RPT
+* AUTHOR      - S.L.Fritz
+* DATE        - 04/29/93
+* DESCRIPTION - Print the status report for the palet file with a status
+*               of WIP or FNGD.  This record list is used to read the open
+*               order file.  It is from this file that the majority of the
+*               reports information comes from.
+*
+* MODIFICATION- 05/10/93 by S.L.Fritz
+*               Add one additional column in the report.  The UOM (unit
+*               of measure) attribute is placed between the PALLET# and
+*               the QUANTITY-SHIPPED columns.
+*T25841 lanny 05/17/2001 * Select for printing Orders not completed,
+*                          cancelled or shipped.
+*T26484 cmykleb 03/11/2002 * Change report to work with new rev12
+*                            changes.
+*T26493 cmykleb 03/22/2002 * Change report to use rpt # from proc.
+*T26732 epitka 09/26/2002 * Remove TOT-SK-QTY column as Sandra requested 
+**************************************************************************
+*
+*---- DATA Structure Libraries
+*
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>OPS.CPYLIB>ORDER
+*COPY>ICS.CPYLIB>INV_RECEIPTS
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>OPS.CPYLIB>BOL ;*T25841
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+   MAT SYSCOM.REC =  ""; SYS.TYPE = 2
+*
+*---- Read Proc Buffer
+*
+   PROCREAD BUFFER ELSE
+      ERRMSG = 'Must run this program from a REPORT.SCRN PROC.'
+      GOTO 93000
+   END
+*
+*---- File open
+*
+   OPEN '','CUSTOMER' TO CUSTOMER ELSE ERRMSG = 'CUSTOMER';GOTO 93000
+   OPEN '','ORDER' TO ORDER ELSE ERRMSG = 'ORDER';GOTO 93000
+   OPEN '','INV_RECEIPTS' TO INV_RECEIPTS ELSE ERRMSG = 'INV_RECEIPTS';GOTO 93000
+   OPEN '','INVENTORY' TO INVENTORY ELSE ERRMSG = 'INVENTORY';GOTO 93000
+   OPEN '','INV.WHSE' TO INV.WHSE ELSE ERRMSG = 'INV.WHSE';GOTO 93000
+   OPEN '','BOL' TO BOL ELSE ERRMSG = 'BOL';GOTO 93000 ;*T25841
+*
+*---- Initialize variables
+*
+   TRUE = 1
+   OTHERS = 1
+   VOID = ''
+   NULL = ''
+   FALSE = 0
+   PAGE.NO = 0
+   TOP.OF.NEW.PAGE = CHAR(12)
+   PAGE.NO = 0
+   LINES.THIS.PAGE = 99 ;*T25841 CHANGED FROM 0 TO 99
+   PAGE.HEADING.SIZE = 5
+   PAGE.SIZE = 55
+   PRIOR.CUSTOMER = ''
+   CUSTOMER.BLOCK.CNTR = 0
+   EQU CONO         TO BUFFER<1>
+   EQU COMPANY.NAME TO BUFFER<2>
+   EQU WAREHOUSE.NO TO BUFFER<3>
+   SHD1 = 'ORDER   '
+   SHD1 = SHD1:'ORD-DATE '
+   SHD1 = SHD1:'DUE-DATE '
+   SHD1 = SHD1:'PRODUCT         '
+   SHD1 = SHD1:'DESCRIPTION                              '
+   SHD1 = SHD1:'WHSE '
+   SHD1 = SHD1:'RECEIPT # '
+   SHD1 = SHD1:' TOT-QUANT '
+   SHD2 = STR('-',7):SPACE(1)
+   SHD2 = SHD2:STR('-',8):SPACE(1)
+   SHD2 = SHD2:STR('-',8):SPACE(1)
+   SHD2 = SHD2:STR('-',15):SPACE(1)
+   SHD2 = SHD2:STR('-',40):SPACE(1)
+   SHD2 = SHD2:STR('-',4):SPACE(1)
+   SHD2 = SHD2:STR('-',9):SPACE(1)
+   SHD2 = SHD2:STR('-',10):SPACE(1)
+   PRINTER ON
+*T26493 v
+*  RPT.NAME = 'READY-TO-SHIP ORDER STATUS REPORT'
+*  RPT.NUM = 'XXXX'
+   RPT.NAME = ""
+   RPT.NUM = BUFFER<2>
+*T26493 ^
+   RPT.DATE = DATE()
+   HD1 = ''
+   HD2 = ''
+   CALL GET.PROG.HEAD(CONO,VOID,RPT.NAME,RPT.NUM,RPT.DATE,HD1,HD2)
+*
+10000 *
+*
+   READNEXT IR.KEY ELSE GOTO 99999
+   MATREAD INVR.REC FROM INV_RECEIPTS, IR.KEY ELSE
+      ERRMSG = 'Cannot read the ':IR.KEY:' record from INV_RECEIPTS file.'
+      GOSUB 91000
+      GOTO 10000;* Record disappeared, get next record key from list.
+   END
+   LOCATE "SHIP" IN INVR.STATUS<1>,1 SETTING FND THEN GOTO 10000
+   RECEIPT.NO = IR.KEY[4,9]
+   ORDER.KEY = CONO:INVR.ORDER<1,1>
+   ORDER.NUMBER = INVR.ORDER<1,1>
+   IF ORDER.NUMBER = '*FNGD*' THEN GOTO 10000 ; * NO ORDER
+   MATREAD ORD.REC FROM ORDER, ORDER.KEY ELSE
+      ERRMSG = 'Cannot read the ':ORDER.KEY:' record from the ORDER file.'
+      GOSUB 91000
+      GOTO 10000
+   END
+*T25841 v
+   IF ORD.STATUS<1,1>='CLOSED' OR ORD.STATUS<1,1>='COMPLETE' OR ORD.STATUS<1,1>='CANCEL' THEN GOTO 10000
+   IF ORD.STATUS<1,1>='SHIP' OR ORD.STATUS<1,1>='INVOICED' THEN
+      BCNT=DCOUNT(ORD.BOL,VM)
+      PD.SHIPPED=0
+      FOR B = 1 TO BCNT UNTIL PD.SHIPPED
+         MATREAD BOL.REC FROM BOL,CONO:ORD.BOL<1,B> THEN
+            PTR=1
+            LOOP
+               LOCATE INVR.PROD IN BOL.PROD<1>,PTR SETTING PFND ELSE PFND = 0
+               BEGIN CASE
+                  CASE PFND = 0
+                     PTR = 0
+                  CASE INVR.ORG.WHSE = BOL.WHSE<1,PFND>
+                     IF BOL.QTY<1,PFND> >= INVR.ORG.QTY THEN PD.SHIPPED = 1
+                     PTR = 0
+                  CASE 1
+                     PTR = PFND+1
+               END CASE
+            WHILE PTR DO REPEAT
+         END
+      NEXT B
+      IF PD.SHIPPED THEN GOTO 10000
+   END
+*T25841 ^
+   MATREAD CUST.REC FROM CUSTOMER, CONO:ORD.CUST ELSE
+      MAT CUST.REC = ''
+      ERRMSG = 'Cannot read ':ORD.CUST:' from the CUSTOMER file.'
+      GOSUB 91000
+      GOTO 10000
+   END
+   IF PRIOR.CUSTOMER # ORD.CUST THEN
+      GOSUB 20000
+      PRIOR.CUSTOMER = ORD.CUST
+   END
+   GOSUB 30000 ; * Print the detail line
+   GOTO 10000 ; * Get the next record
+*
+20000 * Build the customers address block variables
+*
+   CUST.PRINT.1 = ''
+   CUST.PRINT.2 = 'CUSTOMER NO :':ORD.CUST'L#10'
+   CUST.PRINT.3 = '       NAME :':CUST.NAME'L#34'
+   CUST.PRINT.4 = '    ADDRESS :':CUST.ADDR1'L#30'
+   CUSTOMER.BLOCK.CNTR = 4
+   IF CUST.ADDR2 # '' THEN
+      CUST.PRINT.5 = '            :':CUST.ADDR2'L#30'
+      CUSTOMER.BLOCK.CNTR = CUSTOMER.BLOCK.CNTR + 1
+   END ELSE
+      CUST.PRINT.5 = ''
+   END
+   IF CUST.ADDR3 # '' THEN
+      CUST.PRINT.6 = '            :':CUST.ADDR3'L#30'
+      CUSTOMER.BLOCK.CNTR = CUSTOMER.BLOCK.CNTR + 1
+   END ELSE
+      CUST.PRINT.6 = ''
+   END
+   IF CUST.ADDR4 # '' THEN
+      CUST.PRINT.7 = '            :':CUST.ADDR4:' ':CUST.ZIP
+      CUSTOMER.BLOCK.CNTR = CUSTOMER.BLOCK.CNTR + 1
+   END ELSE
+      CUST.PRINT.7 = ''
+   END
+   RETURN
+*
+30000 * Consolidate all the ship.to data for the order lines.
+*
+   MATREAD INV.REC FROM INVENTORY, CONO:INVR.PROD ELSE
+      INV.FULL.DESC = 'Inventory record description missing'
+   END
+   IF INV.BASE.SKU # '' THEN
+      READV DESCRIPTION.ONE FROM INVENTORY, CONO:INV.BASE.SKU, 2 ELSE
+         DESCRIPTION.ONE = "Inventory description miissing from file!"
+      END
+      DESCRIPTION.TWO = INV.FULL.DESC
+   END ELSE
+      DESCRIPTION.ONE = INV.FULL.DESC
+      DESCRIPTION.TWO = ''
+   END
+   IF CUST.PRINT.2 # '' THEN
+      LINES.THIS.PAGE = LINES.THIS.PAGE + CUSTOMER.BLOCK.CNTR
+      IF LINES.THIS.PAGE > PAGE.SIZE THEN
+         GOSUB 60000
+         LINES.THIS.PAGE = LINES.THIS.PAGE + CUSTOMER.BLOCK.CNTR
+      END
+      PRINT CUST.PRINT.1
+      PRINT CUST.PRINT.2
+      PRINT CUST.PRINT.3
+      PRINT CUST.PRINT.4
+      IF CUST.PRINT.5 # '' THEN PRINT CUST.PRINT.5
+      IF CUST.PRINT.6 # '' THEN PRINT CUST.PRINT.6
+      IF CUST.PRINT.7 # '' THEN PRINT CUST.PRINT.7
+*
+* Once the customer address prints, flag it to not print again.
+*
+      CUST.PRINT.2 = ''
+   END
+*
+* Check to see if the product line will fit BEFORE printing it.
+*
+   LINES.THIS.PAGE = LINES.THIS.PAGE + 1
+   IF LINES.THIS.PAGE > PAGE.SIZE THEN
+      GOSUB 60000
+      LINES.THIS.PAGE = LINES.THIS.PAGE + 1
+   END
+   PROD.LINE = ORDER.NUMBER'L#7':SPACE(1)
+   PROD.LINE = PROD.LINE:OCONV(ORD.DATE,'D2/')'L#8':SPACE(1)
+   PROD.LINE = PROD.LINE:OCONV(ORD.DUE,'D2/')'L#8':SPACE(1)
+   PROD.LINE = PROD.LINE:INVR.PROD'L#15':SPACE(1)
+   PROD.LINE = PROD.LINE:DESCRIPTION.ONE'L#40':SPACE(1)
+   PROD.LINE = PROD.LINE:INVR.ORG.WHSE'L#4':SPACE(1)
+   PROD.LINE = PROD.LINE:RECEIPT.NO'L#9':SPACE(1)
+   PROD.LINE = PROD.LINE:OCONV(SUM(INVR.ORG.QTY/1000),'MD0,')'R#10':SPACE(1)
+   PRINT PROD.LINE
+   IF DESCRIPTION.TWO # '' THEN
+      LINES.THIS.PAGE = LINES.THIS.PAGE + 1
+      IF LINES.THIS.PAGE > PAGE.SIZE THEN
+         GOSUB 60000
+         LINES.THIS.PAGE = LINES.THIS.PAGE + 1
+      END
+      PRINT SPACE(41):DESCRIPTION.TWO'L#30'
+   END
+   RETURN
+*
+60000 * Print the heading.
+*
+   PRINT TOP.OF.NEW.PAGE
+   PAGE.NO = PAGE.NO + 1
+   PRINT HD1:PAGE.NO
+   PRINT HD2
+   PRINT
+   PRINT SHD1
+   PRINT SHD2
+   LINES.THIS.PAGE = PAGE.HEADING.SIZE
+   RETURN
+91000 CRT ERRMSG ; RETURN
+93000 ERR.TYPE=3;CALL SYSCOM(MAT SYSCOM.REC)
+99999 *
+   PRINTER CLOSE
+   PRINTER OFF
+END

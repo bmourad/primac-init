@@ -1,0 +1,144 @@
+SUBROUTINE ORDM_WHSE_VALIDATE
+********************************************************************************
+*   Program name :- ORDM_WHSE_VALIDATE
+*   Created:- 12/16/2003
+*------------------------------------------------------------------------------*
+*
+* PROGRAM G.PURUSHOTHAM RAO
+* REPROGRAMED SYED ALEEM
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+
+$INCLUDE CPYLIB COMMON1
+
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB CATEGORY
+$INCLUDE ICS.CPYLIB INV.FNGD
+$INCLUDE ICS.CPYLIB INV.CNV
+$INCLUDE ICS.CPYLIB FNGD.BOM
+$INCLUDE ICS.CPYLIB FNGD.STATS
+$INCLUDE ICS.CPYLIB FNGD.ORDER.STATS
+$INCLUDE ICS.CPYLIB FNGD.JOB.STATS
+$INCLUDE ICS.CPYLIB WAREHOUSE
+
+$INCLUDE ICS.CPYLIB INV.WHSE
+$INCLUDE ICS.CPYLIB INV_RECEIPTS
+$INCLUDE ICS.CPYLIB INV_RECP_WHSE
+$INCLUDE ICS.CPYLIB INV_AUDIT_HIST
+$INCLUDE CPYLIB CHAR
+$DEFINE FILEVARS
+$INCLUDE CPYLIB FILE.VARS
+
+DEFFUN CALC_STK_QTY(COST.QTY,MAT INV.CNV.REC,ROND,LN)
+DEFFUN CALC_COST_QTY(STK.QTY,MAT INV.CNV.REC,ROND,LN)
+
+* Insert method code here
+   OPEN "","INV.FNGD" TO INV.FNGD ELSE
+      ERRMSG = "Cannot locate the INV.FNGD file";GOTO 93000
+   END
+   OPEN "","FNGD.BOM" TO FNGD.BOM ELSE
+      ERRMSG = "Cannot locate the FNGD.BOM file";GOTO 93000
+   END
+   OPEN "","INVENTORY" TO INVENTORY ELSE
+      ERRMSG = "Cannot locate the INVENTORY file";GOTO 93000
+   END
+   OPEN "","FOB" TO FOB ELSE
+      ERRMSG = "Cannot locate the FOB file";GOTO 93000
+   END
+   OPEN "","INV.WHSE" TO INV.WHSE ELSE
+      ERRMSG = "Cannot locate the INV.WHSE file";GOTO 93000
+   END
+   OPEN "","FNGD.STATS" TO FNGD.STATS ELSE
+      ERRMSG = "Cannot locate the FNGD.STATS file";GOTO 93000
+   END
+   OPEN "","WAREHOUSE" TO WAREHOUSE ELSE
+      ERRMSG = "Cannot locate the WAREHOUSE file";GOTO 93000
+   END
+
+
+ STATUS = RBO.getProperty('', 'PMCProperty', PMCProperty)
+  CONO = PMCProperty<1,4>
+
+  STATUS = RBO.getProperty('', 'ID', PARAMS)
+
+  ERRMSG = ""
+  OPEN.FLAG = 1
+  PDNO      = PARAMS<1,1>
+  WHS_NO    = PARAMS<1,2>
+  ORD.DIV   = PARAMS<1,6>
+  OSD.R.QTY = PARAMS<1,7>
+  OSD.A.QTY = PARAMS<1,8>
+
+  MATREAD INV.REC FROM INVENTORY, CONO:PDNO ELSE
+    ERRMSG = "Cannot locate finished goods # ":PDNO
+    GOTO 93000
+  END
+  
+  $INCLUDE ICSBP INV.UM.CNV
+
+  MATREAD IOF.REC FROM INV.FNGD, CONO:PDNO ELSE
+    MAT IOF.REC = ""
+  END
+  BOM.KEY = CONO:IOF.BOM
+  MATREAD BOM.REC FROM FNGD.BOM, CONO:IOF.BOM ELSE
+    MAT BOM.REC = ""
+  END
+
+  IWH.ID = CONO:PDNO:"!":WHS_NO
+  MATREAD IWH.REC FROM INV.WHSE, IWH.ID THEN
+	QTY.FI = IWH.QTY.FI
+    ERR.FLG='';ERRMSG='';PERIOD=''
+    CALL BUILD_IWH_FI(IWH.ID,MAT IWH.REC,PERIOD,ERR.FLG,ERRMSG,OPEN.FLAG) 
+	QTY.FI = QTY.FI : " : NEW VALUE : " : IWH.QTY.FI
+  END ELSE
+    ERRMSG = "Cannot locate warehouse (":WHS_NO:") for item # ":PDNO
+    GOTO 93000
+  END
+
+*******************************************
+  MATREAD FGS.REC FROM FNGD.STATS, IWH.ID ELSE
+    MAT FGS.REC = ""
+  END
+*
+******************************************
+* End of method code
+   *STATUS = RBO.setProperty('', 'ID', QTY.FI)
+  MATREAD WHSE.REC FROM WAREHOUSE,CONO:WHS_NO ELSE
+    MAT WHSE.REC =""
+  END
+
+  IF IWH.ON.HAND - IWH.RESV < 0 THEN
+      AVL.RESV = OSD.R.QTY
+  END ELSE
+      AVL.RESV = IWH.ON.HAND - IWH.RESV + OSD.R.QTY
+  END
+  
+  AVL.ALOC = SUM(FGS.M.QTY) - SUM(FGS.A.QTY)
+  IF AVL.ALOC < 1 THEN AVL.ALOC = 0
+  AVL.ALOC = AVL.ALOC + OSD.A.QTY
+
+  IF WHS.DIV # ORD.DIV THEN
+     IF WHS.DIV # "00" THEN
+      	ERRMSG = "Warehouse Division ":WHS.DIV:" doesnot match Order Division ":ORD.DIV
+      	GOTO 93000
+    END
+  END
+
+   STATUS = RBO.setProperty('', 'ServerStatus', '0')
+   STATUS = RBO.setProperty('', 'ServerMessage', ERRMSG)
+   STATUS = RBO.setProperty('', 'REMOTE_OUTPUT', AVL.RESV : VM : AVL.ALOC)
+
+RETURN
+93000*
+   STATUS = RBO.setProperty('', 'ServerStatus', '1')
+   STATUS = RBO.setProperty('', 'ServerMessage', ERRMSG)
+
+
+

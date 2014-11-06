@@ -1,0 +1,180 @@
+      XRPT = "WHO"
+      XCONO = "001"
+      XUSER = "CBA"
+      XACCT = "DEMO-JCS"
+      XPROC = "CUST.MAINT.PROC"
+*********************************************************************
+*
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+*
+* SYSTEM        - PRIMAC
+*
+* PROGRAM       - OVERNIGHT.PROCESSOR.EXEC
+*
+* AUTHOR        - NICK AMENDOLA - COMPUTER BUSINESS ASSOCIATES
+*
+* DATE          - 23 MAR 1992
+*
+* DESCRIPTION
+*
+* This subroutine is used to RUN the overnight reports and is called
+* from program OVERNIGHT.PROCESSOR.SUB
+*
+*********************************************************************
+*
+*  COPY statements
+*
+*COPY>PMC.CPYLIB>MENUS.CONTROL
+*COPY>CPYLIB>PORT.CONTROL
+*COPY>CPYLIB>CHAR
+*
+      DIM O.USER.REC(20)
+*
+*  Initialization
+*
+      XSTATUS = ""
+      PORT = @TTY
+      PORT = FIELD(PORT,"/",1)[4,99]
+      SEC.ID = "R.":PORT
+      ACCT = @WHO
+      OPEN "","VOC" TO MDICT ELSE
+         XSTATUS = "CANNOT OPEN MASTER DICTIONARY"
+         GOTO 99999
+      END
+      OPEN "","CONTROL" TO CONTROL ELSE
+         XSTATUS = "CANNOT OPEN CONTROL FILE"
+         GOTO 99999
+      END
+      OPEN "","SECURITY" TO SECURITY ELSE
+         XSTATUS = "CANNOT OPEN SECURITY FILE"
+         GOTO 99999
+      END
+      MATREAD MENU.REC FROM CONTROL, "MENUS.CONTROL" ELSE
+         XSTATUS = "Cannot Locate CONTROL, MENUS.CONTROL"
+         GOTO 99999
+      END
+      PMC.PATH=PRIMAC.PATH[1,INDEX(PRIMAC.PATH,"/",COUNT(PRIMAC.PATH,"/"))]
+*
+*  Main processing
+*
+      QF.ID="QF_":PORT
+      READU QFILE FROM MDICT, QF.ID ELSE QFILE=""
+      O.QFILE=QFILE
+      QFILE="F"
+      BEGIN CASE
+      CASE XACCT[1,3] = "CBA"
+         NEW.PATH = CBA.PATH[1,INDEX(CBA.PATH,"/",COUNT(CBA.PATH,"/"))]
+      CASE XACCT[1,LEN(M.ACCOUNT)] = M.ACCOUNT
+         NEW.PATH = PMC.PATH
+      CASE 1
+         NEW.PATH = ""
+      END CASE
+      QFILE<2> = NEW.PATH:XACCT:"/VOC"
+      QFILE<3> = NEW.PATH:XACCT:"/D_VOC"
+      WRITEU QFILE ON MDICT, QF.ID
+      OPEN "",QF.ID TO NEW.MDICT ELSE
+         XSTATUS = "(":XACCT:") is an invalid account"
+         GOTO 99997
+      END
+      READ REC FROM NEW.MDICT, "LOGIN" ELSE
+         XSTATUS = "Invalid setup for account (":XACCT:")"
+         GOTO 99997
+      END
+      CNT=DCOUNT(REC,AM)
+      BEGIN CASE
+      CASE REC<1> # "PQN"
+         XSTATUS = "Invalid setup for account (":XACCT:")"
+         GOTO 99997
+      CASE REC<CNT-2>[1,6] # "MV %1 "
+         XSTATUS = "Invalid setup for account (":XACCT:")"
+         GOTO 99997
+      CASE REC<CNT-1> # "HEASY.MENU" OR REC<CNT> # "P"
+         XSTATUS = "Invalid setup for account (":XACCT:")"
+         GOTO 99997
+      END CASE
+      STMT = "LOGTO ":NEW.PATH:XACCT
+      MATREADU O.USER.REC FROM SECURITY, SEC.ID THEN
+         FROM.MENU = 1
+      END ELSE
+         FROM.MENU = 0
+         MAT O.USER.REC = ""
+      END
+      MAT USER.REC = ""
+      USER.CONO = XCONO
+      USER.ID   = XUSER
+      USER.DIR  = XACCT
+      USER.C.CO = XCONO
+      USER.EXEC = STMT
+      MATWRITE USER.REC ON SECURITY, SEC.ID
+      WRITE XRPT ON CONTROL, "OVERNIGHT.":PORT
+      PRINT
+      PRINT "LOGGING TO ":XACCT:; INPUT XOXO
+      PERFORM STMT CAPTURING RESPONSE
+      RESPONSE = ""
+      IF @WHO # XACCT THEN
+         XSTATUS = "LOGTO Failure"
+         GOTO 99993
+      END
+      PRINT "ALREADY LOGGED TO :":XACCT:; INPUT XOXO
+*
+      MATREADU USER.REC FROM SECURITY, SEC.ID ELSE
+         MAT USER.REC = ""
+         USER.CONO = XCONO
+         USER.ID   = XUSER
+         USER.DIR  = XACCT
+         USER.C.CO = XCONO
+      END
+      USER.EXEC = XPROC
+      MATWRITE USER.REC ON SECURITY, SEC.ID
+*
+*  Print a banner page and run the current report procedure
+*
+*     REPORT.TIME = OCONV(TIME(),"MTS")
+*     BANNER = XUSER:" ":OCONV(DATE(),"D2/"):" ":REPORT.TIME
+*     PERFORM "BLOCK-PRINT ":BANNER CAPTURING RESPONSE
+      PRINT
+      PRINT "PERFORMING ":USER.EXEC:; INPUT XOXO
+      PERFORM USER.EXEC
+*
+*  Log back to Process account
+*
+      BEGIN CASE
+      CASE ACCT[1,3] = "CBA"
+         NEW.PATH = CBA.PATH[1,INDEX(CBA.PATH,"/",COUNT(CBA.PATH,"/"))]
+      CASE ACCT[1,LEN(M.ACCOUNT)] = M.ACCOUNT
+         NEW.PATH = PMC.PATH
+      CASE 1
+         NEW.PATH = ""
+      END CASE
+      STMT = "LOGTO ":NEW.PATH:ACCT
+      MATREADU USER.REC FROM SECURITY, SEC.ID ELSE NULL
+      IF FROM.MENU THEN
+         MAT USER.REC = MAT O.USER.REC
+         USER.EXEC = STMT
+         MATWRITE USER.REC ON SECURITY, SEC.ID
+      END ELSE
+         DELETE SECURITY, SEC.ID
+      END
+      PRINT
+      PRINT "LOGGING TO ":ACCT:; INPUT XOXO
+      PERFORM STMT CAPTURING RESPONSE
+      RESPONSE = ""
+      IF @WHO # ACCT THEN
+         XSTATUS = "LOGTO Failure"
+         GOTO 99993
+      END
+      PRINT "ALREADY LOGGED TO :":ACCT:; INPUT XOXO
+*
+*  End of program
+*
+99993*
+      READU DUMMY FROM CONTROL, "OVERNIGHT.":PORT ELSE NULL
+      DELETE CONTROL, "OVERNIGHT.":PORT
+99997*
+      IF O.QFILE="" THEN
+         DELETE MDICT, QF.ID
+      END ELSE
+         WRITE O.QFILE ON MDICT, QF.ID
+      END
+99999*
+   END

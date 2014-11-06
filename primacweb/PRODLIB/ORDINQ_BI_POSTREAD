@@ -1,0 +1,131 @@
+SUBROUTINE ORDINQ_BI_POSTREAD
+********************************************************************************
+*   Program name :- ORDINQ_BI_POSTREAD
+*   Created:- 12/04/2002
+*   Author:- L. Ross
+*   Gets info for Order Inquiry 'BI' option.
+*------------------------------------------------------------------------------*
+*
+*  
+
+* In Properties:
+* --------------
+*  
+IN_PARAM=''
+*
+* Out Properties:
+* ---------------
+*  
+OUT_PARAM=''
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB INV.CNV
+$INCLUDE CPYLIB CHAR
+$INCLUDE OPS.CPYLIB ORDER
+$INCLUDE OPS.CPYLIB BOL
+$INCLUDE PMC.CPYLIB SHIP.TO
+$INCLUDE PMC.CPYLIB SHIP.VIA
+
+;* open files
+
+ERRMSG=''
+IF FILEINFO(INVENTORY,0)=0 THEN
+  OPEN '','INVENTORY' TO INVENTORY ELSE
+    ERRMSG ='INVENTORY FILE IS MISSING'
+   END
+END
+IF FILEINFO(ORDER,0)=0 THEN
+  OPEN '','ORDER' TO ORDER ELSE
+    ERRMSG ='ORDER FILE IS MISSING'
+  END
+END
+IF FILEINFO(BOL,0)=0 THEN
+  OPEN '','BOL' TO BOL ELSE
+    ERRMSG ='BOL FILE IS MISSING'
+  END
+END
+IF FILEINFO(SHIP.TO,0)=0 THEN
+  OPEN '','SHIP.TO' TO SHIP.TO ELSE
+    ERRMSG ='SHIP.TO FILE IS MISSING'
+  END
+END
+IF FILEINFO(SHIP.VIA,0)=0 THEN
+  OPEN '','SHIP.VIA' TO SHIP.VIA ELSE
+    ERRMSG ='SHIP.VIA FILE IS MISSING'
+  END
+END
+IF ERRMSG#'' THEN GOTO 93000
+
+;* initialize
+
+
+;* get ID
+STATUS=RBO.getProperty('','ID',ID)
+CONO=ID[1,3]
+ORDNO=ID[4,99]
+
+;* get database values
+
+MATREAD ORD.REC FROM ORDER,ID ELSE
+  ERRMSG='Cannot read ORDER ':ID:' record!'
+  GOTO 93000
+END
+SHIP.QTY=0
+BOL.QTYS=''
+BOL.NOS = ''
+BOL.DATES = ''
+SHIPTO.NAMES=''
+SHIPTO.ADDRS=''
+SHIP.VIAS=''
+INVOICES=''
+BCNT=DCOUNT(ORD.BOL,VM)
+FOR B=1 TO BCNT
+  BOLNO=ORD.BOL<1,B>
+  BOL.ID=CONO:BOLNO
+  MATREAD BOL.REC FROM BOL, BOL.ID ELSE
+    MAT BOL.REC = ''
+  END
+  IF BOL.STATUS # 'CANCEL' THEN
+    MATREAD SPT.REC FROM SHIP.TO, CONO:BOL.CUST:'!':BOL.SHIP.TO ELSE
+       MAT SPT.REC = ''; SPT.NAME='Unknown'
+    END
+    MATREAD SHIP.VIA.REC FROM SHIP.VIA, CONO:BOL.SHIP.VIA ELSE
+       MAT SHIP.VIA.REC = ''
+    END
+    PCNT=DCOUNT(BOL.PROD,VM)
+    BOL.TOTAL=0
+    FOR P=1 TO PCNT
+      PROD.TOTAL = SUM(BOL.QTY<1,P>)
+      MATREAD INV.REC FROM INVENTORY,CONO:BOL.PROD<1,P> ELSE
+        INV.FULL.DESC = 'Unknown'; INV.UNIT<1,3> = 'EA'; INV.M.LINE = 'FNGD'
+      END
+      CALL GetInvUMCnv(ERRMSG,IN_PARAM,OUT_PARAR,MAT INV.CNV.REC,MAT INV.REC)
+      BOL.TOTAL += OCONV(INT(((PROD.TOTAL / ICR.DV1) * ICR.MT1) / ICR.DV2 + .5),'ICR.CNV1')
+    NEXT P
+    SHIP.QTY += BOL.TOTAL
+    BOL.QTYS<1,-1>=OCONV((BOL.TOTAL),'MD0,') "R#12"
+    BOL.NOS<1,-1>=BOLNO
+    BOL.DATES<1,-1>=OCONV(BOL.SHP.DATE,'D2/')
+    SHIPTO.NAMES<1,-1>=SPT.NAME"L#23"
+    SHIPTO.ADDRS<1,-1>=SPT.ADDR1"L#25"
+    SHIP.VIAS<1,-1>=SHPV.DESC"L#8"
+    INVOICES<1,-1>=BOL.INVOICE
+  END
+NEXT B
+SHIP.QTY = OCONV((SHIP.QTY),'MD0,') "R#12"
+
+STATUS=RBO.setProperty('','BOLnos',BOL.NOS)
+STATUS=RBO.setProperty('','BOLdates',BOL.DATES)
+STATUS=RBO.setProperty('','Shipped_Qty',BOL.QTYS)
+STATUS=RBO.setProperty('','Ship_To_Names',SHIPTO.NAMES)
+STATUS=RBO.setProperty('','Ship_To_Addrs',SHIPTO.ADDRS)
+STATUS=RBO.setProperty('','Ship_Vias',SHIP.VIAS)
+STATUS=RBO.setProperty('','Invoices',INVOICES)
+STATUS=RBO.setProperty('','Total_shipped',SHIP.QTY)
+
+93000
+STATUS = RBO.setProperty('','ServerStatus',1)        
+STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+RETURN
+

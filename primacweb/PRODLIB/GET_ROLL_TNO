@@ -1,0 +1,203 @@
+SUBROUTINE GET_ROLL_TNO
+********************************************************************************
+*   Program name :- GET_ROLL_TNO
+*   Created:- 3/4/2004
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB INV.CNV
+$INCLUDE PMC.CPYLIB PO
+
+* Insert method code here
+OPEN '','INVENTORY' TO INVENTORY ELSE ERRMSG = 'INVENTORY FILE IS MISSING'; GOTO 99999
+OPEN '','CONTROL' TO CONTROL ELSE ERRMSG = 'CONTROL FILE IS MISSING'; GOTO 99999
+OPEN '','REG.REQ' TO REG.REQ ELSE 	ERRMSG = 'REG.REQ FILE IS MISSING'; GOTO 99999
+
+*INTIALIZING VARIABLE
+DIFF.UM = ''
+LN = ''
+PROD.NUM = ''
+TEMP_DEFAULT = ''
+
+STATUS = RBO.getProperty('','PROD_NO',PROD_NUM) 
+STATUS = RBO.getProperty('','ID',ID)
+CONO = ID[1,3]
+STATUS = RBO.getProperty('','LN_NO',LN)
+STATUS = RBO.getProperty('','CALC_TOT_ONORD',PO.TOT.ONORD)
+
+DEFFUN UOM.CONVERSION.CALC(QTY,FROM.UOM,TO.UOM,WGT,WIDTH,ROND,LN)    ;* C40540
+MAT INV.CNV.REC = ""
+
+MATREAD INV.REC FROM INVENTORY, CONO:PROD_NUM THEN
+   BEGIN CASE
+	CASE INV.PAP.TYPE = "ROLL" OR INV.PAP.TYPE = "LROLL" OR INV.PAP.TYPE = "PCOAT"
+		RETURN_VALUE = "# Rolls"
+	*CASE INV.PAP.TYPE = "SHEET" OR INV.PAP.TYPE = "REGULAR"
+	CASE INV.PAP.TYPE = "SHEET"
+		RETURN_VALUE = "# Skids"
+	CASE 1	
+		RETURN_VALUE = ""
+   END CASE
+END
+
+STATUS = RBO.setProperty('','RollType',RETURN_VALUE)
+************************
+IF RETURN_VALUE = "# Rolls" THEN
+	MATREAD PO.REC FROM REG.REQ,ID ELSE
+		ERRMSG = 'RECORD NOT FOUND'
+	END
+	MATREAD INV.REC FROM INVENTORY, CONO:PROD_NUM THEN
+		PO.JB.UNITS<1,LN> = INV.UNIT<1,2>
+		PO.UNIT.FLG<1,LN> = INV.UNIT<1,1>
+		IF PO.PROD.TYPE<1,LN> = "REG" THEN
+			PO.UNIT.FLG<1,LN> = INV.UNIT<1,1>
+		END
+		GOSUB 4000
+		IF DIFF.UM<LN> = "N" THEN
+		    PO.TOT.ONORD = PO.TOT.ONORD * 1000                  
+		END
+		*GOSUB 5000 		
+		GOSUB ROLL_CALC
+*STATUS = RBO.setProperty('','TEMPVAL',TEMP_DEFAULT)
+*RETURN
+	END
+END
+
+*STATUS = RBO.setProperty('','ServerMessage',TEMP_DEFAULT)
+STATUS = RBO.setProperty('','DEFAULT_ROLL',DEFAULT)
+STATUS = RBO.setProperty('','LN_NO',LN)
+RETURN
+*************
+4000:
+  BEGIN CASE
+   CASE INV.UNIT<1,2> = "SHT" AND INV.UNIT<1,3> = "LBS"
+     ICR.CNV<LN,1> = "MD0"; ICR.DV2<LN,1> = 1
+     ICR.DV1<LN,1> = INV.M.WT; ICR.MT1<LN,1> = 1
+    CASE INV.UNIT<1,2> = "PC" AND INV.UNIT<1,3> = "MSI"
+      ICR.CNV<LN,1> = "MD0"; ICR.DV2<LN,1> = 1
+      ICR.DV1<LN,1> = INV.PAP.WIDTH/100; ICR.MT1<LN,1> = 10
+    CASE INV.UNIT<1,2> = "FT" AND INV.UNIT<1,3> = "MSI"
+      ICR.CNV<LN,1> = "MD0"; ICR.DV2<LN,1> = 12
+      ICR.DV1<LN,1> = INV.PAP.WIDTH/100; ICR.MT1<LN,1> = 100
+    CASE 1
+      ICR.CNV<LN,1> = "MD2"; ICR.DV2<LN,1> = 1
+      ICR.DV1<LN,1> = 10; ICR.MT1<LN,1> = INV.SBR
+  END CASE
+  BEGIN CASE
+    CASE PO.UNIT.FLG<1,LN> = "SHT" AND INV.UNIT<1,3> = "LBS"
+      ICR.CNV<LN,2> = "MD0"; ICR.DV2<LN,2> = 1
+      ICR.DV1<LN,2> = INV.M.WT; ICR.MT1<LN,2> = 1
+    CASE PO.UNIT.FLG<1,LN> = "PC" AND INV.UNIT<1,3> = "MSI"
+      ICR.CNV<LN,2> = "MD0"; ICR.DV2<LN,2> = 1
+      ICR.DV1<LN,2> = INV.PAP.WIDTH/100; ICR.MT1<LN,2> = 10
+    CASE PO.UNIT.FLG<1,LN> = "FT" AND INV.UNIT<1,3> = "MSI"
+      ICR.CNV<LN,2> = "MD0"; ICR.DV2<LN,2> = 12
+      ICR.DV1<LN,2> = INV.PAP.WIDTH/100; ICR.MT1<LN,2> = 100
+    CASE 1
+      ICR.CNV<LN,2> = "MD2"; ICR.DV2<LN,2> = 1
+      ICR.DV1<LN,2> = 10; ICR.MT1<LN,2> = 1
+  END CASE
+  IF PO.UNIT.FLG<1,LN> # INV.UNIT<1,2> THEN DIFF.UM<LN> = "Y" ELSE DIFF.UM<LN> = "N"
+RETURN
+**************
+***********
+ROLL_CALC:
+
+STATUS=RBO.setProperty('','TEMPVAL',INV.PAP.TYPE)
+BEGIN CASE
+    CASE INV.PAP.TYPE = "ROLL"
+      IF INV.AVG.DIA = "" OR INV.CORE.DIA = "" OR INV.PAP.WIDTH = "" OR INV.FACTOR = "" THEN
+        ERRMSG ="Roll/skids calculations information missing" ;GOSUB 99999
+      END ELSE
+          READ ROLL.VARIANCE FROM CONTROL, CONO: 'ROLL.VARIANCE' ELSE ROLL.VARIANCE = 5
+          MIN.DIA = INV.AVG.DIA * ((100 - ROLL.VARIANCE)/100)
+          MIN.ROLL.SZ=(((MIN.DIA/100)*(MIN.DIA/100))-((INV.CORE.DIA/100)*(INV.CORE.DIA/100)))*(INV.PAP.WIDTH/10000)*(INV.FACTOR/10000)/10
+          O.R = "O"
+          IF MIN.ROLL.SZ > 0 THEN
+            *DEFAULT = INT((PO.TOT.ONORD<1,LN>/1000/MIN.ROLL.SZ)+1)
+
+*STATUS = RBO.setProperty('','ServerMessage','HERE IN ROLL_CALC PO total order --' : PO.TOT.ONORD)
+*RETURN
+	      DEFAULT = INT((PO.TOT.ONORD/1000/MIN.ROLL.SZ)+1)
+	     *DEFAULT = INT((100000/1000/MIN.ROLL.SZ)+1) ; *THIS IS FOR 100.00
+	     TEMP_DEFAULT<1,1> = "IN 1:" : DEFAULT
+          END ELSE
+            DEFAULT = 0
+     	     TEMP_DEFAULT<1,2> = "IN 2:" : DEFAULT
+          END
+        *END
+      END
+    CASE INV.PAP.TYPE = "LROLL" OR INV.PAP.TYPE = "PCOAT"
+      IF INV.AVG.DIA = "" OR INV.CORE.DIA = "" OR INV.PAP.WIDTH = "" OR INV.FACTOR = "" THEN
+        ERRMSG ="Roll/skids calculations information missing" ; GOSUB 99999
+      END ELSE
+          READ ROLL.VARIANCE FROM CONTROL, CONO: 'ROLL.VARIANCE' ELSE ROLL.VARIANCE = 5
+          MIN.DIA = INV.AVG.DIA * ((100 - ROLL.VARIANCE)/100)
+          BEGIN CASE
+            CASE INV.UNIT<1,3> = "FT"
+              X = (MIN.DIA * MIN.DIA) - (INV.CORE.DIA * INV.CORE.DIA)
+              MIN.ROLL.SZ = INT((X/10000)*3.1416/4*(100000/INV.FACTOR)/12+0.5)
+              O.R = "O"
+              IF MIN.ROLL.SZ > 0 THEN
+                *DEFAULT = INT((PO.TOT.ONORD<1,LN>/MIN.ROLL.SZ)+1)
+		   DEFAULT = INT((PO.TOT.ONORD/MIN.ROLL.SZ)+1)
+                TEMP_DEFAULT<1,3> = "IN 3:" : DEFAULT
+              END ELSE
+                DEFAULT = 0
+		  TEMP_DEFAULT<1,4> = "IN 4:" : DEFAULT
+              END
+            CASE INV.UNIT<1,3> = "PC"
+              X = (MIN.DIA * MIN.DIA) - (INV.CORE.DIA * INV.CORE.DIA)
+              MIN.ROLL.SZ = INT((X/10000)*3.1416/4*(100000/INV.FACTOR)/10+0.5)
+              O.R = "O"
+              IF MIN.ROLL.SZ > 0 THEN
+                *DEFAULT = INT((PO.TOT.ONORD<1,LN>/MIN.ROLL.SZ)+1)
+		   DEFAULT = INT((PO.TOT.ONORD/MIN.ROLL.SZ)+1)
+                TEMP_DEFAULT<1,5> = "IN 5:" : DEFAULT
+              END ELSE
+                DEFAULT = 0
+	         TEMP_DEFAULT<1,6> = "IN 6:" : DEFAULT
+              END
+            CASE INV.UNIT<1,3> = "MSI"
+              X = (MIN.DIA * MIN.DIA) - (INV.CORE.DIA * INV.CORE.DIA)
+              MIN.ROLL.SZ = INT((X/10000)*3.1416/4*(100000/INV.FACTOR)*(INV.PAP.WIDTH/10000)/1000+0.5)
+              O.R = "O"
+              IF MIN.ROLL.SZ > 0 THEN
+                *DEFAULT = INT((PO.TOT.ONORD<1,LN>/1000/MIN.ROLL.SZ)+1)
+		  DEFAULT = INT((PO.TOT.ONORD/1000/MIN.ROLL.SZ)+1)
+		  TEMP_DEFAULT<1,7> = "IN 7:" : DEFAULT
+              END ELSE
+                DEFAULT = 0
+		  TEMP_DEFAULT<1,8> = "IN 8:" : DEFAULT
+              END
+          END CASE
+        *END
+      END
+    CASE 1
+      *IF PREV.NO.OF.ROLLS # "" THEN
+      *  O.R = "O"
+      *  DEFAULT = PREV.NO.OF.ROLLS
+      *END
+END CASE
+RETURN
+
+*************
+
+*************
+* End of method code
+99999:
+STATUS = RBO.setProperty('','ServerStatus',1)        
+STATUS = RBO.setProperty('','ServerMessage',ERRMSG) 
+RETURN
+
+

@@ -1,0 +1,196 @@
+      SUBROUTINE OVERNIGHT.PROCESSOR.SUB
+*********************************************************************
+*
+* Copyright 1989 by PRISYS Pty Ltd (Australasia)
+*
+* SYSTEM        - PRIMAC
+*
+* PROGRAM       - OVERNIGHT.PROCESSOR.SUB
+*
+* AUTHOR        - BERN (PRISYS Pty Ltd)
+*
+* DATE          - 15 NOV 1989
+*
+* MODIFIED      - 23 MAR 1992 by NICK AMENDOLA - VERCOM
+*
+* DESCRIPTION
+*
+* This subroutine is used to RUN the overnight reports and is called
+* from program OVERNIGHT.PROCESSOR
+*
+*********************************************************************
+*
+*  COPY statements
+*
+*COPY>CPYLIB>SCOMMON1
+*COPY>CPYLIB>PORT.CONTROL
+*COPY>CPYLIB>SCREEN.COM
+*COPY>CPYLIB>FILE.VARS
+*COPY>PMC.CPYLIB>OVERNIGHT.REQUESTS
+*COPY>CPYLIB>CHAR
+*
+*  Initialization
+*
+*     PORT = SYSTEM(18)
+      PORT = 'TTY'
+      CALL SYSVARS.SUB(PORT)
+      PROCESS.DATE = DATE()
+      PROCESS.TIME = TIME()
+      IF PROCESS.TIME < 30 THEN PROCESS.DATE = DATE()
+      SCREEN DEFINE;OVERNIGHT.PROCESSOR.SUB
+      SCREEN FORMAT
+      PDAYS = 2
+      PSECS = PDAYS * 86400
+      TFLAG = 0
+*
+*  Display the skeleton screen and process the overnight reports
+*
+      MATREAD OR.REC FROM CONTROL,"OVERNIGHT.REQUESTS" ELSE
+         MAT OR.REC = ""
+      END
+      PRCNT = 0
+      RCNT = DCOUNT(OR.MD.PROC,VM)
+      FOR REF = 1 TO RCNT
+         BEGIN CASE
+         CASE OR.STATUS<1,REF> = "S"
+            PRCNT = PRCNT + 1
+         CASE OR.STATUS<1,REF> = "H"
+            IF OR.SCHED.DATE<1,REF> <= DATE() THEN PRCNT = PRCNT + 1
+         END CASE
+      NEXT REF
+      S$DATA(1)<S$SCR> = DATE()
+      S$DATA(2)<S$SCR> = PRCNT
+      S$DATA(3)<S$SCR> = OCONV(OR.PROCESS.TIME,"MTS")
+      SCREEN DISPLAY;;1
+      SCREEN DISPLAY;;2
+      SCREEN DISPLAY;;3
+*
+* Process awaiting reports
+*
+      LOOP
+         ECHO OFF
+         LOOP
+            INPUT DATA.PRESENT,-1
+         WHILE DATA.PRESENT DO
+            INPUT REQUEST,1:
+            IF REQUEST = CHAR(27) THEN TFLAG = 1
+         REPEAT
+         ECHO ON
+         IF TFLAG THEN GOTO 5000
+*
+         MATREADU OR.REC FROM CONTROL,"OVERNIGHT.REQUESTS" ELSE
+            MAT OR.REC = ""
+         END
+         RCNT = DCOUNT(OR.MD.PROC,VM)
+         REQ = 0
+         FOR REF = 1 TO RCNT UNTIL REQ > 0
+            BEGIN CASE
+            CASE OR.STATUS<1,REF> = "S"
+               REQ = REF
+            CASE OR.STATUS<1,REF> = "H"
+               IF OR.SCHED.DATE<1,REF> <= DATE() THEN REQ = REF
+            END CASE
+         NEXT REF
+      WHILE REQ > 0 DO
+         OR.STATUS<1,REQ> = "I"
+         SDATE = DATE()
+         STIME = TIME()
+         IF STIME < 30 THEN SDATE = DATE()
+         OR.SCHED.DATE<1,REQ> = ""
+         OR.START.DATE<1,REQ> = SDATE
+         OR.START.TIME<1,REQ> = STIME
+         OR.END.DATE<1,REQ> = ""
+         OR.END.TIME<1,REQ> = ""
+         OR.PROCESS.PORT<1,REQ> = PORT
+         S$DATA(4)<S$SCR>  = REQ
+         S$DATA(10)<S$SCR> = OR.REPORT.NAME<1,REQ>
+         S$DATA(5)<S$SCR>  = OR.MD.PROC<1,REQ>
+         S$DATA(6)<S$SCR>  = OR.COMPANY.NO<1,REQ>
+         S$DATA(7)<S$SCR>  = OR.USER.ID<1,REQ>
+         S$DATA(8)<S$SCR>  = OR.ACCOUNT.NAME<1,REQ>
+         S$DATA(9)<S$SCR>  = OCONV(OR.START.TIME<1,REQ>,"MTS")
+         MATWRITE OR.REC ON CONTROL,"OVERNIGHT.REQUESTS"
+*
+*  Display current report details on skeleton screen
+*
+         SCREEN DISPLAY;;ALL
+         PRINT @(0,22):
+*
+*  Process this report
+*
+         XCONO = OR.COMPANY.NO<1,REQ>
+         XUSER = OR.USER.ID<1,REQ>
+         XACCT = OR.ACCOUNT.NAME<1,REQ>
+         XPROC = OR.MD.PROC<1,REQ>
+         CALL OVERNIGHT.PROCESSOR.EXEC(REQ,XCONO,XUSER,XACCT,XPROC,STATUS)
+         MATREADU OR.REC FROM CONTROL,"OVERNIGHT.REQUESTS" ELSE
+            MAT OR.REC = ""
+         END
+         IF STATUS = "" THEN
+            OR.STATUS<1,REQ> = "C"
+         END ELSE
+            OR.STATUS<1,REQ> = "A"
+         END
+         OR.SCHED.DATE<1,REQ> = ""
+         OR.END.DATE<1,REQ> = DATE()
+         OR.END.TIME<1,REQ> = TIME()
+         IF OR.END.TIME<1,REQ> < 30 THEN OR.END.DATE<1,REQ>=DATE()
+         MATWRITE OR.REC ON CONTROL,"OVERNIGHT.REQUESTS"
+      REPEAT
+*
+*  Overnight report processor finished or terminated
+*
+5000 *
+      CTIME = DATE()*100000+TIME()
+      IFND = 0
+      RCNT = DCOUNT(OR.MD.PROC,VM)
+      FOR REF = RCNT TO 1 STEP -1 UNTIL IFND
+         STAT = OR.STATUS<1,REF>
+         PTIME = OR.END.DATE<1,REF>*100000+OR.END.TIME<1,REF>
+         ETIME = CTIME - PTIME
+         BEGIN CASE
+         CASE STAT = "I"
+            DELFLAG = 0
+            IFND = 1
+         CASE STAT = "D"
+            DELFLAG = 1
+         CASE (CTIME-PTIME) < PSECS
+            DELFLAG = 0
+         CASE STAT = "A"
+            DELFLAG = 1
+         CASE STAT = "C"
+            DELFLAG = 1
+         CASE 1
+            DELFLAG = 0
+         END CASE
+         IF DELFLAG THEN
+            AC = COUNT(OR.A1A,",")+1
+            FOR AP = 1 TO AC
+               AA = FIELD(OR.A1A,",",AP)
+               AA1 = FIELD(AA,"-",1)
+               AA2 = FIELD(AA,"-",2)
+               IF AA2 = "" THEN AA2 = AA1
+               FOR AAP = AA1 TO AA2
+                  OR.REC(AAP) =  DELETE(OR.REC(AAP),1,REF,0)
+               NEXT AAP
+            NEXT AP
+         END
+      NEXT REF
+      RCNT = DCOUNT(OR.MD.PROC,VM)
+      MATWRITE OR.REC ON CONTROL,"OVERNIGHT.REQUESTS"
+      GOTO 99999
+*
+*  Error routine
+*
+90000 *
+      PRINT @(0,23):@(-4):ERRMSG:
+      INPUT REPLY:
+      PRINT @(0,23):@(-4):
+      RETURN
+*
+*  End of program
+*
+99999 *
+      SCREEN CLEAR;;D
+      RETURN
+   END

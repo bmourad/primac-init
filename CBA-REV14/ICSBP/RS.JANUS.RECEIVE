@@ -1,0 +1,495 @@
+   SUBROUTINE RS.JANUS.RECEIVE(CONO, PO.NO, MAN.NO, TOT.WGT, MAT INT.REC, DAILY_STOCK, PO.MAN.XREF, PO.RSKI.XREF, ERRMSG)
+*********************************************************************
+*
+* PROGRAM  - RS.JANUS.RECEIVE
+*
+* AUTHOR   - ALEX DELGADO, PRIMAC SYSTEMS
+*
+* DATE     - 07/11/2002
+*
+* DESCRIPTION
+*
+* This program is used to process the Roll Receiving transaction
+* from the hand-held Janus units used on the receiving dock.
+*
+*T26198 adelgado 07/11/2002 * Initial programming.
+*T27904 cmykleb 02/10/2004 * Multiple changes to receiving process.
+*T27928 cmykleb 11/18/2004 * Allow for auto-posting when company field
+*                            CO.ICS.REAL.REC (real time posting) is set
+*                            to a "Y".
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>CPYLIB>COM1
+*COPY>ICS.CPYLIB>COM.INV.MAIN  
+*COPY>ICS.CPYLIB>COM.INV.SERIAL
+*COPY>ICS.CPYLIB>COM.INV.LINK  
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>ICS.CPYLIB>CATEGORY
+*COPY>ICS.CPYLIB>DAILY_STOCK
+*COPY>ICS.CPYLIB>INV_SERIAL
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>WAREHOUSE
+*COPY>PMC.CPYLIB>PO
+*COPY>ICS.CPYLIB>PO.MAN.XREF
+*COPY>ICS.CPYLIB>PO.RSKI.XREF
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>ICS.CPYLIB>INTERMEC.TRAN
+*COPY>ICS.CPYLIB>SAVE.STOCK.REC
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*
+   DEFFUN CALC.DIAM(COST.QTY,STK.QTY,MAT INV.REC)
+   SERIAL.ID  = Intermec.SERIAL
+   MILL.ID    = Intermec.MILL.ID
+   RCV.QTY    = Intermec.QTY
+   LOC.ID     = Intermec.LOC
+   TDATE      = Intermec.TDATE
+*T27904 v
+   PO.LINE.NO = Intermec.PO.LINE.NO
+   IF MILL.ID = "" AND RCV.QTY = "" AND LOC.ID = "" THEN RETURN
+*T27904 ^
+*
+   BAD.SERIAL = 0
+   GOSUB VALIDATE.TRANS
+   IF ERRMSG = '' THEN
+      GOSUB UPDATE.TRANS
+   END
+   GOTO 99999
+*
+VALIDATE.TRANS: 
+*
+*T27904 v
+*  MATREADU PO.REC FROM PO, CONO:PO.NO ELSE
+*     ERRMSG = "PO # ":PO.NO:" IS AN INVALID P/O #"
+*     RETURN
+*  END
+*  MATREADU ISTK.REC FROM INV_SERIAL, CONO:SERIAL.ID THEN
+*     IF ISTK.POST.DATE = "" THEN
+*        IF ISTK.PLACE = "M" THEN
+*           ERRMSG = "SERIAL ALREADY RECV BY MENU"; RETURN
+*        END ELSE
+*           IF ISTK.PLACE = "R" THEN
+*              ERRMSG = "SERIAL ALREADY RECV BY RF"; RETURN
+*           END
+*        END
+*        PO.LINE   = Intermec.PO.LINE.NO ; * T27904
+*     END ELSE
+*        ERRMSG = "SERIAL ALREADY RECEIVED"; RETURN
+*     END
+*     IF ISTK.PO.NO # PO.NO THEN
+*        ERRMSG = "SERIAL DOES NOT MATCH WITH PO ENTERED"
+*     END ELSE
+*        LOCATE ISTK.PROD IN PO.PROD.NUM<1>,1 SETTING POS ELSE
+*           ERRMSG = "SERIAL PRODUCT IS NOT FOUND IN THE PO"
+*        END
+*     END
+*  END ELSE
+*     MAT ISTK.REC = ''
+*     ISTK.PO.NO = '*BAD*'
+*     ISTK.PO.LINE = 1
+*     ISTK.MANIFEST.NO = '1'
+*     PO.NO = '*BAD*'
+*  END
+   PO.WRITE = 1
+   PO.PRESENT = 1 ; * T27928
+   MATREADU PO.REC FROM PO, CONO:PO.NO ELSE
+      MAT PO.REC = ""
+      PO.WRITE = 0
+      PO.PRESENT = 0 ; * T27928
+   END
+   WRITE.SERIAL = 0
+   MATREADU ISTK.REC FROM INV_SERIAL, CONO:SERIAL.ID ELSE
+      WRITE.SERIAL = 1
+      MAT ISTK.REC = ''
+      ISTK.PO.NO = PO.NO
+      ISTK.PO.LINE = PO.LINE.NO
+      ISTK.PROD = PO.PROD.NUM<1,PO.LINE.NO>
+      ISTK.WHSE = PO.WHSE<1,PO.LINE.NO>
+      ISTK.UOM = PO.JB.UNITS<1,PO.LINE.NO>
+      ISTK.MANIFEST.NO = MAN.NO
+      IF ISTK.UOM = 'LBS' OR ISTK.UOM = 'MSI' THEN
+         ISTK.QTY.ENTERED = ICONV(OCONV(RCV.QTY,'MD2'),'MD2')
+      END ELSE                                    
+         ISTK.QTY.ENTERED = ICONV((RCV.QTY/100),'MD0')                  
+      END                                         
+   END
+*T27904 ^
+   *
+   RETURN
+*
+UPDATE.TRANS: 
+*
+   ISTK.PLACE = 'J'
+   ISTK.ENTRY.DAT = TDATE
+   ISTK.MILL.ID = MILL.ID
+   *
+   * CHECK TO SEE IF A MANIFEST # SHOULD BE GENERATED
+   *
+   IF PO.NO # '*BAD*' THEN
+      GOT.ONE = 1
+      IF MAN.NO = '' THEN
+         IF PO.LAST.MAN = '' THEN
+            GOT.ONE = 0
+         END ELSE
+            RSMAN.ID = CONO:PO.NO:'!':PO.LAST.MAN
+            READV MANDATE FROM PO.MAN.XREF, RSMAN.ID,4 THEN
+               IF MANDATE = TDATE THEN
+                  MAN.NO = PO.LAST.MAN
+               END ELSE
+                  GOT.ONE = 0
+               END
+            END
+         END
+      END
+      IF GOT.ONE = 0 THEN
+         MAN.NO = 0
+         LOOP UNTIL GOT.ONE DO
+            MAN.NO = MAN.NO + 1
+            READV MANID FROM PO.MAN.XREF, CONO:PO.NO:"!":MAN.NO, 0 ELSE
+               GOT.ONE = 1
+            END
+         REPEAT
+         PO.MAN = INSERT(PO.MAN,1,-1,0,MAN.NO)
+         PO.LAST.MAN = MAN.NO
+      END
+   END
+   *
+   BEGIN CASE
+      ;* Bad roll skids have no update of manifest
+      CASE PO.NO = "*BAD*"
+         ;* No prior manifest number used
+      CASE ISTK.MANIFEST.NO = ''
+         ISTK.MANIFEST.NO = MAN.NO
+         ;* Prior manifest used
+      CASE ISTK.MANIFEST.NO # ''
+         BEGIN CASE
+            ;* Manifest is same no change to files
+            CASE ISTK.MANIFEST.NO = MAN.NO
+               ;* Different manifest
+            CASE ISTK.MANIFEST.NO # MAN.NO
+               OLD.RSMAN.ID = CONO:ISTK.PO.NO:'!':ISTK.MANIFEST.NO
+               ;* Update old manifest PO.MAN.XREF and PO
+               MATREADU RSMAN.REC FROM PO.MAN.XREF, OLD.RSMAN.ID THEN
+                  LOCATE SERIAL.ID IN RSMAN.RS.NO<1>,1 SETTING MPTR THEN
+                     RSMAN.RS.NO = DELETE(RSMAN.RS.NO,1,MPTR,0)
+                     RSMAN.LINE.NO = DELETE(RSMAN.LINE.NO,1,MPTR,0)
+                     RSMAN.PLACE = DELETE(RSMAN.PLACE,1,MPTR,0)
+                  END
+                  IF RSMAN.RS.NO = '' THEN
+                     DELETE PO.MAN.XREF, OLD.RSMAN.ID
+                     LOCATE ISTK.MANIFEST.NO IN PO.MAN<1>,1 SETTING POPTR THEN
+                        PO.MAN = DELETE(PO.MAN,1,POPTR,0)
+                     END
+                  END ELSE
+                     MATWRITE RSMAN.REC ON PO.MAN.XREF, OLD.RSMAN.ID
+                  END
+               END ELSE
+                  RELEASE PO.MAN.XREF, OLD.RSMAN.ID
+               END
+               ISTK.MANIFEST.NO = MAN.NO
+         END CASE
+   END CASE
+   *
+   MATREADU DSR.REC FROM DAILY_STOCK, CONO:PO.NO:"!":ISTK.MANIFEST.NO ELSE
+      MAT DSR.REC = ""
+   END
+   IF NUM(TOT.WGT) = 0 THEN
+      TOT.WGT = DSR.SHPMNT.TOT+0
+   END
+   BEGIN CASE
+      CASE PO.NO = "*BAD*"
+         MAT INV.REC = ""
+         MAT CATG.REC = ""
+         DSR.PO.LINE = 1
+      *
+      * UPDATE PO.RSKI.XREF, ONLY IF PO = 'BAD'
+      *
+         MATREADU RSXRF.REC FROM PO.RSKI.XREF, CONO:PO.NO ELSE
+            MAT RSXRF.REC = ''
+         END
+         LOCATE SERIAL.ID IN RSXRF.RS.NO<1>,1 SETTING RSPTR ELSE
+            RSXRF.RS.NO = INSERT(RSXRF.RS.NO,1,-1,0,SERIAL.ID)
+            RSXRF.LN.NO = INSERT(RSXRF.LN.NO,1,-1,0,ISTK.PO.LINE)
+         END
+         MATWRITE RSXRF.REC ON PO.RSKI.XREF, CONO:PO.NO
+*T27904 v
+      CASE PO.WRITE = 0
+         LOCATE PO.LINE.NO IN DSR.PO.LINE<1>,1 SETTING POS ELSE
+            DSR.PO.LINE<1,POS> = PO.LINE.NO
+         END
+*T27904 ^
+      CASE 1
+         LOCATE ISTK.PROD IN PO.PROD.NUM<1>,1 SETTING PO.LINE THEN
+            PROD.NO = PO.PROD.NUM<1,PO.LINE>
+            MATREAD INV.REC FROM INVENTORY,CONO:PROD.NO ELSE
+               MAT INV.REC = ""
+            END
+            MATREAD CATG.REC FROM CATEGORY,CONO:INV.LINE ELSE
+               MAT CATG.REC = ""
+            END
+            LOCATE PO.LINE IN DSR.PO.LINE<1>,1 SETTING POS ELSE
+               DSR.PO.LINE<1,POS> = PO.LINE
+               DSR.PROD<1,POS> = PROD.NO
+               DSR.WHSE<1,POS> = ISTK.WHSE
+               DSR.UN.PRICE<1,POS> = PO.GROS.PRICE<1,PO.LINE>
+            END
+            ISTK.PO.LINE = PO.LINE
+            DSR.VEND = PO.VEND.NO
+         END
+         LOCATE ISTK.MANIFEST.NO IN PO.MAN<1>,1 SETTING PINDX ELSE
+            PO.MAN = INSERT(PO.MAN,1,PINDX,0,ISTK.MANIFEST.NO)
+            MATWRITEU PO.REC ON PO,CONO:PO.NO
+         END
+   END CASE
+   DSR.SHPMNT.NO = ISTK.MANIFEST.NO
+   DSR.SHPMNT.TOT = TOT.WGT
+   IF DSR.DATE = "" THEN DSR.DATE = TDATE
+   DSR.PO = PO.NO
+   PREV.PPTR = 0
+   PREV.RPTR = 0
+   LOCATE ISTK.PO.LINE IN DSR.PO.LINE<1>,1 SETTING PPTR THEN
+      LOCATE SERIAL.ID IN DSR.SERIAL<1,PPTR>,1 SETTING RPTR THEN
+         PREV.PPTR = PPTR
+         PREV.RPTR = RPTR
+      END
+   END
+   DSR.UOM<1,PPTR> = ISTK.UOM  
+   GOSUB GET.INV.CNV
+   IF PREV.PPTR > 0 AND PREV.RPTR > 0 THEN
+      DEL DSR.SERIAL<1,PREV.PPTR,PREV.RPTR>
+      DEL DSR.MILL.ID<1,PREV.PPTR,PREV.RPTR>
+      DEL DSR.QTY<1,PREV.PPTR,PREV.RPTR>
+      DEL DSR.LOC<1,PREV.PPTR,PREV.RPTR>
+      DEL DSR.SERIAL.STATUS<1,PREV.PPTR,PREV.RPTR>
+      DEL DSR.POST.DATE<1,PREV.PPTR,PREV.RPTR>
+      DEL DSR.QTY.ENTERED<1,PREV.PPTR,PREV.RPTR> ; * T27904
+   END
+*
+   LOCATE SERIAL.ID IN DSR.SERIAL<1,PPTR>,1 BY "AL" SETTING RPTR ELSE
+      INS "" BEFORE DSR.SERIAL<1,PPTR,RPTR>
+      INS "" BEFORE DSR.MILL.ID<1,PPTR,RPTR>
+      INS "" BEFORE DSR.QTY<1,PPTR,RPTR>
+      INS "" BEFORE DSR.LOC<1,PPTR,RPTR>
+      INS "" BEFORE DSR.LOC.STATUS<1,PPTR,RPTR>
+      INS "" BEFORE DSR.POST.DATE<1,PPTR,RPTR>
+      INS "" BEFORE DSR.QTY.ENTERED<1,PPTR,RPTR> ; * T27904
+   END
+*
+   DSR.SERIAL<1,PPTR,RPTR>   = SERIAL.ID
+   DSR.MILL.ID<1,PPTR,RPTR>   = MILL.ID
+   IF ISTK.UOM = 'LBS' OR ISTK.UOM = 'MSI' THEN
+      ISTK.QTY.ENTERED = ICONV(OCONV(RCV.QTY,'MD2'),'MD2')
+   END ELSE                                    
+      ISTK.QTY.ENTERED = ICONV((RCV.QTY/100),'MD0')                  
+   END                                         
+   DSR.QTY.ENTERED<1,PPTR,RPTR> = ISTK.QTY.ENTERED ; * T27904
+   IF DIFF.UM = "Y" THEN
+      TEMP.WEIGHT = ISTK.QTY.ENTERED
+      IF ICR.CNV<1,2> = "MD0" THEN
+         TEMP.WEIGHT = INT(((TEMP.WEIGHT/ICR.MT1<1,2>)*ICR.DV1<1,2>)*ICR.DV2<1,2> + .5)
+      END
+      IF ICR.CNV<1,1> = "MD0" THEN
+         IF ICR.CNV<1,2> # "MD0" THEN
+            TEMP.WEIGHT = TEMP.WEIGHT * 10
+         END
+         TEMP.WEIGHT = INT(((TEMP.WEIGHT/ICR.DV1<1,1>)*ICR.MT1<1,1>)/ICR.DV2<1,1> + .5)
+         DSR.STK.QTY<1,PPTR,RPTR> = TEMP.WEIGHT
+         TEMP.WEIGHT = INT(((TEMP.WEIGHT/ICR.MT1<1,1>)*ICR.DV1<1,1>)*ICR.DV2<1,1> + .5)
+      END ELSE
+         TEMP.WEIGHT = TEMP.WEIGHT * ICR.MT1<1,1> * 10
+         DSR.STK.QTY<1,PPTR,RPTR> = ''
+      END
+      DSR.QTY<1,PPTR,RPTR> = TEMP.WEIGHT
+   END ELSE
+      IF ICR.CNV<1,1> = "MD0" THEN
+         DSR.QTY<1,PPTR,RPTR> = INT(((ISTK.QTY.ENTERED/ICR.MT1<1,1>)*ICR.DV1<1,1>)*ICR.DV2<1,1> + .5)
+         DSR.STK.QTY<1,PPTR,RPTR> = ISTK.QTY.ENTERED
+      END ELSE
+         DSR.QTY<1,PPTR,RPTR> = ISTK.QTY.ENTERED * 10
+         DSR.STK.QTY<1,PPTR,RPTR> = ''
+      END
+   END
+   DSR.DIAM<1,PPTR,RPTR>=CALC.DIAM(DSR.QTY<1,PPTR,RPTR>,DSR.STK.QTY<1,PPTR,RPTR>,MAT INV.REC)
+   DSR.WHSE<1,PPTR>     = ISTK.WHSE
+   DSR.LOC<1,PPTR,RPTR>     = LOC.ID
+   DSR.SERIAL.STATUS<1,PPTR,RPTR>    = ""
+   DSR.POST.DATE<1,PPTR,RPTR> = ""
+   IF DSR.PERIOD = '' THEN
+      MATREAD WHSE.REC FROM WAREHOUSE, CONO:DSR.WHSE<1,PPTR> THEN
+         ERR.FLG = "";ERRMSG = ""                              
+         CALL CHECK.PERIOD.DATE(CONO,DSR.DATE,DSR.PERIOD,WHS.DIV,ERR.FLG,ERRMSG,COMPANY,CONTROL)
+         BEGIN CASE                           
+            CASE ERRMSG = ""                   
+            CASE ERR.FLG = 0                   
+            CASE ERR.FLG = 1                   
+            CASE ERR.FLG = 2                   
+               DSR.PERIOD = ''
+         END CASE                             
+      END
+   END
+   *
+   * UPDATE PO.MAN.XREF
+   *
+   MATREADU RSMAN.REC FROM PO.MAN.XREF, CONO:PO.NO:"!":ISTK.MANIFEST.NO ELSE
+      MAT RSMAN.REC = ""
+   END
+   LOCATE SERIAL.ID IN RSMAN.RS.NO<1>,1 SETTING SPTR THEN
+      RSMAN.PLACE<1,SPTR>       = "J"
+   END ELSE
+      RSMAN.RS.NO = INSERT(RSMAN.RS.NO,1,SPTR,0,SERIAL.ID)
+      RSMAN.LINE.NO    = INSERT(RSMAN.LINE.NO,1,SPTR,0,ISTK.PO.LINE)
+      RSMAN.PLACE = INSERT(RSMAN.PLACE,1,SPTR,0,"J")
+   END
+   RSMAN.MAN.NO = ISTK.MANIFEST.NO
+   RSMAN.MAN.TOT.WGT = TOT.WGT
+   RSMAN.ENTRY.DATE = TDATE
+   RSMAN.PERIOD = DSR.PERIOD
+   MATWRITE RSMAN.REC ON PO.MAN.XREF, CONO:PO.NO:"!":ISTK.MANIFEST.NO
+   DSR.TYPE = 'J' ; * T27904
+   DSR.ID = CONO:PO.NO:"!":MAN.NO ; * T27928
+   MATWRITEU DSR.REC ON DAILY_STOCK, DSR.ID
+*  IF WRITE.SERIAL THEN ; * T27904
+   MATWRITE ISTK.REC ON INV_SERIAL, CONO:SERIAL.ID
+*  END ; * T27904
+*
+*T27928 v
+   IF CO.ICS.REAL.REC = 'Y' AND PO.WRITE = 1 THEN
+      MAT SAVE.STK.REC=""
+      SSTK.PO.LINE=DSR.PO.LINE
+      SSTK.PROD = DSR.PROD
+      SSTK.WHSE=DSR.WHSE
+      SSTK.UNIT.PRICE= DSR.UN.PRICE
+      SSTK.DISCOUNT=DSR.DISCOUNT
+      SSTK.TOT.ONORD = PO.TOT.ONORD                            
+      SSTK.TOT.RECEVED = PO.TOT.RECEVED                        
+      SSTK.PREV.RECEVED = PO.PREV.RECEVED                      
+      SSTK.QTY.OPEN = PO.QTY.OPEN                              
+      SSTK.TOT.CANCEL = PO.TOT.CANCEL                          
+      SSTK.TOT.REC = 0                                         
+      SSTK.PROD.TYPE = PO.PROD.TYPE                            
+      SSTK.UNIT.FLG = PO.UNIT.FLG                              
+      SSTK.DEL.DATE = PO.DEL.DATE                              
+      SSTK.STATUS = DSR.LINE.STATUS
+      SSTK.LOC = DSR.LOC             
+      SSTK.SERIAL = DSR.SERIAL       
+*     Double-check ISTK.POST.DATE
+      FOR P = 1 TO DCOUNT(DSR.PROD,VM)
+         FOR S = 1 TO DCOUNT(DSR.SERIAL<1,P>,SVM)
+            MATREAD ISTK.REC FROM INV_SERIAL,CONO:DSR.SERIAL<1,P,S> THEN
+               IF ISTK.POST.DATE # '' THEN
+                  DSR.POST.DATE<1,P,S> = ISTK.POST.DATE
+                  DSR.QTY<1,P,S> = 0
+                  DSR.STK.QTY<1,P,S> = 0
+                  DSR.DIAM<1,P,S> = 0
+               END
+            END
+         NEXT S
+      NEXT P
+*     End of double-check
+      SSTK.QTY = DSR.QTY             
+      SSTK.MILL.ID = DSR.MILL.ID     
+      SSTK.SHEET = DSR.STK.QTY         
+      SSTK.DIAM = DSR.DIAM           
+      SSTK.LOC.STATUS = DSR.LOC.STATUS   
+      SSTK.DATE = DSR.DATE
+      SSTK.PERIOD = DSR.PERIOD
+      SSTK.SHIP.NO = DSR.SHPMNT.NO
+      SSTK.SHIP.TOT = DSR.SHPMNT.TOT
+      SSTK.VEND = DSR.VEND                           
+      SSTK.UNIT.FLG = DSR.UOM         
+      SSTK.JOB.ALC = DSR.JOB.ALC      
+      SSTK.JOB.REC = DSR.JOB.REC      
+      SSTK.COMPLETE = DSR.COMPLETE    
+      SSTK.NO.PIECES = DSR.NO.PIECES 
+      SSTK.POST.DATE=DSR.POST.DATE 
+      CALL RS.STOCK.REC.UPDATE(CONO,PO.NO,MAT COMP.REC,MAT RSXRF.REC,MAT RSMAN.REC,ERROR,HERRMSG,DSR.PERIOD,PO.PRESENT)
+      ERROR = ''
+      HRRMSG = ''
+      IF ERROR THEN
+         DSR.LINE.STATUS=SSTK.STATUS
+         DSR.LOC.STATUS=SSTK.LOC.STATUS
+         DSR.JOB.STATUS=SSTK.JOB.STATUS
+         MATWRITE DSR.REC ON DAILY_STOCK,DSR.ID
+      END ELSE
+         DELETE DAILY_STOCK,DSR.ID
+         PO.CHG.FLG=""
+         NO.PROD = DCOUNT(PO.PROD.NUM,VM)
+         IF PO.PRESENT THEN ;*T27306 v
+            FOR P = 1 TO NO.PROD
+               INV.ID = CONO:PO.PROD.NUM<1,P>
+               MATREAD INV.REC FROM INVENTORY,INV.ID ELSE MAT INV.REC = ''
+               TEST.OPEN = ABS(PO.QTY.OPEN<1,P>)
+               IF TEST.OPEN > 0 AND TEST.OPEN <= 50 THEN
+                  IF INV.UNIT<1,3>='MSI' OR TEST.OPEN <= 9 THEN
+                     PO.TOT.CANCEL<1,P> += (PO.TOT.ONORD<1,P>-PO.TOT.CANCEL<1,P>-PO.TOT.RECEVED<1,P>)
+                     PO.QTY.OPEN<1,P> = 0
+                  END
+               END
+            NEXT P
+         END
+      END
+      MATWRITE RSXRF.REC ON PO.RSKI.XREF, CONO:PO.NO
+      IF DCOUNT(RSMAN.RS.NO,VM) > 0 THEN
+         MATWRITE RSMAN.REC ON PO.MAN.XREF,RSMAN.ID
+      END ELSE
+         DELETE PO.MAN.XREF, RSMAN.ID
+         IF PO.PRESENT THEN
+            MAN.ID = FIELD(DSR.ID,"!",2)
+            LOCATE MAN.ID IN PO.MAN<1> SETTING MFND THEN DEL PO.MAN<1,MFND>
+         END
+      END
+      MATWRITE PO.REC ON PO,CONO:PO.NO
+   END
+*T27928 ^
+   RETURN
+*
+*---- GET CONVERSIONS
+*
+GET.INV.CNV: 
+*
+   ICR.CNV = ""                                               
+   ICR.DV1 = ""                                               
+   ICR.DV2 = ""                                               
+   ICR.MT1 = ""                                               
+   BEGIN CASE                                                 
+      CASE INV.UNIT<1,2> = "SHT" AND INV.UNIT<1,3> = "LBS"       
+         ICR.CNV<1,1> = "MD0";             ICR.DV2<1,1> = 1      
+         ICR.DV1<1,1> = INV.M.WT;          ICR.MT1<1,1> = 1      
+      CASE INV.UNIT<1,2> = "PC" AND INV.UNIT<1,3> = "MSI"        
+         ICR.CNV<1,1> = "MD0";             ICR.DV2<1,1> = 1      
+         ICR.DV1<1,1> = INV.PAP.WIDTH/100; ICR.MT1<1,1> = 10     
+      CASE INV.UNIT<1,2> = "FT" AND INV.UNIT<1,3> = "MSI"        
+         ICR.CNV<1,1> = "MD0";             ICR.DV2<1,1> = 12     
+         ICR.DV1<1,1> = INV.PAP.WIDTH/100; ICR.MT1<1,1> = 100    
+      CASE 1                                                     
+         ICR.CNV<1,1> = "MD2";             ICR.DV2<1,1> = 1      
+         ICR.DV1<1,1> = 10;                ICR.MT1<1,1> = INV.SBR
+   END CASE                                                   
+   BEGIN CASE                                             
+      CASE ISTK.UOM = "SHT" AND INV.UNIT<1,3> = "LBS"       
+         ICR.CNV<1,2> = "MD0";             ICR.DV2<1,2> = 1  
+         ICR.DV1<1,2> = INV.M.WT;          ICR.MT1<1,2> = 1  
+      CASE ISTK.UOM = "PC" AND INV.UNIT<1,3> = "MSI"        
+         ICR.CNV<1,2> = "MD0";             ICR.DV2<1,2> = 1  
+         ICR.DV1<1,2> = INV.PAP.WIDTH/100; ICR.MT1<1,2> = 10 
+      CASE ISTK.UOM = "FT" AND INV.UNIT<1,3> = "MSI"        
+         ICR.CNV<1,2> = "MD0";             ICR.DV2<1,2> = 12 
+         ICR.DV1<1,2> = INV.PAP.WIDTH/100; ICR.MT1<1,2> = 100
+      CASE 1                                                 
+         ICR.CNV<1,2> = "MD2";             ICR.DV2<1,2> = 1  
+         ICR.DV1<1,2> = 10;                ICR.MT1<1,2> = 1  
+   END CASE                                               
+   IF ISTK.UOM # INV.UNIT<1,2> THEN
+      DIFF.UM = "Y"
+   END ELSE
+      DIFF.UM = "N"
+   END
+   RETURN
+*
+*---- END OF PROGRAM
+*
+99999 *
+   RETURN
+END

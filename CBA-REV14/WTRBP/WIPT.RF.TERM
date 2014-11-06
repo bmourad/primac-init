@@ -1,0 +1,1708 @@
+*********************************************************************
+*
+* PROGRAM  - WIPT.RF.TERM
+*
+* AUTHOR   - NICK AMENDOLA, NASTech, Inc.
+*
+* DATE     - 09/01/95
+*
+* DESCRIPTION
+*
+* This program is used to process transaction from the hand-held 
+* R-F units used in the warehouse.
+*
+*T22322 ct6 01/07/1998 * Install WIP IN-PROCESS with changes for Bawden
+*T23359 rik 01/14/1999 * REMOVE ISBN CODING.
+*T26030 ajibaly 02/01/2002 * REMOVE PROMPT "CHANGE QTY?" WHEN ADJUSTING
+*                            QTY
+*T26725 lross 07/02/2002 * Do not allow qty change on ZERO qty
+*                          locations.
+*T27646 thompson 08/18/2003 * ALL FOR MULTI PLATFORM USE
+*********************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>CPYLIB>COM1
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>CPYLIB>EDIT.COM
+*COPY>WTR.CPYLIB>WIP.TRACK.JOB
+*COPY>WTR.CPYLIB>WIP.TRACK.FORM
+*COPY>WTR.CPYLIB>WIP.TRACK.PALLET
+*COPY>WTR.CPYLIB>WIP.TRACK.CONTROL
+*COPY>WTR.CPYLIB>WIP.FILE.VARS
+*COPY>WTR.CPYLIB>WIP.TRACK.TO.JOB
+***T23359*COPY>WTR.CPYLIB>WIP.TRACK.ISBN
+*COPY>WTR.CPYLIB>WIPT.STORAGE.LOC
+*COPY>JCS.CPYLIB>JOB
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>PMC.CPYLIB>EMPLOYEE
+*COPY>PMC.CPYLIB>VEND
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*
+*---- PRE-INITIALIZATION
+*
+   PROCREAD PARAM ELSE PARAM = ""
+   ACTION = PARAM<1>
+*
+*---- OPEN ALL FILES
+*
+   OPEN "","COMPANY" TO COMPANY ELSE
+      ERRMSG = "CANNOT OPEN COMPANY FILE"
+      GOTO 93000
+   END
+   OPEN "","CONTROL" TO CONTROL ELSE
+      ERRMSG = "CANNOT OPEN CONTROL FILE"
+      GOTO 93000
+   END
+   OPEN "","JOB" TO JOB ELSE
+      ERRMSG = "CANNOT OPEN JOB FILE"
+      GOTO 93000
+   END
+   OPEN "","CUSTOMER" TO CUSTOMER ELSE
+      ERRMSG = "CANNOT OPEN CUSTOMER FILE"
+      GOTO 93000
+   END
+   OPEN "","EMPLOYEE" TO EMPLOYEE ELSE
+      ERRMSG = "CANNOT OPEN EMPLOYEE FILE"
+      GOTO 93000
+   END
+   OPEN "","VEND" TO VEND ELSE
+      ERRMSG = "CANNOT OPEN VEND FILE"
+      GOTO 93000
+   END
+   OPEN "","WIP.TRACK.JOB" TO WIP.TRACK.JOB ELSE
+      ERRMSG = "CANNOT OPEN WIP.TRACK.JOB FILE"
+      GOTO 93000
+   END
+   OPEN "","WIP.TRACK.FORM" TO WIP.TRACK.FORM ELSE
+      ERRMSG = "CANNOT OPEN WIP.TRACK.FORM FILE"
+      GOTO 93000
+   END
+   OPEN "","WIP.TRACK.PALLET" TO WIP.TRACK.PALLET ELSE
+      ERRMSG = "CANNOT OPEN WIP.TRACK.PALLET FILE"
+      GOTO 93000
+   END
+   OPEN "","WIP.TRACK.CONTROL" TO WIP.TRACK.CONTROL ELSE
+      ERRMSG = "CANNOT OPEN WIP.TRACK.CONTROL FILE"
+      GOTO 93000
+   END
+   OPEN "","WIP.TRACK.LOC" TO WIP.TRACK.LOC ELSE
+      ERRMSG = "CANNOT OPEN WIP.TRACK.LOC FILE"
+      GOTO 93000
+   END
+   OPEN "","WIP.TRACK.HIST" TO WIP.TRACK.HIST ELSE
+      ERRMSG = "CANNOT OPEN WIP.TRACK.HIST FILE"
+      GOTO 93000
+   END
+   OPEN "","WIP.TRACK.TO.JOB" TO WIP.TRACK.TO.JOB ELSE
+      ERRMSG = "CANNOT OPEN WIP.TRACK.TO.JOB FILE"
+      GOTO 93000
+   END
+*T23359     OPEN "","WIP.TRACK.ISBN" TO WIP.TRACK.ISBN ELSE
+*T23359        ERRMSG = "CANNOT OPEN WIP.TRACK.ISBN FILE"
+*T23359        GOTO 93000
+*T23359     END
+   OPEN "","WIPT.STORAGE.LOC" TO WIPT.STORAGE.LOC ELSE
+      ERRMSG = "CANNOT OPEN WIPT.STORAGE.LOC FILE"
+      GOTO 93000
+   END
+*
+*---- INITIALIZATION
+*
+   CONO = ""
+   MAT COMP.REC = ""
+   CALL GET.CONO (CONO, MAT COMP.REC)
+   IF CONO = "END" THEN GOTO 99999
+   READV WTR.CNTL FROM CONTROL, CONO:'WIP.TRACKING',1 ELSE WTR.CNTL = 'N'
+   IF WTR.CNTL # 'Y' THEN GOTO 99999
+   LOGNAME = 'LOGNAME'; CALL SYSVARS.SUB(LOGNAME); *T27646
+   USER.ID = LOGNAME; *T27646
+   EMPID = "XXXX"
+   EMPNAME = ""
+   MATREAD WIPTE.REC FROM WIP.TRACK.CONTROL, CONO:"EMP" THEN
+      LOCATE USER.ID IN WIPTE.USER<1>,1 SETTING EPTR THEN 
+         EMPID = WIPTE.EMP<1,EPTR>
+         MATREAD EMP.REC FROM EMPLOYEE, CONO:EMPID THEN
+            EMPNAME = EMP.FRST.NAME:" ":EMP.LAST.NAME
+         END
+      END
+   END
+10 *
+   MATREADU WIPTR.REC FROM WIP.TRACK.CONTROL, CONO:"REQ" THEN
+      POS = 1
+      LOOP
+         LOCATE USER.ID IN WIPTR.USER<1>,POS SETTING PTR ELSE PTR = 0
+      WHILE PTR > 0 DO
+         WIPTR.USER<1,PTR> = ""
+         WIPTR.PALLET<1,PTR> = ""
+         POS = PTR + 1
+      REPEAT
+      MATWRITE WIPTR.REC ON WIP.TRACK.CONTROL, CONO:"REQ"
+   END LOCKED
+        ERRMSG="Locked by ":GETUSERNAME(STATUS() )
+        ERY = 15
+        GOSUB 91000
+        GO 10
+   END ELSE
+      RELEASE WIP.TRACK.CONTROL, CONO:"REQ"
+   END
+   PREV.DEFINE.JOB = ""
+   PREV.DEFINE.FORM = ""
+   PREV.DEFINE.SKID = ""
+   PREV.DEFINE.TYPE = ""
+   PREV.DEFINE.QTY = ""
+   PREV.DEFINE.LOC = ""
+   PREV.DEFINE.DESC = ""
+*
+*---- INITIALIZE EDIT.SUB
+*
+   MAT EDIT.COM = ""
+   TYP = 0
+   CALL WIPT.INPUT
+   GOSUB 89990
+   FILL = "#"
+   ERY = 15
+*
+*---- INITIALIZE MENUS AND SCREENS
+*
+   DIM SCRN(10,16)
+   DIM SCRX(10,16)
+   DIM SCRD(10,16)
+   MAT SCRN = ""
+   MAT SCRX = ""
+   MAT SCRD = ""
+   XXXXXXXXXX = " 123456789012345678901 "
+   XXXXXXXXXX = "+--------------------+"
+   SCRN(1,01) = "|      Main Menu     |"
+   SCRN(1,02) = "|--------------------|"
+   SCRN(1,03) = "|                    |"
+   SCRN(1,04) = "|  1- Sign-on        |"
+   SCRN(1,05) = "|  2- Store Pallet   |"
+   SCRN(1,06) = "|  3- Pallet Request |"
+   SCRN(1,07) = "|  4- Locate Pallet  |"
+*T22322*      SCRN(1,08) = "|  5- Change Location|"
+*T22322v
+*      SCRN(1,09) = "|  6- Define Pallet  |"
+*      SCRN(1,10) = "|  7- Update Pallet  |"
+*      SCRN(1,11) = "|                    |"
+*      SCRN(1,12) = "|  X- Exit           |"
+*      SCRN(1,13) = "|                    |"
+   SCRN(1,08) = "|  5- Update Pallet  |"
+   SCRN(1,9) = "|  6- Adjust Qty     |"
+   SCRN(1,10) = "|                    |"
+   SCRN(1,11) = "|  X- Exit           |"
+   SCRN(1,12) = "|                    |"
+   SCRN(1,13) = "|                    |"
+*T22322^
+   SCRN(1,14) = "|    Selection: #    |"
+   SCRN(1,15) = "|                    |"
+   SCRN(1,16) = "|                    |"
+   XXXXXXXXXX = "+--------------------+"
+   XXXXXXXXXX = " 123456789012345678901 "
+   XXXXXXXXXX = "+--------------------+"
+   SCRN(2,01) = "|      Sign-on       |"
+   SCRN(2,02) = "|--------------------|"
+   SCRN(2,03) = "|                    |"
+   SCRN(2,04) = "|Current Employee:   |"
+   SCRN(2,05) = "|                    |"
+   SCRN(2,06) = "| ###################|"
+   SCRN(2,07) = "|                    |"
+   SCRN(2,08) = "|                    |"
+   SCRN(2,09) = "|Employee ID: ####   |"
+   SCRN(2,10) = "|                    |"
+   SCRN(2,11) = "|                    |"
+   SCRN(2,12) = "|                    |"
+   SCRN(2,13) = "|                    |"
+   SCRN(2,14) = "|                    |"
+   SCRN(2,15) = "|                    |"
+   SCRN(2,16) = "|                    |"
+   XXXXXXXXXX = "+--------------------+"
+   XXXXXXXXXX = " 123456789012345678901 "
+   XXXXXXXXXX = "+--------------------+"
+   SCRN(3,01) = "|    Store Pallet    |"
+   SCRN(3,02) = "|--------------------|"
+   SCRN(3,03) = "| ###################|"
+   SCRN(3,04) = "|--------------------|"
+   SCRN(3,05) = "| Pallet #: ######## |"
+   SCRN(3,06) = "|                    |"
+   SCRN(3,07) = "| Location: ######## |"
+   SCRN(3,08) = "|                    |"
+   SCRN(3,09) = "| Moved To: ######## |"
+   SCRN(3,10) = "|                    |"
+   SCRN(3,11) = "|                    |"
+   SCRN(3,12) = "|------- Prior ------|"
+   SCRN(3,13) = "|                    |"
+   SCRN(3,14) = "| Pallet #: ######## |"
+   SCRN(3,15) = "| Moved To: ######## |"
+   SCRN(3,16) = "|                    |"
+   XXXXXXXXXX = "+--------------------+"
+   XXXXXXXXXX = " 123456789012345678901 "
+*T22322v
+*      XXXXXXXXXX = "+--------------------+"
+*      SCRN(4,01) = "|   Pallet Request   |"
+*      SCRN(4,02) = "|--------------------|"
+*      SCRN(4,03) = "|                    |"
+*      SCRN(4,04) = "| Pallet #: ######## |"
+*      SCRN(4,05) = "| Location: ######## |"
+*      SCRN(4,06) = "|                    |"
+*      SCRN(4,07) = "| Job : ########     |"
+*      SCRN(4,08) = "| Form     : ####### |"
+*      SCRN(4,09) = "|                    |"
+*      SCRN(4,10) = "| Stitcher: ######## |"
+*      SCRN(4,11) = "|                    |"
+*      SCRN(4,12) = "|Delivered: ######## |"
+*      SCRN(4,13) = "|                    |"
+*      SCRN(4,14) = "|                    |"
+*      SCRN(4,15) = "|                    |"
+*      SCRN(4,16) = "|                    |"
+*      XXXXXXXXXX = "+--------------------+"
+   XXXXXXXXXX = " 123456789012345678901 "
+   XXXXXXXXXX = "+--------------------+"
+   SCRN(4,01) = "|   Pallet Request   |"
+   SCRN(4,02) = "|--------------------|"
+   SCRN(4,03) = "| ###################|"
+   SCRN(4,04) = "|--------------------|"
+   SCRN(4,05) = "| Date: ########     |"
+   SCRN(4,06) = "| Time: #####        |"
+   SCRN(4,07) = "| Cctr: ###          |"
+   SCRN(4,08) = "| Job : ########     |"
+   SCRN(4,09) = "| Form: #######      |"
+   SCRN(4,10) = "| (N)ext,(P)rior: #  |"
+   SCRN(4,11) = "| (F)ifo,(L)ifo : #  |"
+   SCRN(4,12) = "|                    |"
+   SCRN(4,13) = "| Pallet #: ######## |"
+   SCRN(4,14) = "| Location: ######## |"
+   SCRN(4,15) = "|(N)ext,(P)rior: #   |"
+   SCRN(4,16) = "|                    |"
+   XXXXXXXXXX = "+--------------------+"
+*T22322^
+   XXXXXXXXXX = " 123456789012345678901 "
+*T22322v
+*      XXXXXXXXXX = "+--------------------+"
+*      SCRN(5,01) = "|   Locate Pallet    |"
+*      SCRN(5,02) = "|--------------------|"
+*      SCRN(5,03) = "| Job : ########     |"
+*      SCRN(5,04) = "| Form     : ####### |"
+*      SCRN(5,05) = "|--------------------|"
+*      SCRN(5,06) = "|     ###    ###     |"
+*      SCRN(5,07) = "|                    |"
+*      SCRN(5,08) = "| Pallet #: ######## |"
+*      SCRN(5,09) = "| Location: ######## |"
+*      SCRN(5,10) = "| Quantity: ######## |"
+*      SCRN(5,11) = "|     Type: ####     |"
+*      SCRN(5,12) = "|####################|"
+*      SCRN(5,13) = "|                    |"
+*      SCRN(5,14) = "|                    |"
+*      SCRN(5,15) = "|                    |"
+*      SCRN(5,16) = "|                    |"
+*      XXXXXXXXXX = "+--------------------+"
+   XXXXXXXXXX = " 123456789012345678901 "
+   XXXXXXXXXX = "+--------------------+"
+   SCRN(5,01) = "|   Locate Pallet    |"
+   SCRN(5,02) = "|--------------------|"
+   SCRN(5,03) = "| ###################|"
+   SCRN(5,04) = "|--------------------|"
+   SCRN(5,05) = "| Job   : ########   |"
+   SCRN(5,06) = "| Form  : #######    |"
+   SCRN(5,07) = "| To-Job: ########   |"
+*T23359 v
+*     SCRN(5,08) = "| ISBN:              |"
+   SCRN(5,08) = "|                    |"
+*T23359 ^
+   SCRN(5,09) = "|################### |"
+   SCRN(5,10) = "| (F)ifo,(L)ifo: #   |"
+   SCRN(5,11) = "| --------### of ### |"
+   SCRN(5,12) = "| Pallet #: ######## |"
+   SCRN(5,13) = "| Location: ######## |"
+   SCRN(5,14) = "| Quantity: ######## |"
+   SCRN(5,15) = "| (P)rior,(N)ext: #  |"
+   SCRN(5,16) = "|                    |"
+   XXXXXXXXXX = "+--------------------+"
+*T22322^
+   XXXXXXXXXX = " 123456789012345678901 "
+   XXXXXXXXXX = "+--------------------+"
+   SCRN(7,01) = "|    Update Pallet   |"
+   SCRN(7,02) = "|--------------------|"
+   SCRN(7,03) = "|                    |"
+   SCRN(7,04) = "|  Pallet: ########  |"
+   SCRN(7,05) = "|                    |"
+   SCRN(7,06) = "| Job : ########     |"
+   SCRN(7,07) = "| Form: #######      |"
+   SCRN(7,08) = "| Skid: ###          |"
+   SCRN(7,09) = "| To-Cctr: ###       |"
+   SCRN(7,10) = "|                    |"
+   SCRN(7,11) = "| Quantity: ######## |"
+   SCRN(7,12) = "| Location: ######   |"
+   SCRN(7,13) = "|                    |"
+   SCRN(7,14) = "| Description:       |"
+   SCRN(7,15) = "|####################|"
+   SCRN(7,16) = "|                    |"
+   XXXXXXXXXX = "+--------------------+"
+   XXXXXXXXXX = " 123456789012345678901 "
+   XXXXXXXXXX = "+--------------------+"
+   SCRN(8,01) = "|    Adjust Qty      |"
+   SCRN(8,02) = "|--------------------|"
+   SCRN(8,03) = "| ###################|"
+   SCRN(8,04) = "|--------------------|"
+   SCRN(8,05) = "| Pallet  : ######## |"
+   SCRN(8,06) = "| Job     : ######## |"
+   SCRN(8,07) = "| Form    : #######  |"
+   SCRN(8,08) = "| Skid    : ###      |"
+   SCRN(8,09) = "| To-Cctr : ###      |"
+   SCRN(8,10) = "| To-Job  : ######## |"
+   SCRN(8,11) = "| Location: ######## |"
+   SCRN(8,12) = "| Quantity: ######   |"
+   SCRN(8,13) = "| Cartons : ######   |"
+   SCRN(8,14) = "|                    |"
+   SCRN(8,15) = "| (E)xit, (F)ile: #  |"
+   SCRN(8,16) = "|                    |"
+   XXXXXXXXXX = "+--------------------+"
+   XXXXXXXXXX = " 123456789012345678901 "
+   XXXXXXXXXXX = "+--------------------+"
+   SCRN(10,01) = "|   Pallet Pick-up   |"
+   SCRN(10,02) = "|--------------------|"
+   SCRN(10,03) = "|                    |"
+   SCRN(10,04) = "| Pallet #: ######## |"
+   SCRN(10,05) = "| Location: ######## |"
+   SCRN(10,06) = "|                    |"
+   SCRN(10,07) = "| Job : ########     |"
+   SCRN(10,08) = "| Form: #######      |"
+   SCRN(10,09) = "|                    |"
+   SCRN(10,10) = "| Accept? : ###      |"
+   SCRN(10,11) = "|                    |"
+   SCRN(10,12) = "|                    |"
+   SCRN(10,13) = "|                    |"
+   SCRN(10,14) = "|                    |"
+   SCRN(10,15) = "|                    |"
+   SCRN(10,16) = "|                    |"
+   XXXXXXXXXXX = "+--------------------+"
+   XXXXXXXXXXX = " 123456789012345678901 "
+*
+   FOR SN = 1 TO 9
+      FOR SL = 1 TO 16
+*T22322v
+*            SLINE = SCRN(SN,SL)[2,21]
+         SLINE = SCRN(SN,SL)[2,20]
+*T22322^
+         FOR N = 1 TO 21 WHILE SCRX(SN,SL) = ""
+            IF SLINE[N,1] # " " THEN
+               SCRX(SN,SL) = N
+               SCRD(SN,SL) = SLINE[N,99]
+            END
+         NEXT N
+      NEXT SL
+   NEXT SN
+*
+*---- MAIN PROCESSING
+*
+100 *
+   RELEASE
+*
+   ESN=1; GOSUB 1000
+*T22322vvv
+*      TYP=1; X=15; Y=12; MAXL=1
+   TYP=1; X=15; Y=13; MAXL=1
+*T22322^^^
+   EX=0; EY=15; ERY=15
+*T22322vvv
+*      VALDAT="1":VM:"2":VM:"3":VM:"4":VM:"5":VM:"6":VM:"X"
+   VALDAT="1":VM:"2":VM:"3":VM:"4":VM:"5":VM:"6":VM:"7":VM:"X"
+*T22322^^
+   CALL WIPT.INPUT
+   GOSUB 89990
+   OPTION = VALUE
+120 *
+   BEGIN CASE
+      CASE OPTION = "END"
+         GOTO 99999
+      CASE OPTION = "1"           ;* SIGN-ON
+         ESN=2; GOSUB 1000
+         GOSUB 1010
+      CASE OPTION = "2"           ;* PALLET STORAGE
+         ESN=3; GOSUB 1000
+         GOSUB 1020
+      CASE OPTION = "3"           ;* PALLET REQUEST
+         ESN=4; GOSUB 1000
+         GOSUB 1030
+      CASE OPTION = "4"           ;* LOCATE PALLET
+         ESN=5; GOSUB 1000
+         GOSUB 1040
+*T22322*      CASE OPTION = "5"           ;* CHANGE LOCATION
+*T22322*         ESN=6; GOSUB 1000
+*T22322*         GOSUB 1050
+*T22322v
+*      CASE OPTION = "6"           ;* DEFINE PALLET
+      CASE OPTION = "5"           ;* DEFINE PALLET
+*T22322^
+         ESN=7; GOSUB 1000
+         GOSUB 1060
+*T22322vvv
+      CASE OPTION = "6"           ;* UPDATE PALLET
+         ESN=8; GOSUB 1000
+         GOSUB 1070
+*T22322^^
+*     CASE OPTION = "9"           ;* PALLET PICK-UP
+*        ESN=5; GOSUB 1000
+*        GOSUB 1090
+*        IF OPTION = "2" THEN GOTO 120
+      CASE OPTION = "X"
+         GOTO 99999
+   END CASE
+   GOTO 100
+*
+*---- DISPLAY SCREEN
+*
+1000 *
+   SLINE = @(-1)
+   FOR N = 1 TO 16
+      SDATA = SCRD(ESN,N)
+      CONVERT "#" TO " " IN SDATA
+      IF TRIM(SDATA) # "" THEN
+         X = SCRX(ESN,N) - 1
+         Y = N - 1
+         SLINE = SLINE:@(X,Y):TRIMF(TRIMB(SDATA))
+      END
+   NEXT N
+   PRINT SLINE:
+   GOSUB 89990
+   RETURN
+*
+*---- SIGN-ON
+*
+1010 *
+   TYP=1; X=13; Y=8; MAXL=4; EX=0; EY=15; ERY=15
+   PRINT @(X,Y):STR("#",MAXL):
+   PRINT @(X,Y):
+   INPUT VALUE,4:_ FOR 10 ELSE VALUE = ""
+   IF VALUE = "" OR VALUE = "END" THEN RETURN
+   MATREAD EMP.REC FROM EMPLOYEE, CONO:VALUE ELSE
+      ERRMSG = "INVALID EMPLOYEE ID"
+      GOSUB 91000
+      GOTO 1010
+   END
+   EMPID = VALUE
+   EMPNAME = EMP.FRST.NAME:" ":EMP.LAST.NAME
+   PRINT @(1,11):"HELLO":
+   PRINT @(1,13):EMPNAME"L#20":
+   MATREADU WIPTE.REC FROM WIP.TRACK.CONTROL, CONO:"EMP" ELSE MAT WIPTE.REC = ""
+   LOCATE USER.ID IN WIPTE.USER<1>,1 SETTING EPTR ELSE WIPTE.USER<1,EPTR> = USER.ID
+   WIPTE.EMP<1,EPTR> = EMPID
+   MATWRITE WIPTE.REC ON WIP.TRACK.CONTROL, CONO:"EMP"
+   SLEEP 3
+   RETURN
+*
+*---- STORE PALLET
+*
+1020 *
+   LOOP
+*T22322vvv
+      IF EMPNAME # "" THEN PRINT @(1,2):EMPNAME "L#20"
+*         TYP=7; X=11; Y=3; MINL=8; MAXL=8; EX=0; EY=9; ERY=9 
+      TYP=7; X=11; Y=4; MINL=8; MAXL=8; EX=0; EY=9; ERY=9 
+*T22322^^
+      PATRN="1A7N"
+      O.R="O"; DEFAULT=""
+      CALL WIPT.INPUT
+      GOSUB 89990
+      IF VALUE = "" OR VALUE = "END" THEN RETURN
+      CALL WIPT.CHECK.DIGIT("T", VALUE, "10RL", CKDIG, VALID)
+      IF NOT(VALID) THEN
+         ERRMSG = "INVALID PALLET ID"
+         GOSUB 91000
+         GOTO 1029
+      END
+      PAL.ID = VALUE
+      MATREAD WIPTP.REC FROM WIP.TRACK.PALLET, CONO:PAL.ID ELSE
+*           MAT WIPTP.REC = ""
+*           WIPTP.MLOC = "????"
+*           PRINT CHAR(7):CHAR(7):
+         ERRMSG = "PALLET NOT ON FILE"
+         GOSUB 91000
+         GOTO 1029
+      END
+*T22322v
+*         PRINT @(11,05):WIPTP.MLOC<1,1>"L#8":
+      PRINT @(11,06):WIPTP.MLOC<1,1>"L#8":
+*T22322^
+1028 *
+*T22322v
+*         TYP=7; X=11; Y=7; MINL=4; MAXL=8
+      TYP=1; X=11; Y=8; MINL=4; MAXL=8
+*         PATRN="1A1N1A0X":VM:"1A1N-0X":VM:"'SHREDDER'":VM:"'VENDOR'"
+*T22322^
+      EX=0; EY=9; ERY=9
+      IF WIPTP.MLOC<1,1> # "????" THEN
+         O.R="O"; DEFAULT=WIPTP.MLOC<1,1>
+      END
+      CALL WIPT.INPUT
+      GOSUB 89990
+      IF VALUE = "END" THEN RETURN
+*T22322v
+      SL.LOC = VALUE
+      GOSUB 3000 ;* Get the location definition record
+      IF ERRMSG # "" THEN
+         GOSUB 91000
+         GOTO 1028
+      END
+*T22322^
+      IF VALUE # "" THEN
+         NEWLOC = VALUE
+         MATREADU WIPTP.REC FROM WIP.TRACK.PALLET, CONO:PAL.ID LOCKED
+            ERRMSG = "** Pallet Locked **"
+            GOSUB 91000
+            GOTO 1028
+         END ELSE
+            MAT WIPTP.REC = ""
+         END
+         PLOC = WIPTP.MLOC<1,1>
+         PQTY = WIPTP.CQTY
+         GOSUB 2000
+         CALL WIPT.LOC.UPD(CONO,PAL.ID,PLOC,MAT WIPTP.REC,WIP.TRACK.LOC,ERRMSG)
+*NA         CALL WIPT.HIST.UPD(CONO,PLOC,PQTY,MAT WIPTP.REC,WIP.TRACK.HIST,ERRMSG)
+         MATWRITE WIPTP.REC ON WIP.TRACK.PALLET, CONO:PAL.ID
+         PRINT @(11,13):PAL.ID"L#8":
+         PRINT @(11,14):NEWLOC"L#8":
+         PRINT @(00,15):@(-4):
+         IF WIPTP.SEQ >= 900 THEN
+            PRINT @(00,15):BEL:BEL:" **** USE LAST **** ":
+         END
+      END
+      PRINT @(11,04):@(-4):
+      PRINT @(11,06):@(-4):
+      PRINT @(11,08):@(-4):
+      GOSUB 89990
+1029 REPEAT
+   RETURN
+*
+*---- PALLET REQUEST
+*
+1030 *
+*T22322v
+   IF EMPNAME # "" THEN PRINT @(1,2):EMPNAME "L#20"
+*T22322^
+   RTYPE = "D"
+   REQCCTR = ""
+   REQFND = 0
+   MATREADU WIPTR.REC FROM WIP.TRACK.CONTROL, CONO:"REQ" ELSE MAT WIPTR.REC = ""
+   RCNT = DCOUNT(WIPTR.DATE,VM)
+   RSTEP = 0
+   LOOP
+      TYP=1; X=17; Y=10; MAXL=3; EX=0; EY=15; ERY=15
+      CALL WIPT.INPUT
+      GOSUB 89990
+      BEGIN CASE
+         CASE VALUE = "END"
+            RETURN
+         CASE VALUE = "F"
+            RSTART=1; REND=RCNT; RSTEP=1
+         CASE VALUE = "L"
+            RSTART=RCNT; REND=1; RSTEP=-1
+         CASE 1
+            ERRMSG = "**INVALID INPUT**"
+            GOSUB 91000
+      END CASE
+   UNTIL RSTEP # 0 DO
+   REPEAT
+1031 *
+   LOCATE USER.ID IN WIPTR.USER<1>,1 SETTING RPTR THEN
+      WIPTR.USER<1,RPTR> = ""
+   END
+   REQFND = 0
+   FOR RPTR = RSTART TO REND STEP RSTEP UNTIL REQFND
+*T22322^
+      BEGIN CASE
+         CASE RTYPE # WIPTR.TYPE<1,RPTR>
+         CASE WIPTR.USER<1,RPTR> # ""
+         CASE 1
+*T22322v
+            PRINT @(7,4):OCONV(WIPTR.DATE<1,RPTR>,"D2/"):@(-4):
+            PRINT @(7,5):OCONV(WIPTR.TIME<1,RPTR>,"MT"):@(-4):
+            PRINT @(07,6):WIPTR.CCTR<1,RPTR>[4,99]:@(-4):
+            PRINT @(07,7):WIPTR.JOB<1,RPTR>:@(-4):
+            PRINT @(07,8):WIPTR.FORM<1,RPTR>:@(-4):
+            WIPTR.USER<1,RPTR> = USER.ID
+            MATWRITE WIPTR.REC ON WIP.TRACK.CONTROL, CONO:"REQ"
+            REQFND = 1
+      END CASE
+   NEXT RPTR
+***      IF REQFND = 0 THEN RPTR = RPTR - RSTEP
+*
+   IF NOT(REQFND) THEN
+      PRINT @(7,4):"**NONE**":
+      PRINT @(7,5):@(-4):
+      PRINT @(7,6):@(-4):
+      PRINT @(7,7):@(-4):
+      PRINT @(7,8):@(-4):
+      GOSUB 89990
+   END
+1032 *
+   TYP=1; X=17; Y=9; MAXL=3; EX=0; EY=15; ERY=15; O.R = "O"
+   VALDAT="DEL":VM:"":VM:"P":VM:"N":VM:"END"
+   CALL WIPT.INPUT
+   GOSUB 89990
+   BEGIN CASE
+      CASE VALUE = "END"
+         MATREADU WIPTR.REC FROM WIP.TRACK.CONTROL, CONO:"REQ" ELSE MAT WIPTR.REC = ""
+         LOCATE USER.ID IN WIPTR.USER<1>,1 SETTING RPTR THEN
+            WIPTR.USER<1,RPTR> = ''
+         END
+         MATWRITE WIPTR.REC ON WIP.TRACK.CONTROL, CONO:"REQ"
+         RETURN
+      CASE VALUE = "DEL"
+         MATREADU WIPTR.REC FROM WIP.TRACK.CONTROL, CONO:"REQ" ELSE MAT WIPTR.REC = ""
+         LOCATE USER.ID IN WIPTR.USER<1>,1 SETTING RPTR THEN
+            FOR N = 1 TO WIPTR.REC.SIZE
+               WIPTR.REC(N) = DELETE(WIPTR.REC(N),1,RPTR,0)
+            NEXT N
+         END
+         MATWRITE WIPTR.REC ON WIP.TRACK.CONTROL, CONO:"REQ"
+         RETURN
+      CASE VALUE = "N" OR VALUE = "P" 
+1033     REQFND = 0
+         MATREADU WIPTR.REC FROM WIP.TRACK.CONTROL, CONO:"REQ" ELSE MAT WIPTR.REC=""
+         RCNT = DCOUNT(WIPTR.DATE<1>,VM)
+         LOCATE USER.ID IN WIPTR.USER<1>,1 SETTING RPOS THEN
+            RPTR = RPOS
+            WIPTR.USER<1,RPTR> = ""
+         END ELSE
+            IF RSTEP=1 THEN
+               RPTR=RCNT+1
+            END ELSE
+               RPTR = 0
+            END
+         END
+         MATWRITE WIPTR.REC ON WIP.TRACK.CONTROL, CONO:"REQ"
+         IF VALUE = "N" THEN
+            RSTART=RPTR+1; REND=RCNT; RSTEP=1
+            IF RSTART > RCNT THEN RSTART = RCNT
+         END
+         IF VALUE = "P" THEN
+            RSTART=RPTR-1; REND=1; RSTEP=-1
+            IF RSTART < 1 THEN RSTART = 1
+         END
+         PRINT @(11,12):@(-4):
+         PRINT @(11,13):@(-4):
+         GOSUB 89990
+         GOTO 1031
+      CASE VALUE = "" AND REQFND # 0
+         PAL.ACTION = 0
+         GOSUB 1035 ;* HANDLE PALLET SCROLLING
+         PRINT @(0,15):@(-4):
+         GOSUB 89990
+         BEGIN CASE
+            CASE PAL.ACTION = 1 
+         * REQUEST WAS ACCEPTED
+               MATREADU WIPTR.REC FROM WIP.TRACK.CONTROL, CONO:"REQ" ELSE MAT WIPTR.REC = ""
+               LOCATE USER.ID IN WIPTR.USER<1>,1 SETTING RPTR THEN
+                  FOR N = 1 TO WIPTR.REC.SIZE
+                     WIPTR.REC(N) = DELETE(WIPTR.REC(N),1,RPTR,0)
+                  NEXT N
+               END
+               MATWRITE WIPTR.REC ON WIP.TRACK.CONTROL, CONO:"REQ"
+               RETURN ;* TO MAIN MENU
+            CASE 1    ;* 'END' was entered at N/P Pallet prompt
+               GOTO 1033 ;* Prompt for Next or Prior Request
+         END CASE
+   END CASE
+   GOTO 1032
+*
+1035 * Pallet Display for Request
+   LOCATE USER.ID IN WIPTR.USER<1>,1 SETTING RPTR ELSE RETURN
+   WIPTF.ID = WIPTR.JOB<1,RPTR>:"!":WIPTR.FORM<1,RPTR>
+   MATREAD WIPTF.REC FROM WIP.TRACK.FORM, CONO:WIPTF.ID ELSE
+      MAT WIPTF.REC = ""
+   END
+   PCNT = DCOUNT(WIPTF.PALLET,VM)
+   PAL.IDS = ""
+   FOR PPTR = PCNT TO 1 STEP -1
+      PAL.ID = WIPTF.PALLET<1,PPTR>
+      MATREAD WIPTP.REC FROM WIP.TRACK.PALLET, CONO:PAL.ID THEN
+*T22322v  *Determine the Location's Definition (Zero Bal flag)
+         SL.LOC = WIPTP.MLOC<1,1>
+         GOSUB 3000 ;* GET THE WIPSL.REC FOR THIS PALLET'S LOCATION
+*T22322^
+         BEGIN CASE
+            CASE WIPTP.CQTY = 0
+*T22322>            CASE WIPTP.MLOC<1,1> = "VENDOR"
+*T22322>            CASE WIPTP.MLOC<1,1> = "SHREDDER"
+*T22322v  *This case will cover all Zero Qty Flaged locations (as above)
+            CASE WIPSL.RANGE.ZERO<1> = "Y"
+*T22322^
+            CASE WIPTP.STATUS<1,1> = "D"
+            CASE 1
+               SELPTR = PPTR
+               PAL.IDS = INSERT(PAL.IDS,1,1,0;PAL.ID) ;*Build list
+         END CASE
+      END
+   NEXT PPTR
+   PALCNT = DCOUNT(PAL.IDS,VM)
+   BEGIN CASE
+      CASE PALCNT = 0 
+         PAL.ID = "**NONE**"
+         MAT WIPTP.REC = ""
+         RETURN
+      CASE PALCNT = 1
+         PPTR = 1
+      CASE 1
+*** Prompt for FIFO/LIFO viewing of Pallets
+         PPTR = 0
+         LOOP
+            TYP=1; X=17; Y=10; MAXL=3; EX=0; EY=15; ERY=15
+            CALL WIPT.INPUT
+            GOSUB 89990
+            BEGIN CASE
+               CASE VALUE = "END"
+                  RETURN
+               CASE VALUE = "F"
+                  PPTR = 1
+               CASE VALUE = "L"
+                  PPTR = PCNT
+               CASE 1
+                  ERRMSG = "**INVALID INPUT**"
+                  GOSUB 91000
+            END CASE
+         UNTIL PPTR # 0 DO
+         REPEAT
+*
+   END CASE
+1036 * Display the next/prior pallet
+   PAL.ID = PAL.IDS<1,PPTR>
+   MATREAD WIPTP.REC FROM WIP.TRACK.PALLET, CONO:PAL.ID ELSE MAT WIPTP.REC = ""
+   PRINT @(11,12):PAL.ID "L#8":
+   PRINT @(11,13):WIPTP.MLOC<1,1> "L#8":
+   GOSUB 89990
+1037 * Prompt for Next or Prior (or Acceptance of Request!)
+   PRINT @(0,15):"Enter=Accept Request"
+   TYP=1; X=16; Y=14; MAXL=3; EX=0; EY=15; ERY=15; O.R = "O"
+   VALDAT = "N":VM:"P":VM:"":VM:"END"
+   CALL WIPT.INPUT
+   GOSUB 89990
+   BEGIN CASE
+      CASE VALUE = "END"
+         RETURN
+      CASE VALUE = "N"
+         PPTR = PPTR + 1
+         IF PPTR > PALCNT THEN PPTR = PALCNT
+      CASE VALUE = "P"
+         PPTR = PPTR - 1
+         IF PPTR < 1 THEN PPTR = 1
+      CASE VALUE = ""
+         PAL.ACTION = 1
+         RETURN
+   END CASE
+   GOTO 1036
+   RETURN
+*
+*---- LOCATE PALLET
+*
+1040 *
+1041 *
+   IF EMPNAME # "" THEN PRINT @(1,2):EMPNAME"L#20":
+   GOSUB 89990
+   TYP=1; X=9; Y=4; MAXL=8; EX=0; EY=15; ERY=15; O.R="O"
+   CALL WIPT.INPUT
+   GOSUB 89990
+   IF VALUE = "END" THEN GOTO 1049
+   REQJOB = '' ;* T22322
+   IF VALUE = "" THEN GOTO 1043  ;* T22322
+   MATREAD JOB.REC FROM JOB, CONO:VALUE ELSE
+      ERRMSG = "INVALID JOB NUMBER"
+      GOSUB 91000
+      GOTO 1041
+   END
+   REQJOB = VALUE
+1042 TYP=1; X=9; Y=5; MAXL=7; EX=0; EY=15; ERY=15
+*T22322v
+*      PATRN="1A0N":VM:"2A0N":VM:"0N":VM:"0N'.'0N":VM:"0N'.'0N'.'0N"
+*  PATRN="0N":VM:"0N'.'0N"
+*T22322^
+   CALL WIPT.INPUT
+   GOSUB 89990
+   IF VALUE = "END" THEN GOTO 1049
+   FORMNO = VALUE
+   GOSUB 85100
+   IF ERRMSG # "" THEN
+      GOSUB 91000
+      GOTO 1042
+   END
+   REQFORM = FORMNO
+*T22322v
+1043 * To-Job entry in Locate Pallet
+*T23359      IF REQJOB # "" THEN GOTO 1044
+   TYP=1; X=9; Y=6; MAXL=8; EX=0; EY=15; ERY=15; O.R="O"
+   CALL WIPT.INPUT
+   GOSUB 89990
+   IF VALUE = "END" THEN GOTO 1049
+   IF VALUE = '' THEN GO 1046
+   REQTOJOB = ""
+*T23359      IF VALUE = "" AND REQJOB = "" THEN GOTO 1044
+   MATREAD WIPTTJ.REC FROM WIP.TRACK.TO.JOB, CONO:VALUE ELSE
+      ERRMSG = "INVALID TO-JOB NUM."
+      GOSUB 91000
+      GOTO 1043
+   END
+   REQTOJOB = VALUE
+* CROSS REFERENCE TO GET JOB IDS USING TO-JOB
+   IF REQJOB # "" THEN GOTO 1046
+   JPTRCNT = DCOUNT(WIPTTJ.JOB<1>,VM)
+   IF JPTRCNT = 0 THEN
+      ERRMSG = "INVALID TO-JOB NUMBER"
+      GOSUB 91000
+      GOTO 1043
+   END
+   IF JPTRCNT = 1 THEN
+      MATREAD JOB.REC FROM JOB, CONO:WIPTTJ.JOB<1,JPTRCNT> ELSE
+         ERRMSG = "INVALID TO-JOB NUMBER"
+         GOSUB 91000
+         GOTO 1043
+      END
+      REQJOB = WIPTTJ.JOB<1,JPTRCNT>
+      PRINT @(9,4):REQJOB "L#8"
+      GOSUB 89990
+      GOTO 1042 ;* CONTINUE ON WITH THE COMPONENT PROMPT
+   END
+* You will only pass here if there are multiple JOB#'s in TO-JOB Xref
+   JPTR = 1
+   PRINT @(1,15):"ENTER = ACCEPT JOB"
+10431 * CROSS REF DISPLAY
+   PRINT @(9,7):@(-4):JPTR "R#3":" of ":JPTRCNT "R#3"
+   TEMPJOB = WIPTTJ.JOB<1,JPTR>
+   PRINT @(9,4):TEMPJOB "L#8":
+   GOSUB 89990
+   TYP=1; X=17; Y=14; MAXL=1; O.R="O"; EX=0; EY=15; ERY=15
+   CALL WIPT.INPUT
+   GOSUB 89990
+   BEGIN CASE
+      CASE VALUE = "END"
+         GOSUB 1000; GOTO 1040
+      CASE (VALUE = "P" OR VALUE = "p") AND JPTR > 1
+         JPTR = JPTR - 1
+      CASE (VALUE = "N" OR VALUE = "n") AND JPTR < JPTRCNT
+         JPTR = JPTR + 1
+      CASE VALUE = ""
+         MATREAD JOB.REC FROM JOB, CONO:TEMPJOB ELSE
+            ERRMSG = "INVALID JOB NUMBER"
+            GOSUB 91000
+            GOTO 10431
+         END
+         REQJOB = TEMPJOB
+         PRINT @(9,4):REQJOB "L#8"
+         GOSUB 89990
+         PRINT @(9,7):SPACE(10):
+         PRINT @(1,15):SPACE(19):
+         GOSUB 89990
+         GOTO 1042 ;* CONTINUE ON WITH THE COMPONENT PROMPT
+      CASE 1
+         GOTO 10431
+   END CASE
+   GOTO 10431
+*T233591044 * ISBN entry in Locate Pallet
+*T23359      IF REQJOB # "" THEN
+*T23359         REQISBN = JOB.ISBN<1,1>
+*T23359         PRINT @(0,8):REQISBN "L#20"
+*T23359         GOTO 1046
+*T23359      END
+*T23359      TYP=1; X=0; Y=8; MAXL=20; EX=0; EY=15; ERY=15
+*T23359      CALL WIPT.INPUT
+*T23359      GOSUB 89990
+*T23359      IF VALUE = "END" THEN GOTO 1049
+*T23359      MATREAD WIPTISBN.REC FROM WIP.TRACK.ISBN, CONO:VALUE ELSE
+*T23359         ERRMSG = "INVALID ISBN NUMBER"
+*T23359         GOSUB 91000
+*T23359         GOTO 1044
+*T23359      END
+*T23359      REQISBN = VALUE
+*T23359* CROSS REFERNCE TO GET JOB IDS
+*T23359      IF REQJOB # "" THEN GOTO 1046
+*T23359      JPTRCNT = DCOUNT(WIPTISBN.JOB<1>,VM)
+*T23359      IF JPTRCNT = 0 THEN
+*T23359         ERRMSG = "INVALID ISBN NUMBER"
+*T23359         GOSUB 91000
+*T23359         GOTO 1044
+*T23359      END
+*T23359      IF JPTRCNT = 1 THEN
+*T23359         MATREAD JOB.REC FROM JOB, CONO:WIPTISBN.JOB<1,JPTRCNT> ELSE
+*T23359            ERRMSG = "INVALID ISBN NUMBER"
+*T23359            GOSUB 91000
+*T23359            GOTO 1044
+*T23359         END
+*T23359         REQJOB = WIPTISBN.JOB<1,JPTRCNT>
+*T23359         PRINT @(9,4):REQJOB "L#8"
+*T23359         GOSUB 89990
+*T23359         GOTO 1042 ;* CONTINUE ON WITH THE COMPONENT PROMPT
+*T23359      END
+*T23359* You will only get passed here if there are multiple JOB#'s in ISBN Xref
+*T23359      JPTR = 1
+*T23359      PRINT @(1,15):"ENTER = ACCEPT JOB"
+*T233591045 * CROSS REF DISPLAY
+*T23359      PRINT @(9,7):@(-4):JPTR "R#3":" of ":JPTRCNT "R#3"
+*T23359      TEMPJOB = WIPTISBN.JOB<1,JPTR>
+*T23359      PRINT @(9,4):TEMPJOB "L#8":
+*T23359      GOSUB 89990
+*T23359      TYP=1; X=17; Y=14; MAXL=1; O.R="O"; EX=0; EY=15; ERY=15
+*T23359      CALL WIPT.INPUT
+*T23359      GOSUB 89990
+*T23359      BEGIN CASE
+*T23359      CASE VALUE = "END"
+*T23359         GOSUB 1000; GOTO 1040
+*T23359      CASE (VALUE = "P" OR VALUE = "p") AND JPTR > 1
+*T23359         JPTR = JPTR - 1
+*T23359      CASE (VALUE = "N" OR VALUE = "n") AND JPTR < JPTRCNT
+*T23359         JPTR = JPTR + 1
+*T23359      CASE VALUE = ""
+*T23359         MATREAD JOB.REC FROM JOB, CONO:TEMPJOB ELSE
+*T23359            ERRMSG = "INVALID JOB NUMBER"
+*T23359            GOSUB 91000
+*T23359            GOTO 1045
+*T23359         END
+*T23359         REQJOB = TEMPJOB
+*T23359         PRINT @(9,4):REQJOB "L#8"
+*T23359         GOSUB 89990
+*T23359         PRINT @(9,7):SPACE(10):
+*T23359         PRINT @(1,15):SPACE(19):
+*T23359         GOSUB 89990
+*T23359         GOTO 1042 ;* CONTINUE ON WITH THE COMPONENT PROMPT
+*T23359      CASE 1
+*T23359         GOTO 1045
+*T23359      END CASE
+*T23359   GOTO 1045
+*      PRINT @(-1):" ISBN/JOB CROSS REF":
+*      PRINT @(0,1):"--------------------":
+*      PRINT @(0,2):"Line   Job ID":
+*      PRINT @(0,3):"----  --------":
+*      FOR DISPY = 4 TO 13
+*         JPTR = JPTR + 1
+*         IF WIPTISBN.JOB<1,JPTR> # "" THEN
+*            PRINT @(1,DISPY):JPTR "R#3":
+*            PRINT SPACE(2):WIPTISBN.JOB<1,JPTR> "L#8":
+*         END
+*      NEXT DISPY
+*      JPTR = JPTR - 10  ;* KEEPS THE DISPLAYED LINES THE SAME
+*      TYP=1; X=2; Y=15; MAXL=2; O.R='O'; EX=0; EY=15; ERY=15
+*      PMSG = "Line#,(S)croll:"
+*      CALL WIPT.INPUT
+*      GOSUB 89990
+*      BEGIN CASE
+*      CASE VALUE = "END"
+*         GOSUB 1000; GOTO 1040
+*      CASE VALUE = ""
+*         GOSUB 1000; GOTO 1044
+*      CASE NUM(VALUE)
+*         MATREAD JOB.REC FROM JOB, CONO:WIPTISBN.JOB<1,VALUE> ELSE
+*            ERRMSG = "INVALID LINE NUMBER"
+*            GOSUB 91000
+*            GOTO 1045
+*         END
+*         REQJOB = WIPTISBN.JOB<1,VALUE>
+*         GOSUB 1000
+*         PRINT @(9,4):REQJOB "L#8"
+*         GOSUB 89990
+*         GOTO 1042 ;* CONTINUE ON WITH THE COMPONENT PROMPT
+*      CASE VALUE = "S"
+*         JPTR = JPTR + 10; IF JPTR > JPTRCNT THEN JPTR = 0
+*      CASE VALUE = "SR"
+*         JPTR = JPTR - 10
+*         IF JPTR < 0 THEN JPTR = 0
+*      END CASE
+*      GOTO 1045
+**
+1046 *
+*T22322^
+   PALIDS = ""
+   WIPTF.ID = REQJOB:"!":REQFORM
+   MATREAD WIPTF.REC FROM WIP.TRACK.FORM, CONO:WIPTF.ID ELSE
+      MAT WIPTF.REC = ""
+   END
+   PCNT = DCOUNT(WIPTF.PALLET,VM)
+   FOR PPTR = PCNT TO 1 STEP -1
+      PAL.ID = WIPTF.PALLET<1,PPTR>
+      MATREAD WIPTP.REC FROM WIP.TRACK.PALLET, CONO:PAL.ID THEN
+         BEGIN CASE
+            CASE WIPTP.CQTY = 0
+*           CASE WIPTP.MLOC<1,1> = "VENDOR"
+*           CASE WIPTP.MLOC<1,1> = "SHREDDER"
+*           CASE WIPTP.STATUS<1,1> = "D"
+            CASE 1
+               PALIDS<1,-1> = PAL.ID
+         END CASE
+      END
+   NEXT PPTR
+   IF PALIDS = "" THEN
+      ERRMSG = "NO MATCHING PALLETS"
+      GOSUB 91000
+      PRINT @(9,4):@(-4):
+      PRINT @(9,5):@(-4):
+      PRINT @(9,6):@(-4):
+      PRINT @(0,8):@(-4):
+      GOTO 1040
+*T22322v
+*      END ELSE
+   END
+   PCNT = DCOUNT(PALIDS,VM)
+   IF PCNT > 1 THEN
+1047 *  PROMPT FOR FIFO OR LIFO VIEWING OF PALLETS
+*     TYP=1; X=16; Y=9; MAXL=1; O.R="O"; EX=0; EY=15; ERY=15
+       TYP=1; X=16; Y=9; MAXL=3; O.R="O"; EX=0; EY=15; ERY=15
+      CALL WIPT.INPUT
+      GOSUB 89990
+      BEGIN CASE
+         CASE VALUE = "END"
+            RETURN
+         CASE VALUE = "F"
+            PPTR = PCNT
+         CASE VALUE = "L"
+            PPTR = 1
+         CASE 1
+            GOTO 1047
+      END CASE
+   END ELSE
+      PPTR = 1
+   END
+*         PRINT @(09,05):"of":@(12,05):PCNT"L#3":
+   PRINT @(16,10):PCNT"L#3":
+*T22322^
+   LOOP
+      PAL.ID = PALIDS<1,PPTR>
+      MATREAD WIPTP.REC FROM WIP.TRACK.PALLET, CONO:PAL.ID ELSE
+         MAT WIPTP.REC = ""
+      END
+*T22322v
+*            PRINT @(05,05):PPTR"R#3":
+*            PRINT @(11,07):PAL.ID"L#8":
+*            PRINT @(11,08):WIPTP.MLOC<1,1>"L#8":
+*            PRINT @(11,09):OCONV(WIPTP.CQTY,"MD0,")"L#8":
+*            PRINT @(11,10):WIPTP.TYPE"L#4":
+*            PRINT @(01,11):WIPTP.DESC"L#20":
+      PRINT @(09,10):PPTR"R#3":
+      PRINT @(11,11):PAL.ID"L#8":
+      PRINT @(11,12):WIPTP.MLOC<1,1>"L#8":
+      PRINT @(11,13):OCONV(WIPTP.CQTY,"MD0,")"L#8":
+*1048        TYP=1; X=3; Y=13; MAXL=1; O.R="O"; EX=0; EY=15; ERY=15
+*            PMSG = "(P)rior, (N)ext:"
+*1048  TYP=1; X=17; Y=14; MAXL=1; O.R="O"; EX=0; EY=15; ERY=15
+1048  TYP=1; X=17; Y=14; MAXL=3; O.R="O"; EX=0; EY=15; ERY=15
+*T22322^
+      CALL WIPT.INPUT
+      GOSUB 89990
+      BEGIN CASE
+         CASE VALUE = "END"
+         CASE (VALUE = "P" OR VALUE = "p") AND PPTR > 1
+            PPTR = PPTR - 1
+         CASE (VALUE = "" OR VALUE = "N" OR VALUE = "n") AND PPTR < PCNT
+            PPTR = PPTR + 1
+         CASE 1
+            GOTO 1048
+      END CASE
+   UNTIL VALUE = "END" DO
+   REPEAT
+1049 RETURN
+*
+*---- CHANGE LOCATION
+*
+1050 *
+   CALL WIPT.RF.CHG.LOC(ACTION,CONO,EMPID,MAT WIP.FILE.VARS)
+   RETURN
+*
+*---- DEFINE PALLET
+*
+1060 *
+   LOOP
+1061  TYP=7; X=10; Y=3; MINL=8; MAXL=8; EX=0; EY=15; ERY=15
+      PATRN="1A7N"
+      CALL WIPT.INPUT
+      GOSUB 89990
+      IF VALUE = "END" THEN RETURN
+      CALL WIPT.CHECK.DIGIT("T", VALUE, "10RL", CKDIG, VALID)
+      IF NOT(VALID) THEN
+         ERRMSG = "INVALID PALLET ID"
+         GOSUB 91000
+         GOTO 1061
+      END
+      PAL.ID = VALUE
+      MATREADU WIPTP.REC FROM WIP.TRACK.PALLET, CONO:PAL.ID THEN
+         PRINT @(10,3):PAL.ID"L#8":
+         PRINT @(07,5):WIPTP.JOB"L#8":
+         BEGIN CASE
+            CASE WIPTP.VER = "" AND WIPTP.SIG = ""
+               XFORM = WIPTP.FORM
+            CASE WIPTP.SIG = ""
+               XFORM = WIPTP.FORM:".":WIPTP.VER
+            CASE 1
+               XFORM = WIPTP.FORM:".":WIPTP.VER:".":WIPTP.SIG
+         END CASE
+         PRINT @(07,6):XFORM"L#14":
+         PRINT @(07,7):WIPTP.SKID"L#3":
+         PRINT @(11,8):WIPTP.TO.OPER"L#3":
+         PRINT @(11,10):WIPTP.CQTY"L#6":
+         PRINT @(11,11):WIPTP.MLOC<1,1>"L#8":
+*T22322v
+*            PRINT @(1,13):WIPTP.DESC"L#20":
+*            TYP=8; X=0; Y=14
+         PRINT @(1,14):WIPTP.DESC"L#20":
+         TYP=8; X=0; Y=15
+*T22322^
+         PMSG = "Continue?"
+         CALL WIPT.INPUT
+*T22322v
+*            PRINT @(0,14):SPACE(21):
+         PRINT @(0,15):SPACE(21):
+*T22322^
+         IF VALUE # "Y" THEN
+            RELEASE WIP.TRACK.PALLET, CONO:PAL.ID
+            ESN=7; GOSUB 1000
+            GOTO 1061
+         END
+         PREV.DEFINE.JOB = WIPTP.JOB
+         PREV.DEFINE.FORM = XFORM
+         PREV.DEFINE.SKID = WIPTP.SKID
+         PREV.DEFINE.TYPE = WIPTP.TYPE
+         PREV.DEFINE.QTY = WIPTP.CQTY
+         PREV.DEFINE.LOC = WIPTP.MLOC<1,1>
+         PREV.DEFINE.DESC = WIPTP.DESC
+         PREV.JOB = WIPTP.JOB
+         PREV.FORM = XFORM
+      END LOCKED
+         ERRMSG = "** Pallet Locked **"
+         GOSUB 91000
+         GOTO 1061
+      END ELSE
+         MAT WIPTP.REC = ""
+         PREV.DEFINE.SKID = ""
+         PREV.DEFINE.TYPE = ""
+         PREV.DEFINE.QTY = ""
+         PREV.DEFINE.LOC = ""
+         PREV.DEFINE.DESC = ""
+         PREV.JOB = ""
+         PREV.FORM = ""
+      END
+      PLOC = WIPTP.MLOC<1,1>
+      PQTY = WIPTP.CQTY
+1062  TYP=1; X=07; Y=5; MAXL=8; EX=0; EY=15; ERY=15
+      IF PREV.DEFINE.JOB # "" THEN
+         O.R="O"; DEFAULT=PREV.DEFINE.JOB
+      END
+      CALL WIPT.INPUT
+      IF VALUE="" THEN VALUE=PREV.DEFINE.JOB
+      GOSUB 89990
+      IF VALUE = "END" THEN GOTO 1069
+      MATREAD JOB.REC FROM JOB, CONO:VALUE ELSE
+         ERRMSG = "INVALID JOB NUMBER"
+         GOSUB 91000
+         GOTO 1062
+      END
+      JOB.NO = VALUE
+1063  TYP=7; X=07; Y=6; MAXL=14; EX=0; EY=15; ERY=15
+      IF JOB.NO = PREV.DEFINE.JOB AND PREV.DEFINE.FORM # "" THEN
+         O.R="O"; DEFAULT=PREV.DEFINE.FORM
+      END
+*T22322v
+*         PATRN="1A0N":VM:"2A0N":VM:"0N":VM:"0N'.'0N":VM:"0N'.'0N'.'0N"
+      PATRN="0N'.'0N":VM:"0N"
+*T22322^
+      CALL WIPT.INPUT
+      IF VALUE="" THEN VALUE=PREV.DEFINE.FORM
+      GOSUB 89990
+      IF VALUE = "END" THEN GOTO 1069
+      FORMNO = VALUE; GOSUB 85100
+      IF ERRMSG # "" THEN
+         GOSUB 91000
+         GOTO 1063
+      END
+1064  TYP=3; X=07; Y=7; MAXL=3; EX=0; EY=15; ERY=15
+      IF PREV.DEFINE.SKID # "" THEN
+         O.R="O"; DEFAULT=PREV.DEFINE.SKID
+      END
+      JUSTIFY="L"
+      CALL WIPT.INPUT
+      IF VALUE="" THEN VALUE=PREV.DEFINE.SKID
+      GOSUB 89990
+      IF VALUE = "END" THEN GOTO 1069
+      SKID = VALUE
+1065  TYP=1; X=11; Y=8; MAXL=3; EX=0; EY=15; ERY=15
+      O.R="O"; DEFAULT=PREV.DEFINE.TYPE
+*        VALDAT="V":VM:"S":VM:"VS":VM:"L":VM:"LV":VM:"LS":VM:"LVS"
+      CALL WIPT.INPUT
+      GOSUB 89990
+      IF VALUE = "END" THEN GOTO 1069
+      XTYPE = VALUE
+1066  TYP=3; X=11; Y=10; MINL=1; MAXL=6; EX=0; EY=15; ERY=15
+      IF PREV.DEFINE.QTY # "" THEN
+         O.R="O"; DEFAULT=PREV.DEFINE.QTY
+      END
+      JUSTIFY="L"
+      MINV=1; MAXV=999999
+      CALL WIPT.INPUT
+      IF VALUE="" THEN VALUE=PREV.DEFINE.QTY
+      GOSUB 89990
+      IF VALUE = "END" THEN GOTO 1069
+      QTY = VALUE
+*T22322v
+*1067     TYP=7; X=11; Y=11; MINL=4; MAXL=8; EX=0; EY=15; ERY=15
+1067  TYP=1; X=11; Y=11; MINL=4; MAXL=8; EX=0; EY=15; ERY=15
+      IF PREV.DEFINE.LOC # "" THEN
+         O.R="O"; DEFAULT=PREV.DEFINE.LOC
+      END
+*         PATRN="1A1N1A0X":VM:"1A1N-0X"
+*T22322^
+      CALL WIPT.INPUT
+      IF VALUE="" THEN VALUE=PREV.DEFINE.LOC
+      GOSUB 89990
+      IF VALUE = "END" THEN GOTO 1069
+*T22322v
+      SL.LOC = VALUE; GOSUB 3000  ;* Check for Storage Loc Definition
+      IF ERRMSG # "" THEN GOSUB 91000; GOTO 1067
+*T22322^
+      LOC = VALUE
+*T22322v
+*1068     TYP=1; X=1; Y=13; MAXL=20; EX=0; EY=15; ERY=15
+1068  TYP=1; X=1; Y=14; MAXL=20; EX=0; EY=15; ERY=15
+*T22322^
+      O.R="O"; DEFAULT=PREV.DEFINE.DESC
+      PATRN="1A1N1A0X":VM:"1A1N-0X"
+      CALL WIPT.INPUT
+      IF VALUE="" THEN VALUE=PREV.DEFINE.DESC
+      IF VALUE[1,20]=PREV.DEFINE.DESC[1,20] THEN VALUE=PREV.DEFINE.DESC
+      GOSUB 89990
+      IF VALUE = "END" THEN GOTO 1069
+      DESC = VALUE
+*
+      MAT WIPTP.REC = ""
+      CDATE=DATE(); CTIME=TIME(); IF CTIME < 10 THEN CDATE=DATE()
+      IF NUM(FNUM) THEN
+         WIPTP.PTYPE = ""
+      END ELSE
+         WIPTP.PTYPE = "I"
+      END
+      WIPTP.DATE  = CDATE
+      WIPTP.TIME  = CTIME
+      WIPTP.JOB   = JOB.NO
+      WIPTP.FORM  = FNUM
+      WIPTP.VER   = VNUM
+      WIPTP.SIG   = SNUM
+      WIPTP.SKID  = SKID
+      WIPTP.SEQ   = 500
+      WIPTP.TYPE  = XTYPE
+      WIPTP.IQTY  = QTY
+      WIPTP.CQTY  = QTY
+      WIPTP.DESC  = DESC
+      WIPTP.MLOC  = LOC
+      WIPTP.MDATE = CDATE
+      WIPTP.MTIME = CTIME
+      WIPTP.MEMP  = EMPID
+      WIPTP.ACODE = "N"
+      WIPTP.AQTY  = QTY
+      WIPTP.ADATE = CDATE
+      WIPTP.ATIME = CTIME
+      WIPTP.AEMP  = EMPID
+*
+      CURR.JOB = WIPTP.JOB
+      BEGIN CASE
+         CASE WIPTP.VER = "" AND WIPTP.SIG = ""
+            CURR.FORM = WIPTP.FORM
+         CASE WIPTP.SIG = ""
+            CURR.FORM = WIPTP.FORM:".":WIPTP.VER
+         CASE 1
+            CURR.FORM = WIPTP.FORM:".":WIPTP.VER:".":WIPTP.SIG
+      END CASE
+      GOSUB 89100
+*        IF GEN.SKID > 0 THEN WIPTP.SKID = GEN.SKID
+      CALL WIPT.LOC.UPD(CONO,PAL.ID,PLOC,MAT WIPTP.REC,WIP.TRACK.LOC,ERRMSG)
+*NA      CALL WIPT.HIST.UPD(CONO,PLOC,PQTY,MAT WIPTP.REC,WIP.TRACK.HIST,ERRMSG)
+      MATWRITE WIPTP.REC ON WIP.TRACK.PALLET, CONO:PAL.ID
+      PREV.DEFINE.JOB = WIPTP.JOB
+      BEGIN CASE
+         CASE WIPTP.VER = "" AND WIPTP.SIG = ""
+            PREV.DEFINE.FORM = WIPTP.FORM
+         CASE WIPTP.SIG = ""
+            PREV.DEFINE.FORM = WIPTP.FORM:".":WIPTP.VER
+         CASE 1
+            PREV.DEFINE.FORM = WIPTP.FORM:".":WIPTP.VER:".":WIPTP.SIG
+      END CASE
+1069 *
+      PRINT @(10,03):@(-4):
+      PRINT @(07,05):@(-4):
+      PRINT @(07,06):@(-4):
+      PRINT @(07,07):@(-4):
+      PRINT @(07,08):@(-4):
+      PRINT @(11,10):@(-4):
+      PRINT @(11,11):@(-4):
+      PRINT @(0,13):@(-4):
+      GOSUB 89990
+      RELEASE WIP.TRACK.PALLET, CONO:PAL.ID
+   REPEAT
+   RETURN
+*
+*T22322vvv
+*---- UPDATE PALLET
+*
+1070 *
+   LOOP
+1071  IF EMPNAME # "" THEN PRINT @(1,2):EMPNAME"L#20":
+      GOSUB 89990
+      TYP=1; X=11; Y=4; MAXL=8; EX=0; EY=15; ERY=15
+      CALL WIPT.INPUT
+      GOSUB 89990
+      IF VALUE = "END" THEN RETURN
+      CALL WIPT.CHECK.DIGIT("T", VALUE, "10RL", CKDIG, VALID)
+      IF NOT(VALID) THEN
+         ERRMSG = "INVALID PALLET ID"
+         GOSUB 91000
+         GOTO 1071
+      END
+      PAL.ID = VALUE
+      MATREADU WIPTP.REC FROM WIP.TRACK.PALLET, CONO:PAL.ID THEN
+         PRINT @(11,4):PAL.ID"L#8":
+         PRINT @(11,5):WIPTP.JOB"L#8":
+         BEGIN CASE
+            CASE WIPTP.VER = "" AND WIPTP.SIG = ""
+               XFORM = WIPTP.FORM
+            CASE WIPTP.SIG = ""
+               XFORM = WIPTP.FORM:".":WIPTP.VER
+            CASE 1
+               XFORM = WIPTP.FORM:".":WIPTP.VER:".":WIPTP.SIG
+         END CASE
+         PRINT @(11,6):XFORM"L#8":
+         PRINT @(11,7):WIPTP.SKID"L#3":
+         PRINT @(11,8):WIPTP.TO.OPER"L#3":
+         PRINT @(11,9):WIPTP.TO.JOB"L#8":
+         PRINT @(11,10):WIPTP.MLOC<1,1>"L#8":
+         PRINT @(11,11):WIPTP.CQTY"L#6":
+         PRINT @(11,12):WIPTP.CARTONS"L#3":
+         PREV.DEFINE.QTY = WIPTP.CQTY
+         PREV.DEFINE.CARTONS = WIPTP.CARTONS
+1072* CHECK TO SEE IF THEY WANT TO CONTINUE
+*T26030 v
+*        TYP=8; X=0; Y=13
+*        PMSG = "Change quantity?"
+*        CALL WIPT.INPUT
+*        PRINT @(0,13):SPACE(21):
+*        IF VALUE # "Y" THEN
+*           IF PREV.DEFINE.QTY # WIPTP.CQTY OR PREV.DEFINE.CARTONS # WIPTP.CARTONS THEN
+*              GOTO 1078 ;* Get the File or Exit option
+*           END ELSE
+*              RELEASE WIP.TRACK.PALLET, CONO:PAL.ID
+*              ESN=8; GOSUB 1000
+*              GOTO 1071
+*           END
+*        END
+*T26030 ^
+      END LOCKED
+         ERRMSG = "** Pallet Locked **"
+         GOSUB 91000
+         GOTO 1071
+      END ELSE
+         ERRMSG = "*INVALID PALLET ID*"
+         GOSUB 91000
+         GOTO 1071
+      END
+      PLOC = WIPTP.MLOC<1,1>
+*T26725 v
+      SL.LOC = WIPTP.MLOC<1,1>
+      GOSUB 3000
+      IF WIPSL.RANGE.ZERO = "Y" THEN
+         ERRMSG = "** ZERO Location **"
+         GOSUB 91000
+         GOSUB 1000
+         GOTO 1071
+      END
+*T26725 ^
+1073 * Prompt for New Quantity
+      TYP=1; X=11; Y=11; MAXL=6; O.R="O"; EX=0; EY=15; ERY=15
+      DEFAULT = WIPTP.CQTY
+      PATRN="0N":VM:"'+'0N":VM:"'-'0N"
+      CALL WIPT.INPUT
+      GOSUB 89990
+      IF VALUE = "" THEN VALUE = DEFAULT
+      BEGIN CASE
+         CASE VALUE = "END"
+            RELEASE WIP.TRACK.PALLET,CONO:PAL.ID
+            ESN=8; GOSUB 1000
+            GOTO 1071
+         CASE VALUE[1,1] = "+" AND NUM(VALUE[2,99])
+            VALUE = VALUE[2,99]
+            WIPTP.CQTY = WIPTP.CQTY + VALUE
+            PRINT @(11,11):WIPTP.CQTY"L#6"
+            GOSUB 89990
+         CASE VALUE[1,1] = "-" AND NUM(VALUE[2,99])
+            VALUE = VALUE[2,99]
+            WIPTP.CQTY = WIPTP.CQTY - VALUE
+            IF WIPTP.CQTY < 0 THEN WIPTP.CQTY = 0
+            PRINT @(11,11):WIPTP.CQTY"L#6":@(-4):
+            GOSUB 89990
+         CASE NUM(VALUE)
+            WIPTP.CQTY = VALUE
+         CASE 1
+            ERRMSG = "**INVALID RESPONSE**"
+            GOSUB 91000
+            GOTO 1073
+      END CASE
+1074 * Check for Finished Goods flag.  Prompt for Cartons if 'Y'
+*T26725 SL.LOC = WIPTP.MLOC<1,1>
+*T26725 GOSUB 3000
+      IF WIPSL.RANGE.FG = "Y" THEN
+1075     TYP=1; X=11; Y=12; MAXL=3; EX=0; EY=15; ERY=15; O.R = "O"
+         DEFAULT=WIPTP.CARTONS
+         PATRN = "0N":VM:"'+'0N":VM:"'-'0N"
+         CALL WIPT.INPUT
+         GOSUB 89990
+         IF VALUE = "" THEN VALUE = DEFAULT
+         BEGIN CASE
+            CASE VALUE = "END"
+               RELEASE WIP.TRACK.PALLET,CONO:PAL.ID
+               ESN=8; GOSUB 1000
+               GOTO 1071
+            CASE VALUE[1,1] = "+" AND NUM(VALUE[2,99])
+               VALUE = VALUE[2,99]
+               WIPTP.CARTONS = WIPTP.CARTONS + VALUE
+               PRINT @(11,12):WIPTP.CARTONS"L#3"
+               GOSUB 89990
+            CASE VALUE[1,1] = "-" AND NUM(VALUE[2,99])
+               VALUE = VALUE[2,99]
+               WIPTP.CARTONS = WIPTP.CARTONS - VALUE
+               IF WIPTP.CARTONS < 0 THEN WIPTP.CARTONS = 0
+               PRINT @(11,12):WIPTP.CARTONS"L#3":@(-4):
+               GOSUB 89990
+            CASE NUM(VALUE)
+               WIPTP.CARTONS = VALUE
+            CASE 1
+               ERRMSG = "**INVALID RESPONSE**"
+               GOSUB 91000
+               GOTO 1075
+         END CASE
+      END
+      *T26030> GOTO 1072
+*
+1078 * Prompt for Option to File or Exit
+      TYP=1; X=17; Y=14; MAXL=1; EX=0; EY=15; ERY=15
+      CALL WIPT.INPUT
+      GOSUB 89990
+      BEGIN CASE
+         CASE VALUE = "END" OR VALUE = "E"
+            RELEASE WIP.TRACK.PALLET, CONO:PAL.ID
+         CASE VALUE = "F"
+            CDATE = DATE(); CTIME = TIME(); IF CTIME < 10 THEN CDATE = DATE()
+            AQTY = WIPTP.CQTY - PREV.DEFINE.QTY
+            ACARTONS = WIPTP.CARTONS - PREV.DEFINE.CARTONS
+            WIPTP.ACODE = INSERT(WIPTP.ACODE,1,1,0;"C")
+            WIPTP.AQTY = INSERT(WIPTP.AQTY,1,1,0;AQTY)
+            WIPTP.ADATE = INSERT(WIPTP.ADATE,1,1,0;CDATE)
+            WIPTP.ATIME = INSERT(WIPTP.ATIME,1,1,0;CTIME)
+            WIPTP.AEMP = INSERT(WIPTP.AEMP,1,1,0;EMPID)
+            WIPTP.ACARTONS = INSERT(WIPTP.ACARTONS,1,1,0;ACARTONS)
+            MATWRITE WIPTP.REC ON WIP.TRACK.PALLET, CONO:PAL.ID
+      END CASE
+1079 *
+      PRINT @(11,4):@(-4):
+      PRINT @(11,5):@(-4):
+      PRINT @(11,6):@(-4):
+      PRINT @(11,7):@(-4):
+      PRINT @(11,8):@(-4):
+      PRINT @(11,9):@(-4):
+      PRINT @(11,10):@(-4):
+      PRINT @(11,11):@(-4):
+      PRINT @(11,12):@(-4):
+      PRINT @(17,14):@(-4): ;*T26030
+      GOSUB 89990
+      RELEASE WIP.TRACK.PALLET, CONO:PAL.ID
+   REPEAT
+   RETURN
+*T22322^^
+*
+*---- PICK-UP PALLET
+*
+1090 *
+   RTYPE = "P"
+   MATREADU WIPTR.REC FROM WIP.TRACK.CONTROL, CONO:"REQ" ELSE MAT WIPTR.REC = ""
+   REQFND = 0
+   RCNT = DCOUNT(WIPTR.DATE,VM)
+   FOR RPTR = 1 TO RCNT UNTIL REQFND
+      BEGIN CASE
+         CASE RTYPE # WIPTR.TYPE<1,RPTR>
+         CASE WIPTR.USER<1,RPTR> # ""
+         CASE 1
+            REQFND = 1
+            MATREAD WIPTP.REC FROM WIP.TRACK.PALLET, CONO:WIPTR.PALLET<1,RPTR> ELSE
+               MAT WIPTP.REC = ""
+               WIPTP.JOB = "????"
+               WIPTP.FORM = "????"
+            END
+            BEGIN CASE
+               CASE WIPTP.VER = "" AND WIPTP.SIG = ""
+                  FORM.NO = WIPTP.FORM
+               CASE WIPTP.SIG = ""
+                  FORM.NO = WIPTP.FORM:".":WIPTP.VER
+               CASE 1
+                  FORM.NO = WIPTP.FORM:".":WIPTP.VER:".":WIPTP.SIG
+            END CASE
+            PRINT @(11,3):WIPTR.PALLET<1,RPTR>:
+            PRINT @(11,4):WIPTR.CCTR<1,RPTR>[4,99]:
+            PRINT @(07,6):WIPTP.JOB:
+            PRINT @(07,7):FORM.NO:
+            WIPTR.USER<1,RPTR> = USER.ID
+            MATWRITE WIPTR.REC ON WIP.TRACK.CONTROL, CONO:"REQ"
+      END CASE
+   NEXT RPTR
+*
+   IF REQFND THEN
+      TYP=1; MAXL=3; X=11; Y=9; EX=0; EY=15; ERY=15
+      VALDAT = "Y":VM:"N":VM:"DEL"
+      CALL WIPT.INPUT
+      GOSUB 89990
+      MATREADU WIPTR.REC FROM WIP.TRACK.CONTROL, CONO:"REQ" THEN
+         LOCATE USER.ID IN WIPTR.USER<1>,1 SETTING RPTR THEN
+            BEGIN CASE
+               CASE VALUE = "END"
+                  WIPTR.USER<1,RPTR> = ""
+               CASE VALUE = "Y" OR VALUE = "N" OR VALUE = "DEL"
+                  FOR N = 1 TO WIPTR.REC.SIZE
+                     WIPTR.REC(N) = DELETE(WIPTR.REC(N),1,RPTR,0)
+                  NEXT N
+                  IF VALUE = "Y" THEN OPTION = "2"
+            END CASE
+         END
+         MATWRITE WIPTR.REC ON WIP.TRACK.CONTROL, CONO:"REQ"
+      END ELSE
+         RELEASE WIP.TRACK.CONTROL, CONO:"REQ"
+      END
+   END ELSE
+      RELEASE WIP.TRACK.CONTROL, CONO:"REQ"
+      PRINT @(10,3):"**NONE**":
+      SLEEP 3
+   END
+   RETURN
+*
+*---- UPDATE PALLET LOCATION
+*
+2000 *
+   PREV.LOC = WIPTP.MLOC<1,1>
+   IF NEWLOC # "" AND NEWLOC # WIPTP.MLOC<1,1> THEN
+      CDATE=DATE(); CTIME=TIME(); IF CTIME < 10 THEN CDATE=DATE()
+      WIPTP.MLOC  = INSERT(WIPTP.MLOC,1,1,0,NEWLOC)
+      WIPTP.MDATE = INSERT(WIPTP.MDATE,1,1,0,CDATE)
+      WIPTP.MTIME = INSERT(WIPTP.MTIME,1,1,0,CTIME)
+      WIPTP.MEMP  = INSERT(WIPTP.MEMP,1,1,0,EMPID)
+*T22322v
+*         IF NEWLOC = "VENDOR" OR NEWLOC = "SHREDDER" THEN
+*            IF NEWLOC = "VENDOR" THEN ACODE = "V" ELSE ACODE = "S"
+      IF WIPSL.RANGE.ZERO = "Y" THEN
+         ACODE = "S"  ;* 'S' for Storage Loc Defined Zero
+*T22322^
+         WIPTP.ACODE = INSERT(WIPTP.ACODE,1,1,0,ACODE)
+         WIPTP.AQTY  = INSERT(WIPTP.AQTY,1,1,0,(-WIPTP.CQTY))
+         WIPTP.ADATE = INSERT(WIPTP.ADATE,1,1,0,CDATE)
+         WIPTP.ATIME = INSERT(WIPTP.ATIME,1,1,0,CTIME)
+         WIPTP.AEMP = INSERT(WIPTP.AEMP,1,1,0,EMPID)
+         WIPTP.CQTY = 0
+*T22322v
+         WIPTP.ACARTONS = INSERT(WIPTP.ACARTONS,1,1,0,(-WIPTP.CARTONS))
+         WIPTP.CARTONS = 0
+*T22322^
+      END
+*T22322v
+*         IF PREV.LOC = "VENDOR" OR PREV.LOC = "SHREDDER" THEN
+      SL.LOC = PREV.LOC; GOSUB 3000
+      IF WIPSL.RANGE.ZERO = "Y" THEN
+         WIPTP.CARTONS = -WIPTP.ACARTONS<1,1>
+         WIPTP.ACARTONS = INSERT(WIPTP.ACARTONS,1,1,0,WIPTP.CARTONS)
+*T22322^
+         WIPTP.CQTY = -WIPTP.AQTY<1,1>
+         WIPTP.ACODE = INSERT(WIPTP.ACODE,1,1,0,WIPTP.ACODE<1,1>)
+         WIPTP.AQTY  = INSERT(WIPTP.AQTY,1,1,0,WIPTP.CQTY)
+         WIPTP.ADATE = INSERT(WIPTP.ADATE,1,1,0,CDATE)
+         WIPTP.ATIME = INSERT(WIPTP.ATIME,1,1,0,CTIME)
+         WIPTP.AEMP = INSERT(WIPTP.AEMP,1,1,0,EMPID)
+      END
+   END
+   RETURN
+*
+*T22322v
+*---- Get the WIPT.STORAGE.LOC definition for a specific location
+*
+3000 *
+   ERRMSG = ""
+   STMT = 'SSELECT WIPT.STORAGE.LOC WITH RANGE.START <= "':SL.LOC:'"'
+   STMT = STMT:' AND WITH RANGE.END >= "':SL.LOC:'"'
+   STMT = STMT:' AND WITH CONO = "':CONO:'"'
+   PERFORM STMT CAPTURING GARBAGE
+   MAT WIPSL.REC = ""
+   READNEXT SL.ID THEN
+      MATREAD WIPSL.REC FROM WIPT.STORAGE.LOC, SL.ID ELSE MAT WIPSL.REC = ""
+      CLEARSELECT
+   END ELSE
+      ERRMSG = "*Undefined Location*"
+   END
+   RETURN
+*T22322^
+*
+*---- FORMAT FORM NUMBER
+*
+85100 *
+   ERRMSG = ""
+   FNUM = FIELD(FORMNO,".",1)
+   VNUM = FIELD(FORMNO,".",2)
+   SNUM = FIELD(FORMNO,".",3)
+   BEGIN CASE
+      CASE FNUM = ""
+         ERRMSG = 1
+      CASE FNUM = 0
+         ERRMSG = 1
+      CASE 1
+         BEGIN CASE
+            CASE VNUM = ""
+               FORMNO = FNUM
+            CASE VNUM = 0
+               ERRMSG = 2
+            CASE LEN(VNUM) > 3
+               ERRMSG = 2
+            CASE 1
+               VNUM = (1000+VNUM)[2,3]
+               FORMNO = FNUM:".":VNUM
+         END CASE
+   END CASE
+   BEGIN CASE
+      CASE ERRMSG = 1
+         ERRMSG = "Invalid form #, Try again! "
+      CASE ERRMSG = 2
+         ERRMSG = "Invalid run #, Try again! "
+      CASE ERRMSG = 3
+         ERRMSG = "Invalid sig #, Try again! "
+   END CASE
+   RETURN
+*
+*---- UPDATE X-REF DATA
+*
+89100 *
+   CALL WIPT.XREF.MAINT(CONO,PREV.JOB,PREV.FORM,CURR.JOB,CURR.FORM,PAL.ID,GEN.SKID,ERRMSG)
+   RETURN
+*
+*---- DRAW BORDER
+*
+89990 *
+   RETURN
+   FOR SL = 1 TO 16
+      PRINT @(21,(SL-1)):"|":
+   NEXT SL
+   PRINT @(0,16):"---------------------+":
+   RETURN
+*
+*---- ERROR ROUTINE
+*
+91000 *
+   PRINT @(0,ERY):@(-4):BEL:BEL:ERRMSG:
+   INPUT REPLY,1:
+   PRINT @(0,ERY):@(-4):
+   GOSUB 89990
+   ERY = 15
+   RETURN
+93000 *
+   PRINT @(0,15):@(-4):ERRMSG:
+   INPUT REPLY,1:
+   PRINT @(0,15):@(-4):
+   GOTO 99999
+*
+*---- END OF PROGRAM
+*
+99999 *
+   PRINT @(-1):
+END

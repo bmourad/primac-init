@@ -1,0 +1,200 @@
+SUBROUTINE GETID
+********************************************************************************
+*   Program name :- GETID
+*   Created:- 2/3/2006
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE OPS.CPYLIB ORDER
+$INCLUDE OPS.CPYLIB ORDER.DETAIL
+$INCLUDE OPS.CPYLIB BOL
+$INCLUDE ICS.CPYLIB INV_SERIAL       
+$INCLUDE ICS.CPYLIB INV_RECEIPTS     
+$INCLUDE ICS.CPYLIB INV_RECP_WHSE 
+
+$INCLUDE CPYLIB CHAR
+
+ OPEN "","ORDER" TO ORDER ELSE
+      ERRMSG = "Cannot locate the ORDER file"; GOTO 91000
+ END
+ OPEN "","ORDER.DETAIL" TO ORDER.DETAIL ELSE
+      ERRMSG = "Cannot locate the ORDER.DETAIL file"; GOTO 91000
+ END
+ OPEN "","BOL" TO BOL ELSE
+      ERRMSG = "Cannot locate the BOL file"; GOTO 91000
+ END
+ OPEN "","INV_SERIAL" TO INV_SERIAL ELSE
+      ERRMSG = "Cannot locate the INV_SERIAL file"; GOTO 91000
+END
+
+OPEN "","INV_RECEIPTS" TO INV_RECEIPTS ELSE
+      ERRMSG = "Cannot locate the INV_RECEIPTS file"; GOTO 91000
+END
+
+OPEN "","INV_RECP_WHSE" TO INV_RECP_WHSE ELSE
+      ERRMSG = "Cannot locate the INV_RECP_WHSE file"; GOTO 91000
+END
+
+OPEN "","INV_SERIAL_TEMP" TO INV_SERIAL_TEMP ELSE
+      ERRMSG = "Cannot locate the INV_SERIAL_TEMP file"; GOTO 91000
+END
+
+OPEN "","INV_RECEIPTS_TEMP" TO INV_RECEIPTS_TEMP ELSE
+      ERRMSG = "Cannot locate the INV_RECEIPTS_TEMP file"; GOTO 91000
+END
+OPEN "","INV_RECP_WHSE_TEMP" TO INV_RECP_WHSE_TEMP ELSE
+      ERRMSG = "Cannot locate the INV_RECP_WHSE_TEMP file"; GOTO 91000
+END
+OPEN "","DAILY.BOL" TO DAILY.BOL ELSE
+      ERRMSG = "Cannot locate the DAILY.BOL file"; GOTO 91000
+END
+
+*---- SETUP UNIT MEASURE CONVERSION AND DISPLAY
+   ICR.CNV = "MD0"; ICR.CNV1 = "MD0,"
+   ICR.DV1 = 1; ICR.MT1 = 1; ICR.DV2 = 1000
+   ICR.TYPE = 3; ICR.SCAL = 0
+*----
+
+TEMP.LOC.AVAIL = '';TEMP.AVAIL = '';NUM.ON.SCRN='';TMPQTY='';TEMP.SID=''
+STATUS=RBO.getProperty('','PMCProperty',PMCProperty)
+STATUS=RBO.getProperty('','ID',ID)
+* Insert method code here
+CONO=PMCProperty<1,4>
+RELNO=''
+
+MATREAD BOL.REC FROM DAILY.BOL,ID ELSE
+	ERRMSG="DAILY.BOL MATREAD PROBLEM"
+	MAT BOL.REC=""
+	GOTO 91000
+END
+LINES = DCOUNT(BOL.PROD,VM) 
+   IF LINES > 0 THEN
+	
+      FOR REF = 1 TO LINES
+		
+         PROD = BOL.PROD<1,REF>
+         WHSE = BOL.WHSE<1,REF>
+         ORDNO = BOL.ORDER<1,REF>
+         RECP = BOL.RECP.NO<1,REF>
+         KIT  = BOL.KIT<1,REF>
+         PROD.SEQ = BOL.SEQ<1,REF>
+		
+         TEMP.SID<1,REF> = PROD:"!":WHSE:"!":ORDNO:"!":RECP
+         MATREAD ORD.DET.REC FROM ORDER.DETAIL, CONO:ORDNO:"!":BOL.SHIP.TO ELSE
+            MAT ORD.DET.REC = ""
+         END
+         PTR = 1
+         LOOP
+            LOCATE PROD IN OSD.PROD<1>,PTR SETTING PLOC THEN
+		   
+               IF (OSD.WHSE<1,PLOC> = WHSE) AND (OSD.KIT<1,PLOC> = KIT) AND (OSD.PROD.SEQ<1,PLOC> = PROD.SEQ) THEN PTR = 0
+	          
+               END ELSE
+		 PTR = 0; PLOC = 0
+               END
+         WHILE PTR > 0 DO
+            PTR = PLOC+1
+         REPEAT
+  		  
+		       
+         IF PLOC > 0 THEN
+            LCNT = DCOUNT(BOL.LOC<1,REF>,SM)
+	        PREV.RECP.NO = 0       ;*T24732
+	    FOR LPTR = 1 TO LCNT
+		  
+
+               WLOC = BOL.LOC<1,REF,LPTR>
+               RECP = BOL.RECP.NO<1,REF,LPTR>
+	        
+               LOCATE RECP IN OSD.RECP.NO<1,PLOC>,1 SETTING P ELSE NULL
+               AQTY = OSD.FI.QTY<1,PLOC,P>+0
+		  
+	         
+           
+               IF PREV.RECP.NO = 0 OR PREV.RECP.NO # RECP THEN                  
+                  TEMP.AVAIL<1,REF> = TEMP.AVAIL<1,REF> + AQTY
+			
+               END     	               
+               RSVBLE.QTY=0;RSVD.QTY=0
+               ISTK.ID=CONO:"R":RECP:"!":WHSE:"!":WLOC             
+               IF RECORDLOCKED(INV_SERIAL_TEMP,ISTK.ID)=0 THEN     
+                  DELETE INV_SERIAL_TEMP,ISTK.ID                    
+               END                                  
+			
+               MATREADU ISTK.REC FROM INV_SERIAL_TEMP,ISTK.ID ELSE 
+                  MATREADU ISTK.REC FROM INV_SERIAL,ISTK.ID THEN    
+                     IF (RELNO='') THEN                              
+                        LOCATE ORDNO IN ISTK.ORDER<1> SETTING OPOS THEN  
+                           RSVD.QTY=ISTK.ORSVD.QTY<1,OPOS>              
+                        END                                           
+                     END ELSE                                        
+                        LOCATE RELNO IN ISTK.RELNO<1> SETTING RELPOS THEN
+                           RSVD.QTY=ISTK.RRSVD.QTY<1,RELPOS>            
+                        END                                           
+                     END                                             
+                     ;* return back quantity that has been reserved  
+                     ;* for this order/release into reservable qty   
+                     RSVBLE.QTY=ISTK.RSVB.QTY+RSVD.QTY                
+                  END                                               
+                  RELEASE INV_SERIAL,ISTK.ID                        
+               END                                                 
+               RELEASE INV_SERIAL_TEMP,ISTK.ID                     
+               TEMP.LOC.AVAIL<1,REF,LPTR>=TEMP.LOC.AVAIL<1,REF,LPTR>+RSVBLE.QTY
+               PREV.RECP.NO = RECP
+            NEXT LPTR
+		 * STATUS = RBO.setProperty('','OSD_FI_QTY', TEMP.AVAIL)   
+         END ELSE
+		TEMP.AVAIL<1,REF> = 0
+		*STATUS = RBO.setProperty('','OSD_FI_QTY', TEMP.AVAIL)
+         END
+      NEXT REF
+      K = 0
+      FOR I = 1 TO LINES
+         IF TEMP.AVAIL<1,I> > 0 THEN
+            K = K + 1
+            NUM.ON.SCRN<1,K> = I
+         END
+      NEXT I
+      LINES = DCOUNT(NUM.ON.SCRN,VM)  ;*T24647
+   END ELSE
+      FIRST = 1
+      LINES = DCOUNT(NUM.ON.SCRN,VM)
+      LOOP
+         LN = LINES + 1
+         OLD.LINES = LINES
+         
+      WHILE LINES > OLD.LINES DO
+      REPEAT
+      LN = LINES
+   END
+    	
+	FOR I = 1 TO DCOUNT(TEMP.AVAIL,VM)
+	     IF TEMP.AVAIL<1,I> > 0 THEN
+		PRINT.AVAIL = TEMP.AVAIL<1,I>
+              PQTY = INT(((PRINT.AVAIL / ICR.DV1 ) * ICR.MT1) / ICR.DV2 + .5 )
+		TMPQTY<1,I> = OCONV(PQTY,ICR.CNV)
+            END
+       NEXT I
+	 STATUS = RBO.setProperty('','OSD_FI_QTY',TMPQTY)
+  
+* End of method code
+RETURN
+
+91000*
+   IF ERRMSG # "" THEN
+      STATUS = RBO.setProperty('','ServerStatus', 1)
+      STATUS = RBO.setProperty('','ServerMessage', ERRMSG)
+      
+    END
+RETURN
+
+

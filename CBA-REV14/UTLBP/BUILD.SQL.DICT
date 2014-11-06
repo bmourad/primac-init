@@ -1,0 +1,155 @@
+* REVISION    - [08.1]
+*  CREATE AN SQL COMPLIANT DICTIONARY ITEM FOR EVERY CPYLIB ATTRIBUTE.
+*  WILL STRIP OUT '.' AND '-' AND REPLACE WITH '_'.
+*  TASK 17220 - 06/29/93   B.P., C.B.A.
+*
+*COPY>CPYLIB>CHAR
+DIM FILELN(500)
+DIM ITEM(10)
+DASHES = "---------------------------------------------------------------"
+     PROMPT ""
+     PRINT CS
+     PRINT "This program will create SQL compliant dictionary entries"
+     PRINT "for an existing CPYLIB attributes, Continue ? (Y/N) ":
+     INPUT RESPONSE
+     IF RESPONSE # "Y" THEN STOP
+     PRINT
+     PRINT "Enter the CPYLIB for which you wish to create dictionary items ":
+     INPUT CPY.NAME
+     IF CPY.NAME = "END" THEN STOP
+*    OPEN "","CHECK.LENGTH" TO CHECK.LENGTH ELSE
+*       PRINT "CANNOT OPEN CHECK.LENGTH!! ";STOP
+*    END
+     OPEN "","VOC" TO VOC ELSE
+        PRINT "CANNOT OPEN VOC!! ";STOP
+     END
+     PRINTER ON
+*    STMNT = 'SSELECT VOC WITH @ID EQ "CPYLIB" OR WITH IDPARSE2 EQ "CPYLIB" OR WITH IDPARSE3 EQ "CPYLIB" OR WITH IDPARSE4 EQ "CPYLIB"'
+     STMNT = 'SELECT VOC WITH @ID EQ "':CPY.NAME:'"'
+     PERFORM STMNT RTNLIST FLIST CAPTURING MSG
+     PRINT MSG
+     FREC = ''
+     MAT ITEM = ''
+     DASHES = STR("-",50)
+     DONE = 0
+     LOOP
+        READNEXT ID FROM FLIST ELSE DONE = 1
+     UNTIL DONE DO
+        IF ID[1,5] = 'MAKE.' THEN GOTO 2000
+        IF ID[1,4] = 'TRAN' THEN GOTO 2000
+        PRINT "Processing - ":ID
+10 *
+        OPEN "",ID TO CPYLIB.FILE ELSE
+           PRINT "CANNOT OPEN ":ID
+           GOTO 2000
+        END
+        STMNT2 = "SSELECT ":ID
+*       STMNT2 = 'SSELECT PMC.CPYLIB WITH @ID EQ "CUSTOMER"'
+        PERFORM STMNT2 RTNLIST FLIST2 CAPTURING MSG
+*       PRINT CL:MSG:
+        FIN = 0
+        LOOP
+           READNEXT ID.2 FROM FLIST2 ELSE FIN = 1
+        UNTIL FIN DO
+           IF ID.2[1,4] = "COM." THEN GOTO 1000
+           PRINT "Processing - ":ID.2
+           MAT FILELN = ''
+           MATREAD FILELN FROM CPYLIB.FILE, ID.2 ELSE
+              PRINT "CANNOT READ FILELN ":ID.2:" FROM CPYLIB"
+              GOTO 1000
+           END
+           FREC = ''
+           READV FREC FROM VOC,ID.2,1 ELSE  FREC = ''
+           IF FREC # 'F' THEN
+              PRINT ID.2:" HAS NO FILE POINTER"
+              GOTO 1000
+           END
+           OPEN "DICT", ID.2 TO DICT.FILE ELSE
+              PRINT "CANNOT OPEN DICTIONARY OF ":ID.2
+              GOTO 1000
+           END
+           NUMBER.READ = 0
+           FOR I = 1 TO 999
+*             PRINT FILELN(I)
+              IF FILELN(I) = "" THEN GOTO 20
+              NUMBER.READ = NUMBER.READ + 1
+           NEXT I
+20 *
+           FOR I = 1 TO NUMBER.READ
+              LINE = TRIM(FILELN(I))
+              IF FIELD(LINE," ",1) = "EQU" THEN
+                 ITEM.NAME = FIELD(LINE," ",2)
+                 NEW.ITEM.NAME = CHANGE(ITEM.NAME,'.','_')
+                 NEW.ITEM.NAME = CHANGE(NEW.ITEM.NAME,'-','_')
+                 POSITION = FIELD(LINE," ",4)
+                 POSITION = FIELD(POSITION,"(",2)
+                 POSITION = POSITION[1,LEN(POSITION)-1]
+                 IF NOT(NUM(POSITION)) THEN GOTO 100
+                 THERE = 1
+                 MATREAD ITEM FROM DICT.FILE, NEW.ITEM.NAME ELSE
+                    THERE = 0
+                    MATREAD ITEM FROM DICT.FILE, ITEM.NAME THEN
+                       MATWRITE ITEM ON DICT.FILE, NEW.ITEM.NAME
+                       GOTO 100
+                    END ELSE
+                       MATREAD ITEM FROM DICT.FILE, 'F':POSITION THEN
+                          MATWRITE ITEM ON DICT.FILE, NEW.ITEM.NAME
+                          GOTO 100
+                       END
+                    END
+                 END
+                 IF THERE = 1 THEN
+                    PRTMSG = NEW.ITEM.NAME:" ALREADY IN DICTIONARY OF ":ID.2:" - PLEASE CHECK"
+*                   PRINT PRTMSG
+                    GOTO 100
+                 END
+                 MAT ITEM = ''
+                 ITEM(1) = 'D'
+                 ITEM(2) = POSITION
+                 BEGIN CASE
+                    CASE INDEX(ITEM.NAME,"DATE",1) # 0
+                       ITEM(3) = "D2/"
+                       ITEM(5) = "8R"
+                    CASE INDEX(ITEM.NAME,"AMT",1) # 0 OR INDEX(ITEM.NAME,"AMOUNT",1) # 0 OR INDEX(ITEM.NAME,"$",1) # 0
+                       ITEM(3) = "MD2,"
+                       ITEM(5) = "10R"
+                    CASE INDEX(ITEM.NAME,"COST",1) # 0 OR INDEX(ITEM.NAME,"SALE",1) # 0
+                       ITEM(3) = "MD2,"
+                       ITEM(5) = "10R"
+                    CASE INDEX(ITEM.NAME,"QTY",1) # 0 OR INDEX(ITEM.NAME,"QUANT",1) # 0
+                       ITEM(3) = "MD0,"
+                       ITEM(5) = "7R"
+                    CASE 1
+                       ITEM(5) = "20L"
+*                      WRITE '' ON CHECK.LENGTH, ID.2!NEW.ITEM.NAME
+                       * COULDN'T FIGURE OUT THE LENGTH SO SAVE ITEM NAME
+                 END CASE
+                 ITEM(4)=ITEM.NAME:VM:DASHES[1,LEN(ITEM.NAME)]
+                 ITEM(6) = "M"
+                 IF INDEX(LINE,"(MV",1) = 0 AND INDEX(LINE,"(SM",1) = 0 THEN ITEM(6) = "S"
+                 MATWRITE ITEM ON DICT.FILE, NEW.ITEM.NAME
+              END
+100 *
+           NEXT I
+           STMNT3 = 'SSELECT DICT ':ID.2:' WITH TYP = "V" OR WITH TYP ="I"'
+           PERFORM STMNT3 RTNLIST FLIST3 CAPTURING MSG
+           PRINT "Processing DICT ":ID.2
+           FINAL = 0
+           LOOP
+              READNEXT ID.3 FROM FLIST3 ELSE FINAL = 1
+           UNTIL FINAL DO
+              MATREAD ITEM FROM DICT.FILE, ID.3 THEN
+                 NEW.ITEM.NAME = CHANGE(ID.3,'.','_')
+                 NEW.ITEM.NAME = CHANGE(NEW.ITEM.NAME,'-','_')
+                 MATWRITE ITEM ON DICT.FILE, NEW.ITEM.NAME
+              END
+           REPEAT
+1000 *
+        REPEAT
+2000 *
+     REPEAT
+     PRINTER OFF
+     PRINTER CLOSE
+     PRINT "Done !!"
+     STOP
+     END

@@ -1,0 +1,137 @@
+SUBROUTINE PRODWKM_JOB_WRITE
+********************************************************************************
+*   Program name :- PRODWKM_JOB_WRITE
+*   Created:- 3/6/2006
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+
+OPEN '','CONTROL' TO CONTROL ELSE ERRMSG = "CONTROL FILE IS MISSING"; GOTO 93000
+	
+
+READ JC.REC FROM CONTROL, CONO:"JCFISCAL" ELSE
+   JC.REC = ""
+END
+      IF ECD.RET.VALUE = "Y" THEN
+         PRODUCTION.REC<8> = ""
+         CPROD.REC<7> = PRODUCTION.REC<7>
+         CPROD.REC<8> = PRODUCTION.REC<8>
+         NPROD.REC<7> = PRODUCTION.REC<7>
+         NPROD.REC<8> = PRODUCTION.REC<8>
+      END
+
+* NUM.DIV=2
+* NUM.PRODUCTION=52
+*PDATE=01-11-03
+      NUM.DIV = DCOUNT(PRODUCTION.REC<7>,VM)
+      NUM.PRODUCTION = DCOUNT(PRODUCTION.REC<1>,VM)
+      PDATE     = OCONV(PRODUCTION.REC<1,1>,"D2-")
+
+      FOR D = 1 TO NUM.DIV
+*PRODUCTION.REC<7,D>=01,04
+         DIV.NUM = PRODUCTION.REC<7,D>
+*T24507 v
+         IF DIV.SEC.REC<2> = 'Y' THEN
+           LOCATE DIV.NUM IN TEMP.REC<1>,1 SETTING POS ELSE GOTO 199
+         END ELSE POS = 1
+         DIV.CODE = DIV.NUM
+         GOSUB 11000
+         IF ERRMSG # "" THEN GOTO 199
+*T24507 ^
+*        YEAR.BUILD = JC.REC<1,POS>[3,2]
+         CYEAR = JC.REC<1,POS>[1,4]
+         NYEAR = CYEAR + 1
+*        LST.PER = PRODUCTION.REC<2,NUM.PRODUCTION>  ;* T22395
+* C30420
+*        PRODUCTION.REC<8,D> = DATE()
+* C30420
+         FOR Y = 2 TO 1 STEP -1     ;*C35807
+            IF Y = 1 THEN     ;*C35807
+               YEAR.BUILD = CYEAR[LEN(CYEAR)-1,2]     ;*C35807
+               YEAR.BUILD = STR('0',2-LEN(YEAR.BUILD)):YEAR.BUILD
+               PRODUCTION.REC = CPROD.REC
+               NUM.PRODUCTION = DCOUNT(PRODUCTION.REC<1>,VM)
+               PRODUCTION.REC<8,D> = DATE()
+               CPROD.REC = PRODUCTION.REC     ;*C35807
+            END ELSE
+               YEAR.BUILD = NYEAR[LEN(NYEAR)-1,2]     ;*C35807
+               YEAR.BUILD = STR('0',2-LEN(YEAR.BUILD)):YEAR.BUILD
+               PRODUCTION.REC = NPROD.REC
+               NUM.PRODUCTION = DCOUNT(PRODUCTION.REC<1>,VM)
+               PRODUCTION.REC<8,D> = DATE()
+               NPROD.REC = PRODUCTION.REC     ;*C35807
+            END
+* 22049
+*  FOR P = 1 TO 12  ;* T22395
+*T25005     FOR P = 1 TO LST.PER
+            FOR P = 1 TO NUM.PRODUCTION
+              LOCATE PRODUCTION.REC<2,P> IN PRODUCTION.REC<2>,1 BY "AR" SETTING STRT ELSE STRT = P
+              W = P - STRT + 1
+              IF W > 5 THEN W = 5
+*T25005        FOR W = 1 TO 5
+               P.SEQ = W
+*     JOB.KEY = CONO:"X":PDATE[7,2]:PDATE[1,2]:DIV.NUM:P.SEQ
+*T25005        JOB.KEY = CONO:"X":YEAR.BUILD:P"R%2":DIV.NUM:P.SEQ
+               JOB.KEY = CONO:"X":YEAR.BUILD:PRODUCTION.REC<2,P>"R%2":DIV.NUM:P.SEQ
+	        MAT JOB.REC = ""
+                  MATREAD JOB.REC FROM JOB, JOB.KEY ELSE
+                     MAT JOB.REC = ""
+                     JOB.MASTER = JOB.KEY[4,8]
+                     JOB.CUST   = PRODUCTION.REC<3>
+                     JOB.SLSMN  = PRODUCTION.REC<4>
+                     JOB.DIV    = DIV.NUM
+                     JOB.COLORS = PRODUCTION.REC<6>
+                     JOB.CATG   = PRODUCTION.REC<5>
+                     JOB.TRACK.DATE<1,1> = PRODUCTION.REC<1,P>
+                     JOB.TRACK.DATE<1,2> = PRODUCTION.REC<1,P>
+                     JOB.TRACK.DATE<1,3> = PRODUCTION.REC<1,P>
+                     JOB.TYPE            = "N"
+                     MATWRITE JOB.REC ON JOB, JOB.KEY
+                     CFND = 1
+                     IF PRODUCTION.REC<3> # OLD.CUST THEN
+                        MATREADU CUST.REC FROM CUSTOMER, CONO:OLD.CUST ELSE CFND = 0
+                        IF CFND = 1 THEN
+                           LOCATE JOB.KEY[4,8] IN CUST.JOB<1>,1 SETTING JFND THEN
+                              CUST.JOB.BAL = DELETE(CUST.JOB.BAL,1,JFND,0)
+                              CUST.JOB     = DELETE(CUST.JOB,1,JFND,0)
+                           END
+                           MATWRITE CUST.REC ON CUSTOMER, CONO:OLD.CUST
+                        END
+                     END
+                     CFND = 1
+                     MATREADU CUST.REC FROM CUSTOMER,CONO:JOB.CUST ELSE CFND = 0
+                     IF CFND THEN
+                        LOCATE JOB.KEY[4,8] IN CUST.JOB<1>,1 SETTING JFND ELSE NULL
+                        CUST.JOB.BAL<1,JFND> = JOB.CONF.AMT
+                        CUST.JOB<1,JFND> = JOB.KEY[4,8]
+                     END
+                     MATWRITE CUST.REC ON CUSTOMER,CONO:JOB.CUST
+                  END
+*T25005        NEXT W
+            NEXT P
+         NEXT Y
+199 *
+      NEXT D
+*T23468 ^
+*   WRITE PRODUCTION.REC ON CONTROL, CONO:"PRODUCTION.WEEKS"
+      GOSUB 9000
+      ECD.ACTION = 3; CALL SCRN.EDIT
+
+
+RETURN
+
+
+
+93000
+STATUS = RBO.setProperty('','ServerStatus',1)
+STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+RETURN

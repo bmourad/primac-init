@@ -1,0 +1,142 @@
+SUBROUTINE POR_REQUISITION_GETAPPROVALDETAILS(CONO,USRID,DIV,STRXML,ERRMSG,SCHEMA.ONLY)
+SCHEMA.ONLY = 1
+$INCLUDE POS.CPYLIB APP.REQ
+$INCLUDE PMC.CPYLIB COMPANY
+$INCLUDE CPYLIB CHAR
+* OPEN FILES
+*
+OPEN "","COMPANY" TO COMPANY ELSE
+           ERRMSG = "CANNOT OPEN COMPANY FILE"
+           GOTO 99999
+END
+OPEN "","APP.REQ" TO APP.REQ ELSE
+           ERRMSG = "CANNOT OPEN APP.REQ FILE"
+           GOTO 99999
+END
+OPEN "","CONTROL" TO CONTROL ELSE
+           ERRMSG = "CANNOT OPEN CONTROL FILE"
+           GOTO 99999
+END
+OPEN '','SECURITY' TO SECURITY ELSE 
+   ERRMSG="CANNOT OPEN SECURITY FILE"
+   GOTO 99999
+END
+OPEN "","DIVISION" TO DIVISION ELSE
+           ERRMSG = "CANNOT OPEN DIVISION FILE"
+           GOTO 99999
+END
+*
+* INITIALIZE  VARIABLES
+*
+ERRMSG=""
+*
+* MAIN PROCESSING
+*
+****APPROVAL
+MATREAD COMP.REC FROM COMPANY,CONO ELSE
+SCHEMA.ONLY = 0
+ERRMSG="Company number ":CONO : " does not exist"
+GOTO 99999
+END
+READ SEC.REC FROM SECURITY, CONO:USRID THEN
+SCHEMA.ONLY = 0
+  APPROVER = USRID
+  GOSUB ENTER.DIVISION
+END ELSE
+  SCHEMA.ONLY = 0
+  GO.BACK = 1
+  ERRMSG = "User ":USRID:" is not a valid user"
+  GOTO 99999
+END
+ID = CONO:USRID:"!":DIV
+MATREAD APP.REQ.REC FROM APP.REQ, ID THEN
+SCHEMA.ONLY = 0
+    USRID = FIELD(ID[4,99],"!",1)
+    DIV = FIELD(ID[4,99],"!",2)
+STRXML:='<Approval><ApprovalUserId>'  : USRID : '</ApprovalUserId><ApprovalDivison>'  : DIV : '</ApprovalDivison>'
+STRXML:='<ApprovalLevel>'  : APP.PO.LEVEL : '</ApprovalLevel><ApprovalCode>'  : APP.CODE : '</ApprovalCode>'
+STRXML:='<ApprovalName>'  : APP.NAME : '</ApprovalName><ApprovalStatus>'  : APP.STATUS : '</ApprovalStatus>'
+*STRXML:='<ApprovalRegular>'  : APP.PO.FLAG<1,1> : '</ApprovalRegular><ApprovalRLimit>'  : APP.PO.LIMIT<1,1> : '</ApprovalRLimit>'
+*STRXML:='<ApprovalOutside>'  : APP.PO.FLAG<1,2> : '</ApprovalOutside><ApprovalOLimit>'  : APP.PO.LIMIT<1,2> : '</ApprovalOLimit>'
+*STRXML:='<ApprovalMisc>'  : APP.PO.FLAG<1,3> : '</ApprovalMisc><ApprovalMLimit>'  : APP.PO.LIMIT : '</ApprovalMLimit>'
+STRXML:='<ApprovalRegularOutsideMisc>'  : APP.PO.FLAG : '</ApprovalRegularOutsideMisc><ApprovaLimit>'  : APP.PO.LIMIT : '</ApprovaLimit>'
+STRXML:='<RequisitionApproverIDs>'  : APP.PO.ID : '</RequisitionApproverIDs></Approval>'
+*RLINES=DCOUNT(APP.PO.ID<1,1>,SVM)
+*FOR I = 1 TO RLINES
+*  STRXML:='<RequisitionApproverRegular':I:'>'  : APP.PO.ID<1,1,I> : '</RequisitionApproverRegular':I:'>'  
+*NEXT I
+*OLINES=DCOUNT(APP.PO.ID<1,2>,SVM)
+*FOR J = 1 TO OLINES
+*  STRXML:='<RequisitionApproverOutside':J:'>'  : APP.PO.ID<1,2,J> : '</RequisitionApproverOutside':J:'>'  
+*NEXT I
+*MLINES=DCOUNT(APP.PO.ID<1,3>,SVM)
+*FOR K = 1 TO MLINES
+*  STRXML:='<RequisitionApproverMisc':K:'>'  : APP.PO.ID<1,3,K> : '</RequisitionApproverMisc':K:'>'  
+*NEXT I
+*STRXML:='</Approval>'
+END 
+RETURN
+***************
+ENTER.DIVISION: 
+***************
+*
+  EOI = 0
+  LOOP
+    GO.BACK = 0
+    BEGIN CASE
+      CASE DIV = "END"
+        GO.BACK = 1
+        EOI = 1
+      CASE DIV = "ALL"
+*
+*check if the profile exist for any division already
+*
+        READ DIV.LIST FROM CONTROL, CONO:"DIVISIONS" THEN
+          NBR.DIV = DCOUNT(DIV.LIST<1>,VM)  
+          FOR AA = 1 TO NBR.DIV UNTIL GO.BACK
+            READ CHECK.REC FROM APP.REQ, CONO:APPROVER:"!":DIV.LIST<1,AA> THEN
+              IF CHECK.REC<2> = "Y" THEN
+	        GO.BACK = 1
+                ERRMSG = "You have a profile for the user set in division ":DIV.LIST<1,AA>
+                GOTO 99999
+              END
+            END
+          NEXT AA
+          IF NOT(GO.BACK) THEN 
+            EOI = 1
+            *DIV = "ALL"
+          END
+        END
+      CASE 1
+*
+*check if profile for "ALL" divisions exists.
+*
+        READ CHECK.REC FROM APP.REQ, CONO:APPROVER:"!ALL" THEN
+          IF CHECK.REC<2> = "Y" THEN
+            ERRMSG= "Profile for all divisions exists"
+            GO.BACK = 1
+            GOTO 99999
+          END
+        END
+        IF NOT(GO.BACK) THEN
+          DIV.ID = CONO:DIV
+          READ CHECK.REC FROM DIVISION,DIV.ID THEN
+            EOI = 1
+          END ELSE
+           ERRMSG = "Invalid Division Number"
+	   GOTO 99999
+          END
+        END
+    END CASE
+  UNTIL EOI DO REPEAT
+  RETURN
+*
+* WRITE ERROR MESSAGE
+*
+99999*
+IF ERRMSG <> "" THEN
+      STRXML:='<Approval><ErrorStack>'  : ERRMSG : '</ErrorStack></Approval>'
+      ERRMSG = "GetApprovalDetails ----> POR_REQUISITION_GETAPPROVALDETAILS --->": ERRMSG
+      CALL WRITELOG(ERRMSG)
+END
+END

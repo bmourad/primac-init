@@ -1,0 +1,150 @@
+SUBROUTINE RFT_READ.RCV.RF.ADJUST(CONO,SERIALNO,STRXML,ERRMSG)
+*********************************************************************
+*
+* PROGRAM  - RCV.RF.ADJUST
+*
+* AUTHOR   - PRASHANT KUMAR
+*
+* DATE     - 10/01/2007
+*
+* DESCRIPTION
+*
+* This program is used to process the Roll Adjustment transaction
+* from the hand-held R-F units used in the warehouse.
+*
+*T25697 edvard 03/20/2001 * FIX UNINITIALIZED VARIBLE ERROR. (CSF# 38021)
+*T26132 cm 09/06/2001 * Change screen size from 21x16 to 20x15.
+*T26350 lhelms 12/17/2001 * CORRECT QTY TO DEFAULT TO STOCK QTY AND NOT
+*                           ALLWAYS DEFAULT TO LBS
+*T26496 lhelms 04/10/2002 * UPGRADE REV 12; COM COMMONS; REMOVE
+*                           ROLL.SKID.INFO INV_SERIAL
+*C40525 adelgado 08/07/2002 * Not updating PHYSICAL.INV rec. correctly.
+*T27369 adelgado 04/09/2003 * Fix unindentify variable.
+*T27705 lross 11/14/2003 * Expand Serial to 15 chars.
+*********************************************************************
+*
+*---- INCLUDE COPYLIB
+*
+$INCLUDE PMC.CPYLIB COMPANY
+$INCLUDE ICS.CPYLIB INV_SERIAL
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB INV.WHSE
+$INCLUDE ICS.CPYLIB INV.WHSE.LOC
+$INCLUDE ICS.CPYLIB INV.CNV
+$INCLUDE ICS.CPYLIB CATEGORY
+$INCLUDE CPYLIB CHAR
+*
+*---- STORAGE AREA
+*
+  DIM SAVE.ADJ.REC(10)
+  EQU SAJ.TOT.QTY      TO SAVE.ADJ.REC(1)
+  EQU SAJ.QTY          TO SAVE.ADJ.REC(2)
+  EQU SAJ.SHT          TO SAVE.ADJ.REC(3)
+  EQU SAJ.DIAM         TO SAVE.ADJ.REC(4)
+  ERY = 15
+*
+*---- OPEN ALL FILES
+*
+  OPEN "","INV_SERIAL" TO INV_SERIAL ELSE ERRMSG = "INV_SERIAL FILE MISSING"; RETURN
+  OPEN "","CATEGORY" TO CATEGORY ELSE ERRMSG = "CATEGORY FILE MISSING"; RETURN
+  OPEN "","INVENTORY" TO INVENTORY ELSE ERRMSG = "INVENTORY FILE MISSING"; RETURN
+  OPEN "","INV.WHSE" TO INV.WHSE ELSE ERRMSG = "INV.WHSE FILE MISSING"; RETURN
+  OPEN "","INV.WHSE.LOC" TO INV.WHSE.LOC ELSE ERRMSG = "INV.WHSE.LOC FILE MISSING"; RETURN
+*
+*---- INITIALIZATION
+*
+  DIAM = 0
+  MAN.NO = ""
+  PO.NO = ""
+  PROD.ID = ""
+  JOB.NO = ""
+  TOT.WGT = ""
+  WHSE = ""
+  WLOC = ""
+  STRXML = ''
+*
+*---- MAIN PROCESSING
+*
+* enter roll number
+*
+    S$VALUE = SERIALNO
+    IF S$VALUE = "" THEN RETURN
+*T27705 v Should really look at CATG.BARCODE for below check.
+    VALID=1
+    IF LEN(S$VALUE) = 8 THEN
+      CALL RFT_CHECK.DIGIT("T", S$VALUE, "10RL", CKDIG, VALID)
+    END
+*T27705 ^
+    IF NOT(VALID) THEN
+      ERRMSG = "INVALID SERIAL"; RETURN
+    END
+    MATREADU ISTK.REC FROM INV_SERIAL, CONO:S$VALUE LOCKED
+      ERRMSG = "SERIAL LOCKED"; RETURN
+    END ELSE
+      RELEASE INV_SERIAL, CONO:S$VALUE
+      ERRMSG = "INVALID SERIAL"; RETURN
+    END
+**    PRINT @(05,05):ISTK.MILL.ID[1,15]:
+     STRXML := "<MillId>":ISTK.MILL.ID[1,15]:"</MillId>"
+    IF ISTK.POST.DATE = "" THEN
+      CURR.QTY.ON.HAND = ISTK.CUR.QTY                ;* 9999v999
+**      PRINT @(05,06):OCONV(CURR.QTY.ON.HAND,"MD3,")"L#10":
+       STRXML := "<Quantity>":OCONV(CURR.QTY.ON.HAND,"MD3,"):"</Quantity>"
+      ERRMSG = "SERIAL NOT RCVD"; RETURN
+    END ELSE
+      MATREAD INV.REC FROM INVENTORY, CONO:ISTK.PROD ELSE
+        RELEASE INV_SERIAL, CONO:S$VALUE
+        ERRMSG = "INVALID PRODUCT"; RETURN
+      END
+      MATREAD IWH.REC FROM INV.WHSE, CONO:ISTK.PROD:"!":ISTK.WHSE ELSE
+        ERRMSG = "NO INV.WHSE"         ;* "From Whse does not exist"
+        RETURN
+      END
+      MATREAD IWLO.REC FROM INV.WHSE.LOC, CONO:ISTK.PROD:"!":ISTK.WHSE:"!":ISTK.LOC ELSE
+        RELEASE INV_SERIAL, CONO:S$VALUE
+        ERRMSG = "NO INV.WHSE.LOC"; RETURN
+      END
+      LOCATE S$VALUE IN IWLO.SERIAL<1>,1 SETTING RSPTR ELSE
+        RELEASE INV_SERIAL, CONO:S$VALUE
+        ERRMSG = "NO SER # IN LOC"; RETURN
+      END
+      IF ISTK.CUR.QTY = 0 THEN
+        RELEASE INV_SERIAL, CONO:S$VALUE
+        ERRMSG = "NO QTY"; RETURN
+      END
+      MATREAD CATG.REC FROM CATEGORY,CONO:INV.LINE ELSE
+        RELEASE INV_SERIAL, CONO:S$VALUE
+        ERRMSG = "INVALID PROD LINE"; RETURN
+      END
+*38405 v
+$INCLUDE ICSBP INV.UM.CNV
+      BEGIN CASE              
+        CASE CATG.TYPE="L"  
+          U.M="LBS"       
+        CASE CATG.TYPE="S"  
+          U.M="SHT"       
+        CASE CATG.TYPE="RL" 
+          U.M="PC "       
+        CASE CATG.TYPE="PC" 
+          U.M="FT "       
+        CASE 1              
+          NULL
+      END CASE
+*38405 ^
+* T 26350
+*        CURR.WT = IWLO.CURR.WT<1,RSPTR>           ;* 9999v999
+*        PRINT @(05,06):OCONV(CURR.WT,"MD3,")"L#10":
+      CURR.QTY.ON.HAND = ISTK.CUR.QTY
+      IF CURR.QTY.ON.HAND < 0 THEN ROND="-.5" ELSE ROND=".5"
+**      PRINT @(05,06):OCONV(INT(((CURR.QTY.ON.HAND/ICR.DV1)*ICR.MT1)/ICR.DV2+ROND),ICR.CNV)"L#10":
+        STRXML := "<Quantity>":OCONV(INT(((CURR.QTY.ON.HAND/ICR.DV1)*ICR.MT1)/ICR.DV2+ROND),ICR.CNV):"</Quantity>"
+* T 26350 ^
+    END
+    IF ISTK.LOC = "" THEN
+*      PRINT @(05,07):ISTK.WHSE"L#4":
+       STRXML := "<Location>":ISTK.WHSE:"</Location>"
+    END ELSE
+*      PRINT @(05,07):(ISTK.WHSE:"-":ISTK.LOC)"L#9":
+       STRXML := "<Location>":ISTK.WHSE:"-":ISTK.LOC:"</Location>"
+    END
+RETURN

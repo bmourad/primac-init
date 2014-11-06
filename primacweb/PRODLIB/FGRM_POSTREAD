@@ -1,0 +1,423 @@
+SUBROUTINE FGRM_POSTREAD
+*************************************************************
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - EPRIMAC
+* PROGRAM     - FGRM_POSTREAD
+* BY          - KHAJA ZIAUDDIN
+* DATE        - 07/05/03  (mm/dd/yy)
+* DESCRIPTION   
+*ENDDOC
+*************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE ICS.CPYLIB INV.CNV
+$INCLUDE PMC.CPYLIB CUSTOMER
+$INCLUDE ICS.CPYLIB INV_RECEIPTS
+$INCLUDE ICS.CPYLIB WAREHOUSE
+$INCLUDE OPS.CPYLIB JOB.FNGD.STATS
+$INCLUDE JCS.CPYLIB JOB
+$INCLUDE OPS.CPYLIB DAILY_FNGD_RECEIPT
+$INCLUDE PMC.CPYLIB COMP.OPS
+$INCLUDE OPS.CPYLIB ORDER
+$INCLUDE OPS.CPYLIB ORDER.DETAIL
+$INCLUDE OPS.CPYLIB ORDER.RELEASE
+$INCLUDE PMC.CPYLIB SHIP.TO
+$INCLUDE ICS.CPYLIB CATEGORY
+$INCLUDE ICS.CPYLIB INVENTORY
+
+DEFFUN CalcStkQty(COST.QTY,MAT INV.CNV.REC,ROND,LN)
+
+* Insert method code here
+OPEN '','CUSTOMER' TO CUSTOMER ELSE
+	ERRMSG = 'CUSTOMER FILE IS MISSING'
+   	GOTO 93000
+END
+OPEN '','INV_RECEIPTS' TO INV_RECEIPTS ELSE
+	ERRMSG = 'INV_RECEIPTS FILE IS MISSING'
+	GOTO 93000
+END
+OPEN '','WAREHOUSE' TO WAREHOUSE ELSE
+	ERRMSG = 'WAREHOUSE FILE IS MISSING'
+	GOTO 93000
+END
+OPEN '','JOB.FNGD.STATS' TO JOB.FNGD.STATS ELSE
+	ERRMSG = 'JOB.FNGD.STATS FILE IS MISSING'
+	GOTO 93000
+END
+OPEN '','JOB' TO JOB ELSE
+	ERRMSG = 'JOB FILE IS MISSING'
+	GOTO 93000
+END
+OPEN '','DAILY_FNGD_RECEIPT' TO DAILY_FNGD_RECEIPT ELSE ERRMSG = 'DAILY_FNGD_RECEIPT FILE IS MISSING'; GOTO 93000
+OPEN '','CONTROL' TO CONTROL ELSE ERRMSG = 'CONTROL FILE IS MISSING'; GOTO 93000
+OPEN '','ORDER' TO ORDER ELSE ERRMSG = 'CONTROL FILE IS MISSING'; GOTO 93000
+OPEN '','ORDER.DETAIL' TO ORDER.DETAIL ELSE ERRMSG = 'ORDER.DETAIL FILE IS MISSING'; GOTO 93000
+OPEN '','ORDER.RELEASE' TO ORDER.RELEASE ELSE ERRMSG = 'ORDER.RELEASE FILE IS MISSING'; GOTO 93000
+OPEN '','SHIP.TO' TO SHIP.TO ELSE ERRMSG = 'SHIP.TO FILE IS MISSING'; GOTO 93000
+OPEN '','CATEGORY' TO CATEGORY ELSE ERRMSG = 'CATEGORY FILE IS MISSING'; GOTO 93000
+OPEN '','INVENTORY' TO INVENTORY ELSE ERRMSG = 'INVENTORY FILE IS MISSING'; GOTO 93000
+
+CONO =''
+MAT OPCO.REC = ''
+MAT CATG.REC = ''
+MAT INV.REC = ''
+DFR.PROD = ""
+ERRMSG = ""
+STATUS = RBO.getProperty('','PMCProperty',PMCPROPERTY)
+CONO = PMCPROPERTY<1,4>
+MATREAD OPCO.REC FROM CONTROL, CONO:"OPS" ELSE
+   MAT OPCO.REC=""
+END
+*STATUS = RBO.getDBVals('@ID',ID)
+STATUS = RBO.getProperty("","ID",ID);* COMMENTED THE ABOVE STMT AND REPLACED IT WITH THIS ONE
+
+** IF IT IS A NEW RECORD CHECK WHETHER THE RECEIPT NO. EXISTS OR IS IT ALREADY POSTED
+STATUS = RBO.getProperty('','new_item',NEWITEM)
+
+IF ID[4,99] # "N" THEN
+	IF NEWITEM = 1 THEN
+		READU DUMMY FROM INV_RECEIPTS,ID LOCKED
+		   ERRMSG = 'RECEIPT record is locked by user - ':GETUSERNAME(STATUS())
+		   GOSUB 93000; ERR=1 
+		END THEN
+		   ERRMSG="Receipt ":ID[4,99]:" has been already posted."
+		   RELEASE INV_RECEIPTS, ID
+		   GOTO 93000
+		END ELSE
+		   ERRMSG = "Cannot locate Receipt # ":ID[4,99]
+		   RELEASE INV_RECEIPTS, ID
+		   GOTO 93000
+		END
+		***STATUS = RBO.setProperty('','',ERRMSG)
+	END
+END
+
+** CHECK WHETHER THERE ARE ANY FINISHED GOODS ITEM FOR THIS RECEIPT
+
+MAT CUST.REC = ''
+MAT DFR.REC = ''
+JB = ''
+CUST.ID = ''
+CUST.NAME = ''
+
+IF NEWITEM = "0" THEN	;* if not new item
+	MATREAD DFR.REC FROM DAILY_FNGD_RECEIPT,ID ELSE MAT DFR.REC = ""
+	STATUS = RBO.getDBVals('DFR_CUST',CUST.ID)
+	STATUS = RBO.getDBVals('DFR_JOB',JB)
+	STATUS = RBO.getDBVals('DFR_ORDER',DFR.ORDER)
+	STATUS = RBO.getDBVals('DFR_WHSE',DFR.WHSE)
+	STATUS = RBO.getDBVals('DFR_QTY',DFR.QTY)
+	STATUS = RBO.getDBVals('DFR_SQTY',DFR.SQTY)
+   	STATUS = RBO.getDBVals('DFR_PICK_FLG',DFR.PICK.FLG)
+       STATUS = RBO.getDBVals('DFR_PROD',DFR_PROD)
+END ELSE
+	STATUS = RBO.getProperty('','JB',JB)
+	MATREAD JOB.REC FROM JOB, CONO:JB ELSE MAT JOB.REC = ''
+	CUST.ID = JOB.CUST
+END
+MAT JFS.REC = ''
+MATREAD CUST.REC FROM CUSTOMER, CONO:CUST.ID THEN
+   MATREAD JFS.REC FROM JOB.FNGD.STATS,CONO:JB ELSE MAT JFS.REC = ""
+	STATUS = RBO.setDBVals('DFR_JOB',JB)
+	DFR.JOB = JB
+       *vvvvv : ADDED BY SUHAIL : IF THERE ARE MORE THAN 1 PROD FOR THE JOB THEN GET THE PROD SPECIFIED BY THE USER
+       JFSPROD_CNT = ''
+       JFS_M_QTY = ''
+       JFS_F_QTY = ''
+       JFS_S_QTY = ''
+       JFSPROD_CNT = DCOUNT(JFS.PROD,@VM)
+       IF JFSPROD_CNT = 1 THEN
+	   DFR.PROD = JFS.PROD
+	   DFR.WHSE = JFS.WHSE
+          JFS_M_QTY = JFS.M.QTY
+          JFS_F_QTY = JFS.F.QTY
+          JFS_S_QTY = JFS.S.QTY
+
+       END ELSE
+          IF NEWITEM <> "0" THEN
+             STATUS = RBO.getProperty('','JFS_PROD',DFR_PROD)
+          END
+          TMPJFSPROD = JFS.PROD
+          SWAP @VM WITH @AM IN TMPJFSPROD
+          LOCATE DFR_PROD IN TMPJFSPROD,1 SETTING JJ THEN
+             DFR.PROD = JFS.PROD<1,JJ>
+             *JFS.PROD = JFS_PROD
+	      DFR.WHSE = JFS.WHSE<1,JJ>
+             JFS_M_QTY = JFS.M.QTY<1,JJ>
+             JFS_F_QTY = JFS.F.QTY<1,JJ>
+             JFS_S_QTY = JFS.S.QTY<1,JJ>
+          END
+       END
+	*^^^^ :
+
+	
+	GOSUB CHECK.LINKS
+
+** MASTER PRODUCT AND SERIAL PRODUCT CHECK
+   MATREAD INV.REC FROM INVENTORY, CONO:DFR.PROD ELSE
+      ERRMSG<1,-1>="Cannot locate Product # ":DFR.PROD
+      GOTO 93000
+   END
+   IF INV.SUBS # "" THEN
+      ERRMSG="Cannot receive finished goods for a Master Product"
+      GOTO 93000
+   END
+   MATREAD CATG.REC FROM CATEGORY, CONO:INV.LINE ELSE
+      ERRMSG="Cannot locate Product Line # ":INV.LINE
+      GOTO 93000
+   END
+   IF CATG.TRK.LVL="S" THEN
+      ERRMSG="Cannot use this function to receive palletized goods"
+      GOTO 93000
+   END
+** END OF MASTER AND SERIAL PRODUCT CHECK
+
+	*IF NEWITEM = 1 THEN
+		GOSUB EXTRACT.ORD.INFO
+	*END
+
+** Check for Divisional Security
+WHSE.ID=CONO:DFR.WHSE
+MATREAD WHSE.REC FROM WAREHOUSE,WHSE.ID ELSE
+   MAT WHSE.REC=''
+END
+STATUS = RBO.setProperty('','DIV_CODE',WHS.DIV)
+
+*DIV.CODE=WHS.DIV; USER.ID=UPCASE(@LOGNAME); ERRMSG=''
+*CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+
+$INCLUDE ICSBP INV.UM.CNV
+TMP=''
+MM=''
+
+  INPROCES =''
+  *INPROCES=JFS.M.QTY - JFS.F.QTY
+  INPROCES=JFS_M_QTY - JFS_F_QTY
+
+* TMP=CalcStkQty(JFS.M.QTY,MAT INV.CNV.REC,'.5','')
+  TMP=CalcStkQty(JFS_M_QTY,MAT INV.CNV.REC,'.5','')
+  TMP=OCONV(TMP,ICR.CNV1)
+  MM=OCONV(TMP,ICR.CNV1)
+
+* ADDED BY SSH
+  JFS_M_QTY= TMP
+
+  TMP=CalcStkQty(JFS_F_QTY,MAT INV.CNV.REC,'.5','')
+  TMP=OCONV(TMP,ICR.CNV1)
+  JFS_F_QTY = TMP
+ 
+  TMP=CalcStkQty(INPROCES,MAT INV.CNV.REC,'.5','')
+  TMP=OCONV(TMP,ICR.CNV1)
+  INPROCES = TMP
+
+
+*STATUS = RBO.setProperty('','TEST',"HERER" : INPROCES/1000)
+
+*STATUS = RBO.setDBVals('DFR_PROD',JFS.PROD);*REPLACED WITH THE ONE GIVEN BELOW
+*STATUS = RBO.setDBVals('DFR_WHSE',JFS.WHSE)
+*STATUS = RBO.setProperty('','ManufQty',OCONV(JFS.M.QTY/1000,"MD0"))
+*STATUS = RBO.setProperty('','FinishQty',OCONV(JFS.F.QTY/1000,"MD0"))
+*STATUS = RBO.setProperty('','AllocatedQty',OCONV(INPROCES/1000,"MD0"))
+*STATUS = RBO.setProperty('','ShipQty',JFS.S.QTY)
+
+STATUS = RBO.setDBVals('DFR_PROD',DFR.PROD)
+STATUS = RBO.setDBVals('DFR_WHSE',DFR.WHSE)
+*STATUS = RBO.setProperty('','ManufQty',OCONV(JFS_M_QTY/1000,"MD0"))
+*STATUS = RBO.setProperty('','FinishQty',OCONV(JFS_F_QTY/1000,"MD0"))
+*STATUS = RBO.setProperty('','AllocatedQty',OCONV(INPROCES/1000,"MD0"))
+STATUS = RBO.setProperty('','ManufQty',JFS_M_QTY)
+STATUS = RBO.setProperty('','FinishQty',JFS_F_QTY)
+STATUS = RBO.setProperty('','AllocatedQty',INPROCES)
+STATUS = RBO.setProperty('','ShipQty',JFS_S_QTY)
+
+*STATUS = RBO.setDBVals('',JFS.PROD)
+*STATUS = RBO.setDBVals('',JFS.PROD)
+   
+END
+
+STATUS = RBO.setProperty('','CustId', CUST.ID)
+STATUS = RBO.setProperty('','CustName',CUST.NAME)
+
+STATUS = RBO.setProperty('','ServerStatus',0)
+STATUS=RBO.setProperty('','TEMP','POSTREAD')
+*STATUS = RBO.setProperty('','ServerMessage',"CUST ":CONO:CUST.ID)
+* End of method code
+RETURN
+
+*****************
+EXTRACT.ORD.INFO: 
+*****************
+*
+   DFR.ORDER=""
+   DFR.SHIP.TO=""
+   TEMP.SHPNM=""
+   TEMP.ALLOC=""
+   REL.NO=""; REL.DATE=""; REL.QTY=""
+   OP=0
+   FLN=REFNOS<PLOC,WLOC>
+   OCNT=DCOUNT(JFS.ORDER<1,FLN>,@SM)
+   FOR OPTR=1 TO OCNT
+      ORDNO=JFS.ORDER<1,FLN,OPTR>
+      ORD.ID=CONO:ORDNO
+      MATREAD ORD.REC FROM ORDER,ORD.ID THEN
+         SCNT=DCOUNT(ORD.SHIP.TO,@VM)
+         FOR SPTR=1 TO SCNT
+            SHPNO=ORD.SHIP.TO<1,SPTR>
+            OSD.ID=ORD.ID:"!":SHPNO
+            MATREAD ORD.DET.REC FROM ORDER.DETAIL,OSD.ID THEN
+               PCNT=DCOUNT(OSD.PROD,@VM)
+               PP=0
+                FOR PPTR=1 TO PCNT UNTIL PP > 0
+                  BEGIN CASE
+                     CASE OSD.PROD<1,PPTR> # DFR.PROD
+                     CASE OSD.WHSE<1,PPTR> # DFR.WHSE
+                     CASE OSD.KIT<1,PPTR> # "N"
+                     CASE 1
+                        PP=PPTR
+                        LOCATE DFR.JOB IN OSD.JOB<1,PP>,1 SETTING JP THEN
+                           IF OSD.JOB.QTY<1,PP,JP>+0 > 0 THEN
+                              RCNT=DCOUNT(ORD.REL.NO,@VM)
+                              FOR R=1 TO RCNT
+                                 ORR.ID=CONO:ORD.REL.NO<1,R>
+                                 MATREAD ORR.REC FROM ORDER.RELEASE,ORR.ID THEN
+                                    BEGIN CASE
+                                       CASE ORR.STATUS # ""
+                                       CASE ORR.SHIP.TO # SHPNO
+                                       CASE ORR.QTY<1,PP>=0
+                                       CASE 1
+                                          P=1; RESVD=0
+                                          LOOP
+                                             LOCATE ORD.REL.NO<1,R> IN OSD.REL.NO<1,PP>,P SETTING RPTR THEN
+                                                RESVD=RESVD + OSD.REL.QTY<1,PP,RPTR>
+                                                P=RPTR + 1
+                                             END ELSE
+                                                P=0
+                                             END
+                                          WHILE P DO REPEAT
+                                          REL.OPEN=ORR.QTY<1,PP> - RESVD
+                                          IF REL.OPEN > 0 THEN
+                                             LOCATE ORR.DUE.DATE IN REL.DATE,1 BY "AR" SETTING RPTR THEN
+                                                RPTR=RPTR + 1
+                                             END
+                                             REL.NO=INSERT(REL.NO,RPTR,0,0,ORD.REL.NO<1,R>)
+                                             REL.DATE=INSERT(REL.DATE,RPTR,0,0,ORR.DUE.DATE)
+                                             REL.QTY=INSERT(REL.QTY,RPTR,0,0,REL.OPEN)
+                                          END
+                                    END CASE
+                                 END
+                              NEXT R
+
+                              BEGIN CASE
+                                 CASE OP=0
+                                    OP=1
+                                 CASE DFR.ORDER<1,OP> # ORDNO
+                                    OP=OP + 1
+                                 CASE DFR.SHIP.TO<1,OP> # SHPNO
+                                    OP=OP + 1
+                              END CASE
+                              TEMP.ALLOC<1,OP>=TEMP.ALLOC<1,OP> + OSD.JOB.QTY<1,PP,JP>
+
+                              DFR.ORDER<1,OP>=ORDNO
+                              DFR.SHIP.TO<1,OP>=SHPNO
+                              MATREAD SPT.REC FROM SHIP.TO, CONO:ORD.CUST:"!":SHPNO ELSE
+                                 MAT SPT.REC=""
+                                 IF SHPNO="000" THEN
+                                    SPT.NAME="GENERAL SHIPTO"
+                                 END ELSE
+                                    SPT.NAME="???????????????"
+                                 END
+                              END
+                              TEMP.SHPNM<1,OP>=SPT.NAME
+                              IF ORD.PRINT="N" OR OPCO.SHP.FRM="R" OR SHPNO="000" THEN
+                                 DFR.PICK.FLG<1,OP>="N"
+                              END ELSE
+                                 IF DFR.PICK.FLG<1,OP>="" THEN
+                                    DFR.PICK.FLG<1,OP>="Y"
+                                 END
+                              END
+                           END
+                        END
+                  END CASE
+               NEXT PPTR
+            END
+         NEXT SPTR
+      END
+   NEXT OPTR
+   DFR.ORDER<1,OP+1>="*FNGD*"
+
+   STATUS = RBO.setDBVals('DFR_ORDER',DFR.ORDER)
+   STATUS = RBO.setDBVals('DFR_SHIP_TO',DFR.SHIP.TO)
+   STATUS = RBO.setDBVals('DFR_PICK_FLG',DFR.PICK.FLG)
+   STATUS = RBO.setProperty('','SHPNM',TEMP.SHPNM)
+   STATUS = RBO.setProperty('','AllocatedQty',OCONV(TEMP.ALLOC,"MD0"))
+  *STATUS = RBO.setProperty('','ReservedQty',OCONV(TEMP.RESERVE,"MD0"))
+   
+
+   RETURN
+*
+
+*************
+CHECK.LINKS: 
+*************
+*
+   PDNOS=""; WHNOS=""; REFNOS=""
+   FLINES=DCOUNT(JFS.PROD,@VM)
+   IF FLINES < 1 THEN
+      ERRMSG="Cannot locate any Finished Goods for Job # ":JB
+      GOTO 93000
+   END ELSE
+      FOR P=1 TO FLINES
+         PROD=JFS.PROD<1,P>
+         WHSE=JFS.WHSE<1,P>
+         LOCATE PROD IN PDNOS,1 SETTING PLOC THEN
+            ;* i don't get this logic prod/whse is one to one
+            ;* relationship. There can never be more  then one
+            ;* whse in the same multivalue according to cpylib
+             LOCATE WHSE IN WHNOS<PLOC>,1 SETTING WLOC ELSE
+               WHNOS<PLOC,WLOC>=WHSE
+               REFNOS<PLOC,WLOC>=P
+            END
+         END ELSE
+            PDNOS<PLOC>=PROD
+            WHNOS<PLOC>=WHSE
+            REFNOS<PLOC>=P
+         END
+      NEXT P
+      IF DFR.PROD="" THEN
+         FLN=1
+      END ELSE
+         LOCATE DFR.PROD IN PDNOS,1 SETTING PLOC THEN
+            LOCATE DFR.WHSE IN WHNOS<PLOC>,1 SETTING WLOC THEN
+               FLN=REFNOS<PLOC,WLOC>
+               OCNT=DCOUNT(DFR.ORDER,@VM)
+               FOR OPTR=OCNT TO 1 STEP -1
+                  ORDNO=DFR.ORDER<1,OPTR>
+                  IF ORDNO # "*FNGD*" THEN
+                     LOCATE ORDNO IN JFS.ORDER<1,FLN>,1 SETTING OLOC ELSE
+                        ERRMSG="Order ":ORDNO:" is de-linked from product "
+                        ERRMSG:=DFR.PROD:"!"
+                        GOTO 93000
+                        DFR.ORDER=DELETE(DFR.ORDER,1,OPTR,0)
+                        DFR.QTY=DELETE(DFR.QTY,1,OPTR,0)
+                        DFR.SQTY=DELETE(DFR.SQTY,1,OPTR,0)
+                        DFR.SHIP.TO=DELETE(DFR.SHIP.TO,1,OPTR,0)
+                     END
+                  END
+               NEXT OPTR
+            END ELSE
+               ERRMSG="Warehouse ":DFR.WHSE:" is de-linked from Job # ":DFR.JOB
+               GOTO 93000
+            END
+         END ELSE
+            ERRMSG="Product (":DFR.PROD:") is de-linked from Job # ":DFR.JOB
+            GOTO 93000
+         END
+      END
+   END
+RETURN
+
+
+
+93000
+STATUS = RBO.setProperty('','ServerStatus',1)
+STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+

@@ -1,0 +1,585 @@
+!* 9087 61533 16NOV92 17:05:33
+*************************************************************************
+* This material is the property of Exodus Computer Systems, Manchester, *
+* England, embodies confidential information proprietary to Exodus      *
+* Computer Systems, and may not be reproduced, copied, used, disclosed, *
+* or transferred in any manner without the express written consent of   *
+* Exodus Computer Systems.                                              *
+*************************************************************************
+*
+*************************************************************************
+* DDE server program.
+*************************************************************************
+*
+* This program causes VIA Duct to act as a DDE server, allowing other
+* Windows applications to do simple reads and writes on the Pick
+* database.  You can write your own substitute program for more
+* advanced functionality.
+*
+************************************************
+*COPY>PMC.CPYLIB>CUSTOMER
+*COPY>PMC.CPYLIB>SALESMAN
+*COPY>PMC.CPYLIB>COST.CNTR
+*COPY>JCS.CPYLIB>JOB
+*COPY>JES.CPYLIB>ESTIMATE
+*COPY>JES.CPYLIB>ESTIMATE.MATL
+*COPY>JES.CPYLIB>ESTIMATOR
+*************************************************
+*OPEN "","TEMP" TO TEMP ELSE STOP
+PCCMD = CHAR(27):CHAR(8); ENDCMD = CHAR(1)
+PREV.FILENAME = ''
+PREV.DICTNAME = ''
+PREV.ITEMID = ''
+*
+*************************************************************************
+* Put VIA Duct into "server mode".  It will then accept DDE messages
+* from other Windows applications and forward them to us.
+*************************************************************************
+*
+PRINT 'DDE server mode.  Press ENTER,Q,ENTER to quit.'
+PRINT PCCMD:'DDE S ON':ENDCMD:
+*
+*************************************************************************
+* Loop, processing requests.  Quit when the user enters "Q".
+*************************************************************************
+*
+ECHO OFF
+PROMPT ''
+CLIENTS = 0
+LOOP
+  INPUT REPLY,999:
+*GOSUB 105
+UNTIL REPLY = 'Q' OR REPLY = 'q' DO
+  *
+  * The messages all start with "t,cccc,xxxxxxxx".
+  * Anything other than this, we ignore.
+  *
+  ID = FIELD(REPLY,' ',1)
+  IF ID MATCHES '1A","4X","8X' THEN 
+    *
+    * "t" is the request type, "I" (initiate), "R" (request), "P" (poke),
+    * or "T" (terminate).
+    *
+    TYPE = ID[1,1]
+    RESULT = ''   ;* result to be sent to VIA Duct
+    ERRORMSG = '' ;* error message
+    BEGIN CASE
+    CASE TYPE = 'I'
+      * Initiate: don't need to do anything with this, but we'll keep
+      * a count of the nmuber of clients anyway.
+      CLIENTS = CLIENTS+1
+    CASE TYPE = 'R'
+      * Request: need to respond, use a subroutine for this.
+      GOSUB 200
+    CASE TYPE = 'P'
+      * Poke: need to respond, use a subroutine for this.
+      GOSUB 300
+    CASE TYPE = 'T'
+      * Terminate: don't need to do anything with this, but we'll keep
+      * a count of the nmuber of clients anyway.
+      CLIENTS = CLIENTS-1
+    CASE 1
+      ERRORMSG = 'unknown action'
+    END CASE
+    *
+    * Request and Poke: VIA Duct is waiting for an answer.
+    *
+    IF TYPE = 'R' OR TYPE = 'P' THEN
+      IF ERRORMSG = '' THEN ;* no error
+        * Send the result in a DDE S{ERVER} command.
+        * Format: DDE S t,cccc,xxxxxxxx ACK data
+        PRINT PCCMD:'DDE S ':ID:' ACK ':RESULT:ENDCMD:
+*GOSUB 106
+      END ELSE ;* error
+        * Send the result in a DDE S{ERVER} command.
+        * Format: DDE S t,cccc,xxxxxxxx NAK
+        PRINT PCCMD:'DDE S ':ID:' NAK':ENDCMD:
+        * We can't send the message with the NAK, so display it on the
+        * screen.
+        PRINT '"':REPLY:'" <<<< ':ERRORMSG
+        END
+    END ELSE
+      * Initiate and Terminate: no response required.
+      * But you can enable the next line to terminate this program
+      * automatically when there are no clients left.
+      * IF CLIENTS = 0 THEN DATA 'Q'
+      END
+    END
+  REPEAT
+ECHO ON
+*
+* Put VIA Duct out of "server mode".  It will then no longer accept DDE
+* messages for Pick read/writes.
+*
+PRINT PCCMD:'DDE S OFF':ENDCMD:
+STOP
+105*
+LIMIT = 100
+FOR I = 1 TO LIMIT
+READU ITEM FROM TEMP, "I":I THEN
+RELEASE TEMP, "I":I
+END ELSE
+WRITE REPLY ON TEMP, "I":I
+LIMIT = 0
+END
+NEXT I
+RETURN
+106*
+LIMIT = 100
+FOR I = 1 TO LIMIT
+READU ITEM FROM TEMP, "O":I THEN
+RELEASE TEMP, "O":I
+END ELSE
+WRITE ID:RESULT ON TEMP, "O":I
+LIMIT = 0
+END
+NEXT I
+RETURN
+*
+************************************************************************
+200 * REQUEST processing.
+************************************************************************
+*
+*************************************************************************
+* Analyze 'itemname'.
+*************************************************************************
+*
+FILENAME = FIELD(REPLY,' ',2)
+IF FILENAME = '' THEN ERRORMSG = 'file name missing'; RETURN
+@ID = FIELD(REPLY,' ',3)
+IF @ID = '' THEN ERRORMSG = 'itemid missing'; RETURN
+BEGIN CASE
+CASE FILENAME = "&JOBTICKET&"
+   IF FILENAME # PREV.FILENAME THEN
+      OPEN "","JOB" TO JOB ELSE
+         ERRORMSG = "JOB file missing"
+         RETURN
+      END
+      OPEN "","JOB_TICKET" TO JOB_TICKET ELSE
+         ERRORMSG = "JOB_TICKET file missing"
+         RETURN
+      END
+      OPEN "","CUSTOMER" TO CUSTOMER ELSE
+         ERRORMSG = "CUSTOMER file missing"
+         RETURN
+      END
+      OPEN "","ESTIMATE" TO ESTIMATE ELSE
+         ERRORMSG = "ESTIMATE file missing"
+         RETURN
+      END
+      OPEN "","SALESMAN" TO SALESMAN ELSE
+         ERRORMSG = "SALESMAN file missing"
+         RETURN
+      END
+      OPEN "","ESTIMATE.MATL" TO ESTIMATE.MATL ELSE
+         ERRORMSG = "ESTIMATE.MATL file missing"
+         RETURN
+      END
+      OPEN "","ESTIMATOR" TO ESTIMATOR ELSE
+         ERRORMSG = "ESTIMATOR file missing"
+         RETURN
+      END
+      OPEN "","COST.CNTR" TO COST.CNTR ELSE
+         ERRORMSG = "COST.CNTR file missing"
+         RETURN
+      END
+      PREV.FILENAME = FILENAME
+      MATREAD ESTM.REC FROM ESTIMATE.MATL, "001I" ELSE
+         MAT ESTM.REC = ""
+      END
+   END
+   CONO = "001"
+*
+*---- Get all the records
+*
+   MATREAD JOB.REC FROM JOB, CONO:@ID ELSE
+     ERRORMSG = "Item name missing"
+     RETURN
+   END
+   READ JOBTKTREC FROM JOB_TICKET, CONO:@ID ELSE
+      JOBTKTREC = ""
+   END
+   MATREAD CUST.REC FROM CUSTOMER, CONO:JOB.CUST ELSE
+      MAT CUST.REC = ""
+   END
+   MATREAD SALESMAN.REC FROM SALESMAN, CONO:JOB.SLSMN ELSE
+      MAT SALESMAN.REC = ""
+   END
+   IF JOB.EST = "" THEN
+      MAT EST.REC = ""
+   END ELSE
+      MATREAD EST.REC FROM ESTIMATE, CONO:JOB.EST ELSE
+         MAT EST.REC = ""
+      END
+   END
+   IF EST.ESTIMATOR = "" THEN
+      MAT ESTIMATOR.REC = ""
+   END ELSE
+      MATREAD ESTIMATOR.REC FROM ESTIMATOR, CONO:EST.ESTIMATOR ELSE
+         MAT ESTIMATOR.REC = ""
+      END
+   END
+*
+*---- Build description variables
+*
+   EST_PROD_COATING = EST.PROD.COATING<1,1,1>
+   BEGIN CASE
+   CASE EST_PROD_COATING = "0"
+      EST_PROD_COATING = "Unsided"
+   CASE EST_PROD_COATING = "1"
+      EST_PROD_COATING = "One Side"
+   CASE EST_PROD_COATING = "2"
+      EST_PROD_COATING = "Two Sides"
+   END CASE
+   INK_ID_1 = FIELD(EST.PROD.INK.ID<1,1,1>,"!",1)
+   IF INK_ID_1 # "" THEN
+      LOCATE INK_ID_1 IN ESTM.PROD<1>,1 SETTING FND THEN
+         INK_ID_1 = ESTM.FULL.DESC<1,FND>
+      END
+   END
+   INK_ID_2 = FIELD(EST.PROD.INK.ID<1,1,1>,"!",2)
+   IF INK_ID_2 # "" THEN
+      LOCATE INK_ID_2 IN ESTM.PROD<1>,1 SETTING FND THEN
+         INK_ID_2 = ESTM.FULL.DESC<1,FND>
+      END
+   END
+   EST_PROD_MODE = EST.PROD.MODE<1,1,1>
+   BEGIN CASE
+   CASE EST_PROD_MODE = "SS"
+      EST_PROD_MODE = "Single Side"
+   CASE EST_PROD_MODE = "WT"
+      EST_PROD_MODE = "Work & Turn"
+   CASE EST_PROD_MODE = "WR"
+      EST_PROD_MODE = "Work & Roll"
+   CASE EST_PROD_MODE = "SW"
+      EST_PROD_MODE = "Sheetwise"
+   CASE EST_PROD_MODE = "P"
+      EST_PROD_MODE = "Perfecting"
+   END CASE
+   PRESS_ID = EST.PROD.PRESS.ID<1,1,1>
+   MATREAD CCTR.REC FROM COST.CNTR, CONO:PRESS_ID THEN
+      PRESS_ID = "(":PRESS_ID:") ":CCTR.DESC
+   END
+   PRODUCT_ID = EST.PROD.INV.ID<1,1,1>
+   IF PRODUCT_ID = "" THEN
+      PRODUCT_ID = "(":EST.PROD.OS.PROD<1,1,1>:") ":EST.PROD.OS.DESC<1,1,1>
+   END ELSE
+      PRODUCT_ID = "(":PRODUCT_ID:") ":EST.PROD.OS.DESC<1,1,1>
+   END
+   FLAT_WIDTH = OCONV(EST.PROD.US.WIDTH<1,1,1>,"MD4")
+   V_LEN = LEN(FLAT_WIDTH)
+   V_ADD = 1
+   LIMIT = 1
+   FOR I = 4 TO LIMIT STEP -1
+      IF FLAT_WIDTH = FLAT_WIDTH[1,V_LEN-V_ADD-I] THEN
+         FLAT_WIDTH = FLAT_WIDTH[1,V_LEN-V_ADD-I]
+         LIMIT = 0
+      END
+      V_ADD = 0
+   NEXT I
+   FLAT_LENGTH = OCONV(EST.PROD.US.LENGTH<1,1,1>,"MD4")
+   V_LEN = LEN(FLAT_LENGTH)
+   V_ADD = 1
+   LIMIT = 1
+   FOR I = 4 TO LIMIT STEP -1
+      IF FLAT_LENGTH = FLAT_LENGTH[1,V_LEN-V_ADD-I] THEN
+         FLAT_LENGTH = FLAT_LENGTH[1,V_LEN-V_ADD-I]
+         LIMIT = 0
+      END
+      V_ADD = 0
+   NEXT I
+   FLAT_SIZE = FLAT_WIDTH:" X ":FLAT_LENGTH
+   ORDER_WIDTH = OCONV(EST.PROD.OS.WIDTH<1,1,1>,"MD4")
+   V_LEN = LEN(ORDER_WIDTH)
+   V_ADD = 1
+   LIMIT = 1
+   FOR I = 4 TO LIMIT STEP -1
+      IF ORDER_WIDTH = ORDER_WIDTH[1,V_LEN-V_ADD-I] THEN
+         ORDER_WIDTH = ORDER_WIDTH[1,V_LEN-V_ADD-I]
+         LIMIT = 0
+      END
+      V_ADD = 0
+   NEXT I
+   ORDER_LENGTH = OCONV(EST.PROD.OS.LENGTH<1,1,1>,"MD4")
+   V_LEN = LEN(ORDER_LENGTH)
+   V_ADD = 1
+   LIMIT = 1
+   FOR I = 4 TO LIMIT STEP -1
+      IF ORDER_LENGTH = ORDER_LENGTH[1,V_LEN-V_ADD-I] THEN
+         ORDER_LENGTH = ORDER_LENGTH[1,V_LEN-V_ADD-I]
+         LIMIT = 0
+      END
+      V_ADD = 0
+   NEXT I
+   ORDER_SIZE = ORDER_WIDTH:" X ":ORDER_LENGTH
+*
+*---- Build Transfer data string
+*
+   RESULT = JOB.CUST:"&&"
+   RESULT = RESULT:JOB.EST:"&&"
+   RESULT = RESULT:OCONV(JOB.TRACK.DATE<1,4>,"D2/"):"&&"
+   RESULT = RESULT:CUST.NAME:"&&"
+   RESULT = RESULT:CUST.ADDR1:"&&"
+   RESULT = RESULT:CUST.ADDR4:"&&"
+   RESULT = RESULT:CUST.ZIP:"&&"
+   RESULT = RESULT:CUST.ATTENTION:"&&"
+   RESULT = RESULT:SALS.NAME:"&&"
+   RESULT = RESULT:ESTMTR.NAME:"&&"
+   RESULT = RESULT:OCONV(JOB.TRACK.DATE<1,2>,"D2/"):"&&"
+   RESULT = RESULT:OCONV(JOB.QTY<1,1>,"MD0,"):"&&"
+   RESULT = RESULT:PRESS_ID:"&&"
+   RESULT = RESULT:EST_PROD_MODE:"&&"
+   RESULT = RESULT:EST.PROD.PG.CNT<1,1,1>:"&&"
+   RESULT = RESULT:EST.PROD.COLORS.1<1,1,1>:"&&"
+   RESULT = RESULT:EST.PROD.PGS.PER.FORM<1,1,1>:"&&"
+   RESULT = RESULT:EST.PROD.COLORS.2<1,1,1>:"&&"
+   RESULT = RESULT:FLAT_SIZE:"&&"
+CASE FILENAME = "&JOBTICKET1&"
+   RESULT = PRODUCT_ID:"&&"
+   RESULT = RESULT:ORDER_SIZE:"&&"
+   RESULT = RESULT:EST.PROD.BASIS.WT<1,1,1>:"LBS &&"
+   RESULT = RESULT:EST.PROD.FINISH<1,1,1>:"&&"
+   RESULT = RESULT:EST.PROD.COLOR<1,1,1>:"&&"
+   RESULT = RESULT:EST.PROD.OS.GRAIN<1,1,1>:"&&"
+   RESULT = RESULT:EST_PROD_COATING:"&&"
+   RESULT = RESULT:INK_ID_1:"&&"
+   RESULT = RESULT:FIELD(EST.PROD.INK.SIDES<1,1,1>,"!",1):"&&"
+   RESULT = RESULT:FIELD(EST.PROD.INK.COVER<1,1,1>,"!",1):"&&"
+   RESULT = RESULT:INK_ID_2:"&&"
+   RESULT = RESULT:FIELD(EST.PROD.INK.SIDES<1,1,1>,"!",2):"&&"
+   RESULT = RESULT:FIELD(EST.PROD.INK.COVER<1,1,1>,"!",2):"&&"
+CASE FILENAME = "&JOBTICKET2&"
+   RESULT = JOBTKTREC<1>:"&&"
+   FOR I = 2 TO 14
+      RESULT = RESULT:JOBTKTREC<I>:"&&"
+   NEXT I
+CASE 1
+ATTRS = REPLY[COL2()+1,9999]
+IF ATTRS = '' THEN ATTRS = '*'
+*
+************************************************************************
+* Get Pick item from cache or file.
+************************************************************************
+*
+IF FILENAME = PREV.FILENAME AND PREV.FILENAME # '' THEN
+  FILE = PREV.FILE
+END ELSE
+  OPEN '',FILENAME TO FILE ELSE ERRORMSG = 'file missing'; RETURN
+  PREV.FILENAME = FILENAME
+  PREV.FILE = FILE
+  PREV.ITEMID = ''
+  END
+IF @ID = PREV.ITEMID AND PREV.ITEMID # '' THEN
+  @RECORD = PREV.ITEM
+END ELSE
+  READ @RECORD FROM FILE,@ID ELSE ERRORMSG = 'item missing'; RETURN
+  PREV.ITEMID = @ID
+  PREV.ITEM = @RECORD
+  END
+*
+************************************************************************
+* Loop once per attribute to be read.
+************************************************************************
+*
+IF ATTRS = '*' THEN NBR.ATTRS = COUNT(@RECORD,@FM)+2 ELSE NBR.ATTRS = COUNT(ATTRS,' ')+1
+FOR WORD.NBR = 1 TO NBR.ATTRS
+  * extract data depending on attribute definition
+  WORD = FIELD(ATTRS,' ',WORD.NBR)
+  BEGIN CASE
+  CASE ATTRS = '*' ;* all attributes
+    IF WORD.NBR = 1 THEN VALUE = @ID ELSE VALUE = @RECORD<WORD.NBR-1>
+  CASE WORD = 0    ;* attribute 0
+    VALUE = @ID
+  CASE WORD MATCHES '1N0N' ;* attribute 'n'
+    VALUE = @RECORD<WORD>
+  CASE WORD MATCHES '1N0N","1N0N' ;* attribute 'n1' value 'n2'
+    VALUE = @RECORD<FIELD(WORD,',',1),FIELD(WORD,',',2)>
+  CASE WORD MATCHES '1N0N","1N0N","1N0N' ;* attribute 'n1' value 'n2' subvalue 'n3'
+    VALUE = @RECORD<FIELD(WORD,',',1),FIELD(WORD,',',2),FIELD(WORD,',',3)>
+  CASE 1 ;* dictionary definition
+    IF FILENAME = PREV.DICTNAME THEN
+      DICT = PREV.DICT
+    END ELSE
+      OPEN 'DICT',FILENAME TO DICT ELSE ERRORMSG = 'DICT missing'; RETURN
+      PREV.DICTNAME = FILENAME
+      PREV.DICT = DICT
+      END
+    READ DICT.ITEM FROM DICT,WORD ELSE ERRORMSG = 'Dict item "':WORD:'" missing'; RETURN
+    IF DICT.ITEM[1,1] = 'D' THEN
+      AMC = DICT.ITEM<2>
+      IF AMC = 0 THEN VALUE = @ID ELSE VALUE = @RECORD<AMC>
+    END ELSE
+      VALUE = ITYPE(DICT.ITEM)
+      END
+    CONVS = DICT.ITEM<3>
+    IF CONVS # '' THEN
+      NBR.CONVS = 1+COUNT(CONVS,@VM)
+      IF CONVS<1,NBR.CONVS>[1,1] = 'D' AND NOT(CONVS<1,NBR.CONVS> MATCHES '1A') THEN 
+        CONVS<1,NBR.CONVS> = 'D2/' ;* widely-compatible date format
+        END
+      VALUE = OCONV(VALUE,CONVS)
+      END
+  END CASE
+  * add this attribute to the result
+  IF RESULT # '' THEN RESULT = RESULT:'<CR><LF>'
+  RESULT = RESULT:VALUE
+  NEXT WORD.NBR
+END CASE
+*
+RETURN
+*
+*************************************************************************
+300 * WRITE processing.
+*************************************************************************
+*
+*************************************************************************
+* Get item data.
+*************************************************************************
+*
+*
+*************************************************************************
+* Analyse 'itemname'.
+*************************************************************************
+*
+FILENAME = FIELD(REPLY,' ',2)
+IF FILENAME = '' THEN ERRORMSG = 'file name missing'; RETURN
+ITEMID = FIELD(REPLY,' ',3)
+IF ITEMID = '' THEN ERRORMSG = 'itemid missing'; RETURN
+BEGIN CASE
+CASE FILENAME = "&JOBTICKET&"
+   IF FILENAME # PREV.FILENAME THEN
+      OPEN "","JOB" TO JOB ELSE
+         ERRORMSG = "JOB file missing"
+         RETURN
+      END
+      OPEN "","JOB_TICKET" TO JOB_TICKET ELSE
+         ERRORMSG = "JOB_TICKET file missing"
+         RETURN
+      END
+      OPEN "","CUSTOMER" TO CUSTOMER ELSE
+         ERRORMSG = "CUSTOMER file missing"
+         RETURN
+      END
+      OPEN "","ESTIMATE" TO ESTIMATE ELSE
+         ERRORMSG = "ESTIMATE file missing"
+         RETURN
+      END
+      OPEN "","SALESMAN" TO SALESMAN ELSE
+         ERRORMSG = "SALESMAN file missing"
+         RETURN
+      END
+      OPEN "","ESTIMATE.MATL" TO ESTIMATE.MATL ELSE
+         ERRORMSG = "ESTIMATE.MATL file missing"
+         RETURN
+      END
+      OPEN "","ESTIMATOR" TO ESTIMATOR ELSE
+         ERRORMSG = "ESTIMATOR file missing"
+         RETURN
+      END
+      OPEN "","COST.CNTR" TO COST.CNTR ELSE
+         ERRORMSG = "COST.CNTR file missing"
+         RETURN
+      END
+      PREV.FILENAME = FILENAME
+      MATREAD ESTM.REC FROM ESTIMATE.MATL, "001I" ELSE
+         MAT ESTM.REC = ""
+      END
+   END
+   DATA_STRING = REPLY[INDEX(REPLY," ",3)+1,999]
+   CNT = COUNT(DATA_STRING,"&&") + (DATA_STRING # "")
+   ITEM.DATA = FIELD(DATA_STRING,"&&",1)
+   FOR I = 2 TO CNT
+      ITEM.DATA<I> = FIELD(DATA_STRING,"&",I*2-1)
+   NEXT I
+   CONO = "001"
+   WRITE ITEM.DATA ON JOB_TICKET, CONO:ITEMID
+CASE 1
+ITEM.DATA = ''
+LOOP
+  INPUT ITEM.DATA.LINE,999:
+UNTIL ITEM.DATA.LINE = '<End>' DO
+  ITEM.DATA<-1> = ITEM.DATA.LINE
+REPEAT
+ATTRS = REPLY[COL2()+1,9999]
+IF ATTRS = '' THEN ATTRS = '*'
+*
+************************************************************************
+* Open Pick file or use cache.  Set flag if updating cached item.
+************************************************************************
+*
+IF FILENAME = PREV.FILENAME AND PREV.FILENAME # '' THEN
+  FILE = PREV.FILE
+END ELSE
+  OPEN '',FILENAME TO FILE ELSE ERRORMSG = 'file missing'; RETURN
+  PREV.FILENAME = FILENAME
+  PREV.FILE = FILE
+  PREV.ITEMID = ''
+  END
+IF ITEMID = PREV.ITEMID AND PREV.ITEMID # '' THEN
+  WRITING.PREV.ITEM = 1
+END ELSE
+  WRITING.PREV.ITEM = 0
+  END
+*
+*************************************************************************
+* Deal with the 'whole item' case.
+*************************************************************************
+*
+IF ATTRS = '*' THEN
+  WRITE ITEM.DATA ON FILE,ITEMID
+  IF WRITING.PREV.ITEM THEN PREV.ITEM = ITEM.DATA
+  RETURN
+  END
+*
+************************************************************************
+* Process list of attributes to be written.
+************************************************************************
+*
+NBR.ATTRS = COUNT(ATTRS,' ')+1
+FOR WORD.NBR = 1 TO NBR.ATTRS
+  * get first or next line of data
+  ITEM.DATA.LINE = ITEM.DATA<1>
+  ITEM.DATA = DELETE(ITEM.DATA,1,0,0)
+  * create new attribute depending on attribute definition
+  WORD = FIELD(ATTRS,' ',WORD.NBR)
+  AMC = FIELD(WORD,',',1)
+  BEGIN CASE
+  CASE WORD MATCHES '1N0N' ;* attribute 'n'
+    ATTR = ITEM.DATA.LINE
+  CASE WORD MATCHES '1N0N","1N0N' ;* attribute 'n1' value 'n2'
+    IF WRITING.PREV.ITEM THEN
+      ATTR = PREV.ITEM<AMC>
+    END ELSE
+      READV ATTR FROM FILE,ITEMID,AMC ELSE ATTR = ''
+      END
+    ATTR<1,FIELD(WORD,',',2)> = ITEM.DATA.LINE
+  CASE WORD MATCHES '1N0N","1N0N","1N0N' ;* attribute 'n1' value 'n2' subvalue 'n3'
+    IF WRITING.PREV.ITEM THEN
+      ATTR = PREV.ITEM<AMC>
+    END ELSE
+      READV ATTR FROM FILE,AMC ELSE ATTR = ''
+      END
+    ATTR<1,FIELD(WORD,',',2),FIELD(WORD,',',3)> = ITEM.DATA.LINE
+  CASE 1 ;* dictionary definition
+    IF FILENAME = PREV.DICTNAME THEN
+      DICT = PREV.DICT
+    END ELSE
+      OPEN 'DICT',FILENAME TO DICT ELSE ERRORMSG = 'DICT missing'; RETURN
+      PREV.DICTNAME = FILENAME
+      PREV.DICT = DICT
+      END
+    READ DICT.ITEM FROM DICT,WORD ELSE ERRORMSG = 'Dict item "':WORD:'" missing'; RETURN
+    AMC = DICT.ITEM<2>
+    IF NOT(NUM(AMC)) THEN ERRORMSG = 'Dict item "':WORD:'" not "D" type'; RETURN
+    ATTR = ITEM.DATA.LINE
+    CONVS = DICT.ITEM<3>
+    IF CONVS # '' THEN ATTR = ICONV(ATTR,CONVS)
+  END CASE
+  * do the attribute update
+  WRITEV ATTR ON FILE,ITEMID,AMC
+  IF WRITING.PREV.ITEM THEN PREV.ITEM<AMC> = ATTR
+  NEXT WORD.NBR
+END CASE
+RETURN
+*
+END

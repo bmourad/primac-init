@@ -1,0 +1,798 @@
+*COPY>CPYLIB>COM1
+*********************************************************************
+* REVISION    - [08.1]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - FASBP
+* PROGRAM     - FAS.EOM.CLOSE
+* BY          - Ziad Yamout, VERCOM Software, Inc.
+* DATE        - 01/13/89
+* DESCRIPTION -
+* TASK
+*     18573 6/95 LLH 1-52 WEEK ACCOUNTING
+*T21177 diane 01/22/1997 * REV11 UPG ADD CLOSE
+******* renee 08/18/1997 * Putting changes that Lanny made in REV10B
+*                          into REV11 for T21880. (see below)
+*T21880 lanny 05/06/1997 * Set the EQP.FST.YR field if blank.
+*T23278 markt 12/11/1998 * Make fiscal data multi-value by division.
+*C36161 cm 04/12/2000 * Unable to close period because getting error
+*                       that "YOU MUST RUN PERIOD SUMMARY REPORT BEFORE
+*                       CLOSING".
+*T25975 cmykleb 01/31/2002 * Save EOM transaction data so history
+*                            reports can be run.
+*T26685 lhelms 07/03/2002 * REV12 DIVISION SECURITY
+*ENDDOC
+*********************************************************************
+*
+***** INSERT FILE EQUATE
+*
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>SALESDATES
+*COPY>PMC.CPYLIB>FISCAL
+*COPY>PMC.CPYLIB>EOM.TRANS
+*COPY>PMC.CPYLIB>EOM.TRANS.HIST             ; * T25975
+*COPY>GLS.CPYLIB>GLA
+*COPY>PMC.CPYLIB>COA
+*COPY>GLS.CPYLIB>COA.SYS
+*COPY>FAS.CPYLIB>ASSETS
+*COPY>FAS.CPYLIB>ASSETS.DEPR
+*COPY>FAS.CPYLIB>DEP.MAST
+*COPY>FAS.CPYLIB>EQUIP.FILE
+*COPY>FAS.CPYLIB>EQUIP.HIST
+*COPY>FAS.CPYLIB>REPAIRS
+*COPY>FAS.CPYLIB>REPAIRS.DETAIL
+*COPY>FAS.CPYLIB>MAN.DEPR.CTL
+*COPY>FAS.CPYLIB>UOP.DEPR.CTL
+*COPY>PMC.CPYLIB>POST.REJECTS
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*
+   DIM ST.MN(2)
+*
+***** SETUP ERRMSG ROUTINE
+*
+   SYS.TYPE = 1
+   CALL SYSCOM(MAT SYSCOM.REC)
+*
+*--- PROCREAD
+*
+   PROCREAD INBUFF ELSE
+      ERRMSG = "MUST RUN FROM PROC"
+      GOSUB 91000; GOTO 99999
+   END
+   CONO = INBUFF<1>
+   POST.FLG = INBUFF<6>
+   DIV.CODE = INBUFF<8>;* T23278
+*
+**** INTITIALIZATION
+*
+   MAT FILE.VARS = ""
+   MAT EDIT.COM.DRIVER = ""
+   TODAY = DATE()
+   UNKNOWN = "NOT ON FILE"
+   SYS.FISCAL = "FAFISCAL"
+*     PROG.ID = SYSTEM(18):"!":CONO:"!ARC.EOM"
+   PROG.ID = @TTY:"!":CONO:"!FAS.EOM"
+*C36161 v
+   D.M.FLG = "PERIOD";* T23278
+*  D.M.FLG = ''
+*C36161 ^
+*
+***** OPEN FILES
+*
+   OPEN "","CONTROL" TO CONTROL ELSE
+      ERRMSG = "CONTROL FILE MISSING"
+      GOSUB 91000; GOTO 99000
+   END
+   OPEN "",INBUFF<3> TO EOM.TRANS ELSE
+      ERRMSG = "YOU NEED TO RUN END OF PERIOD POSTING BEFORE YOU CLOSE THE PERIOD"
+      GOSUB 91000; GOTO 99000
+   END
+   OPEN "",INBUFF<4> TO POST.REJECTS ELSE
+      ERRMSG = "YOU NEED TO RUN END OF PERIOD POSTING BEFORE YOU CLOSE THE PERIOD"
+      GOSUB 91000; GOTO 99000
+   END
+   OPEN "","COMPANY" TO COMPANY ELSE ERRMSG="COMPANY FILE MISSING";GOTO 93000
+   OPEN "","PMC.SCREENS" TO M.SCREENS ELSE ERRMSG="PMC.SCREENS FILE IS MISSING";GOTO 93000
+   OPEN "","ASSETS" TO ASSETS ELSE ERRMSG="ASSETS FILE MISSING";GOTO 93000
+   OPEN "","ASSETS.DEPR" TO ASSETS.DEPR ELSE ERRMSG="ASSETS.DEPR FILE MISSING";GOTO 93000
+   OPEN "","DEP.MAST" TO DEP.MAST ELSE ERRMSG="DEP.MAST FILE MISSING";GOTO 93000
+   OPEN "","EQUIP.FILE" TO EQUIP.FILE ELSE ERRMSG="EQUIP.FILE FILE MISSING";GOTO 93000
+   OPEN "","EQUIP.HIST" TO EQUIP.HIST ELSE ERRMSG="EQUIP.HIST HIST MISSING";GOTO 93000
+   OPEN "","REPAIRS" TO REPAIRS ELSE ERRMSG="REPAIRS FILE MISSING";GOTO 93000
+   OPEN "","REPAIRS.DETAIL" TO REPAIRS.DETAIL ELSE ERRMSG="REPAIRS.DETAIL FILE MISSING";GOTO 93000
+   OPEN "","EOD.HIST" TO EOD.HIST ELSE ERRMSG="EOD.HIST FILE IS MISSING";GOTO 93000
+*T25975 v
+   OPEN "","FAS.EOM.TRANS.HIST" TO FAS.EOM.TRANS.HIST ELSE ERRMSG="FAS.EOM.TRANS.HIST FILE IS MISSING";GOTO 93000
+*T25975 ^
+   MATREAD COMP.REC FROM COMPANY,CONO ELSE
+      ERRMSG = "CANNOT LOCATE COMPANY # ":CONO; GOTO 93000
+   END
+   IF CO.GLS # "N" THEN
+      IF CO.GL.LINK<1,4> = "Y" THEN
+         OPEN "","GLA" TO GLA ELSE ERRMSG="GLA FILE IS MISSING";GOTO 93000
+      END
+      OPEN "","COA" TO COA ELSE ERRMSG="COA FILE IS MISSING";GOTO 93000
+      EQV.FLG = 1
+      OPEN "","COA.EQUIV" TO COA.EQUIV ELSE EQV.FLG = 0
+   END
+   READ PERIOD.REC FROM CONTROL, CONO:"ACCT.PERIODS" ELSE
+      PERIOD.REC = ""
+      PERIOD.REC<1> = 12
+   END
+   NUM.PERIODS = PERIOD.REC<1>
+   STMT.HEAD = "FIXED ASSETS"
+*COPY>PMCBP>EOD.CLOSE
+   IF ECD.RET.VALUE = "END" THEN
+      ECD.ACTION = 99 ; CALL SCRN.EDIT
+      GOTO 99000
+   END
+   MATREAD UOP.DEPR.CTL FROM CONTROL, CONO:"UOP.DEPR" ELSE
+      MAT UOP.DEPR.CTL = ""
+   END
+***** T23278 v
+*      IF UDC.EOM.PER # FR.CURR.PER THEN
+   IF UDC.EOM.PER<1,POS> # FR.CURR.PER<1,POS> THEN
+***** T23278 ^
+      ERRMSG = "Cannot close before executing the Units Of Production process"
+      GOSUB 91000
+      ECD.ACTION = 99 ; CALL SCRN.EDIT
+      GOTO 99000
+   END
+   MATREAD MAN.DEPR.CTL FROM CONTROL, CONO:"MANUAL.DEPR" ELSE
+      MAT MAN.DEPR.CTL = ""
+   END
+***** T23278 v
+*      IF MDC.EOM.PER # FR.CURR.PER THEN
+   IF MDC.EOM.PER<1,POS> # FR.CURR.PER<1,POS> THEN
+***** T23278 ^
+      ERRMSG = "Cannot close before executing the Manual Depreciation process"
+      GOSUB 91000
+      ECD.ACTION = 99 ; CALL SCRN.EDIT
+      GOTO 99000
+   END
+   CLEARFILE POST.REJECTS
+   PRR.SEQ = 10000
+***** T23278 v
+*      YR = FR.CURR.PER[1,4]
+*      MN = FR.CURR.PER[5,2]
+   YR = FR.CURR.PER<1,POS>[1,4]
+   MN = FR.CURR.PER<1,POS>[5,2]
+***** T23278 ^
+   PER = MN + 1
+   IF PER > NUM.PERIODS THEN
+      PER = "01"
+   END
+   B.T = "B"; B.T<2> = "T"
+   P.Y = "X"
+   FOR I = 2 TO 52
+      P.Y<1,I> = "X"
+   NEXT I
+*
+***** MAIN PROCESSING
+*
+   IF CO.GLS = "N" THEN GOTO 8000
+   IF CO.GL.LINK<1,4> # "Y" THEN GOTO 8000
+**** EOM.TRANS (1) ****
+7000 ECD.NUM = 14; SCV.REC(ECD.NUM)<1> = "NOW PROCESSING EOM.TRANS (1) FILE"
+   ECD.ACTION = 5; CALL SCRN.EDIT
+   ACCOUNTS = ""; AMOUNTS = ""
+   SELECT EOM.TRANS
+   WRITE "EOM.TRANS (1)" ON CONTROL , PROG.ID
+   MATREAD CSY.REC FROM CONTROL, CONO : "COA.SYS" ELSE MAT CSY.REC = ""
+   LOCATE "CR" IN CSY.SOURCE<1>,1 SETTING FND ELSE NULL
+   L.GLA = CSY.LEVEL<1,FND>
+   MAT GLA.REC = ""
+   GLA.DATE = TODAY
+   GLA.SRC = "FA"
+***** T23278 v
+*      GLA.MON = FR.CURR.PER
+*      ODATE = " " : OCONV(FR.CURR.DATE,"D2/")
+   GLA.MON = FR.CURR.PER<1,POS>
+   ODATE = " " : OCONV(FR.CURR.DATE<1,POS>,"D2/")
+***** T23278 ^
+   READU COUNTER FROM CONTROL, CONO : "GLACOUNTER" ELSE COUNTER = 1
+   WRITE "GLA ":COUNTER ON CONTROL, PROG.ID
+   DATA = 1
+   BEGIN CASE
+      CASE L.GLA = "R"
+         LOOP
+            READNEXT ETR.ID ELSE DATA = 0
+         WHILE DATA DO
+            IF ETR.ID[1,3] # CONO THEN GOTO 7200
+            MATREADU ETR.REC FROM EOM.TRANS, ETR.ID ELSE GOTO 7100
+            TYPE = FIELD(FIELD(ETR.ID,"!",2),"*",1)
+            ACCT = ETR.ID[1,ACCT.LEN]
+            IF EQV.FLG = 1 THEN
+               READ N.ACCT FROM COA.EQUIV, ACCT ELSE N.ACCT = ACCT
+               ACCT = N.ACCT
+            END
+            COA.ID = ACCT[11,IN.ACCT.LEN]
+            MATREAD COA.REC FROM COA, CONO : COA.ID ELSE
+               MAT COA.REC = ""
+               COA.DESC = UNKNOWN
+            END
+            BEGIN CASE
+               CASE COA.DETAIL = "R" OR COA.DETAIL = "D"
+                  LOOP
+                     COUNTER = COUNTER + 1
+                     IF COUNTER > 999998 THEN COUNTER = 1
+                     GLA.ID = ACCT : STR("0",6-LEN(COUNTER)) : COUNTER
+                     READ DUMMY FROM GLA, GLA.ID ELSE DUMMY = ""
+                  WHILE DUMMY # "" DO REPEAT
+                  GLA.DESC = COA.DESC "L#25" : ODATE
+                  GLA.AMT = ETR.AMT
+                  MATWRITE GLA.REC ON GLA, GLA.ID
+               CASE 1
+                  LOCATE ACCT IN ACCOUNTS,1 SETTING AFND ELSE
+                     ACCOUNTS<AFND> = ACCT
+                     AMOUNTS<AFND> = ""
+                  END
+                  IF TYPE = "D" THEN
+                     AMOUNTS<AFND,1> = AMOUNTS<AFND,1> + ETR.AMT
+                  END ELSE
+                     AMOUNTS<AFND,2> = AMOUNTS<AFND,2> + ETR.AMT
+                  END
+            END CASE
+7100        RELEASE EOM.TRANS, ETR.ID
+7200     REPEAT
+      CASE L.GLA = "D"
+         LOOP
+            READNEXT ETR.ID ELSE DATA = 0
+         WHILE DATA DO
+            IF ETR.ID[1,3] # CONO THEN GOTO 7400
+            MATREADU ETR.REC FROM EOM.TRANS, ETR.ID ELSE GOTO 7300
+            ACCT = ETR.ID[1,ACCT.LEN]
+            TYPE = FIELD(FIELD(ETR.ID,"!",2),"*",1)
+            IF EQV.FLG = 1 THEN
+               READ N.ACCT FROM COA.EQUIV, ACCT ELSE N.ACCT = ACCT
+               ACCT = N.ACCT
+            END
+            COA.ID = ACCT[11,IN.ACCT.LEN]
+            MATREAD COA.REC FROM COA, CONO : COA.ID ELSE
+               MAT COA.REC = ""
+               COA.DESC = UNKNOWN
+            END
+            BEGIN CASE
+               CASE COA.DETAIL = "D"
+                  TCNT = COUNT(ETR.TRAN,VM) + (ETR.TRAN # "")
+                  FOR I = 1 TO TCNT
+                     LOOP
+                        COUNTER = COUNTER + 1
+                        IF COUNTER > 999998 THEN COUNTER = 1
+                        GLA.ID = ACCT : STR("0",6-LEN(COUNTER)) : COUNTER
+                        READ DUMMY FROM GLA, GLA.ID ELSE DUMMY = ""
+                     WHILE DUMMY # "" DO REPEAT
+                     GLA.DESC = ETR.RDATE<1,I> "L#8" : ETR.TRAN<1,I> : "-" : ETR.REF<1,I>
+                     GLA.DESC = GLA.DESC "L#25" : " " : OCONV(ETR.DATE<1,I>,"D2/")
+                     GLA.AMT = ETR.TAMT<1,I>
+                     MATWRITE GLA.REC ON GLA, GLA.ID
+                  NEXT I
+               CASE COA.DETAIL = "R"
+                  LOOP
+                     COUNTER = COUNTER + 1
+                     IF COUNTER > 999998 THEN COUNTER = 1
+                     GLA.ID = ACCT : STR("0",6-LEN(COUNTER)) : COUNTER
+                     READ DUMMY FROM GLA, GLA.ID ELSE DUMMY = ""
+                  WHILE DUMMY # "" DO REPEAT
+                  GLA.DESC = COA.DESC "L#25" : ODATE
+                  GLA.AMT = ETR.AMT
+                  MATWRITE GLA.REC ON GLA, GLA.ID
+               CASE 1
+                  LOCATE ACCT IN ACCOUNTS,1 SETTING AFND ELSE
+                     ACCOUNTS<AFND> = ACCT
+                     AMOUNTS<AFND> = ""
+                  END
+                  IF TYPE = "D" THEN
+                     AMOUNTS<AFND,1> = AMOUNTS<AFND,1> + ETR.AMT
+                  END ELSE
+                     AMOUNTS<AFND,2> = AMOUNTS<AFND,2> + ETR.AMT
+                  END
+            END CASE
+7300        RELEASE EOM.TRANS, ETR.ID
+7400     REPEAT
+      CASE 1
+         LOOP
+            READNEXT ETR.ID ELSE DATA = 0
+         WHILE DATA DO
+            IF ETR.ID[1,3] # CONO THEN GOTO 7600
+            MATREADU ETR.REC FROM EOM.TRANS, ETR.ID ELSE GOTO 7500
+            ACCT = ETR.ID[1,ACCT.LEN]
+            TYPE = FIELD(FIELD(ETR.ID,"!",2),"*",1)
+            IF EQV.FLG = 1 THEN
+               READ N.ACCT FROM COA.EQUIV, ACCT ELSE N.ACCT = ACCT
+               ACCT = N.ACCT
+            END
+            LOCATE ACCT IN ACCOUNTS,1 SETTING FND ELSE
+               ACCOUNTS<FND> = ACCT
+               AMOUNTS<FND> = ""
+            END
+            IF TYPE = "D" THEN
+               AMOUNTS<FND,1> = AMOUNTS<FND,1> + ETR.AMT
+            END ELSE
+               AMOUNTS<FND,2> = AMOUNTS<FND,2> + ETR.AMT
+            END
+7500        RELEASE EOM.TRANS, ETR.ID
+7600     REPEAT
+   END CASE
+   GLA.REF = ""
+   ACNT = COUNT(ACCOUNTS,AM)+(ACCOUNTS # "")
+   FOR I = 1 TO ACNT
+      ACCT = ACCOUNTS<I>
+      COA.ID = CONO : ACCT[11,IN.ACCT.LEN]
+      MATREAD COA.REC FROM COA, COA.ID ELSE COA.DESC = UNKNOWN
+      GLA.DESC = COA.DESC "L#25" : ODATE
+      FOR J = 1 TO 2
+         IF AMOUNTS<I,J> = "" THEN GOTO 7900
+         LOOP
+            COUNTER = COUNTER + 1
+            IF COUNTER > 999998 THEN COUNTER = 1
+            GLA.ID = ACCT : STR("0",6-LEN(COUNTER)) : COUNTER
+            READ DUMMY FROM GLA, GLA.ID ELSE DUMMY = ""
+         WHILE DUMMY # "" DO REPEAT
+         GLA.AMT = AMOUNTS<I,J>
+         MATWRITE GLA.REC ON GLA, GLA.ID
+7900  NEXT J
+   NEXT I
+   WRITE COUNTER ON CONTROL, CONO : "GLACOUNTER"
+   ACCOUNTS = ""
+   AMOUNTS = ""
+**** EOM.TRANS (2) ****
+8000 ECD.NUM = 14; SCV.REC(ECD.NUM)<1> = "NOW PROCESSING EOM.TRANS (2) FILE"
+   ECD.ACTION = 5; CALL SCRN.EDIT
+   SELECT EOM.TRANS
+   WRITE "EOM.TRANS (2)" ON CONTROL , PROG.ID
+   DATA = 1
+   LOOP
+      READNEXT ETR.ID ELSE DATA = 0
+   WHILE DATA DO
+      IF CONO # ETR.ID[1,3] THEN GOTO 8099
+      MATREADU ETR.REC FROM EOM.TRANS, ETR.ID ELSE
+         RELEASE EOM.TRANS, ETR.ID
+         GOTO 8099
+      END
+*T25975 v
+      CURR.PER = FR.CURR.PER<1,POS>
+      MAT ETH.REC = MAT ETR.REC
+      DONE = 0
+      SEQ = 0
+      ETH.ID = FIELD(ETR.ID,"*",1):"*":CURR.PER
+      LOOP UNTIL DONE = 1 DO
+         SEQ = SEQ + 1
+         ETH.KEY = ETH.ID:"*":SEQ
+         READ CHECKIT FROM FAS.EOM.TRANS.HIST, ETH.KEY ELSE DONE = 1
+      REPEAT
+      MATWRITE ETH.REC ON FAS.EOM.TRANS.HIST, ETH.KEY
+*T25975 ^
+      DELETE EOM.TRANS, ETR.ID
+8099 REPEAT
+   WRITE "EOM.TRANS (3)" ON CONTROL, PROG.ID
+*****
+*     Activate the next two statements if using PMCBP>EOD.CLOSE
+   EOD.HIST.REC = INSERT(EOD.HIST.REC,-1,0,0,TODAY)
+*     WRITE EOD.HIST.REC ON EOD.HIST,CONO:SYS.FISCAL:FR.CURR.PER
+* T26685
+   WRITE EOD.HIST.REC ON EOD.HIST,CONO:SYS.FISCAL:FR.CURR.PER:EOD.HID
+*****
+   SELECT EOM.TRANS
+   READNEXT ETR.ID ELSE
+*
+*--- Update the ASSETS file
+8100  ECD.NUM = 14; SCV.REC(ECD.NUM)<1> = "NOW PROCESSING ASSETS FILE"
+      ECD.ACTION = 5; CALL SCRN.EDIT
+      WRITE "ASSETS" ON CONTROL, PROG.ID
+      SELECT ASSETS
+      DATA = 1
+      LOOP
+         READNEXT AST.ID ELSE DATA = 0
+      WHILE DATA DO
+         IF AST.ID[1,3] # CONO THEN GOTO 8199
+         MATREADU AST.REC FROM ASSETS, AST.ID ELSE
+            RELEASE ASSETS, AST.ID
+            GOTO 8199
+         END
+*CSF 19603
+         IF AST.DISPOSAL # "" THEN
+            RELEASE ASSETS, AST.ID
+            GOTO 8199
+         END
+*
+***** T23278 v
+*            IF AST.FISCAL.MON = FR.CURR.PER THEN
+         IF AST.FISCAL.MON = FR.CURR.PER<1,POS> THEN
+***** T23278 ^
+            RELEASE ASSETS, AST.ID
+            GOTO 8199
+         END
+         READU DUMMY FROM EOM.TRANS, AST.ID ELSE NULL
+         DUMMY = ""
+         MATWRITEU AST.REC ON EOM.TRANS, AST.ID
+         FOR BT = 1 TO 2
+            MATREAD DEPR.REC FROM DEP.MAST, CONO:AST.DEPR.METHOD<1,BT> ELSE
+               MAT DEPR.REC = ""
+               DEPR.ACQ.PER = P.Y
+               DEPR.SVC.PER = P.Y
+               DEPR.DSP.PER = P.Y
+            END
+            BEGIN CASE
+               CASE AST.FST.PER<1,BT>[1,4] = YR
+                  V.P = DEPR.ACQ.PER
+               CASE AST.DEPR.METHOD<1,BT>[1,1] = "U"
+                  V.P = DEPR.SVC.PER
+               CASE AST.LST.PER<1,BT>[1,4] = YR
+                  V.P = DEPR.DSP.PER
+               CASE 1
+                  V.P = DEPR.SVC.PER
+            END CASE
+            IF EOY OR V.P<1,MN> # "" THEN
+               ST.MN(BT) = 1
+               LIMIT = MN - 1
+               FOR M = LIMIT TO 1 STEP -1 WHILE ST.MN(BT) = 1
+                  IF V.P<1,M> # "" THEN ST.MN(BT) = M + 1
+               NEXT M
+            END ELSE
+               ST.MN(BT) = 0
+            END
+         NEXT BT
+         IF AST.FISCAL.MON = "" THEN
+            AST.CUM.UNITS = ""; AST.YTD.UNITS = ""
+            AST.CUM.DEPR = ""; AST.YTD.DEPR = ""
+            AST.BONUS.DEPR = ""; AST.CURR.DEPR = ""
+            FOR BT = 1 TO 2
+               FYR = AST.FST.PER<1,BT>[1,4]
+               LIMIT = YR - 1
+               FOR Y = FYR TO LIMIT
+                  MATREAD ADR.REC FROM ASSETS.DEPR, AST.ID:"U":Y THEN
+                     FOR M = 1 TO 52
+                        AST.CUM.UNITS<1,BT> = AST.CUM.UNITS<1,BT> + ADR.REC(M)
+                     NEXT M
+                  END
+                  MATREAD ADR.REC FROM ASSETS.DEPR, AST.ID:B.T<BT>:Y THEN
+                     FOR M = 1 TO 52
+                        AST.BONUS.DEPR<1,BT> = AST.BONUS.DEPR<1,BT> + ADR.REC(M+52)
+                        AST.CUM.DEPR<1,BT> = AST.CUM.DEPR<1,BT> + ADR.REC(M)
+                        AST.CURR.DEPR<1,BT> = AST.CURR.DEPR<1,BT> + ADR.REC(M) + ADR.REC(M+52)
+                     NEXT M
+                  END
+               NEXT Y
+               IF ST.MN(BT) > 1 THEN
+                  LIMIT = ST.MN(BT) - 1
+                  MATREAD ADR.REC FROM ASSETS.DEPR, AST.ID:"U":YR THEN
+                     FOR M = 1 TO LIMIT
+                        AST.CUM.UNITS<1,BT> = AST.CUM.UNITS<1,BT> + ADR.REC(M)
+                        AST.YTD.UNITS<1,BT> = AST.YTD.UNITS<1,BT> + ADR.REC(M)
+                     NEXT M
+                  END
+                  MATREAD ADR.REC FROM ASSETS.DEPR, AST.ID:B.T<BT>:YR THEN
+                     FOR M = 1 TO LIMIT
+                        AST.BONUS.DEPR<1,BT> = AST.BONUS.DEPR<1,BT> + ADR.REC(M+52)
+                        AST.CUM.DEPR<1,BT> = AST.CUM.DEPR<1,BT> + ADR.REC(M)
+                        AST.YTD.DEPR<1,BT> = ADR.REC(M+52) + ADR.REC(M)
+                     NEXT M
+                  END
+               END
+            NEXT BT
+         END
+         FOR BT = 1 TO 2
+            IF ST.MN(BT) THEN
+               MATREAD ADR.REC FROM ASSETS.DEPR, AST.ID:"U":YR THEN
+                  FOR M = ST.MN(BT) TO MN
+                     AST.YTD.UNITS<1,BT> = AST.YTD.UNITS<1,BT> + ADR.REC(M)
+                     AST.CUM.UNITS<1,BT> = AST.CUM.UNITS<1,BT> + ADR.REC(M)
+                  NEXT M
+               END
+               MATREAD ADR.REC FROM ASSETS.DEPR, AST.ID:B.T<BT>:YR THEN
+                  FOR M = ST.MN(BT) TO MN
+                     AST.BONUS.DEPR<1,BT> = AST.BONUS.DEPR<1,BT> + ADR.REC(M+52)
+                     AST.CUM.DEPR<1,BT> = AST.CUM.DEPR<1,BT> + ADR.REC(M)
+                     AST.YTD.DEPR<1,BT> = AST.YTD.DEPR<1,BT> + ADR.REC(M+52) + ADR.REC(M)
+                  NEXT M
+               END
+            END
+            IF AST.CUM.UNITS<1,BT> > AST.UNITS<1,BT> THEN
+               AST.CUM.UNITS<1,BT> = AST.UNITS<1,BT>
+            END
+            IF AST.YTD.UNITS<1,BT> > AST.UNITS<1,BT> THEN
+               AST.YTD.UNITS<1,BT> = AST.UNITS<1,BT>
+            END
+         NEXT BT
+         AST.CUR.UNITS = ""
+         AST.CUR.DEPR.AMT = ""
+***** T23278 v
+*            AST.FISCAL.MON = FR.CURR.PER
+         AST.FISCAL.MON = FR.CURR.PER<1,POS>
+***** T23278 ^
+         AST.LAST.POST = TODAY
+*           IF EOY AND AST.INVST.CRDT = "Y" THEN
+*              AST.INVST.CRDT = "T"
+*           END
+         MATWRITE AST.REC ON ASSETS, AST.ID
+         DELETE EOM.TRANS, AST.ID
+8199  REPEAT
+      IF POST.FLG # "PERIOD" THEN GOTO 8900
+*
+*--- Update the EQUIP.FILE file
+8300  ECD.NUM = 14; SCV.REC(ECD.NUM)<1> = "NOW PROCESSING EQUIP.FILE FILE"
+      ECD.ACTION = 5; CALL SCRN.EDIT
+      WRITE "EQUIP.FILE" ON CONTROL, PROG.ID
+      SELECT EQUIP.FILE
+      DATA = 1
+      LOOP
+         READNEXT EQP.ID ELSE DATA = 0
+      WHILE DATA DO
+         IF EQP.ID[1,3] # CONO THEN GOTO 8399
+         MATREADU EQP.REC FROM EQUIP.FILE, EQP.ID ELSE
+            RELEASE EQUIP.FILE, EQP.ID
+            GOTO 8399
+         END
+         MATREADU RPR.REC FROM REPAIRS, EQP.ID ELSE
+            RELEASE EQUIP.FILE, EQP.ID
+            RELEASE REPAIRS, EQP.ID
+            GOTO 8399
+         END
+         MATWRITE RPR.REC ON EOM.TRANS, EQP.ID
+         EQH.ID = EQP.ID:YR
+         MATREADU EQH.REC FROM EQUIP.HIST, EQH.ID ELSE
+            MAT EQH.REC = ""
+         END
+         MATWRITE EQH.REC ON EOM.TRANS, EQH.ID
+         RPR.M.SRC = ""; RPR.M.DATE = ""
+         RPR.M.HRS = ""; RPR.M.COST = ""
+         MAX.NO = RPR.M.NO; RPR.M.NO = ""
+         A.DATE = ""; A.HRS = 0; A.COST = 0; A.NO = 0
+         A.ID = EQP.ID:"M"
+         FOR I = 1 TO MAX.NO
+            RDR.ID = A.ID : I
+            MATREADU RDR.REC FROM REPAIRS.DETAIL, RDR.ID ELSE NULL
+            MATWRITE RDR.REC ON EOM.TRANS, RDR.ID
+            DELETE REPAIRS.DETAIL, RDR.ID
+            IF RDR.UPD = "UPDATED" THEN
+               IF RDR.DATE > A.DATE THEN
+                  A.DATE = RDR.DATE
+               END
+               A.HRS = A.HRS + RDR.HRS
+               A.COST = A.COST + RDR.COST
+               A.NO = A.NO + 1
+*T21880 v
+               IF EQP.FST.YR = '' THEN EQP.FST.YR = OCONV(RDR.DATE,'D4/')[7,4]
+               IF OCONV(RDR.DATE,'D4/')[7,4] < EQP.FST.YR THEN EQP.FST.YR = OCONV(RDR.DATE,'D4/')[7,4]
+*T21880 ^
+            END ELSE
+               IF RDR.DATE > RPR.M.DATE THEN
+                  RPR.M.DATE = RDR.DATE
+               END
+               BEGIN CASE
+                  CASE RPR.M.SRC = ""
+                     RPR.M.SRC = RDR.SRC
+                  CASE NOT(INDEX(RPR.M.SRC,RDR.SRC,1))
+                     RPR.M.SRC = RPR.M.SRC:",":RDR.SRC
+               END CASE
+               RPR.M.HRS = RPR.M.HRS + RDR.HRS
+               RPR.M.COST = RPR.M.COST + RDR.COST
+               RPR.M.NO = RPR.M.NO + 1
+               RDR.ID = A.ID:RPR.M.NO
+               MATWRITE RDR.REC ON REPAIRS.DETAIL, RDR.ID
+            END
+         NEXT I
+         IF A.DATE > EQH.M.DATE THEN
+            EQH.M.DATE = A.DATE
+         END
+         EQH.M.NO = EQH.M.NO + A.NO
+         EQH.M.HRS = EQH.M.HRS + A.HRS
+         EQH.M.COST = EQH.M.COST + A.COST
+         IF A.DATE > EQP.M.DATE THEN
+            EQP.M.DATE = A.DATE
+         END
+         EQP.LST.DATE = EQP.M.DATE
+         EQP.M.NO = EQP.M.NO + A.NO
+         EQP.M.HRS = EQP.M.HRS + A.HRS
+         EQP.M.COST = EQP.M.COST + A.COST
+         RPR.R.SRC = ""; RPR.R.DATE = ""
+         RPR.R.HRS = ""; RPR.R.COST = ""
+         MAX.NO = RPR.R.NO; RPR.R.NO = ""
+         A.DATE = ""; A.HRS = 0; A.COST = 0; A.NO = 0
+         A.ID = EQP.ID:"R"
+         FOR I = 1 TO MAX.NO
+            RDR.ID = A.ID : I
+            MATREADU RDR.REC FROM REPAIRS.DETAIL, RDR.ID ELSE NULL
+            MATWRITE RDR.REC ON EOM.TRANS, RDR.ID
+            DELETE REPAIRS.DETAIL, RDR.ID
+            IF RDR.UPD = "UPDATED" THEN
+               IF RDR.DATE > A.DATE THEN
+                  A.DATE = RDR.DATE
+               END
+               A.HRS = A.HRS + RDR.HRS
+               A.COST = A.COST + RDR.COST
+               A.NO = A.NO + 1
+*T21880 v
+               IF EQP.FST.YR = '' THEN EQP.FST.YR = OCONV(RDR.DATE,'D4/')[7,4]
+               IF OCONV(RDR.DATE,'D4/')[7,4] < EQP.FST.YR THEN EQP.FST.YR = OCONV(RDR.DATE,'D4/')[7,4]
+*T21880 ^
+            END ELSE
+               IF RDR.DATE > RPR.R.DATE THEN
+                  RPR.R.DATE = RDR.DATE
+               END
+               BEGIN CASE
+                  CASE RPR.R.SRC = ""
+                     RPR.R.SRC = RDR.SRC
+                  CASE NOT(INDEX(RPR.R.SRC,RDR.SRC,1))
+                     RPR.R.SRC = RPR.R.SRC:",":RDR.SRC
+               END CASE
+               RPR.R.HRS = RPR.R.HRS + RDR.HRS
+               RPR.R.COST = RPR.R.COST + RDR.COST
+               RPR.R.NO = RPR.R.NO + 1
+               RDR.ID = A.ID:RPR.R.NO
+               MATWRITE RDR.REC ON REPAIRS.DETAIL, RDR.ID
+            END
+         NEXT I
+         IF A.DATE > EQH.R.DATE THEN
+            EQH.R.DATE = A.DATE
+         END
+         EQH.R.NO = EQH.R.NO + A.NO
+         EQH.R.HRS = EQH.R.HRS + A.HRS
+         EQH.R.COST = EQH.R.COST + A.COST
+         IF A.DATE > EQP.R.DATE THEN
+            EQP.R.DATE = A.DATE
+         END
+         EQP.R.NO = EQP.R.NO + A.NO
+         EQP.R.HRS = EQP.R.HRS + A.HRS
+         EQP.R.COST = EQP.R.COST + A.COST
+         RPR.O.SRC = ""; RPR.O.DATE = ""
+         RPR.O.HRS = ""; RPR.O.COST = ""
+         MAX.NO = RPR.O.NO; RPR.O.NO = ""
+         A.DATE = ""; A.HRS = 0; A.COST = 0; A.NO = 0
+         A.ID = EQP.ID:"O"
+         FOR I = 1 TO MAX.NO
+            RDR.ID = A.ID : I
+            MATREADU RDR.REC FROM REPAIRS.DETAIL, RDR.ID ELSE NULL
+            MATWRITE RDR.REC ON EOM.TRANS, RDR.ID
+            DELETE REPAIRS.DETAIL, RDR.ID
+            IF RDR.UPD = "UPDATED" THEN
+               IF RDR.DATE > A.DATE THEN
+                  A.DATE = RDR.DATE
+               END
+               A.HRS = A.HRS + RDR.HRS
+               A.COST = A.COST + RDR.COST
+               A.NO = A.NO + 1
+*T21880 v
+               IF EQP.FST.YR = '' THEN EQP.FST.YR = OCONV(RDR.DATE,'D4/')[7,4]
+               IF OCONV(RDR.DATE,'D4/')[7,4] < EQP.FST.YR THEN EQP.FST.YR = OCONV(RDR.DATE,'D4/')[7,4]
+*T21880 ^
+            END ELSE
+               IF RDR.DATE > RPR.O.DATE THEN
+                  RPR.O.DATE = RDR.DATE
+               END
+               BEGIN CASE
+                  CASE RPR.O.SRC = ""
+                     RPR.O.SRC = RDR.SRC
+                  CASE NOT(INDEX(RPR.O.SRC,RDR.SRC,1))
+                     RPR.O.SRC = RPR.O.SRC:",":RDR.SRC
+               END CASE
+               RPR.O.HRS = RPR.O.HRS + RDR.HRS
+               RPR.O.COST = RPR.O.COST + RDR.COST
+               RPR.O.NO = RPR.O.NO + 1
+               RDR.ID = A.ID:RPR.O.NO
+               MATWRITE RDR.REC ON REPAIRS.DETAIL, RDR.ID
+            END
+         NEXT I
+         IF A.DATE > EQH.O.DATE THEN
+            EQH.O.DATE = A.DATE
+         END
+         EQH.O.NO = EQH.O.NO + A.NO
+         EQH.O.HRS = EQH.O.HRS + A.HRS
+         EQH.O.COST = EQH.O.COST + A.COST
+         IF A.DATE > EQP.O.DATE THEN
+            EQP.O.DATE = A.DATE
+         END
+         EQP.O.NO = EQP.O.NO + A.NO
+         EQP.O.HRS = EQP.O.HRS + A.HRS
+         EQP.O.COST = EQP.O.COST + A.COST
+         RPR.U.SRC = ""; RPR.U.DATE = ""
+         RPR.U.HRS = ""; RPR.U.UNITS = ""; RPR.U.COST = ""
+         MAX.NO = RPR.U.NO; RPR.U.NO = ""
+         A.DATE = ""; A.HRS = 0; A.UNITS = 0; A.NO = 0
+         A.ID = EQP.ID:"U"
+         FOR I = 1 TO MAX.NO
+            RDR.ID = A.ID : I
+            MATREADU RDR.REC FROM REPAIRS.DETAIL, RDR.ID ELSE NULL
+            MATWRITE RDR.REC ON EOM.TRANS, RDR.ID
+            DELETE REPAIRS.DETAIL, RDR.ID
+            IF RDR.UPD = "UPDATED" THEN
+               IF RDR.DATE > A.DATE THEN
+                  A.DATE = RDR.DATE
+               END
+               A.HRS = A.HRS + RDR.HRS
+               A.UNITS = A.UNITS + RDR.UNITS
+               A.NO = A.NO + 1
+*T21880 v
+               IF EQP.FST.YR = '' THEN EQP.FST.YR = OCONV(RDR.DATE,'D4/')[7,4]
+               IF OCONV(RDR.DATE,'D4/')[7,4] < EQP.FST.YR THEN EQP.FST.YR = OCONV(RDR.DATE,'D4/')[7,4]
+*T21880 ^
+            END ELSE
+               IF RDR.DATE > RPR.U.DATE THEN
+                  RPR.U.DATE = RDR.DATE
+               END
+               BEGIN CASE
+                  CASE RPR.U.SRC = ""
+                     RPR.U.SRC = RDR.SRC
+                  CASE NOT(INDEX(RPR.U.SRC,RDR.SRC,1))
+                     RPR.U.SRC = RPR.U.SRC:",":RDR.SRC
+               END CASE
+               RPR.U.HRS = RPR.U.HRS + RDR.HRS
+               RPR.U.UNITS = RPR.U.UNITS + RDR.UNITS
+               RPR.U.NO = RPR.U.NO + 1
+               RDR.ID = A.ID:RPR.U.NO
+               MATWRITE RDR.REC ON REPAIRS.DETAIL, RDR.ID
+            END
+         NEXT I
+         IF A.DATE > EQH.U.DATE THEN
+            EQH.U.DATE = A.DATE
+         END
+         EQH.U.HRS = EQH.U.HRS + A.HRS
+         EQH.U.UNITS = EQH.U.UNITS + A.UNITS
+         IF A.DATE > EQP.U.DATE THEN
+            EQP.U.DATE = A.DATE
+         END
+         EQP.U.HRS = EQP.U.HRS + A.HRS
+         EQP.U.UNITS = EQP.U.UNITS + A.UNITS
+         BEGIN CASE
+            CASE EQP.M.DATE >= EQP.NEXT.DATE + EQP.FREQ.DAYS
+               EQP.SCH.DATE = EQP.M.DATE
+               EQP.NEXT.DATE = EQP.SCH.DATE + EQP.FREQ.DAYS
+            CASE EQP.M.DATE >= EQP.NEXT.DATE
+               EQP.SCH.DATE = EQP.NEXT.DATE
+               EQP.NEXT.DATE = EQP.SCH.DATE + EQP.FREQ.DAYS
+         END CASE
+         MATWRITE RPR.REC ON REPAIRS, EQP.ID
+         MATWRITE EQH.REC ON EQUIP.HIST, EQH.ID
+         MATWRITE EQP.REC ON EQUIP.FILE, EQP.ID
+         CLEARFILE EOM.TRANS
+8399  REPEAT
+***** T23278 v
+*         FR.CURR.PER = FR.NEXT.PER
+*         FR.CURR.DATE = FR.NEXT.DATE
+*         FR.CLOSE.DATE = TODAY
+      FR.CURR.PER<1,POS> = FR.NEXT.PER<1,POS>
+      FR.CURR.DATE<1,POS> = FR.NEXT.DATE<1,POS>
+      FR.CLOSE.DATE<1,POS> = TODAY
+***** T23278 ^
+      IF MN > PER THEN
+***** T23278 v
+*            FR.NEXT.PER = ""; FR.NEXT.DATE = ""; FR.PRINT = ""
+         FR.NEXT.PER<1,POS> = ""; FR.NEXT.DATE<1,POS> = ""; FR.PRINT<1,POS> = ""
+***** T23278 ^
+         MATWRITE FISCAL.REC ON CONTROL, CONO : "FAFISCALMON"
+         DELETE CONTROL, CONO : "FAFISCAL"
+      END ELSE
+8900 *
+***** T23278 v
+*          FR.NEXT.PER = ""; FR.NEXT.DATE = ""; FR.PRINT = ""
+         FR.NEXT.PER<1,POS> = ""; FR.NEXT.DATE<1,POS> = ""; FR.PRINT<1,POS> = ""
+***** T23278 ^
+         MATWRITE FISCAL.REC ON CONTROL, CONO:SYS.FISCAL
+      END
+      DELETE CONTROL, PROG.ID
+      ECD.ACTION = 99 ; CALL SCRN.EDIT
+      GOTO 99999
+   END
+***** T23278 v
+*  FR.PRINT = "X"
+   FR.PRINT<1,POS> = "X"
+***** T23278 ^
+   MATWRITE FISCAL.REC ON CONTROL, CONO:SYS.FISCAL
+   ERRMSG = "E R R O R !!! CANNOT LOCATE ALL TRANSACTIONS"
+   ECD.ACTION = 99 ; CALL SCRN.EDIT
+   GOTO 93000
+91000 ERR.TYPE = 1
+   CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+93000 WRITEV ERRMSG ON CONTROL, PROG.ID,2
+   ERR.TYPE = 3
+   CALL SYSCOM(MAT SYSCOM.REC)
+99000 INBUFF<5> = "END"
+   PROCWRITE INBUFF
+*** END OF JOB ***
+99999 END

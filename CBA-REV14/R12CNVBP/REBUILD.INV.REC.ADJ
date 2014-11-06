@@ -1,0 +1,70 @@
+OPEN '','INV.REC.ADJ' TO INV.REC.ADJ ELSE STOP INV.REC.ADJ
+OPEN '','INV.TRAN.HIST' TO INV.TRAN.HIST ELSE STOP INV.TRAN.HIST
+*
+*COPY>ICS.CPYLIB>INV.TRAN.HIST
+*COPY>ICS.CPYLIB>INV.REC.ADJ
+*
+PRINT @(-1)
+PRINT @(1,5):'SELECTING INV.REC.ADJ':@(-4)     
+CMD='SELECT INV.REC.ADJ WITH IRA.R.S#""'
+UDTEXECUTE CMD CAPTURING MSG
+PRINT @(1,5):'REBUILDING INV.REC.ADJ RECORD':@(-4)    
+*
+DONE=0 ; CNT=0
+LOOP
+  READNEXT IRA.ID ELSE DONE=1
+UNTIL DONE DO
+  IF REM(CNT,100)=0 THEN   
+    PRINT @(45,5):CNT:@(-4)
+  END                      
+  MATREAD IRA.REC FROM INV.REC.ADJ,IRA.ID THEN
+    SCNT=DCOUNT(IRA.R.S<1>,@VM)
+    COST.ARR=''
+    IF SCNT>1 THEN
+      CONO=IRA.ID[1,3]
+      ITH.ID =CONO:IRA.PROD:"!":IRA.WHSE:"!":IRA.RECV
+      MATREAD ITH.REC FROM INV.TRAN.HIST,ITH.ID THEN
+        TRAN=IRA.ID[4,99]
+        LOCATE TRAN IN ITH.TRAN<1> SETTING TPOS THEN
+          LOCATE ITH.R.S<1,TPOS> IN IRA.R.S<1> SETTING JUNK THEN
+            ORG.ADJ.COST=ITH.COST<1,TPOS>
+            ORG.ADJ.QTY=ITH.QTY<1,TPOS>
+            ORG.JOB=ITH.JOB<1,TPOS>
+            MLT=(ORG.ADJ.COST/100)/(ORG.ADJ.QTY/1000)
+            FOR S=1 TO SCNT
+              ADJ.QTY=IRA.QTY<1,S>-IRA.ORG.QTY<1,S>
+              ADJ.COST=INT((ADJ.QTY/1000)*MLT+.5)
+              ADJ.COST=ICONV(ADJ.COST,'MD2')
+              COST.ARR<1,-1>=ADJ.COST
+              IF S=1 THEN
+                ITH.TYPE<1,TPOS>='A'
+                ITH.LOC<1,TPOS>=IRA.LOC<1,S>
+                ITH.R.S<1,TPOS>=IRA.R.S<1,S>
+                ITH.TRAN<1,TPOS>=TRAN
+                ITH.JOB<1,TPOS>=ORG.JOB
+                ITH.QTY<1,TPOS>=ADJ.QTY
+                ITH.COST<1,TPOS>=ADJ.COST
+              END ELSE
+                IF S=SCNT THEN
+                  IF ORG.ADJ.COST#SUM(COST.ARR<1>) THEN 
+                    DIFF=ORG.ADJ.COST-SUM(COST.ARR<1>)
+                    ADJ.COST+=DIFF
+                  END
+                END
+                ITH.TYPE=INSERT(ITH.TYPE,1,TPOS,0,"A")
+                ITH.LOC=INSERT(ITH.LOC,1,TPOS,0,IRA.LOC<1,S>)
+                ITH.R.S=INSERT(ITH.R.S,1,TPOS,0,IRA.R.S<1,S>)
+                ITH.TRAN=INSERT(ITH.TRAN,1,TPOS,0,TRAN)
+                ITH.JOB=INSERT(ITH.JOB,1,TPOS,0,ORG.JOB)
+                ITH.QTY=INSERT(ITH.QTY,1,TPOS,0,ADJ.QTY)
+                ITH.COST=INSERT(ITH.COST,1,TPOS,0,ADJ.COST)
+              END
+            NEXT S
+            MATWRITE ITH.REC ON INV.TRAN.HIST,ITH.ID
+          END
+        END
+      END
+    END
+  END
+REPEAT
+END

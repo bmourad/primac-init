@@ -1,0 +1,136 @@
+*
+*COPY>CPYLIB>COM1
+*
+*********************************************************************
+* REVISION    - [10.A]
+* Copyright 1994 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* PROGRAM     - PURGE.ACCRUED.LIAB.HIST
+* BY          - RICK BROWN
+* DATE        - 05/20/95
+* DESCRIPTION
+* This program is used to purge the Accrued.Liab.Hist file based upon a date
+* entered by the user
+*
+*********************************************************************
+**** INSERT FILES EQUATES
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>PMC.CPYLIB>SECURITY
+*COPY>POS.CPYLIB>ACCRUED.LIAB.HIST
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>SYSCOM
+*
+EQU A_ALH.REF TO 2
+EQU A_ALH.DIV TO 10
+*   OPEN FILES
+*
+SYS.TYPE=1
+CALL SYSCOM(MAT SYSCOM.REC)
+*
+OPEN "COMPANY" TO COMPANY ELSE ERRMSG="COMPANY" ; GOTO 93000
+OPEN "ACCRUED.LIAB.HIST" TO ACCRUED.LIAB.HIST ELSE ERRMSG="ACCRUED.LIAB.HIST" ; GOTO 93000
+OPEN "SECURITY" TO SECURITY ELSE ERRMSG="SECURITY" ; GOTO 93000
+OPEN "CONTROL" TO CONTROL ELSE ERRMSG="CONTROL" ; GOTO 93000
+*
+PORT.NO='TTY'
+CALL SYSVARS.SUB(PORT.NO)
+*
+INPUT CONO
+INPUT CUTOFFDATE
+INPUT DIV
+*
+ICUTOFF=ICONV(CUTOFFDATE,"D")
+*
+PRINT @(0,15):"Purging Accrued Liability History"
+CTR=0
+POSCTR=0
+SELECT ACCRUED.LIAB.HIST TO LIST1
+DONE=0
+LOOP
+  READNEXT ID FROM LIST1 ELSE DONE = 1
+UNTIL DONE DO
+  CTR=CTR+1
+  IF REM(CTR,100)=0 THEN
+    POSCTR=POSCTR+1
+    BEGIN CASE
+    CASE POSCTR=1 OR POSCTR=5
+      PRINT @(40,15):"|":
+    CASE POSCTR=2 OR POSCTR=6
+      PRINT @(40,15):"/":
+    CASE POSCTR=3 OR POSCTR=7
+      PRINT @(40,15):"-":
+    CASE POSCTR=4 OR POSCTR=8
+      PRINT @(40,15):"\"
+      POSCTR=0
+    END CASE
+  END
+  IF ID[1,3] = CONO THEN
+    READU T.ALH.REC FROM ACCRUED.LIAB.HIST,ID THEN
+      IF DIV = T.ALH.REC<A_ALH.DIV>[1,2] OR DIV = "ALL" THEN
+        SELECTINDEX "ALH_REF",T.ALH.REC<A_ALH.REF> FROM ACCRUED.LIAB.HIST TO LIST2
+        SMALDONE=0  ; TMP.AMT=0
+        NEW.DATE='' ; CLOSE.DATE=''
+        IDLIST=''
+        LOOP
+          READNEXT ALID FROM LIST2 ELSE SMALDONE=1
+        UNTIL SMALDONE DO
+          MATREAD ALH.REC FROM ACCRUED.LIAB.HIST,ALID THEN
+            IF DIV = ALH.DV.DP.CC[1,2] OR DIV = "ALL" THEN
+              IF IDLIST='' THEN
+                IDLIST=ALID
+              END ELSE
+                IDLIST<1,-1>=ALID
+              END
+              TMP.AMT=TMP.AMT+ALH.AMT
+              IF ALH.CLOSED # "" THEN
+                CLOSE.DATE=ALH.CLOSED
+              END ELSE
+                IF NEW.DATE = '' THEN
+                  NEW.DATE=ALH.DATE
+                END ELSE
+                  IF ALH.DATE > NEW.DATE THEN
+                    NEW.DATE = ALH.DATE
+                  END
+                END
+              END
+            END
+          END
+        REPEAT
+        DO.DELETE = 0
+        IF CLOSE.DATE # "" AND CLOSE.DATE < ICUTOFF THEN
+          DO.DELETE=1
+        END ELSE
+          IF NEW.DATE # "" AND NEW.DATE < ICUTOFF AND TMP.AMT=0 THEN
+            DO.DELETE=1
+          END
+        END
+        IF DO.DELETE THEN
+          NUM.DEL = DCOUNT(IDLIST,CHAR(253))
+          FOR I = 1 TO NUM.DEL
+            DELETE ACCRUED.LIAB.HIST,IDLIST<1,I>
+          NEXT I
+        END
+      END
+      RELEASE ACCRUED.LIAB.HIST,ID
+    END
+  END
+REPEAT
+STOP
+*
+*-- CALLS FOR SYSCOM
+*
+91000 *
+ERR.TYPE=1 ; CALL SYSCOM(MAT SYSCOM.REC)
+RETURN
+92000 *
+ERR.TYPE=2 ; CALL SYSCOM(MAT SYSCOM.REC)
+RETURN
+93000 *
+ERRMSG = "Cannot find ":ERRMSG:" file"
+ERR.TYPE=3 ; CALL SYSCOM(MAT SYSCOM.REC)
+*
+*-- END OF JOB
+*
+99999 *
+END

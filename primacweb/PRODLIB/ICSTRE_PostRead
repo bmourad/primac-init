@@ -1,0 +1,347 @@
+SUBROUTINE ICSTRE_PostRead
+********************************************************************************
+*   Program name :- ICSTRE_PostRead
+*   Created:- 7/9/2003
+*   Programmer:- G.Purushotham Rao
+*------------------------------------------------------------------------------*
+*
+*  This server event is triggered from within the {m:WW:uObject=ReadData}, {m- *
+*  :WW:uObject=DeleteData} and {m:WW:uObject=WriteData} server events. In eac- *
+*  h case, this {m:WW:uObject=PostRead} event occurs after the physical datab- *
+*  ase read, but before values are extracted from the database record. This p- *
+*  rovides a window of opportunity in which the database values may be direct- *
+*  ly manipulated. The API functions
+*  RBO.setDBVals() and RBO.getDBVals() are - *
+*  used to do this.
+*  
+*                - *
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+*  T110     Redback TestTrack 
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE ICS.CPYLIB DAILY_TRANSFER ;*  T110
+$INCLUDE ICS.CPYLIB INVENTORY
+$INCLUDE ICS.CPYLIB INV.CNV
+$INCLUDE ICS.CPYLIB INV.WHSE
+$INCLUDE ICS.CPYLIB WAREHOUSE
+$INCLUDE ICS.CPYLIB INV_SERIAL
+$INCLUDE ICS.CPYLIB CATEGORY
+
+   DEFFUN CALC_STK_QTY(COST.QTY, MAT INV.CNV.REC,ROND,LN)
+   DEFFUN CALC_COST_QTY(STK.QTY,MAT INV.CNV.REC,ROND,LN)
+
+STATUS=RBO.getProperty('','ID',D_TRAN_ID)
+* Insert method code here
+   OPEN '','INVENTORY' TO INVENTORY ELSE
+      ERRMSG = 'CANNOT LOCATE INVENTORY FILE'
+      GOTO 93000
+  END
+
+   OPEN '','INV.WHSE' TO INV.WHSE ELSE
+      ERRMSG = 'CANNOT LOCATE INV.WHSE FILE'
+      GOTO 93000
+   END
+
+  OPEN '','WAREHOUSE' TO WAREHOUSE ELSE
+    ERRMSG = 'CANNOT LOCATE WAREHOUSE FILE'
+    GOTO 93000
+  END
+
+  OPEN '','INV_SERIAL' TO INV_SERIAL ELSE
+     ERRMSG = 'CANNOT LOCATE INV_SERIAL FILE'
+     GOTO 93000
+  END
+
+  OPEN '','CATEGORY' TO CATEGORY ELSE
+     ERRMSG = 'CANNOT LOCATE CATEGORY FILE'
+     GOTO 93000
+  END
+*  T110 v
+  OPEN '','DAILY_TRANSFER' TO DAILY_TRANSFER ELSE
+     ERRMSG = 'CANNOT LOCATE DAILY_TRANSFER FILE'
+     GOTO 93000
+  END
+*  T110 ^
+
+D_TRAN_PROD_NO = ''
+D_TRAN_FROM_WHSE = ''
+D_TRAN_TO_WHSE = ''
+D_TRAN_QTY	= ''
+D_TRAN_TOT_QTY = ''
+D_TRAN_SERIAL = ''
+
+*STATUS=RBO.getDBVals('D_TRAN_PROD_NO',D_TRAN_PROD_NO)
+*STATUS=RBO.getDBVals('D_TRAN_FROM_WHSE',D_TRAN_FROM_WHSE)
+*STATUS=RBO.getDBVals('D_TRAN_TO_WHSE',D_TRAN_TO_WHSE)
+*STATUS=RBO.getDBVals('D_TRAN_QTY',D_TRAN_QTY)
+*STATUS=RBO.getDBVals('D_TRAN_TOT_QTY',D_TRAN_TOT_QTY)
+*STATUS=RBO.getDBVals('D_TRAN_SERIAL',D_TRAN_SERIAL)
+*  T110 v
+MATREAD D.TRAN.REC FROM DAILY_TRANSFER,D_TRAN_ID THEN
+	D_TRAN_PROD_NO = D.TRAN.PROD.NO
+	D_TRAN_FROM_WHSE = D.TRAN.FROM.WHSE	
+	D_TRAN_TO_WHSE = D.TRAN.TO.WHSE
+	D_TRAN_QTY	= D.TRAN.QTY
+	D_TRAN_TOT_QTY = D.TRAN.TOT.QTY
+	D_TRAN_SERIAL = D.TRAN.SERIAL
+END 
+*  T110 ^
+
+STATUS=RBO.getProperty('','PMCProperty',PMCProperty)
+CONO = PMCProperty<1,4>
+
+PROD.COUNT = DCOUNT(D_TRAN_PROD_NO,@VM)
+
+D_TRAN_PROD_DESC = ""
+D_TRAN_PROD_UM = ""
+MSG = ""
+
+FROM.WHSE.LOC = ''
+TO.WHSE.LOC = ''
+NET.AVAIL.FROM = ''
+NET.AVAIL.TO = ''
+TRANSFER.FROM = ''
+TRANSFER.TO = ''
+BALANCE.FROM = ''
+BALANCE.TO = ''
+X = ''
+D_TRAN_SERIAL_QTY = ''
+
+FOR I = 1 TO PROD.COUNT
+   INV.ID = CONO : D_TRAN_PROD_NO<1,I>
+
+   FROM.WHSE = D_TRAN_FROM_WHSE
+   TO.WHSE = D_TRAN_TO_WHSE<1,I>
+
+   XFROM.WHSE = "X" : FROM.WHSE
+   XTO.WHSE = "X" : TO.WHSE
+
+   MATREAD INV.REC FROM INVENTORY,INV.ID THEN
+	INV.UOM.STK = INV.UNIT<1,2>
+   	INV.UOM.CST = INV.UNIT<1,3>
+
+	GOSUB SET.HEADING
+
+******************
+   IWH.ID=CONO:D_TRAN_PROD_NO<1,I>:'!':TO.WHSE
+   MATREAD IWH.REC FROM INV.WHSE, IWH.ID ELSE
+      *ERRMSG='CANNOT LOCATE INV.WHSE RECORD ':IWH.ID
+      *GOSUB 91000;GOTO 99999
+   END
+
+   TO.QOH=IWH.ON.HAND
+
+   IF XFROM.WHSE # XTO.WHSE THEN
+      IWH.ID=CONO:D_TRAN_PROD_NO<1,I>:"!":FROM.WHSE
+      MATREAD IWH.REC FROM INV.WHSE, IWH.ID ELSE
+         *ERRMSG='CANNOT LOCATE INV.WHSE RECORD ':IWH.ID
+         *GOSUB 91000;GOTO 99999
+      END
+         IF IWH.ON.HAND-IWH.RESV < 1 THEN
+            *ERRMSG='ZERO AVAILABLE QTY FOR WAREHOUSE'
+            *GOSUB 91000;GOTO 99999
+         END
+   END	
+ 
+   FCNT=DCOUNT(IWH.LOC,@VM)
+   MATREAD WHSE.REC FROM WAREHOUSE , CONO:TO.WHSE ELSE
+      MAT WHSE.REC=''
+   END
+   TCNT=DCOUNT(WHS.LOC,@VM)
+
+	CATG.ID = CONO:INV.LINE
+	MATREAD CATG.REC FROM CATEGORY,CATG.ID THEN
+		*   GOSUB ENT.TO.WHSE
+	END ELSE
+	*   ERRMSG='CATEGORY RECORD ':CATG.ID:' IS MISSING.'
+	*   GOSUB 93000
+	
+	END
+   
+  IF CATG.TRK.LVL='S' THEN
+		MATREAD ISTK.REC FROM INV_SERIAL, CONO:D_TRAN_SERIAL<1,I> ELSE
+                 MAT ISTK.REC=""
+              END
+	FROM.WHSE.LOC<1,I> = ISTK.LOC
+  END ELSE
+	FROM.WHSE.LOC<1,I> = CHANGE(IWH.LOC,@VM,"#") 
+  END
+
+   TO.WHSE.LOC<1,I> = CHANGE(WHS.LOC,@VM,"#")
+   
+   NET.QTY=IWH.ON.HAND-IWH.RESV ;*FROM NET AVAIL QTY
+
+   TMP=CALC_STK_QTY(NET.QTY,MAT INV.CNV.REC,'.5','')
+   NET.AVAIL.FROM<1,I>=OCONV(TMP,ICR.CNV)
+
+   TMP=CALC_STK_QTY(TO.QOH,MAT INV.CNV.REC,'.5','')
+   NET.AVAIL.TO<1,I>=OCONV(TMP,ICR.CNV)
+   
+   TRANSFER = CALC_STK_QTY(D_TRAN_TOT_QTY<1,I>,MAT INV.CNV.REC,'.5','')
+   TRANSFER = OCONV(TRANSFER,ICR.CNV)
+   TRANSFER.FROM<1,I> = TRANSFER
+   TRANSFER.TO<1,I> = TRANSFER
+
+   IF XFROM.WHSE = XTO.WHSE THEN
+      BALANCE.FROM<1,I> = NET.AVAIL.FROM<1,I>
+      BALANCE.TO<1,I> = NET.AVAIL.TO<1,I>
+   END ELSE
+     TMP=NET.QTY-D_TRAN_TOT_QTY<1,I>
+     TMP=CALC_STK_QTY(TMP,MAT INV.CNV.REC,'.5','')
+     TMP=OCONV(TMP,ICR.CNV)
+     BALANCE.FROM<1,I> = TMP  
+ 
+     TMP=TO.QOH + D_TRAN_TOT_QTY<1,I>
+     TMP=CALC_STK_QTY(TMP,MAT INV.CNV.REC,'.5','')
+     TMP=OCONV(TMP,ICR.CNV)
+     BALANCE.TO<1,I> = TMP 
+   END
+******************
+
+	 D_TRAN_PROD_DESC<1,I> = INV.DESC
+	 D_TRAN_PROD_UM<1,I> = INV.UNIT<1,2>
+
+	QTY.COUNT = DCOUNT(D_TRAN_QTY<1,I>,@SM)
+	FOR J = 1 TO QTY.COUNT
+		D_TRAN_QTY<1,I,J> = CALC_STK_QTY(D_TRAN_QTY<1,I,J>,MAT INV.CNV.REC,'.5','')
+		D_TRAN_QTY<1,I,J> = OCONV(D_TRAN_QTY<1,I,J>,ICR.CNV)
+		X = X : " _ " : ICR.CNV
+	NEXT J
+
+IF D_TRAN_SERIAL<1,I> # '' THEN
+ MATREAD ISTK.REC FROM INV_SERIAL, CONO:D_TRAN_SERIAL<1,I> ELSE
+   MAT ISTK.REC=""
+ END
+     VALUE=ISTK.CUR.QTY
+     P_VALUE=CALC_STK_QTY(VALUE,MAT INV.CNV.REC,'.5','')
+     SERIAL_QTY=OCONV(P_VALUE,ICR.CNV)	
+     D_TRAN_SERIAL_QTY<1,I> = SERIAL_QTY
+END ELSE
+     D_TRAN_SERIAL_QTY<1,I> = ""
+END
+
+   END ELSE
+        ERRMSG='INVENTORY RECORD ':INV.ID:' IS MISSING.'
+   END
+
+NEXT I
+
+STATUS=RBO.setDBVals('D_TRAN_QTY',D_TRAN_QTY)  
+STATUS=RBO.setProperty('','D_TRAN_PROD_DESC',D_TRAN_PROD_DESC )  
+STATUS=RBO.setProperty('','D_TRAN_PROD_UM',D_TRAN_PROD_UM)
+
+STATUS=RBO.setProperty('','NET_AVAIL_FROM',NET.AVAIL.FROM )  
+STATUS=RBO.setProperty('','NET_AVAIL_TO',NET.AVAIL.TO)
+
+STATUS=RBO.setProperty('','ServerStatus',D_TRAN_SERIAL_QTY)  
+
+STATUS=RBO.setProperty('','TRANSFER_FROM',TRANSFER.FROM)  
+STATUS=RBO.setProperty('','TRANSFER_TO',TRANSFER.TO)
+
+STATUS=RBO.setProperty('','BALANCE_FROM',BALANCE.FROM)  
+STATUS=RBO.setProperty('','BALANCE_TO',BALANCE.TO)
+
+STATUS = RBO.setProperty('','WHSE_FROM_LOC',FROM.WHSE.LOC)        
+STATUS = RBO.setProperty('','WHSE_TO_LOC',TO.WHSE.LOC ) 
+* End of method code
+RETURN
+
+*
+************
+SET.HEADING: 
+************
+BEGIN CASE
+  CASE INV.UNIT<1,2> = "SHT" AND INV.UNIT<1,3> = "LBS"
+    ICR.CNV = "MD0"; ICR.CNV1 = "MD0,"
+    ICR.DV1 = INV.M.WT; ICR.MT1 = 1; ICR.DV2 = 1
+    ICR.TYPE = 3; ICR.SCAL = 0
+    HD1A='Qty/SHT'
+    HD1B=""
+    HD1C=""
+    RX=46;QX=46
+  CASE INV.UNIT<1,2> = "PC" AND INV.UNIT<1,3> = "MSI"
+    ICR.CNV = "MD0"; ICR.CNV1 = "MD0,"
+    ICR.DV1 = INV.PAP.WIDTH/100; ICR.MT1 = 10; ICR.DV2 = 1
+    ICR.TYPE = 3; ICR.SCAL = 0
+    HD1='Roll Number Qty/PC'
+    HD1A='Qty/PC'
+    HD1B=""
+    HD1C=""
+    RX=46;QX=46
+  CASE INV.UNIT<1,2> = "FT" AND INV.UNIT<1,3> = "MSI"
+    ICR.CNV = "MD0"; ICR.CNV1 = "MD0,"
+    ICR.DV1 = INV.PAP.WIDTH/100; ICR.MT1 = 100; ICR.DV2 = 12
+    ICR.TYPE = 3; ICR.SCAL = 0
+    HD1A='Qty/FT'
+    HD1B=""
+    HD1C=""
+    RX=46;QX=46
+  CASE INV.M.LINE = "FNGD"
+    ICR.CNV = "MD0"; ICR.CNV1 = "MD0,"
+    ICR.DV1 = 1; ICR.MT1 = 1; ICR.DV2 = 1000
+    ICR.TYPE = 3; ICR.SCAL = 0
+    HD1A='Qty/FNGD'
+    HD1B=""
+    HD1C=""
+    RX=46;QX=46
+  CASE 1
+    ICR.CNV = "MD2"; ICR.CNV1 = "MD2,"
+    ICR.DV1 = 10; ICR.MT1 = 1; ICR.DV2 = 1
+    ICR.TYPE = 4; ICR.SCAL = 2
+    HD1A='Qty/':INV.UOM.STK
+    HD1B=""
+    HD1C=""
+    RX=46;QX=46
+END CASE
+*
+IF INV.COST.WT + 0 = 0 THEN INV.COST.WT = 100 
+RETURN
+
+
+93000:
+	STATUS=RBO.setProperty('','ServerStatus',1)  
+	STATUS=RBO.setProperty('','ServerMessage',ERRMSG)
+RETURN
+*
+*   BEGIN CASE
+*      CASE INV.UOM.STK='SHT' AND INV.UOM.CST='LBS'
+*         ICR.CNV="MD0";ICR.CNV1="MD0,"
+*         ICR.DV1=INV.M.WT;ICR.MT1=1;ICR.DV2=1
+*         HD1A='Qty/SHT'
+*         HD1B=""
+*         HD1C=""
+*         RX=46;QX=46
+*      CASE INV.UOM.STK='PC' AND INV.UOM.CST='MSI'
+*         ICR.CNV="MD0";ICR.CNV1="MD0,"
+*         ICR.DV1=INV.PAP.WIDTH/100;ICR.MT1=10;ICR.DV2=1
+*         ICR.TYPE=3;ICR.SCAL=0
+*         HD1='Roll Number Qty/PC'
+*         HD1A='Qty/PC'
+*         HD1B=""
+*         HD1C=""
+*         RX=46;QX=46
+*      CASE INV.UOM.STK='FT' AND INV.UOM.CST='MSI'
+*         ICR.CNV="MD0";ICR.CNV1="MD0,"
+*         ICR.DV1=INV.PAP.WIDTH/100;ICR.MT1=100;ICR.DV2=12
+*         ICR.TYPE=3;ICR.SCAL=0
+*         HD1A='Qty/FT'
+*         HD1B=""
+*         HD1C=""
+*         RX=46;QX=46
+*      CASE 1
+*         ICR.CNV="MD2";ICR.CNV1="MD2,"
+*         ICR.DV1=10;ICR.MT1=1;ICR.DV2=1
+*         ICR.TYPE=4;ICR.SCAL=2
+*         HD1A='Qty/':INV.UOM.STK
+*         HD1B=""
+*         HD1C=""
+*         RX=46;QX=46
+*   END CASE
+

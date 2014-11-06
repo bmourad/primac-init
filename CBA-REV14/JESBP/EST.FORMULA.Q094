@@ -1,0 +1,139 @@
+   SUBROUTINE EST.FORMULA.Q094 (CONO, ACTION, EQTY, DEPT, COMP)
+***************************************************************************
+*
+* REVISION - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+*
+* PROGRAM  - EST.FORMULA.Q094
+*
+* AUTHOR   - NICK AMENDOLA, COMPUTER BUSINESS ASSOCIATES
+*
+* DATE     - 02/26/86
+*
+* DESCRIPTION
+*
+* This formula is used to calculate the number of cartons required to
+* ship the finished product. The assumption made is that the waste after
+* cutting is negligible.
+*
+*T27924 cmykleb 03/12/2004 * Move estimate qty to the component level.
+***************************************************************************
+*
+*---- COPY STATEMENTS
+*
+*COPY>JES.CPYLIB>SCOMMON.ESTIMATE
+*COPY>JES.CPYLIB>ESTIMATE
+*COPY>JES.CPYLIB>ESTIMATE.MATL
+*COPY>JES.CPYLIB>EQUIPMENT
+*COPY>JES.CPYLIB>ESTIMATE.PAPER.GROUP
+*COPY>JES.CPYLIB>ESTIMATE.TEMP
+*COPY>JES.CPYLIB>JES.FILE.VARS
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+   MAT SYSCOM.REC =  ""; SYS.TYPE = 2
+*
+*---- INITIALIZATION
+*
+   TEMP.QTY = ""
+   TYP = 0 ;*T27924
+   LOCATE EQTY IN EST.QTY<1>,1 SETTING QPTR ELSE QPTR = 1
+*T27924 v
+   CQTY = EST.COMP.QTY<1,COMP,QPTR>
+   BEGIN CASE
+      CASE CQTY=""
+         COMPQTY = EQTY
+      CASE (CQTY[1,1]="+" OR CQTY[1,1]="-") AND CQTY[LEN(CQTY),1]="%"
+         COMPQTY = INT(EQTY * (1 + (CQTY[1,LEN(CQTY)-1]/100)) + 0.5)
+      CASE CQTY[1,1]="+" OR CQTY[1,1]="-"
+         COMPQTY = EQTY + CQTY
+      CASE 1
+         COMPQTY = CQTY
+   END CASE
+   IF COMPQTY < 0 THEN COMPQTY = 0
+*T27924 ^
+   IF TEMP.TYPE[1,1] = "M" THEN
+      LOCATE TEMP.OPV IN ESTM.PROD<1>,1 SETTING MP ELSE RETURN
+   END
+10*
+   LBS.PER.BOX = 40
+*
+*---- MAIN PROCESSING
+*
+100*
+*T27924 v
+*  PROD.QTY = EQTY
+   PROD.QTY = COMPQTY
+*T27924 ^
+   TOT.WGT = 0
+   FOR C = 1 TO EST.COMPONENT.CNT
+      IF EST.PROD.OS.TYPE<1,C> = "" THEN GOTO 190
+*T27924 v
+*     IF EST.PROD.OS.TYPE<1,C> # "S" THEN
+      IF EST.PROD.OS.TYPE<1,C> # "S" AND EST.PROD.BIND.ONLY<1,C> # "Y" THEN
+*T27924 ^
+         MATREAD EQUIPMENT.REC FROM EQUIPMENT, CONO:EST.PROD.PRESS.ID<1,C> ELSE
+            ERRMSG = "Invalid press ID - ":EST.PROD.PRESS.ID<1,C>
+            GOSUB 90000
+            GOTO 190
+         END
+*T27924 v
+      END ELSE
+         MAT EQUIPMENT.REC = ""
+*T27924 ^
+      END
+      WEB.CNT = EST.PROD.WEB.CNT<1,C>+0
+      IF WEB.CNT = 0 THEN WEB.CNT = 1
+      FOR MPTR = 1 TO WEB.CNT
+         MATREAD ESTPG.REC FROM ESTIMATE.PAPER.GROUP, CONO:EST.PROD.OS.USAGE<1,C,MPTR> ELSE
+            ERRMSG = "Invalid paper group"
+            GOSUB 90000
+            GOTO 180
+         END
+         BW = EST.PROD.BASIS.WT<1,C,MPTR>
+         BSW = ESTPG.WIDTH/10000
+         BSL = ESTPG.LENGTH/10000
+         PSW = EST.PROD.PS.WIDTH<1,C,MPTR>/10000
+         IF EST.PROD.OS.TYPE<1,C> = "S" THEN
+            MAT EQUIPMENT.REC = ""
+            PSL = EST.PROD.PS.LENGTH<1,C,MPTR>/10000
+         END ELSE
+            IF EST.PROD.PS.LENGTH<1,C,MPTR> NE "" THEN
+               PSL = EST.PROD.PS.LENGTH<1,C,MPTR>/10000
+            END ELSE
+               PSL = EQP.PRESS.CUTOFF.LEN/10000
+            END
+         END
+         M.WEIGHT = 2 * BW * (PSW * PSL) / (BSW * BSL)
+         M.WEIGHT = INT(M.WEIGHT * 100 + 0.5) / 100
+         NUMBER.UP = EST.PROD.NO.UP<1,C,1>+0
+         IF NUMBER.UP = 0 THEN NUMBER.UP = 1
+         FORMS = EST.PROD.FORMS<1,C,1>+0
+         IF FORMS = 0 THEN FORMS = 1
+         TOT.SHT = INT(PROD.QTY / NUMBER.UP * FORMS + 0.99)
+         TOT.WGT = TOT.WGT + (TOT.SHT / 1000 * M.WEIGHT)
+180   NEXT MPTR
+190 NEXT C
+   TEMP.QTY = INT(TOT.WGT / LBS.PER.BOX + 0.99)
+   IF TEMP.TYPE[1,1] = "M" THEN
+      TEMP.FCTR = 1000
+      TEMP.STD = ESTM.COST<1,MP> / 100
+      TEMP.STD.TYPE = "$/":ESTM.UM<1,MP>
+      TEMP.UM = ESTM.COST.UNIT<1,MP>
+      TEMP.IND.1 = ESTM.FOH.PCT<1,MP>
+      TEMP.MARKUP = ESTM.MARKUP<1,MP>
+      TEMP.DESC = ESTM.FULL.DESC<1,MP>
+   END
+   TEMP.VSALE = "Y"
+   RETURN
+*
+*---- ERROR ROUTINE
+*
+90000 ERR.TYPE=1;CALL SI_SYSCOM(MAT SYSCOM.REC);RETURN
+*
+*---- END OF PROGRAM
+*
+99999*
+   RETURN
+END

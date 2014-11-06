@@ -1,0 +1,430 @@
+   SUBROUTINE SERIAL.RESERVE.SEL(IWH.ID,JOB.NO,OPEN.FLAG,LINE.NBR,MAT INV.CNV.REC)
+*COPY>CPYLIB>COM1          
+*COPY>JCS.CPYLIB>COM.JCS.LINK
+*COPY>ICS.CPYLIB>COM.INV.MAIN  
+*COPY>ICS.CPYLIB>COM.INV.SERIAL
+*COPY>JCS.CPYLIB>COM.INV.STATS 
+**********************************************
+* REVISION    - [XX.X]
+* Copyright 1995 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - JCSBP
+* PROGRAM     - SERIAL.RESERVE.SEL
+* BY          - epitka; CBA
+* DATE        - 01/03/2002
+* DESCRIPTION -
+*
+*T26334 epitka 01/03/2002 * REV12
+*ENDDOC
+**********************************************
+*
+*COPY>ICS.CPYLIB>INV_RECEIPTS
+*COPY>ICS.CPYLIB>INV_RECP_WHSE
+*COPY>ICS.CPYLIB>INV_SERIAL
+*COPY>ICS.CPYLIB>INV.WHSE
+*COPY>ICS.CPYLIB>INVENTORY
+*COPY>ICS.CPYLIB>INV.CNV
+*COPY>JCS.CPYLIB>SERIAL.RESV
+*COPY>JCS.CPYLIB>JOB
+*COPY>CPYLIB>FILE.VARS         
+*COPY>CPYLIB>SYSCOM            
+*COPY>CPYLIB>CHAR              
+*COPY>CPYLIB>EDIT.COM.DRIVER   
+*
+   DEFFUN CALC.STK.QTY(COST.QTY,MAT INV.CNV.REC,ROND,LN)
+   DEFFUN CALC.COST.QTY(STK.QTY,MAT INV.CNV.REC,ROND,LN)
+*
+   MAT SYSCOM.REC =  "";SYS.TYPE = 2 
+*
+   IF (OPEN.FLAG) = 1 THEN
+      OPEN.FLAG=0
+      IF FILEINFO(INV_RECEIPTS,0)=0 THEN
+         OPEN '','INV_RECEIPTS' TO INV_RECEIPTS ELSE 
+            ERRMSG='INV_RECEIPTS FILE IS MISSING.';GOTO 93000
+         END
+      END
+      IF FILEINFO(INV_RECEIPTS_TEMP,0)=0 THEN
+         OPEN '','INV_RECEIPTS_TEMP' TO INV_RECEIPTS_TEMP ELSE 
+            ERRMSG='INV_RECEIPTS_TEMP FILE IS MISSING.';GOTO 93000
+         END
+      END
+      IF FILEINFO(INV_RECP_WHSE,0)=0 THEN
+         OPEN '','INV_RECP_WHSE' TO INV_RECP_WHSE ELSE
+            ERRMSG='INV_RECP_WHSE FILE IS MISSING';GOTO 93000
+         END
+      END
+      IF FILEINFO(INV_RECP_WHSE_TEMP,0)=0 THEN
+         OPEN '','INV_RECP_WHSE_TEMP' TO INV_RECP_WHSE_TEMP ELSE
+            ERRMSG='INV_RECP_WHSE_TEMP FILE IS MISSING';GOTO 93000
+         END
+      END
+      IF FILEINFO(INV_SERIAL,0)=0 THEN
+         OPEN '','INV_SERIAL' TO INV_SERIAL ELSE
+            ERRMSG='INV_SERIAL FILE IS MISSING';GOTO 93000
+         END
+      END
+      IF FILEINFO(INV_SERIAL_TEMP,0)=0 THEN
+         OPEN '','INV_SERIAL_TEMP' TO INV_SERIAL_TEMP ELSE
+            ERRMSG='INV_SERIAL_TEMP FILE IS MISSING';GOTO 93000
+         END
+      END
+   END
+*
+   EQU ESN TO ECD.SCRN.NO
+*
+**COPY>ICSBP>INV.UM.CNV
+*
+   TMP.RECP='' ; TMP.SERIAL='' ; TMP.OLD.QTY=''
+   TMP.NEW.QTY='' ; TMP.UNIT.COST=''
+   TMP.RECP.DATE='' ; TMP.AVAIL=''
+   START=1 ; PAGE.SIZE=11
+   CONO=IWH.ID[1,3]
+   PROD=OCONV(IWH.ID,"G!1")[4,99]
+   WHSE=OCONV(IWH.ID,"G1!1")
+   LN='' ; L=0
+   PRWHSE=PROD:"!":WHSE
+   LOCATE PRWHSE IN SRESV.PRWHSE<1> SETTING PRWHSE.POS  THEN
+      LL=DCOUNT(SRESV.PRWHSE<1>,VM)
+      L=0; EOP=0
+      FOR PW=PRWHSE.POS TO LL UNTIL EOP
+         IF PRWHSE=SRESV.PRWHSE<1,PW> THEN
+            SCNT=DCOUNT(SRESV.SERIAL<1,PW>,SVM)
+            FOR S=1 TO SCNT
+               L+=1
+               TMP.RECP<1,L>=SRESV.RECP<1,PW>
+               TMP.SERIAL<1,L>=SRESV.SERIAL<1,PW,S>
+               TMP.UNIT.COST<1,L>=SRESV.UN.COST<1,PW>
+               TMP.RECP.DATE<1,L>=SRESV.RECP.DATE<1,PW>
+               TMP.AVAIL<1,L>=SRESV.AVAIL<1,PW,S>
+               TMP.OLD.QTY<1,L>=SRESV.OLD.QTY<1,PW,S>
+               TMP.NEW.QTY<1,L>=SRESV.QTY<1,PW,S>
+            NEXT S
+         END ELSE
+            EOP=1
+         END
+      NEXT PW
+   END ELSE
+      ;* suggest reservation of the serials on fifo basis
+      ;* when initialy setting reserves
+      RESV.QTY=JOB.RESV.QTY<1,LINE.NBR>
+      GOSUB GET.DATA
+      ;* suggest reservation only when
+      ;* initially setting the reserves
+      IF SUM(TMP.OLD.QTY<1>)=0 THEN
+         GOSUB FIFO.RESERVE
+      END
+   END
+   GOSUB BUILD.SCREEN
+   ECD.ACTION=3 ; CALL SCRN.EDIT
+   ;*
+   ;* Main Loop
+   ;*
+   DONE=0
+   LOOP
+      ECD.NUM=31 ; ECD.ACTION=4
+      ECD.MINV=START ; ECD.MAXV=START+PAGE.SIZE-1
+      CALL SCRN.EDIT
+      BEGIN CASE
+         CASE ECD.RET.VALUE="END" OR ECD.RET.VALUE='E'
+            JOB.RESV.QTY<1,LINE.NBR>=SUM(TMP.NEW.QTY<1>)
+            DONE=1
+         CASE ECD.RET.VALUE[1,1]="S"
+            OPT=ECD.RET.VALUE
+            GOSUB SCROLL
+         CASE NUM(ECD.RET.VALUE)
+            LINE=ECD.RET.VALUE
+            GOSUB ENT.RESERVE
+      END CASE
+   UNTIL (DONE) DO REPEAT
+*
+   GOTO 99999
+*
+**************************************************************************
+******* S U B R O U T I N E S ********************************************
+**************************************************************************
+*
+************
+ENT.RESERVE: 
+************
+*
+   ERR=0
+   IF TMP.AVAIL<1,LINE>>0 THEN
+      EOI=0
+      LOOP
+         ECD.MINV=0
+         TMP=CALC.STK.QTY(TMP.AVAIL<1,LINE>,MAT INV.CNV.REC,'',LINE.NBR)
+         ECD.MAXV=OCONV(TMP,ICR.CNV<LINE.NBR>)
+         IF TMP.NEW.QTY<1,LINE>#'' THEN
+            ECD.DEFAULT=CALC.STK.QTY(TMP.NEW.QTY<1,LINE>,MAT INV.CNV.REC,'',LINE.NBR)
+         END
+         BEGIN CASE
+            CASE ICR.SCAL=2
+               ECD.PATRN="0N,0N.1N,0N.2N" 
+               ECD.NUM=18;ECD.SUB.NUM=LINE
+               ECD.ACTION=4;CALL SCRN.EDIT
+               IF ECD.RET.VALUE='END' THEN                 
+                  ERR=1                                     
+               END ELSE                                    
+                  ECD.RET.VALUE = ICONV(ECD.RET.VALUE,'MD2')
+               END                                         
+            CASE 1
+               ECD.PATRN="0N" 
+               ECD.NUM=18;ECD.SUB.NUM=LINE
+               ECD.ACTION=4;CALL SCRN.EDIT
+               IF ECD.RET.VALUE='END' THEN                                   
+                  ERR=1                                                       
+               END ELSE                                                      
+                  IF ICR.CNV<LINE.NBR> = "MD2" THEN ECD.RET.VALUE = ECD.RET.VALUE * 100 
+               END                                                           
+         END CASE
+         IF ERR THEN
+            EOI=1
+            ECD.NUM=18;ECD.SUB.NUM=LINE
+            ECD.ACTION=5;CALL SCRN.EDIT
+         END ELSE
+            EOI=1
+            TMP=OCONV(ECD.RET.VALUE,ICR.CNV<LINE.NBR>)
+            SCV.REC(18)<ESN,LINE>=TMP
+            ECD.NUM=18;ECD.SUB.NUM=LINE
+            ECD.ACTION=5;CALL SCRN.EDIT
+            TMP=ECD.RET.VALUE
+            TMP=CALC.COST.QTY(TMP,MAT INV.CNV.REC,'',LINE.NBR)
+            TMP.NEW.QTY<1,LINE>=TMP
+            GOSUB SET.SRESV.ARR
+            TMP=SUM(TMP.NEW.QTY<1>)                    
+            TMP=CALC.STK.QTY(TMP,MAT INV.CNV.REC,'',LINE.NBR) 
+            TMP=OCONV(TMP,ICR.CNV<LINE.NBR>)                     
+            SCV.REC(23)<ESN>=TMP                       
+            ECD.NUM=23;ECD.ACTION=5;CALL SCRN.EDIT
+         END
+      UNTIL (EOI) DO REPEAT
+   END ELSE
+      ERRMSG='THERE IS NO AVAILABLE QTY FOR THIS SERIAL'
+      GOSUB 91000
+   END
+   RETURN
+*
+*********
+GET.DATA: 
+*********
+*
+   LINE=0
+   RCNT=DCOUNT(IWH.RECP.NO,VM)
+   FOR R=1 TO RCNT
+      INVR.ID=CONO:IWH.RECP.NO<1,R>
+      IF RECORDLOCKED(INV_RECEIPTS_TEMP,INVR.ID)=0 THEN
+         DELETE INV_RECEIPTS_TEMP,INVR.ID
+      END
+      MATREADU INVR.REC FROM INV_RECEIPTS_TEMP,INVR.ID ELSE
+         MATREADU INVR.REC FROM INV_RECEIPTS,INVR.ID THEN
+            IRW.ID=CONO:IWH.RECP.NO<1,R>:"!":WHSE
+            IF RECORDLOCKED(INV_RECP_WHSE_TEMP,IRW.ID)=0 THEN
+               DELETE INV_RECP_WHSE_TEMP,IRW.ID
+            END
+            MATREADU IRW.REC FROM INV_RECP_WHSE_TEMP,IRW.ID ELSE
+               MATREADU IRW.REC FROM INV_RECP_WHSE,IRW.ID ELSE
+                  MAT IRW.REC=''
+               END
+            END
+         END
+      END
+      SCNT=DCOUNT(IRW.SERIAL.NO,VM)
+      FOR S=1 TO SCNT
+         SERIAL=IRW.SERIAL.NO<1,S>
+         ISTK.ID=CONO:SERIAL
+         IF RECORDLOCKED(INV_SERIAL_TEMP,ISTK.ID)=0 THEN
+            DELETE INV_SERIAL_TEMP,ISTK.ID
+         END
+         MATREADU ISTK.REC FROM INV_SERIAL_TEMP,ISTK.ID ELSE
+            MATREADU ISTK.REC FROM INV_SERIAL,ISTK.ID THEN
+               LINE +=1
+               LN<1,LINE>=LINE
+               TMP.RECP<1,LINE>=IWH.RECP.NO<1,R>
+               TMP.SERIAL<1,LINE>=SERIAL
+               TMP.UNIT.COST<1,LINE>=INVR.UNIT.COST
+               TMP.RECP.DATE<1,LINE>=INVR.ENT.DATE
+               TMP.AVAIL<1,LINE>=ISTK.RSVB.QTY
+               LOCATE JOB.NO IN ISTK.JOB<1> SETTING JPOS THEN
+                  TMP.OLD.QTY<1,LINE>=ISTK.JRSVD.QTY<1,JPOS>
+                  TMP.NEW.QTY<1,LINE>=ISTK.JRSVD.QTY<1,JPOS>
+                  TMP.AVAIL<1,LINE>=ISTK.JRSVD.QTY<1,JPOS>+ISTK.RSVB.QTY
+               END
+               GOSUB SET.SRESV.ARR
+            END
+         END
+      NEXT S
+   NEXT R
+   RETURN
+*
+**************
+BUILD.SCREEN: 
+**************
+*
+   SCV.REC(11)<ESN>='';SCV.REC(60)<ESN>=''
+   SCV.REC(14)<ESN>='';SCV.REC(15)<ESN>=''
+   SCV.REC(16)<ESN>='';SCV.REC(17)<ESN>='';SCV.REC(18)<ESN>=''
+*
+   SCV.REC(1)<ESN>=PROD
+   SCV.REC(2)<ESN>=WHSE
+   SCV.REC(3)<ESN>=INV.DESC
+*
+   SCV.REC(11)<ESN>=LN
+   SCV.REC(60)<ESN>=TMP.SERIAL
+   SCV.REC(14)<ESN>=TMP.UNIT.COST
+   SCV.REC(15)<ESN>=TMP.RECP.DATE
+   LCNT=DCOUNT(TMP.SERIAL<1>,VM)
+   FOR S=1 TO LCNT
+      TMP=CALC.STK.QTY(TMP.OLD.QTY<1,S>,MAT INV.CNV.REC,'',LINE.NBR) 
+      SCV.REC(16)<ESN,S>=OCONV(TMP,ICR.CNV<LINE.NBR>)
+      TMP=CALC.STK.QTY(TMP.AVAIL<1,S>,MAT INV.CNV.REC,'',LINE.NBR)
+      SCV.REC(17)<ESN,S>=OCONV(TMP,ICR.CNV<LINE.NBR>)
+      IF TMP.NEW.QTY<1,S>#'' THEN
+         TMP=CALC.STK.QTY(TMP.NEW.QTY<1,S>,MAT INV.CNV.REC,'',LINE.NBR)
+         SCV.REC(18)<ESN,S>=OCONV(TMP,ICR.CNV<LINE.NBR>)
+      END
+   NEXT S
+   ;* set the totals
+   TMP=SUM(TMP.OLD.QTY<1>)
+   TMP=CALC.STK.QTY(TMP,MAT INV.CNV.REC,'',LINE.NBR)
+   TMP=OCONV(TMP,ICR.CNV<LINE.NBR>)
+   SCV.REC(21)<ESN>=TMP
+   TMP=SUM(TMP.AVAIL<1>)
+   TMP=CALC.STK.QTY(TMP,MAT INV.CNV.REC,'',LINE.NBR)
+   TMP=OCONV(TMP,ICR.CNV<LINE.NBR>)
+   SCV.REC(22)<ESN>=TMP
+   TMP=SUM(TMP.NEW.QTY<1>)
+   TMP=CALC.STK.QTY(TMP,MAT INV.CNV.REC,'',LINE.NBR)
+   TMP=OCONV(TMP,ICR.CNV<LINE.NBR>)
+   SCV.REC(23)<ESN>=TMP
+   PAGE.NO=1
+   SCV.REC(58)<ESN>=PAGE.NO'R%2'
+   PAGE.CNT=INT(LCNT/PAGE.SIZE+.99)"R%2"
+   SCV.REC(59)<ESN>=PAGE.CNT
+   RETURN
+*
+***************
+SCROLL: 
+***************
+*
+   BEGIN CASE                                        
+      CASE OPT = "S" OR OPT = "SF"                    
+         START=START+PAGE.SIZE                         
+         PAGE.NO+=1
+         IF START>DCOUNT(TMP.SERIAL<1>,VM) THEN
+            START=1
+            PAGE.NO=1
+         END
+         GOSUB DISP.DETAIL                             
+      CASE OPT = "SR"                                 
+         START=START-PAGE.SIZE                         
+         PAGE.NO-=1
+         IF START<1 THEN
+            START=1                       
+            PAGE.NO=1
+         END
+         GOSUB DISP.DETAIL                             
+      CASE OPT = "ST"                                 
+         START=1 ; PAGE.NO=1
+         GOSUB DISP.DETAIL                             
+      CASE OPT = "SB"                                 
+         START=DCOUNT(TMP.SERIAL<1>,VM)
+         PAGE.NO=PAGE.CNT
+         GOSUB DISP.DETAIL                             
+   END CASE                                          
+   RETURN
+*                                                 
+***************
+DISP.DETAIL: 
+***************
+*
+   START=1+INT((START-1)/PAGE.SIZE)*PAGE.SIZE 
+   ECD.NUM=11;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=60;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=14;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=15;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=16;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=17;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=18;ECD.SUB.NUM=START;ECD.ACTION=7;CALL SCRN.EDIT
+   ECD.NUM=58; SCV.REC(ECD.NUM)<ESN>=PAGE.NO"R%2";ECD.ACTION=5;CALL SCRN.EDIT
+   RETURN
+*
+****************
+FIFO.RESERVE: 
+****************
+*
+   LCNT=DCOUNT(TMP.SERIAL<1>,VM)
+   FOR LINE=1 TO LCNT
+      IF RESV.QTY>0 THEN
+         IF TMP.AVAIL<1,LINE>-TMP.OLD.QTY<1,LINE> > 0 THEN
+            BEGIN CASE
+               CASE TMP.AVAIL<1,LINE> >= RESV.QTY
+                  TMP.NEW.QTY<1,LINE>=RESV.QTY
+                  RESV.QTY=0
+               CASE 1
+                  TMP.NEW.QTY<1,LINE>=TMP.AVAIL<1,LINE>
+                  RESV.QTY-=TMP.AVAIL<1,LINE>
+            END CASE
+         END ELSE
+            TMP.NEW.QTY<1,LINE>=''
+         END
+      END ELSE
+         TMP.NEW.QTY<1,LINE>=''
+      END
+      GOSUB SET.SRESV.ARR
+   NEXT LINE
+   RETURN
+*
+****************
+SET.SRESV.ARR: 
+*****************
+*
+   LOCATE PRWHSE IN SRESV.PRWHSE<1> SETTING PRWHSE.POS THEN
+      LOCATE TMP.RECP<1,LINE> IN SRESV.RECP<1>,PRWHSE.POS SETTING RPOS THEN
+         PRWHSE.POS=RPOS
+         IF SRESV.PRWHSE<1,RPOS>=PRWHSE THEN
+            LOCATE TMP.SERIAL<1,LINE> IN SRESV.SERIAL<1,RPOS> SETTING SPOS THEN 
+               SRESV.QTY<1,RPOS,SPOS>=TMP.NEW.QTY<1,LINE>+0
+               SRESV.OLD.QTY<1,RPOS,SPOS>=TMP.OLD.QTY<1,LINE>+0
+               SRESV.AVAIL<1,RPOS,SPOS>=TMP.AVAIL<1,LINE>+0
+            END ELSE
+               SRESV.SERIAL<1,RPOS,SPOS>=TMP.SERIAL<1,LINE>
+               SRESV.QTY<1,RPOS,SPOS>=TMP.NEW.QTY<1,LINE>+0
+               SRESV.OLD.QTY<1,RPOS,SPOS>=TMP.OLD.QTY<1,LINE>+0
+               SRESV.AVAIL<1,RPOS,SPOS>=TMP.AVAIL<1,LINE>+0
+            END
+         END ELSE
+            GOSUB SRESV.INSERT
+         END
+      END ELSE
+         PRWHSE.POS=RPOS
+         GOSUB SRESV.INSERT
+      END
+   END ELSE
+      GOSUB SRESV.INSERT
+   END
+   RETURN
+*
+*****************
+SRESV.INSERT: 
+*****************
+*
+   SRESV.PRWHSE=INSERT(SRESV.PRWHSE,1,PRWHSE.POS,-1,PRWHSE)
+   SRESV.RECP=INSERT(SRESV.RECP,1,PRWHSE.POS,-1,TMP.RECP<1,LINE>)
+   SRESV.SERIAL=INSERT(SRESV.SERIAL,1,PRWHSE.POS,-1,TMP.SERIAL<1,LINE>)
+   SRESV.QTY=INSERT(SRESV.QTY,1,PRWHSE.POS,-1,TMP.NEW.QTY<1,LINE>+0)
+   SRESV.OLD.QTY=INSERT(SRESV.OLD.QTY,1,PRWHSE.POS,-1,TMP.OLD.QTY<1,LINE>+0)
+   SRESV.AVAIL=INSERT(SRESV.AVAIL,1,PRWHSE.POS,-1,TMP.AVAIL<1,LINE>+0)
+   SRESV.RECP.DATE=INSERT(SRESV.RECP.DATE,1,PRWHSE.POS,-1,TMP.RECP.DATE<1,LINE>)
+   SRESV.UN.COST=INSERT(SRESV.UN.COST,1,PRWHSE.POS,-1,TMP.UNIT.COST<1,LINE>+0)
+   RETURN
+*                                                   
+*---- ERROR ROUTINE                                 
+*                                                   
+91000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN 
+93000 ERR.TYPE=3;CALL SYSCOM(MAT SYSCOM.REC)        
+*                                                   
+*---- END OF PROGRAM                                
+*                                                   
+99999 *                                             
+   ECD.ACTION=99 ; CALL SCRN.EDIT                      
+END                                                 

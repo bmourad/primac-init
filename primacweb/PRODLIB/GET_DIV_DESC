@@ -1,0 +1,144 @@
+SUBROUTINE GET_DIV_DESC
+********************************************************************************
+*   Program name :- GET_DIV_DESC
+*   Created:- 2/18/2004
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+$INCLUDE PMC.CPYLIB COA
+$INCLUDE PMC.CPYLIB DIVISION
+$INCLUDE PMC.CPYLIB FISCAL
+$INCLUDE CPYLIB CHAR
+* Insert method code here
+
+ERRMSG = ""
+	OPEN '','DIVISION' TO DIVISION ELSE ERRMSG="DIVISION FILE IS MISSING"; GOTO 1000
+	OPEN '','COA' TO COA ELSE ERRMSG="COA FILE IS MISSING"; GOTO 1000
+	OPEN '','CONTROL' TO CONTROL ELSE ERRMSG="CONTROL FILE IS MISSING"; GOTO 1000
+	
+
+	STATUS  = RBO.getProperty('', 'ID', ID)
+	STATUS  = RBO.getProperty('', 'TVO_DIV_OWNER', TVO_DIV_OWNER)
+	STATUS  = RBO.getProperty('', 'GLTB_AP', GLTB_AP)
+	CONO	 = FIELD(ID,'!',1)
+	USER.ID = FIELD(ID,'!',2)
+	GLTB.AP = GLTB_AP
+
+*T28331 v
+	READ JCFDATA FROM CONTROL, CONO:"JCFISCAL" ELSE
+	     ERRMSG = "CONTROL RECORD JCFISCAL IS MISSING";GOTO 1000
+	END
+*T28331 ^
+
+	READ DIVISION.REC FROM CONTROL, CONO:"DIVISIONS" ELSE
+      	     ERRMSG = "DIVISIONS CONTROL RECORD IS MISSING"; GOTO 1000
+   	END
+
+	READ SECURITY.REC FROM CONTROL, CONO:"DIV.SECURITY" ELSE
+      	     ERRMSG = "DIV.SECURITY CONTROL RECORD IS MISSING"; GOTO 1000
+   	END
+
+	IF TVO_DIV_OWNER # "00" THEN
+         CK.DIV = CONO:TVO_DIV_OWNER
+         READ TT FROM DIVISION,CK.DIV ELSE
+            ERRMSG = TVO_DIV_OWNER:" is not a valid division"
+            GOTO 1000
+         END
+	  READV TVO_DIV_DESC FROM DIVISION,CK.DIV,1 ELSE
+            ERRMSG = ""            
+         END
+
+         MATREAD COA.REC FROM COA, CONO:GLTB.AP ELSE
+            ERRMSG = "ACCOUNT ":GLTB.AP:" NOT ON FILE"
+	     GOTO 1000
+         END
+         IF COA.LEVEL = 0 THEN
+            ERRMSG = 'CREDIT ACCOUNT ':GLTB.AP:' IS LEVEL 0 AND CAN ONLY BE USED WITH DIV 00 VOUCHERS'
+            GOTO 1000
+         END
+       END ELSE
+         IF SECURITY.REC<1> = "Y" AND SECURITY.REC<2> = "Y" THEN
+            IF TVO_DIV_OWNER = "00" OR TVO_DIV_OWNER = "ALL" THEN
+               ERRMSG = " 'ALL' OR '00' INVALID WHEN DIVISION-LEVEL POSTING & CLOSING IS SELECTED"
+               GOTO 1000
+            END
+*T28331 v
+            LOCATE DIV.CODE IN DIVISION.REC<1>,1 SETTING POS ELSE
+               ERRMSG = "Division ":DIV.CODE:"  not found in Control File DIVISIONS Record."
+               GOTO 1000
+            END
+         END ELSE
+            POS = 1
+         END
+         JCS.PERIOD = JCFDATA<1,POS>
+*T28331 ^
+
+*         END
+      END
+*      DIV.CODE = TVO_DIV_OWNER; USER.ID = UPCASE(USER.ID); ERRMSG = ''
+
+      CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+      IF ERRMSG # '' THEN
+         GOTO 1000
+      END
+
+* COMMENTED BECAUSE THIS CODE HAS BEEN ADDED   SEE TASK    *T28331
+*      IF SECURITY.REC<1> = "Y" AND SECURITY.REC<2> = "Y" THEN
+*         LOCATE DIV.CODE IN DIVISION.REC<1>,1 SETTING POS ELSE
+*            ERRMSG = "Division ":DIV.CODE:"  not found in Control File DIVISIONS Record."
+*            GOTO 1000
+*         END
+*      END ELSE
+*         POS = 1
+*      END      
+
+
+1000*
+IF ERRMSG # "" THEN
+	STATUS = RBO.setProperty('', 'ServerStatus', 1)
+      	STATUS = RBO.setProperty('', 'ServerMessage', ERRMSG)
+END ELSE
+	READV DEPTCODES FROM DIVISION,CK.DIV,2 ELSE
+            ERRMSG = ""            
+       END
+	** following code is to get valid fiscal periods
+	READ PERIOD.REC FROM CONTROL, CONO:"ACCT.PERIODS" ELSE
+      	   PERIOD.REC = ""
+      	   PERIOD.REC<1> = 12
+       END
+       NUM.PERIODS = PERIOD.REC<1>
+       MATREAD FISCAL.REC FROM CONTROL, CONO:"APVFISCAL" ELSE
+      	   ERRMSG = "CONTROL RECORD APVFISCAL IS MISSING"
+       END
+
+	YEAR  = FR.CURR.PER<1,POS>[1,4]
+   	MONTH = FR.CURR.PER<1,POS>[5,2]
+   	IF MONTH < 1 OR MONTH > NUM.PERIODS THEN
+      	   ERRMSG = "ERROR IN CONTROL RECORD APVFISCAL" 
+   	END
+
+   	PERIODS = STR("0",2-LEN(MONTH)):MONTH
+   	IF MONTH < (NUM.PERIODS -1) THEN
+      		PERIODS = PERIODS:VM:STR("0",2-LEN(MONTH+1)):MONTH+1
+      		PERIODS = PERIODS:VM:STR("0",2-LEN(MONTH+2)):MONTH+2
+   	END ELSE
+      		IF MONTH = (NUM.PERIODS -1) THEN PERIODS = (NUM.PERIODS -1):VM:NUM.PERIODS:VM:"01"
+       	IF MONTH = NUM.PERIODS THEN PERIODS = NUM.PERIODS:VM:"01":VM:"02"
+   	END
+	S.HMSG = PERIODS<1,1>:",":PERIODS<1,2>:",":PERIODS<1,3>
+
+	STATUS = RBO.setProperty('', 'ServerStatus', 0)
+      	STATUS = RBO.setProperty('', 'ServerMessage',TVO_DIV_DESC :"~": YEAR :"~": S.HMSG : "~" : COA.LEVEL : "~" : DEPTCODES)
+END
+* End of method code
+RETURN
+

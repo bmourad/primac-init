@@ -1,0 +1,226 @@
+*********************************************************************
+*
+* PROGRAM - GET.COMPILE.DATE
+*
+* AUTHOR  - NICK AMENDOLA, VERCOM SOFTWARE, INC.
+*
+* DATE    - 06/02/92
+*
+* DESCRIPTION
+*
+*   Prints compile date of specified item(s) in a specified file.
+*
+*     GET.COMPILE.DATE filename itemname (opt1,opt2)
+*     GET.COMPILE.DATE filename * (opt1,opt2)
+*     GET.COMPILE.DATE filename (opt1,opt2)
+*
+*   Options:  P = send report to printer
+*             N = do not stop after each screen displayed
+*
+*********************************************************************
+*
+*---- DEFINE EQUATES
+*
+      EQU AM  TO CHAR(254)
+      EQU VM  TO CHAR(253)
+      EQU SM  TO CHAR(252)
+*
+*---- PRE-INITIALIZATION
+*
+      PROMPT ""
+      SYSTYPE = "U"
+      BEGIN CASE
+      CASE SYSTYPE = "U"
+         PORT = @TTY
+         IND.POS = INDEX(PORT,"/",1)
+         IF IND.POS = 0 THEN
+            PORT = PORT[4,LEN(PORT)-3]
+         END ELSE
+            PORT = PORT[4,IND.POS-4]
+         END
+         ACCT = @PATH
+      CASE 1
+         PORT = SYSTEM(18)
+         ACCT = SYSTEM(19)
+      END CASE
+      PROCREAD CMD ELSE CMD = ""
+*
+      CALL PARSE.COMMAND("V","1",CMD,FACCT,FDICT,FNAME,FID,OPTS,ERRMSG)
+      IF ERRMSG # "" THEN GOTO 90000
+*
+      IF FACCT = "" THEN
+         OPEN FDICT,FNAME TO FVAR ELSE
+            ERRMSG = "INVALID FILE NAME"; GOTO 90000
+         END
+      END ELSE
+         OPEN "","MD" TO MD ELSE
+            ERRMSG = "CANNOT OPEN MASTER DICTIONARY"; GOTO 90000
+         END
+         QREC = ""
+         QREC<1> = "Q"
+         QREC<2> = FACCT
+         QREC<3> = FNAME
+         QFILE = "QFILE*":PORT
+         WRITE QREC ON MD, QFILE
+         OPEN FDICT,QFILE TO FVAR THEN
+            DELETE MD, QFILE
+         END ELSE
+            DELETE MD, QFILE
+            ERRMSG = "INVALID FILE NAME"; GOTO 90000
+         END
+      END
+      BEGIN CASE
+      CASE FID = ""
+      CASE FID = "*"
+      CASE 1
+         READ REC FROM FVAR, FID ELSE
+            ERRMSG = "INVALID ITEM NAME"; GOTO 90000
+         END
+      END CASE
+*
+      PRT.FLAG = 0
+      HLT.FLAG = 1
+      OCNT = DCOUNT(OPTS,VM)
+      FOR OPTR = 1 TO OCNT
+         OPT = OPTS<1,OPTR>
+         BEGIN CASE
+         CASE OPT = "P"
+            PRT.FLAG = 1
+         CASE OPT = "N"
+            HLT.FLAG = 0
+         CASE 1
+            ERRMSG = "INVALID OPTION - ":OPT
+            GOTO 90000
+         END CASE
+      NEXT OPTR
+*
+*---- INITIALIZATION
+*
+      SLINE.COUNT = 99
+      SLINES.PER.PAGE = 22
+      SPAGE.NO = 0
+      PLINE.COUNT = 99
+      PLINES.PER.PAGE = 55
+      PPAGE.NO = 0
+      SYSDATE = OCONV(DATE(),"D2/")
+*
+*---- MAIN PROCESSING
+*
+100 *
+      BEGIN CASE
+      CASE FID = "" OR FID = "*"
+         IF FID = "*" THEN SELECT FVAR
+         PRINT "Please stand-by. Sort in progress..."
+         FIDS = ""
+         MAXL = 0
+         DONE = 0
+         LOOP
+            READNEXT FID ELSE DONE = 1
+         UNTIL DONE DO
+            IF FID[1,1] = "_" THEN
+               READV HDR FROM FVAR, FID,1 THEN
+                  CDATE = ICONV(HDR<1,3>,"D")
+                  CDATE = 100000 - CDATE
+                  CDATE = STR("0",6-LEN(CDATE)):CDATE
+                  CPROG = FID[2,99]
+                  SID = CDATE:"*":CPROG
+                  LOCATE SID IN FIDS,1 BY "AL" SETTING P ELSE NULL
+                  FIDS = INSERT(FIDS,P,0,0,SID)
+                  IF LEN(CPROG) > MAXL THEN MAXL = LEN(CPROG)
+               END
+            END
+         REPEAT
+      CASE 1
+         FIDS = ""
+         MAXL = 0
+         READV HDR FROM FVAR, "_":FID,1 THEN
+            CDATE = ICONV(HDR<1,3>,"D")
+            CDATE = 100000 - CDATE
+            CDATE = STR("0",5-LEN(CDATE)):CDATE
+            CPROG = FID[2,99]
+            SID = CDATE:"*":CPROG
+            FIDS = SID
+            MAXL = LEN(CPROG)
+         END
+      END CASE
+*
+*---- PROCESS SORTED LIST
+*
+      CRT
+      IF PRT.FLAG THEN
+         PRINTER ON
+      END
+      BRK.FLAG = 0
+      ICNT = DCOUNT(FIDS,CHAR(254))
+      FOR IPTR = 1 TO ICNT UNTIL BRK.FLAG
+         CDATE = FIELD(FIDS<IPTR>,"*",1)
+         CDATE = 100000 - CDATE
+         CPROG = FIELD(FIDS<IPTR>,"*",2)
+         DOTS = STR(".",(MAXL+3-LEN(CPROG)))
+         PDATA = CPROG:" ":DOTS:" ":OCONV(CDATE,"D2-,")
+         IF (SLINE.COUNT+1) > SLINES.PER.PAGE THEN GOSUB 10000
+         CRT IPTR"R#3":SPACE(5):PDATA
+         SLINE.COUNT = SLINE.COUNT + 1
+         IF PRT.FLAG THEN
+            IF (PLINE.COUNT + 1) > PLINES.PER.PAGE THEN GOSUB 20000
+            PRINT IPTR"R#3":SPACE(5):PDATA
+            PLINE.COUNT = PLINE.COUNT + 1
+         END
+      NEXT IPTR
+      IF NOT(BRK.FLAG) THEN GOSUB 15000
+      IF PRT.FLAG THEN
+         PRINTER OFF
+         PRINTER CLOSE
+      END
+      GOTO 99999
+*
+*---- PRINT SCREEN HEADINGS
+*
+10000 *
+      GOSUB 15000
+      CRT @(-1):
+      SPAGE.NO = SPAGE.NO + 1
+      SLINE = "Compile dates for items in ":FNAME:" on ":SYSDATE
+      SLINE = SLINE"L#60":"   Page: ":SPAGE.NO
+      CRT SLINE
+      CRT
+      SLINE.COUNT = 2
+      RETURN
+*
+*---- PRINT SCREEN FOOTING
+*
+15000 *
+      IF SPAGE.NO > 0 AND HLT.FLAG THEN
+         CRT @(0,23):@(-4):"Press <RETURN> to Continue: ":
+         INPUT REPLY,1
+         BEGIN CASE
+         CASE REPLY = CHAR(27)
+            BRK.FLAG = 1
+         CASE REPLY = "Q"
+            BRK.FLAG = 1
+         END CASE
+      END
+      RETURN
+*
+*---- PRINT PAGE HEADINGS
+*
+20000 *
+      PRINT CHAR(12)
+      PPAGE.NO = PPAGE.NO + 1
+      PLINE = "Compile dates for items in ":FNAME:" on ":SYSDATE
+      PLINE = PLINE"L#60":"   Page: ":PPAGE.NO
+      PRINT PLINE
+      PRINT
+      PLINE.COUNT = 2
+      RETURN
+*
+*---- PRINT ERROR MESSAGE AND TERMINATE
+*
+90000 *
+      CRT ERRMSG
+*
+*---- END OF PROGRAM
+*
+99999 *
+      STOP
+   END

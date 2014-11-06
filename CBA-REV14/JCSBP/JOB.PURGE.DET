@@ -1,0 +1,245 @@
+*COPY>CPYLIB>COM1
+*********************************************************************
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - JCSBP
+* PROGRAM     - JOB.PURGE.DET
+* BY          - JIHAD YAMOUT , CBA
+* DATE        - 06/11/84
+* DESCRIPTION - THIS PROGRAM UPDATES JOB FILE WITH STATUS = '7' READY
+* TO BE PURGED.
+* MODIFIED    - CK 2.9.90. MOD TO CHECK JOB.STATS FOR BLANK RECORD
+* IF BLANK, DELETE JOB.STATS RECORD AND CONTINUE PURGE
+* T22154 stefanie 08/19/1997 * Fix Rev10B to Rev11 match problems.
+*T23278 markt 11/20/1998 * Accumulate fiscal data by division.
+*T26556 cmykleb 06/06/2002 * Rev12 changes
+*T26696 cmykleb 08/30/2002 * Error in code: Could purge job with
+*                            DAILY.INVOICE present.
+*ENDDOC
+*********************************************************************
+*
+*--- INSERT FILES EQUATES
+*
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>POS.CPYLIB>OUTSIDE.PO
+*COPY>PMC.CPYLIB>FISCAL
+*COPY>JCS.CPYLIB>JOB
+*COPY>JCS.CPYLIB>JOB.STATS
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>CHAR
+*** SETUP FOR SYSTEM ERRMSG
+   SYS.TYPE = 1
+   CALL SYSCOM(MAT SYSCOM.REC)
+*** OPEN ALL FILES
+   OPEN 'COMPANY' TO COMPANY ELSE ERRMSG = 'COMPANY FILE IS MISSING' ; GOTO 93000
+   OPEN 'JOB' TO JOB ELSE ERRMSG = 'JOB FILE IS MISSING' ; GOTO 93000
+   OPEN 'JOB.STATS' TO JOB.STATS ELSE ERRMSG = 'JOB.STATS FILE IS MISSING' ; GOTO 93000
+   OPEN 'INVOICE' TO INVOICE ELSE ERRMSG = 'INVOICE FILE IS MISSING' ; GOTO 93000
+   OPEN 'DAILY.INVOICE' TO DAILY.INVOICE ELSE ERRMSG = 'DAILY.INVOICE FILE IS MISSING' ; GOTO 93000
+   OPEN 'CONTROL' TO CONTROL ELSE ERRMSG = 'CONTROL FILE IS MISSING' ; GOTO 93000
+*** GET CONO FROM PROC
+   PROCREAD BUFFER ELSE
+      ERRMSG = 'THIS PROCESS SHOULD BE RUN FROM A PROC';GOTO 93000
+   END
+   CONO = BUFFER<1>
+   MATREAD COMP.REC FROM COMPANY, CONO ELSE
+      ERRMSG = 'COMPANY RECORD IS MISSING' ; GOTO 93000
+   END
+   MATREAD FISCAL.REC FROM CONTROL, CONO:"JCFISCAL" ELSE
+      ERRMSG = "CANNOT LOCATE CONTROL, JCS FISCAL PERIOD"
+      GOTO 93000
+   END
+***** T23278 v
+   READ DIVISION.REC FROM CONTROL, CONO:"DIVISIONS" ELSE
+      ERRMSGS = "CANNOT LOCATE CONTROL, DIVISIONS RECORD"
+      GOTO 93000
+   END
+   READ SECURITY.REC FROM CONTROL, CONO:"DIV.SECURITY" ELSE
+      ERRMSG = "CANNOT LOCATE CONTROL, DIV.SECURITY RECORD"
+      GOTO 93000
+   END
+*T26556 v
+*  DIV.CODE = BUFFER<5>
+   DIV.CODE = BUFFER<3>
+   NO.DATE = BUFFER<4>
+*T26556 ^
+   IF SECURITY.REC<1> = "Y" AND SECURITY.REC<2> = "Y" THEN
+      IF DIV.CODE = "00" OR DIV.CODE = "ALL" THEN
+         ERRMSG = " 'ALL' OR '00' INVALID WHEN DIVISION-LEVEL POSTING & CLOSING IS SELECTED"
+         GOSUB 91000; GOTO 99999
+      END
+      LOCATE DIV.CODE IN DIVISION.REC<1>,1 SETTING POS ELSE
+         ERRMSG = "Division ":DIV.CODE:" not found in Control File DIVISIONS Record."
+         GOTO 93000
+      END
+   END ELSE
+      POS = 1
+   END
+***** T23278 ^
+*** MAIN PROCESS
+   UPDATE.FLG = 0
+*T26556 v
+*  MAT EDIT.COM = ""
+*  TYP = 0 ; CALL EDIT.SUB ; FILL = "#"
+*  READV NO.DATE FROM CONTROL, CONO:"DET.DATES",1 ELSE
+*     NO.DATE = ""
+*  END
+*** ENTER CUTOFF DAYS
+10 *
+*  X = 0 ; Y = 15 ; TYP = 3 ; PMSG = "ENTER PURGE CUTOFF # OF DAYS OR (END)" ; MAXL = 4 ; O.R = "R"
+*  IF NO.DATE # "" THEN
+*     O.R = "O" ; DEFAULT = NO.DATE
+*  END
+*  CALL EDIT.SUB
+*  BEGIN CASE
+*     CASE VALUE = "END"
+*        X = "END"
+*        PROCWRITE X
+*        GOTO 99999
+*     CASE VALUE # NO.DATE
+*        S.VALUE = VALUE
+*        X = 0 ; Y = 22 ; TYP = 8
+*        PMSG = "OK TO USE (":S.VALUE:") AS CUTOFF DAYS (Y)ES OR (N)O"
+*        CALL EDIT.SUB
+*        IF VALUE = "N" THEN GOTO 10
+*        NO.DATE = S.VALUE
+*        WRITEV NO.DATE ON CONTROL , CONO:"DET.DATES",1
+*  END CASE
+   WRITEV NO.DATE ON CONTROL, CONO:"DET.DATES",1
+*T26556 ^
+   DATA = 1
+   LOOP
+      READNEXT ID ELSE DATA = 0
+   WHILE DATA DO
+      MATREADU JOB.REC FROM JOB ,ID ELSE GOTO 111
+      FND = 1
+      MATREAD JSTAT.REC FROM JOB.STATS ,ID ELSE
+         MAT JSTAT.REC = ''
+         FND = 0
+      END
+      IF FND THEN 
+         FOR XYZ = 1 TO 17
+            IF JSTAT.REC(XYZ) # '' THEN
+               GOTO 111
+            END
+         NEXT XYZ
+         DELETE JOB.STATS,ID
+      END
+      BEGIN CASE
+         CASE JOB.STATUS = ""
+            GOTO 111
+         CASE JOB.WIP<1,2,1>+JOB.WIP<1,2,2>+JOB.WIP<1,2,3>+JOB.WIP<1,2,4> <> 0
+            GOTO 111
+         CASE JOB.TOT.BAL + 0 <> 0
+            GOTO 111
+*        CASE JOB.WIP<1,5> >= FR.CURR.PER;* T23278
+         CASE JOB.WIP<1,5> >= FR.CURR.PER<1,POS>;* T23278
+            GOTO 111
+      END CASE
+      COUNT.NO = COUNT(JOB.RESV.MATL,VM) + (JOB.RESV.MATL # "")
+      CONT.PROCESS = 1
+      FOR X = 1 TO COUNT.NO WHILE CONT.PROCESS
+*T22154 v    IF JOB.ALOC.QTY<1,X> # 0 OR JOB.RESV.QTY<1,X> # 0 THEN
+         TEMP = JOB.ALOC.QTY<1,X> + JOB.RESV.QTY<1,X>
+         IF TEMP # 0 THEN
+*T22154 ^
+            CONT.PROCESS = 0
+         END
+      NEXT X
+      IF NOT(CONT.PROCESS) THEN
+         GOTO 111
+      END
+      INV.CNT = COUNT(JOB.INV.NO, VM) + (JOB.INV.NO # "")
+      IF INV.CNT > 0 THEN
+         FND = 1
+         READ DUMMY FROM INVOICE, CONO:JOB.INV.NO<1,INV.CNT> ELSE FND = 0
+         IF FND THEN GOTO 111
+         FND = 1 ; * T26696
+         READ DUMMY FROM DAILY.INVOICE , CONO:JOB.INV.NO<1,INV.CNT> ELSE FND = 0
+         IF FND THEN GOTO 111
+         BEGIN CASE
+            CASE JOB.INV.DATE<1,INV.CNT> # ""
+               INV.DATE = JOB.INV.DATE<1,INV.CNT>
+            CASE JOB.TRACK.DATE<1,9> # ""
+               INV.DATE = JOB.TRACK.DATE<1,9>
+            CASE JOB.TRACK.DATE<1,10> # ""
+               INV.DATE = JOB.TRACK.DATE<1,10>
+            CASE 1
+               GOTO 111
+         END CASE
+         IF (DATE() - INV.DATE) > NO.DATE THEN
+            JOB.STATUS = INSERT(JOB.STATUS,1,1,0,"7")
+            JOB.STAT.DATE = INSERT(JOB.STAT.DATE,1,1,0,DATE())
+            GOSUB 1000
+            UPDATE.FLG = 1
+         END
+      END ELSE
+         STATS.UPD = 1
+         IF ID[4,1] = "X" THEN
+            READ DIV.NUMS FROM CONTROL,CONO:"DIVISIONS" ELSE NULL
+            DFND = 0
+            LOCATE ID[9,2] IN DIV.NUMS<1>,1 SETTING DFND ELSE DFND = 0
+            IF DFND THEN
+               IF ID[11,1] = 1 OR ID[11,1] = 2 OR ID[11,1] = 3 OR ID[11,1] = 4 OR ID[11,1] = 5 THEN
+                  IF JOB.TYPE = "N" AND JOB.TRACK.DATE<1,10> # "" THEN
+                     IF (DATE() - JOB.TRACK.DATE<1,10>) > NO.DATE THEN
+                        JOB.STATUS = INSERT(JOB.STATUS,1,1,0,"7")
+                        JOB.STAT.DATE = INSERT(JOB.STAT.DATE,1,1,0,DATE())
+                        GOSUB 1000
+                        UPDATE.FLG = 1
+                        STATS.UPD = 0
+                     END
+                  END
+               END
+            END
+         END
+         IF STATS.UPD THEN
+            FND = 0
+            LOCATE "9" IN JOB.STATUS<1>,1 SETTING FND ELSE FND = 0
+            IF FND THEN
+               XX = FND
+               IF (DATE() - JOB.STAT.DATE<1,XX>) > NO.DATE THEN
+                  JOB.STATUS = INSERT(JOB.STATUS,1,1,0,"7")
+                  JOB.STAT.DATE = INSERT(JOB.STAT.DATE,1,1,0,DATE())
+                  GOSUB 1000
+                  UPDATE.FLG = 1
+               END
+            END ELSE
+               IF JOB.TRACK.DATE<1,10> # "" THEN
+                  IF (DATE() - JOB.TRACK.DATE<1,10>) > NO.DATE THEN
+                     JOB.STATUS = INSERT(JOB.STATUS,1,1,0,"7")
+                     JOB.STAT.DATE = INSERT(JOB.STAT.DATE,1,1,0,DATE())
+                     GOSUB 1000
+                     UPDATE.FLG = 1
+                  END
+               END
+            END
+         END
+      END
+111 *
+      RELEASE JOB, ID
+   REPEAT
+   IF UPDATE.FLG = 0 THEN
+      PROCWRITE "END"
+*T26556 v
+      DELETE CONTROL, CONO:'JOB.PURGE.DET'
+   END ELSE
+      WRITEV DIV.CODE ON CONTROL, CONO:'JOB.PURGE.DET',1
+*T26556 ^
+   END
+   GOTO 99999
+*** WRITE BACK JOB RECORD
+1000 *
+   MATWRITE JOB.REC ON JOB , ID
+   RETURN
+*** PRINT ERRMSG
+91000 ERR.TYPE = 1; CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+92000 ERR.TYPE = 2; CALL SYSCOM(MAT SYSCOM.REC)
+   RETURN
+93000 ERR.TYPE = 3; CALL SYSCOM(MAT SYSCOM.REC)
+99999 *
+END

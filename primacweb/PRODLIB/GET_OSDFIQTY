@@ -1,0 +1,111 @@
+SUBROUTINE GET_OSDFIQTY
+********************************************************************************
+*   Program name :- GET_OSDFIQTY
+*   Created:- 12/21/2005
+*------------------------------------------------------------------------------*
+*
+
+* In Properties:
+* --------------
+*  
+*
+* Out Properties:
+* ---------------
+*  
+********************************************************************************
+$INCLUDE WWINSERT RBO.H
+
+$INCLUDE OPS.CPYLIB ORDER.DETAIL
+$INCLUDE OPS.CPYLIB BOL
+
+OPEN "","ORDER.DETAIL" TO ORDER.DETAIL ELSE
+  ERRMSG = "CANNOT OPEN ORDER.DETAIL FILE"
+  GOTO 91000
+END
+OPEN "","DAILY.BOL" TO DAILY.BOL ELSE 
+  ERRMSG = "CANNOT OPEN DAILY.BOL"
+  GOTO 91000
+END
+
+STATUS = RBO.getProperty("","ID",ID)
+STATUS = RBO.getProperty("","PMCProperty",PMCProperty)
+
+CONO = PMCProperty<1,4>
+BOL.ID = ID[5,99]
+
+*---- SETUP UNIT MEASURE CONVERSION AND DISPLAY
+   ICR.CNV = "MD0"; ICR.CNV1 = "MD0"
+   ICR.DV1 = 1; ICR.MT1 = 1; ICR.DV2 = 1000
+   ICR.TYPE = 3; ICR.SCAL = 0
+*----
+* Insert method code here
+
+   
+       MATREAD BOL.REC FROM DAILY.BOL,CONO:BOL.ID ELSE ERRMSG = "CANNOT READ DAILY.BOL REC : " : CONO:BOL.ID;GOTO 91000
+   
+
+	
+  LINES = DCOUNT(BOL.PROD,@VM) 
+  
+  IF LINES > 0 THEN
+      FOR REF = 1 TO LINES
+         PROD = BOL.PROD<1,REF>
+         WHSE = BOL.WHSE<1,REF>
+         ORDNO = BOL.ORDER<1,REF>
+         RECP = BOL.RECP.NO<1,REF,1>
+         KIT   = BOL.KIT<1,REF>
+         PROD.SEQ = BOL.SEQ<1,REF>
+         TEMP.SID<1,REF> = PROD:"!":WHSE:"!":ORDNO:"!":RECP
+         
+	  MATREAD ORD.DET.REC FROM ORDER.DETAIL, CONO:ORDNO:"!":BOL.SHIP.TO ELSE
+            MAT ORD.DET.REC = ""
+         END
+         PTR = 1
+         LOOP
+            LOCATE PROD IN OSD.PROD<1>,PTR SETTING PLOC THEN
+               IF (OSD.WHSE<1,PLOC> = WHSE) AND (OSD.KIT<1,PLOC> = KIT) AND (OSD.PROD.SEQ<1,PLOC> = PROD.SEQ) THEN PTR = 0
+            END ELSE
+               PTR = 0; PLOC = 0
+            END
+         WHILE PTR > 0 DO
+            PTR = PLOC+1
+         REPEAT
+         IF PLOC > 0 THEN
+            LCNT = DCOUNT(BOL.LOC<1,REF>,@SM)
+            PREV.RECP.NO = 0       ;*T24732
+            FOR LPTR = 1 TO LCNT
+               WLOC = BOL.LOC<1,REF,LPTR>
+               RECP = BOL.RECP.NO<1,REF,LPTR>
+               LOCATE RECP IN OSD.RECP.NO<1,PLOC>,1 SETTING P ELSE NULL
+               AQTY = OSD.FI.QTY<1,PLOC,P>+0
+               IF PREV.RECP.NO = 0 OR PREV.RECP.NO # RECP THEN                  
+                  TEMP.AVAIL<1,REF> = TEMP.AVAIL<1,REF> + AQTY
+               END
+               PREV.RECP.NO = RECP
+            NEXT LPTR
+         END ELSE
+             TEMP.AVAIL<1,REF> = 0
+         END
+      NEXT REF
+
+      FOR I = 1 TO DCOUNT(TEMP.AVAIL,@VM)
+         IF TEMP.AVAIL<1,I> > 0 THEN
+	     PRINT.AVAIL = TEMP.AVAIL<1,I>
+            PQTY = INT(((PRINT.AVAIL / ICR.DV1 ) * ICR.MT1) / ICR.DV2 + .5 )
+            TMPQTY<1,I> = OCONV(PQTY,ICR.CNV1)
+         END
+      NEXT I
+
+   END
+ 
+  STATUS = RBO.setProperty("","OSD_FI_QTY",TMPQTY)
+  
+RETURN
+
+* End of method code
+91000 *
+  STATUS = RBO.setProperty('','ServerStatus',1)        
+  STATUS = RBO.setProperty('','ServerMessage',ERRMSG)
+RETURN
+
+

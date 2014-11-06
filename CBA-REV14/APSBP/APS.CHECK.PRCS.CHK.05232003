@@ -1,0 +1,252 @@
+*COPY>CPYLIB>COM1
+*                             PROCESSING TO TAKE PLACE AT THE SAME TIME
+* REVISION    - [08.0]
+* Copyright 1982 by Computer Business Associates (Vercom Software, Inc.)
+* TASK 20590 JRCHECK LENGTH OF DIVISION TO DISALLOW "000" AS GEN DIV
+*CSF26262 ALLOWS USER TO GO TO SCH. CASH DISB. WITHOUT RUNNING CHECK REG.
+*T21177 diane 01/27/1997 * REV11 UPG USE SYSCOM AND VSI_PLINE
+*T23278 markt 10/13/1998 * Add division security check
+*T26493 cmykleb 04/02/2002 * Chang proc to use new PMC_REPORTS.
+*T27358 thompson 03/27/2003 * DO NOT ALLOW FOR ALL AND DIVISION SPECIFIC
+*************************************************************************
+*COPY>PMC.CPYLIB>DIVISION
+*COPY>CPYLIB>CHAR
+*COPY>CPYLIB>SYSCOM
+*
+*--- SETUP SYSTEM ERROR MESSAGES
+*
+   SYS.TYPE = 1
+   CALL SYSCOM(MAT SYSCOM.REC)
+   PROMPT ""
+   PROCREAD INBUFF ELSE
+      ERRMSG = "MUST RUN FROM A PROC"
+      GOSUB 91000;GOTO 99999
+   END
+   CONO = INBUFF<1>
+   TYPE = INBUFF<3>
+   DIV = INBUFF<6> ; * T26493
+   IF TYPE # "R" AND TYPE # "U" AND TYPE # "P" AND TYPE # "C" AND TYPE # "F" AND TYPE # "S" THEN
+      ERRMSG = "INVALID PARAMETER PASSED FROM PROC"
+      GOSUB 91000
+      PROCWRITE "END"
+      GOTO 99999
+   END
+   OPEN '','CONTROL' TO CONTROL ELSE
+      ERRMSG = 'CANNOT LOCATE CONTROL FILE'
+      GOSUB 91000
+      PROCWRITE "END"
+      GOTO 99999
+   END
+   OPEN '','SECURITY' TO SECURITY ELSE
+      ERRMSG = 'CANNOT LOCATE SECURITY FILE'
+      GOSUB 91000
+      PROCWRITE "END"
+      GOTO 99999
+   END
+   OPEN '','DIVISION' TO DIVISION ELSE
+      ERRMSG = 'CANNOT LOCATE DIVISION FILE'
+      GOSUB 91000
+      PROCWRITE "END"
+      GOTO 99999
+   END
+   PORT = 'TTY'
+   CALL SYSVARS.SUB(PORT)
+   READV USER.ID FROM SECURITY, 'R.':PORT,2 ELSE USER.ID = ''
+   PORT = USER.ID
+   ACCT = @WHO
+   PORT.ACCT = PORT:" ":ACCT
+   READU ITEM FROM CONTROL, CONO : "APS.CHECK.PRCS.CHK" ELSE ITEM = ""
+*T26493 v
+*  LOCATE PORT IN ITEM<2>,1 SETTING UFND THEN
+*     DIV = ITEM<4,UFND>
+*  END ELSE
+*     DIV = ""
+*  END
+   LOCATE PORT IN ITEM<2>,1 SETTING UFND ELSE NULL
+   IF DIV = "" THEN DIV = ITEM<4,UFND>
+*T26493 ^
+100 *
+   IF DIV = "" THEN GOSUB 9000
+   IF DIV = "END" THEN
+      PROCWRITE "END";RELEASE CONTROL, CONO:"APS.CHECK.PRCS.CHK"
+      GOTO 99999
+   END
+*T27358 v
+   ERR = 0
+   DCNT = DCOUNT(ITEM<4>,VM)
+   IF DIV = "ALL" THEN
+      FOR D = 1 TO DCNT
+         IF NUM(ITEM<4,D>) THEN
+            ERR = 1
+         END
+      NEXT D
+   END ELSE
+      LOCATE "ALL" IN ITEM<4>,1 SETTING PND ELSE PND = 0
+      IF PND THEN 
+         ERR = 1
+      END
+   END
+   IF ERR = 1 THEN 
+      ERRMSG = "You Cannot Run Checks by Division and All at the same time"
+      GOSUB 91000; RELEASE CONTROL, CONO:"APS.CHECK.PRCS.CHK"
+      INBUFF<1> = "END"
+      INBUFF<6> = "END"
+      PROCWRITE INBUFF
+      GOTO 99999
+   END
+*T27358
+   LOCATE DIV IN ITEM<4>,1 SETTING DFND THEN
+      IF UFND # DFND THEN
+         ERRMSG = 'USER (':ITEM<2,DFND>:') IS RUNNING CHECKS FOR DIVISION ':DIV
+         GOSUB 91000;PROCWRITE "END";RELEASE CONTROL, CONO:"APS.CHECK.PRCS.CHK"
+         GOTO 99999
+      END
+   END ELSE
+      ITEM<4,UFND> = DIV
+   END
+   BEGIN CASE
+      CASE ITEM<2,UFND> # "" AND ITEM<2,UFND> # PORT
+         BEGIN CASE
+            CASE ITEM<3,UFND> = "R"
+               ERRMSG = 'YOU NEED TO WAIT FOR USER (':ITEM<2,UFND>:') TO FINISH PRINTING CHECK REGISTER'
+            CASE ITEM<3,UFND> = "P"
+               ERRMSG = 'YOU NEED TO WAIT FOR USER (':ITEM<2,UFND>:') TO FINISH PRINTING CHECKS'
+            CASE ITEM<3,UFND> = "U"
+               ERRMSG = 'YOU NEED TO WAIT FOR USER (':ITEM<2,UFND>:') TO FINISH CHECK UPDATE'
+            CASE 1
+               ERRMSG = 'YOU NEED TO WAIT FOR USER (':ITEM<2,UFND>:') TO FINISH CHECK SCHEDULE'
+         END CASE
+         GOSUB 91000
+         PROCWRITE "END"
+         RELEASE CONTROL, CONO : "APS.CHECK.PRCS.CHK"
+      CASE TYPE = "C"
+         ITEM = DELETE(ITEM,3,UFND,0)
+         IF ITEM<1,UFND> = "" OR ITEM<1,UFND> = "S" THEN
+            ITEM = DELETE(ITEM,1,UFND,0)
+            ITEM = DELETE(ITEM,2,UFND,0)
+            ITEM = DELETE(ITEM,4,UFND,0)
+         END
+         WRITE ITEM ON CONTROL, CONO : "APS.CHECK.PRCS.CHK"
+      CASE TYPE = "F"
+         IF ITEM<3,UFND> = "R" THEN
+            FOR XXX = 1 TO 4
+               ITEM = DELETE(ITEM,XXX,UFND,0)
+            NEXT XXX
+            WRITE ITEM ON CONTROL, CONO : "APS.CHECK.PRCS.CHK"
+         END ELSE
+            ITEM<1,UFND> = ITEM<3,UFND>
+            ITEM<3,UFND> = ""
+            WRITE ITEM ON CONTROL, CONO : "APS.CHECK.PRCS.CHK"
+         END
+      CASE TYPE = "R" AND ITEM<1,UFND> # "P"
+         ERRMSG = "YOU MUST PRINT CHECKS BEFORE THIS MENU OPTION"
+         GOSUB 91000
+         PROCWRITE "END"
+         RELEASE CONTROL, CONO : "APS.CHECK.PRCS.CHK"
+      CASE TYPE = "P" AND ITEM<1,UFND> # "U"
+         BEGIN CASE
+            CASE ITEM<1,UFND> = "S"
+               ERRMSG = "YOU MUST START CHECK PROCESS BEFORE THIS MENU OPTION"
+            CASE ITEM<1,UFND> = "R" OR ITEM<1,UFND> = "P"
+               ERRMSG = "YOU MUST UPDATE CHECKS BEFORE THIS MENU OPTION"
+            CASE 1
+               ERRMSG = "YOU MUST START CHECK PROCESS BEFORE THIS MENU OPTION"
+         END CASE
+         GOSUB 91000
+         PROCWRITE "END"
+         RELEASE CONTROL, CONO : "APS.CHECK.PRCS.CHK"
+      CASE TYPE = "U" AND (ITEM<1,UFND> = "P" OR ITEM<1,UFND> = "R")
+         ERRMSG = "YOU MUST FINISH CHECK PROCESS BEFORE THIS MENU OPTION"
+         GOSUB 91000
+         PROCWRITE "END"
+         RELEASE CONTROL, CONO : "APS.CHECK.PRCS.CHK"
+      CASE TYPE = "S" AND (ITEM<1,UFND> = "P" OR ITEM<1,UFND> = "R")
+         ERRMSG = "YOU MUST FINISH CHECK PROCESS BEFORE THIS MENU OPTION"
+         GOSUB 91000
+         PROCWRITE "END"
+         RELEASE CONTROL, CONO : "APS.CHECK.PRCS.CHK"
+      CASE 1
+         ITEM<3,UFND> = TYPE;ITEM<2,UFND> = PORT
+         WRITE ITEM ON CONTROL, CONO : "APS.CHECK.PRCS.CHK"
+         BEGIN CASE
+            CASE TYPE = "S" OR TYPE = "P"
+               INBUFF<6> = ITEM<4,UFND>
+            CASE TYPE = "R"
+               INBUFF<4> = ITEM<4,UFND>
+            CASE TYPE = "U"
+               INBUFF<6> = ITEM<4,UFND>
+1500 *
+               IF INBUFF<4> = "" THEN
+                  IF TYPE = "U" AND ITEM<1,UFND> # "S" AND ITEM<1,UFND> # "U" THEN
+                     INBUFF<4> = "M"
+                  END ELSE
+                     PRINT @(18,9):"ENTER (R)ebuild, (M)anual, (U)pdate : ":
+                     INPUT RMU :
+                     INBUFF<4> = RMU
+                  END
+                  BEGIN CASE
+                     CASE INBUFF<4> = "END"
+                        PROCWRITE "END";  RELEASE CONTROL, CONO:"APS.CHECK.PRCS.CHK"; GOTO 99999
+                     CASE INBUFF<4> = "M"
+                        IF ITEM<1,UFND> = "S" OR ITEM<1,UFND> = "U" THEN
+                           DIV = ""; GOTO 100
+                        END
+                     CASE INBUFF<4> = "R"
+                     CASE INBUFF<4> = "U"
+                     CASE 1
+                        INBUFF<4> = ""
+                        ERRMSG = "Invalid Entry";GOSUB 91000; GOTO 1500
+                  END CASE
+               END
+         END CASE
+         INBUFF<3> = ''
+         PROCWRITE INBUFF
+   END CASE
+   GOTO 99999
+*
+*--- GET DIVISION
+*
+9000 *
+   PRINT @(18,7):"ENTER SPECIFIC OWNING DIVISION NUMBER : ":
+9001 *
+   PRINT @(57,7):CL:
+   PRINT @(57,7):"":
+   INPUT DIV :
+   BEGIN CASE
+      CASE DIV = "END" OR DIV = "E"
+         DIV = "END"
+      CASE DIV = ""
+         GOTO 9001; * T20590
+      CASE 1
+         IF DIV = "00" AND LEN(DIV) = 2 THEN
+            READ SECURITY.REC FROM CONTROL, CONO:"DIV.SECURITY" ELSE
+               ERRMSG = "DIV.SECURITY CONTROL RECORD IS MISSING:"
+               GOSUB 91000; GOTO 9001
+            END
+            IF SECURITY.REC<1> = "Y" AND SECURITY.REC<2> = "Y" THEN
+               ERRMSG = " 'ALL' OR '00' INVALID WHEN DIVISION-LEVEL POSTING & CLOSING IS SELECTED"
+               GOSUB 91000; GOTO 9001
+            END
+         END ELSE
+            MATREAD DIV.REC FROM DIVISION, CONO:DIV ELSE
+               ERRMSG = "INVALID DIVISION";GOSUB 91000;GOTO 9001
+            END
+         END
+         DIV.CODE = DIV; USER.ID = UPCASE(@LOGNAME); ERRMSG = ''
+         CALL CK.DIV.SEC.SUB(CONO,DIV.CODE,USER.ID,ERRMSG)
+         IF ERRMSG # '' THEN
+            GOSUB 91000; GOTO 9001
+         END
+   END CASE
+   RETURN                                                
+*
+*--- CALLS FOR SYSCOM
+*
+91000 *
+   ERR.TYPE = 1;CALL SYSCOM(MAT SYSCOM.REC); RETURN
+92000 *
+   ERR.TYPE = 2;CALL SYSCOM(MAT SYSCOM.REC); RETURN
+93000 *
+   ERR.TYPE = 3;CALL SYSCOM(MAT SYSCOM.REC)
+99999* 
+END

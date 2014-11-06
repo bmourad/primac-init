@@ -1,0 +1,1095 @@
+*COPY>CPYLIB>COM1
+*COPY>PMC.CPYLIB>COM.CUST
+*
+**********************************************  
+* REVISION    - [XX.X]
+* Copyright 1995 by Computer Business Associates (Vercom Software, Inc.)
+* SYSTEM      - PRIMAC
+* SOURCE      - POSBP 
+* PROGRAM     - PO.APP.REQ.MAINT   
+* BY          - edvard; CBA        
+* DATE        - 08/04/1999         
+* DESCRIPTION -       
+*        
+*T24231 edvard 08/04/1999 * PO PO requisitions requestor/approver 
+* maintenance         
+*T25260 edvard 09/27/2000 * Remove limit check.
+*T25978 adelgado 02/07/2002 * Add the use of prompts (S,SR,SB,ST).
+*T26126 adelgado 02/26/2002 * Implement the LOCKED clause for READU.
+*ENDDOC 
+*************************************************************************
+*COPY>PMC.CPYLIB>COMP.OPS
+*COPY>PMC.CPYLIB>COMPANY
+*COPY>POS.CPYLIB>APP.REQ
+*COPY>CPYLIB>EDIT.COM
+*COPY>CPYLIB>EDIT.COM.DRIVER
+*COPY>CPYLIB>SYSCOM
+*COPY>CPYLIB>FILE.VARS
+*COPY>CPYLIB>GEN.XREF.SUB
+*COPY>CPYLIB>CHAR
+*
+*---- DIMENSION RECORDS
+*
+  DIM CUST.REC.SAVE(100)
+*
+*---- SETUP SYSTEM ERROR MESSAGES
+*
+  SYS.TYPE=1
+  CALL SYSCOM(MAT SYSCOM.REC)
+*
+*---- OPEN FILES
+*
+  OPEN '','POS.SCREENS' TO M.SCREENS ELSE ERRMSG="POS.SCREENS";GOTO 93000
+  OPEN '','CONTROL' TO CONTROL ELSE ERRMSG="CONTROL";GOTO 93000
+  OPEN '','SECURITY' TO SECURITY ELSE ERRMSG="SECURITY";GOTO 93000
+  OPEN '','DIVISION' TO DIVISION ELSE ERRMSG="DIVISION";GOTO 93000
+  OPEN '','APP.REQ' TO APP.REQ ELSE ERRMSG="APP.REQ";GOTO 93000
+  OPEN '','COMPANY' TO COMPANY ELSE ERRMSG="COMPANY";GOTO 93000
+  OPEN '','XREF.DATA' TO XREF.DATA ELSE ERRMSG="XREF.DATA";GOTO 93000
+  OPEN '','PREFIX' TO PREFIX ELSE ERRMSG="PREFIX";GOTO 93000
+*
+*---- GET COMPANY NUMBER
+*
+  CONO=''
+  CALL GET.CONO(CONO,MAT COMP.REC)
+  IF CONO="END" THEN GOTO 99999
+  MATREAD OPCO.REC FROM CONTROL, CONO:"OPS" ELSE
+    MAT OPCO.REC = ""
+  END
+*
+*
+*---- INITIALIZATION
+*
+  MAT EDIT.COM.DRIVER=""
+  MAT GEN.XREF.REC=""
+  LINE.SPACE=1
+  PAGE.SIZE=2
+  C.PAGE.SIZE=3
+  BEGIN.PAGE=18
+  C.BEGIN.PAGE=17
+  LINES=0
+  START.LINE=0
+  OLD.LINES=0
+  OPTION=''
+  OLD.NAME=''
+  NEW.NAME=''
+  GXR.CO=CONO
+  UNKNOWN=STR('?',30)
+  NEW.APP = "NO"
+  COLUMN.ARR = 3:AM:18:AM:33
+  PO.TYPE = "Regular":AM:"Outside":AM:"Misc."
+  NEW =""
+*DIV.ENTRY = ""
+  REQUEST = ""
+  REQUIRED = 0
+*
+*---- GET SCREEN
+*
+  MAT SCV.REC = ""
+  ECD.SCRN.CNT=1
+  ECD.SCRN.NAME="PO.APP.REQ.MAINT"
+  GOSUB ACTION.1
+  MAT APP.REQ.REC = ""
+  EXIT.FLAG = 0
+  ECD.SCRN.NO = 1
+  ESN = ECD.SCRN.NO
+  GOSUB ACTION.2
+*
+*---- MAIN PROCESSING
+*
+  END.OF.INPUT = 0
+  LOOP
+    LN=1;OLD.START.LINE=0;NEW.APP='NO'; LINES =0
+    SCV.REC(16)<ESN,1>=DATE()
+    ECD.NUM=16; GOSUB ACTION.5
+    ECD.NUM=2 ; GOSUB ACTION.4
+    BEGIN CASE
+      CASE ECD.RET.VALUE='END'
+        GOTO 99999
+      CASE ECD.RET.VALUE=''
+      CASE ECD.RET.VALUE # ""
+        READ SEC.REC FROM SECURITY, CONO:ECD.RET.VALUE THEN
+          APPROVER = ECD.RET.VALUE
+          GOSUB ENTER.DIVISION
+        END ELSE
+          ERRMSG = "User ":ECD.RET.VALUE:" is not a valid user"
+          GOSUB 91000
+          GO.BACK = 1
+        END
+        IF NOT(GO.BACK) THEN
+          APP.ID = CONO:APPROVER:"!":DIV
+          * T26126 v
+          MATREADU APP.REQ.REC FROM APP.REQ,APP.ID LOCKED
+            ERRMSG = 'APPROVER record is locked by user - ':GETUSERNAME(STATUS())
+            GOSUB 91000 ; CONTINUE 
+          END THEN
+          * T26126 ^
+            SCV.REC(2)<ESN>=APPROVER
+            ECD.NUM=2 ; GOSUB ACTION.5
+            GOSUB GET.DATA
+            GOSUB PRINT.ALL.DATA
+            GOSUB MAIN.OPT.PROMPT
+            GOSUB CLEAR.SCREEN
+          END ELSE
+            ECD.NUM = 20
+            GOSUB ACTION.4
+            IF ECD.RET.VALUE # "Y" THEN          
+              RELEASE APP.REQ,APP.ID
+              SCV.REC(6)<ESN>=""    
+              ECD.NUM = 6 ; GOSUB ACTION.5
+            END ELSE
+              MAT APP.REQ.REC='';NEW.APP='YES'
+              NEW = 1
+              SCV.REC(2)<ESN>=APPROVER    
+              ECD.NUM=2 ; GOSUB ACTION.5 
+              GO.BACK = 0
+              FOR REQUEST=1 TO 10 UNTIL GO.BACK
+                ON REQUEST GOSUB ENTER.LEVEL, ENTER.NAME,ENTER.STATUS,ENTER.REG.FLAG,ENTER.REG.LIMIT,ENTER.OUT.FLAG,ENTER.OUT.LIMIT,ENTER.MISC.FLAG,ENTER.MISC.LIMIT
+                IF ECD.RET.VALUE="END" THEN
+                  RELEASE APP.REQ,APP.ID
+                  GOSUB CLEAR.SCREEN
+                  GO.BACK = 1
+                END
+              NEXT REQUEST
+*
+* Enter Approvers for Regular, Outside and Misc. PO's
+*
+*PO.POS = 1 ;* REGULAR
+*PO.POS = 2 ;* OUTSIDE
+*PO.POS = 3 ;* MISC.
+*
+              IF NOT(GO.BACK) THEN
+                PO.POS = 0
+                C.BEGIN.PAGE = 17
+                FOR COLUMN = 3 TO 33 STEP 15
+                  LN = 1
+                  LINES = 0
+                  PO.POS +=1
+                  LOOP
+                    LN=LINES + 1
+                    OLD.LINES=LINES
+                    GOSUB ENTER.LINE
+                  WHILE LINES > OLD.LINES DO REPEAT
+                  LN=LINES
+                  LINES=DCOUNT(APP.PO.ID<1,PO.POS>,SVM)
+                  GOSUB SHOW.LINES
+                NEXT COLUMN
+                OLD.NAME=''
+                NEW = 0
+                GOSUB MAIN.OPT.PROMPT
+                GOSUB CLEAR.SCREEN
+              END
+            END
+          END
+        END
+    END CASE
+  UNTIL END.OF.INPUT DO REPEAT
+  STOP
+*
+*************************************************************************
+********* S U B R O U T I N E S *****************************************
+*************************************************************************
+*
+*****************
+MAIN.OPT.PROMPT: 
+*****************
+*
+  DONE=0
+  LOOP
+*  ECD.NUM = 21
+    ECD.NUM = 27
+    SCV.REC(ECD.NUM)<ESN,1>=''
+    GOSUB ACTION.4
+    OPTION=ECD.RET.VALUE
+    BEGIN CASE
+      CASE OPTION="E" OR OPTION="END"
+        RELEASE APP.REQ,APP.ID
+        DONE=1
+      CASE OPTION="CR"
+        PO.POS = 1
+        IF APP.PO.LEVEL > 1 THEN
+          IF APP.PO.FLAG<1,PO.POS> = "Y" THEN
+            COLUMN = 3
+            C.BEGIN.PAGE = 17
+            LINES=DCOUNT(APP.PO.ID<1,1>,SVM)
+            GOSUB ADD.OPT.PROMPT
+            LN=1;OLD.START.LINE=0;LINES=0
+          END ELSE
+            ERRMSG = "Approval of ":PO.TYPE<PO.POS>:" PO is not turned on."
+            GOSUB 91000
+          END
+        END ELSE
+          ERRMSG = "Approver with a level 1 cannot have any approvers."
+          GOSUB 91000
+        END
+      CASE OPTION="CO"
+        PO.POS = 2
+        IF APP.PO.LEVEL > 1 THEN
+          IF APP.PO.FLAG<1,PO.POS> = "Y" THEN
+            COLUMN = 18
+            C.BEGIN.PAGE = 17
+            LINES=DCOUNT(APP.PO.ID<1,2>,SVM)
+            GOSUB ADD.OPT.PROMPT
+            LN=1;OLD.START.LINE=0;LINES=0
+          END ELSE
+            ERRMSG = "Approval of ":PO.TYPE<PO.POS>:" PO is not turned on."
+            GOSUB 91000
+          END
+        END ELSE
+          ERRMSG = "Approver with a level 1 cannot have any approvers."
+          GOSUB 91000
+        END
+      CASE OPTION="CM"
+        PO.POS = 3
+        IF APP.PO.LEVEL > 1 THEN
+          IF APP.PO.FLAG<1,PO.POS> = "Y" THEN
+            COLUMN = 33
+            C.BEGIN.PAGE = 17
+            LINES=DCOUNT(APP.PO.ID<1,3>,SVM)
+            GOSUB ADD.OPT.PROMPT
+            LN=1;OLD.START.LINE=0;LINES=0
+          END ELSE
+            ERRMSG = "Approval of ":PO.TYPE<PO.POS>:" PO is not turned on."
+            GOSUB 91000
+          END
+        END ELSE
+          ERRMSG = "Approver with a level 1 cannot have any approvers."
+          GOSUB 91000
+        END
+      CASE OPTION = "CL"
+        ECD.NUM = 25 ; GOSUB ACTION.4
+        IF ECD.RET.VALUE # "END" THEN 
+          NEW.APP = ECD.RET.VALUE
+          ECD.NUM = 26 ; GOSUB ACTION.4
+          IF ECD.RET.VALUE # "END" THEN
+            IF ECD.RET.VALUE = "ALL" THEN
+              GO.BACK= 0
+*
+         *check if the profile exists for any division already
+*
+              READ DIV.LIST FROM CONTROL, CONO:"DIVISIONS" THEN
+                NBR.DIV = DCOUNT(DIV.LIST<1>,VM)  
+                FOR AA = 1 TO NBR.DIV UNTIL GO.BACK
+                  READ CHECK.REC FROM APP.REQ, CONO:NEW.APP:"!":DIV.LIST<1,AA> THEN
+                    IF CHECK.REC<2> = "Y" THEN
+                      ERRMSG = "You have a profile for the user set in division ":DIV.LIST<1,AA>
+                      GOSUB 91000
+                      GO.BACK = 1
+                    END
+                  END
+                NEXT AA
+              END
+            END ELSE
+ *                                                             
+         *check if profile for "ALL" divisions exists.                 
+ *                                                             
+              READ CHECK.REC FROM APP.REQ, CONO:NEW.APP:"!ALL" THEN  
+                IF CHECK.REC<2> = "Y" THEN                            
+                  ERRMSG= "Profile for all divisions exists"          
+                  GOSUB 91000                                         
+                  GO.BACK = 1
+                END                                                   
+              END ELSE                                                
+                READ CHK.REC FROM DIVISION, CONO:ECD.RET.VALUE THEN
+                  GO.BACK = 0
+                END ELSE
+                  GO.BACK = 1
+                  ERRMSG = "Cannot locate division ":ECD.RET.VALUE
+                  GOSUB 91000
+                END
+              END
+            END
+          END
+          IF NOT(GO.BACK) THEN
+            NEW.DIV = ECD.RET.VALUE
+            NEW.ID = CONO:NEW.APP:"!":NEW.DIV
+            READ CHECK.REC FROM APP.REQ, NEW.ID THEN
+              ERRMSG = "Record with this ID already exists."
+              GOSUB 91000
+              ECD.NUM = 28 ; GOSUB ACTION.4
+              IF ECD.RET.VALUE = "Y" THEN
+                MATWRITE APP.REQ.REC ON APP.REQ, NEW.ID
+              END
+            END ELSE
+              MATWRITE APP.REQ.REC ON APP.REQ, NEW.ID 
+            END
+          END
+        END
+      CASE OPTION="F"
+        IF APP.PO.LEVEL # 1 THEN
+          IF (APP.PO.ID<1,1>="" AND APP.PO.FLAG<1,1> = "Y") OR (APP.PO.ID<1,2>="" AND APP.PO.FLAG<1,2> = "Y") OR (APP.PO.ID<1,3>="" AND APP.PO.FLAG<1,3>="Y") THEN
+            ERRMSG = "Cannot file. Approvers are missing."
+            GOSUB 91000
+          END ELSE
+            DONE=1
+          END
+        END ELSE 
+          DONE = 1
+        END
+        IF (DONE) THEN
+          MATWRITE APP.REQ.REC ON APP.REQ,APP.ID
+        END
+      CASE NOT(NUM(OPTION))
+      CASE OPTION > 0 AND OPTION < 13
+        ON OPTION GOSUB ENTER.LEVEL, ENTER.NAME,ENTER.CODE,ENTER.STATUS,ENTER.REG.FLAG,ENTER.REG.LIMIT,ENTER.OUT.FLAG,ENTER.OUT.LIMIT,ENTER.MISC.FLAG,ENTER.MISC.LIMIT
+    END CASE
+  UNTIL DONE DO REPEAT
+  RETURN
+*
+*********************
+ADD.OPT.PROMPT: 
+*********************
+*
+  EOJ = 0
+  LOOP
+    SCV.REC(22)<ESN,1>=''
+    ECD.NUM=22 ; GOSUB ACTION.4
+    REQUEST=ECD.RET.VALUE
+    BEGIN CASE
+      CASE REQUEST=''
+        EOJ=1
+      CASE REQUEST='END'
+        EOJ=1
+      CASE REQUEST='A'
+        LINES=DCOUNT(APP.PO.ID<1,PO.POS>,SVM)
+        LOOP
+          LN=LINES + 1
+          OLD.LINES=LINES
+          GOSUB ENTER.LINE
+        WHILE LINES > OLD.LINES DO REPEAT
+        LN=LINES
+        GOSUB SHOW.LINES
+        GOSUB REFRESH.APP.LINES
+      CASE REQUEST='S'
+        LN=LN + C.PAGE.SIZE
+        IF LN > LINES THEN LN=1
+        GOSUB SHOW.LINES
+        GOSUB REFRESH.APP.LINES
+      * T25978 v
+      CASE REQUEST = 'SR'
+        LN -= C.PAGE.SIZE
+        IF LN < 1 THEN LN = 1
+        GOSUB SHOW.LINES
+        GOSUB REFRESH.APP.LINES
+      CASE REQUEST = 'ST'
+        LN = 1
+        GOSUB SHOW.LINES
+        GOSUB REFRESH.APP.LINES
+      CASE REQUEST = 'SB'
+        LN = LINES
+        GOSUB SHOW.LINES
+        GOSUB REFRESH.APP.LINES
+      * T25978 ^
+      CASE REQUEST='C'
+        GOSUB GET.LINE.NUMBER
+        IF LNO THEN
+          LN=LNO
+          SLN=C.BEGIN.PAGE + LINE.SPACE  MOD(LN-1,C.PAGE.SIZE)
+          GOSUB ENTER.LINE
+        END
+        GOSUB SHOW.LINES
+        GOSUB REFRESH.APP.LINES
+      CASE REQUEST='D'
+        GOSUB GET.LINE.NUMBER
+        IF LNO THEN
+          LN=LNO
+          APP.PO.ID = DELETE(APP.PO.ID,1,PO.POS,LN)
+          LINES=DCOUNT(APP.PO.ID<1,PO.POS>,SVM)
+          IF LN > 1 AND LN > LINES THEN LN=LN - 1
+          IF LN < 1 THEN LN=1
+          OLD.START.LINE=0
+        END
+        GOSUB SHOW.LINES
+        GOSUB REFRESH.APP.LINES
+      CASE 1
+        ERRMSG="INVALID OPTION";GOSUB 91000
+    END CASE
+  UNTIL EOJ DO REPEAT
+  RETURN
+*
+****************
+GET.LINE.NUMBER: 
+*****************
+*
+  ECD.NUM=23
+  IF LAST.LINE < LINES THEN
+    ECD.MAXV=LAST.LINE
+  END ELSE
+    ECD.MAXV=LINES
+  END
+  SCV.REC(23)<ESN,1>=''
+  GOSUB ACTION.4
+  P_X  = 0 ; P_Y = 23 ; P_VALUE = "" ; P_OPT = "CL"
+  CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+  LNO=ECD.RET.VALUE
+  IF LNO='' OR LNO="END" THEN LNO=0
+  RETURN
+*
+***********
+SHOW.LINES: 
+***********
+*
+  START.LINE=1 + INT((LN-1) / C.PAGE.SIZE) * C.PAGE.SIZE
+  IF START.LINE=OLD.START.LINE THEN GOTO 5047
+  OLD.START.LINE=START.LINE
+  LAST.LINE=START.LINE + C.PAGE.SIZE - 1
+  CNT=1
+  FOR L=START.LINE TO LAST.LINE UNTIL L > LINES
+    SLN=C.BEGIN.PAGE + LINE.SPACE * MOD(L-1,C.PAGE.SIZE)
+    P_X  = COLUMN ; P_Y = SLN ; P_VALUE = L "R#2" ; P_OPT = ""
+    P_X  := AM:COLUMN+3 ; P_Y := AM:SLN
+    P_VALUE := AM:APP.PO.ID<1,PO.POS,L>"L#8"
+    CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+    CNT=CNT + 1
+  NEXT L
+  FOR M=CNT TO C.PAGE.SIZE
+    SLN=C.BEGIN.PAGE + LINE.SPACE * MOD(M-1,C.PAGE.SIZE)
+    P_X  = COLUMN ; P_Y = SLN ; P_VALUE = "" ; P_OPT = "CL"
+    CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+  NEXT M
+5047 *
+  RETURN
+*
+**************
+REFRESH.APP.LINES: 
+**************
+*
+  HOLD.LINES = LINES
+  HOLD.LN = LN
+  HOLD.PO.POS = PO.POS
+  HOLD.COLUMN = COLUMN
+  HOLD.OLD.START.LINE = OLD.START.LINE
+  HOLD.LAST.LINE = LAST.LINE
+  HOLD.SLN = SLN
+  FOR XX = PO.POS+1 TO 3
+    LN = 1
+    LINES = 0
+    PO.POS = XX
+    COLUMN = COLUMN.ARR<XX>
+    LINES=DCOUNT(APP.PO.ID<1,PO.POS>,SVM)
+    OLD.START.LINE = 0                    
+    GOSUB SHOW.LINES
+  NEXT XX
+  PO.POS = HOLD.PO.POS
+  COLUMN = HOLD.COLUMN
+  LN = HOLD.LN
+  LINES = HOLD.LINES
+  OLD.START.LINE = HOLD.OLD.START.LINE
+  LAST.LINE = HOLD.LAST.LINE
+  SLN = HOLD.SLN
+  RETURN
+*
+********************
+PRINT.ALL.DATA: 
+********************
+*
+  GOSUB ACTION.3
+*
+* print approver ids
+*
+  PO.POS = 0
+  C.BEGIN.PAGE = 17
+  FOR COLUMN = 3 TO 33 STEP 15
+    PO.POS +=1
+    LINES=DCOUNT(APP.PO.ID<1,PO.POS>,SVM)
+    OLD.START.LINE = 0
+    GOSUB SHOW.LINES
+  NEXT COLUMN
+  RETURN
+*
+***************
+CHECK.APP.IDS: 
+***************
+*
+  READ CHECK.REC FROM APP.REQ,CHK.ID THEN
+    IF CHECK.REC<6> = APP.PO.LEVEL-1 THEN
+      NULL
+    END ELSE
+      ERRMSG = "Invalid Approver level for ":PO.TYPE<PO.POS>:" PO's.  It must be in level ":APP.PO.LEVEL-1:"."
+      GOSUB 91000
+      SLN=C.BEGIN.PAGE + LINE.SPACE  MOD(LN-1,C.PAGE.SIZE)
+      GOSUB ENTER.LINE
+      GOSUB SHOW.LINES
+      GOSUB REFRESH.APP.LINES
+    END
+  END
+  RETURN
+*
+****************F I E L D  I N P U T S ***********************************
+*
+***************
+ENTER.LEVEL: 
+***************
+*
+  EOI = 0
+  LOOP
+    ECD.NUM=3 ; GOSUB ACTION.4
+    BEGIN CASE
+      CASE ECD.RET.VALUE = "END" 
+        EOI = 1
+      CASE ECD.RET.VALUE > CO.PO.APP.LEVELS 
+        ERRMSG = "Maximum number of levels is ":CO.PO.APP.LEVELS
+        GOSUB 91000
+      CASE ECD.RET.VALUE <= 0 
+        ERRMSG = "Minimum level number is 1 "
+        GOSUB 91000
+      CASE 1
+        SKIP = 1
+        IF ECD.RET.VALUE = 1 THEN
+          IF APP.PO.ID<1,1> # "" OR APP.PO.ID<1,2>#"" OR APP.PO.ID<1,3>#"" THEN
+            ERRMSG = "Cannot change to level 1 while you have approver id's entered"
+            GOSUB 91000
+          END ELSE
+            HOLD.APP.PO.LEVEL = APP.PO.LEVEL
+            APP.PO.LEVEL = ECD.RET.VALUE
+            GOSUB ENTER.CODE
+            IF APP.CODE = "END" OR APP.CODE = "E" THEN
+              APP.PO.LEVEL = HOLD.APP.PO.LEVEL
+              APP.CODE = HOLD.APP.CODE
+              HOLD.APP.CODE = ""
+              GOSUB GET.DATA ; GOSUB PRINT.ALL.DATA
+            END ELSE
+              EOI = 1
+            END
+          END
+        END ELSE
+          HOLD.APP.PO.LEVEL = APP.PO.LEVEL
+          APP.PO.LEVEL = ECD.RET.VALUE
+          IF ECD.RET.VALUE = CO.PO.APP.LEVELS THEN
+            SCV.REC(5)<ESN> = ""
+            ECD.NUM = 5
+            GOSUB ACTION.5
+            APP.CODE = ""
+            EOI = 1
+            SKIP = 0
+          END ELSE
+            GOSUB ENTER.CODE
+            IF APP.CODE = "END" OR APP.CODE = "E" THEN
+              APP.PO.LEVEL = HOLD.APP.PO.LEVEL
+              APP.CODE = HOLD.APP.CODE
+              HOLD.APP.CODE = ""
+              GOSUB GET.DATA ; GOSUB PRINT.ALL.DATA
+            END ELSE                                            
+              EOI = 1                                           
+              SKIP = 0
+            END
+          END
+        END
+        IF NOT(SKIP) THEN
+          PO.POS = 0
+          C.BEGIN.PAGE = 17
+          FOR COLUMN = 3 TO 33 STEP 15
+            PO.POS +=1
+            IF APP.PO.FLAG<1,PO.POS> = "Y" THEN
+              LN.CNT = DCOUNT(APP.PO.ID<1,PO.POS>,SVM)
+              FOR LN = 1 TO LN.CNT
+                CHK.ID = CONO:APP.PO.ID<1,PO.POS,LN>:"!":DIV
+                READ CHECK.REC FROM APP.REQ,CHK.ID THEN
+                  IF CHECK.REC<6> = APP.PO.LEVEL-1 THEN
+                    CONTINUE
+                  END ELSE
+                    ERRMSG = "Invalid Approver level for ":PO.TYPE<PO.POS>:" PO's.  It has to be in level ":APP.PO.LEVEL-1:"."
+                    GOSUB 91000
+                    SLN=C.BEGIN.PAGE + LINE.SPACE  MOD(LN-1,C.PAGE.SIZE)
+                    REQUIRED = 1
+                    GOSUB ENTER.LINE
+                    REQUIRED = 0
+                    GOSUB SHOW.LINES
+                    GOSUB REFRESH.APP.LINES
+                  END
+                END
+              NEXT LN
+            END
+          NEXT COLUMN
+        END
+    END CASE
+  UNTIL EOI DO REPEAT
+  RETURN
+*
+*************
+ENTER.NAME: 
+*************
+*
+  ECD.NUM=4 ; GOSUB ACTION.4
+  IF ECD.RET.VALUE# "" THEN 
+    APP.NAME = ECD.RET.VALUE
+  END
+  RETURN
+*
+*************
+ENTER.CODE: 
+*************
+*
+  HOLD.APP.CODE = APP.CODE
+  IF APP.PO.LEVEL < CO.PO.APP.LEVELS THEN
+    ECD.NUM=5 ; GOSUB ACTION.4
+    IF ECD.RET.VALUE # '' THEN
+      APP.CODE = ECD.RET.VALUE
+    END
+  END
+  RETURN
+*
+***************
+ENTER.STATUS: 
+***************
+*
+  ECD.NUM = 24 ; ECD.DEFAULT = "Y" ; GOSUB ACTION.4
+  BEGIN CASE
+    CASE ECD.RET.VALUE = "END" 
+      GO.BACK = 1
+    CASE ECD.RET.VALUE = "N"
+      CMD1 = 'COUNT REG.REQ WITH APPROVER = ':'"':APPROVER:'" AND WITH LEVEL # "C"'
+      CMD2 = 'COUNT OUT.REQ WITH APPROVER = ':'"':APPROVER:'" AND WITH LEVEL #"C"'
+      CMD3 = 'COUNT MISC.REQ WITH APPROVER = ':'"':APPROVER:'" AND WITH LEVEL #"C"'
+      IF DIV # "!ALL" THEN
+        CMD1 = CMD1 :' AND WITH DIVISION = ':'"':DIV:'"'
+        CMD2 = CMD2 :' AND WITH DIVISION = ':'"':DIV:'"'
+        CMD3 = CMD3 :' AND WITH DIVISION = ':'"':DIV:'"'
+      END
+      UDTEXECUTE CMD1 CAPTURING MSG1
+      UDTEXECUTE CMD2 CAPTURING MSG2
+      UDTEXECUTE CMD3 CAPTURING MSG3
+      IF MSG1<3>[1,1] > 0 OR MSG2<3>[1,1] > 0 OR MSG3<3>[1,1] > 0 THEN
+        ERRMSG = "Cannot inactivate while this user has outstandig requisitions"
+        GOSUB 91000
+        SCV.REC(24)= "Y" ; ECD.NUM = 24 ; GOSUB ACTION.5
+      END ELSE
+        APP.STATUS = ECD.RET.VALUE
+      END
+    CASE 1
+      APP.STATUS = ECD.RET.VALUE
+  END CASE
+  RETURN
+*
+***************
+ENTER.DIVISION: 
+***************
+*
+  EOI = 0
+  LOOP
+    GO.BACK = 0
+    ECD.NUM = 6 ; GOSUB ACTION.4
+    BEGIN CASE
+      CASE ECD.RET.VALUE = "END"
+        GO.BACK = 1
+        EOI = 1
+      CASE ECD.RET.VALUE = "ALL"
+*
+*check if the profile exist for any division already
+*
+        READ DIV.LIST FROM CONTROL, CONO:"DIVISIONS" THEN
+          NBR.DIV = DCOUNT(DIV.LIST<1>,VM)  
+          FOR AA = 1 TO NBR.DIV UNTIL GO.BACK
+            READ CHECK.REC FROM APP.REQ, CONO:APPROVER:"!":DIV.LIST<1,AA> THEN
+              IF CHECK.REC<2> = "Y" THEN
+                ERRMSG = "You have a profile for the user set in division ":DIV.LIST<1,AA>
+                GOSUB 91000
+                SCV.REC(6)<ESN> = ""
+                GO.BACK = 1
+              END
+            END
+          NEXT AA
+          IF NOT(GO.BACK) THEN 
+            EOI = 1
+            DIV = "ALL"
+          END
+        END
+      CASE 1
+*
+*check if profile for "ALL" divisions exists.
+*
+        READ CHECK.REC FROM APP.REQ, CONO:APPROVER:"!ALL" THEN
+          IF CHECK.REC<2> = "Y" THEN
+            ERRMSG= "Profile for all divisions exists"
+            GOSUB 91000
+            GO.BACK = 1
+          END
+        END
+        IF NOT(GO.BACK) THEN
+          DIV.ID = CONO:ECD.RET.VALUE
+          READ CHECK.REC FROM DIVISION,DIV.ID THEN
+            EOI = 1
+            DIV = ECD.RET.VALUE
+          END ELSE
+            ERRMSG = "Invalid Division Number"
+            GOSUB 91000
+          END
+        END
+    END CASE
+  UNTIL EOI DO REPEAT
+  RETURN
+*
+***************
+ENTER.REG.FLAG: 
+***************
+*
+  OLD.FLAG = APP.PO.FLAG<1,1>
+  ECD.NUM =7 ; ECD.DEFAULT = "Y" ; GOSUB ACTION.4
+  IF ECD.RET.VALUE # '' THEN
+    BEGIN CASE
+      CASE ECD.RET.VALUE = "N"                           
+*
+*check if user can be inactivated
+*
+        CMD = 'COUNT REG.REQ WITH APPROVER = ':'"':APPROVER:'" AND WITH LEVEL # "C"'
+        IF DIV # "ALL" THEN 
+          CMD = CMD : ' AND WITH DIVISION = ':'"':DIV:'"'
+        END
+        UDTEXECUTE CMD CAPTURING MSG
+        IF MSG<3>[1,1] > 0 THEN
+          ERRMSG = "Cannot change. User has outstanding requisitions."
+          GOSUB 91000
+          SCV.REC(7)<ESN> = "Y" ; ECD.NUM=7 ; GOSUB ACTION.5
+        END ELSE
+          APP.PO.FLAG<1,1> = ECD.RET.VALUE
+*         zero out limit
+          ECD.NUM = 8 ; SCV.REC(8)<ESN> = "" ; GOSUB ACTION.5 
+        END
+      CASE (ECD.RET.VALUE = "Y") AND (OLD.FLAG = "N")
+        APP.PO.FLAG<1,1> = ECD.RET.VALUE
+        GOSUB ENTER.REG.LIMIT
+        LN.CNT = DCOUNT(APP.PO.ID<1,1>,SVM)
+        C.BEGIN.PAGE = 17
+        PO.POS = 1
+        COLUMN = COLUMN.ARR<PO.POS>
+        FOR LN = 1 TO LN.CNT 
+          CHK.ID = CONO:APP.PO.ID<1,PO.POS,LN>:"!":DIV
+          GOSUB CHECK.APP.IDS
+        NEXT LN
+      CASE ECD.RET.VALUE = "Y"
+        APP.PO.FLAG<1,1> = ECD.RET.VALUE
+      CASE 1
+    END CASE
+  END
+  RETURN
+*
+**************
+ENTER.OUT.FLAG: 
+**************
+*
+  OLD.FLAG = APP.PO.FLAG<1,2>
+  ECD.NUM=9 ; ECD.DEFAULT = "Y" ; GOSUB ACTION.4
+  IF ECD.RET.VALUE  # '' THEN
+    BEGIN CASE
+      CASE ECD.RET.VALUE = "N" 
+*
+*check if user can be inactivated
+*
+        CMD = 'COUNT OUT.REQ WITH APPROVER = ':'"':APPROVER:'" AND WITH LEVEL # "C"'
+        IF DIV # "ALL" THEN 
+          CMD = CMD : ' AND WITH DIVISION = ':'"':DIV:'"'
+        END
+        UDTEXECUTE CMD CAPTURING MSG
+        IF MSG<3>[1,1] > 0 THEN
+          ERRMSG = "Cannot change. User has outstanding requisitions."
+          GOSUB 91000
+          SCV.REC(9) = "Y" ; ECD.NUM = 9 ; GOSUB ACTION.5
+        END ELSE
+          APP.PO.FLAG<1,2> = ECD.RET.VALUE
+          ECD.NUM = 10 ; SCV.REC(10)<ESN> = "" ; GOSUB ACTION.5
+        END
+      CASE ECD.RET.VALUE = "Y" AND OLD.FLAG = "N" 
+        APP.PO.FLAG<1,2> = ECD.RET.VALUE
+        GOSUB ENTER.OUT.LIMIT                            
+        LN.CNT = DCOUNT(APP.PO.ID<1,2>,SVM)              
+        C.BEGIN.PAGE = 17                                
+        PO.POS = 2                                       
+        COLUMN = COLUMN.ARR<PO.POS>
+        FOR LN = 1 TO LN.CNT                             
+          CHK.ID = CONO:APP.PO.ID<1,PO.POS,LN>:"!":DIV   
+          GOSUB CHECK.APP.IDS                            
+        NEXT LN                                          
+      CASE ECD.RET.VALUE = "Y"
+        APP.PO.FLAG<1,2> = ECD.RET.VALUE
+      CASE 1
+    END CASE
+  END
+  RETURN
+*
+**************
+ENTER.MISC.FLAG: 
+**************
+*
+  OLD.FLAG = APP.PO.FLAG<1,3>
+  ECD.NUM=11 ; ECD.DEFAULT = "Y" ; GOSUB ACTION.4
+  IF ECD.RET.VALUE # '' THEN
+    BEGIN CASE
+      CASE ECD.RET.VALUE = "N"                           
+*
+*check if user can be inactivated
+*
+        CMD = 'COUNT MISC.REQ WITH APPROVER = ':'"':APPROVER:'" AND WITH LEVEL # "C"'
+        IF DIV # "ALL" THEN 
+          CMD = CMD : ' AND WITH DIVISION = ':'"':DIV:'"'
+        END
+        UDTEXECUTE CMD CAPTURING MSG
+        IF MSG<3>[1,1] > 0 THEN
+          ERRMSG = "Cannot change. User has outstanding requisitions."
+          GOSUB 91000
+          SCV.REC(11)<ESN> = "Y" ; ECD.NUM = 11 ; GOSUB ACTION.5
+        END ELSE
+          APP.PO.FLAG<1,3> = ECD.RET.VALUE
+          ECD.NUM = 12 ; SCV.REC(12)<ESN> = "" ; GOSUB ACTION.5 
+        END
+      CASE ECD.RET.VALUE = "Y" AND OLD.FLAG = "N"
+        APP.PO.FLAG<1,3> = ECD.RET.VALUE
+        GOSUB ENTER.MISC.LIMIT                            
+        LN.CNT = DCOUNT(APP.PO.ID<1,3>,SVM)              
+        C.BEGIN.PAGE = 17                                
+        PO.POS = 3                                       
+        COLUMN = COLUMN.ARR<PO.POS>
+        FOR LN = 1 TO LN.CNT                             
+          CHK.ID = CONO:APP.PO.ID<1,PO.POS,LN>:"!":DIV   
+          GOSUB CHECK.APP.IDS                            
+        NEXT LN                                          
+      CASE ECD.RET.VALUE = "Y"
+        APP.PO.FLAG<1,3> = ECD.RET.VALUE
+      CASE 1
+    END CASE
+  END
+  RETURN
+*
+**************
+ENTER.REG.LIMIT: 
+**************
+*
+  IF APP.PO.FLAG<1,1> = "Y"  THEN
+    EOI = 0
+    LOOP
+      ECD.NUM=8 ; GOSUB ACTION.4
+      BEGIN CASE
+        CASE ECD.RET.VALUE = "END" 
+          EOI = 1
+        CASE 1
+          NBR.APPS = DCOUNT(APP.PO.ID<1,1>,SVM)
+          PO.POS = 1
+*T25260        GOSUB CHECK.AMOUNT
+*T25260        IF NOT(OVER.LIMIT) THEN 
+          APP.PO.LIMIT<1,1> = ECD.RET.VALUE
+          EOI = 1
+*T25260        END
+      END CASE
+      SCV.REC(8)<ESN> = APP.PO.LIMIT<1,1>
+      ECD.NUM = 8 ; GOSUB ACTION.5
+    UNTIL EOI DO REPEAT
+  END
+  RETURN
+*
+**************
+ENTER.OUT.LIMIT: 
+**************
+*
+  IF APP.PO.FLAG<1,2> = "Y" THEN
+    EOI = 0
+    LOOP
+      ECD.NUM=10 ; GOSUB ACTION.4
+      BEGIN CASE
+        CASE ECD.RET.VALUE = "END"
+          EOI = 1
+        CASE 1
+          NBR.APPS = DCOUNT(APP.PO.ID<1,2>,SVM)
+          PO.POS = 2
+*T25260        GOSUB CHECK.AMOUNT
+*T25260        IF NOT(OVER.LIMIT) THEN 
+          EOI = 1
+          APP.PO.LIMIT<1,2> = ECD.RET.VALUE
+*T25260        END
+      END CASE
+      SCV.REC(10)<ESN> = APP.PO.LIMIT<1,2> 
+      ECD.NUM = 10 ; GOSUB ACTION.5
+    UNTIL EOI DO REPEAT
+  END
+  RETURN
+*
+***************
+ENTER.MISC.LIMIT: 
+***************
+*
+  IF APP.PO.FLAG<1,3> = "Y" THEN
+    EOI = 0
+    LOOP
+      ECD.NUM=12 ; GOSUB ACTION.4
+      BEGIN CASE
+        CASE ECD.RET.VALUE = "END" 
+          EOI = 1
+        CASE 1
+          NBR.APPS = DCOUNT(APP.PO.ID<1,3>,SVM)
+          PO.POS = 3
+*T25260        GOSUB CHECK.AMOUNT
+*T25260        IF NOT(OVER.LIMIT) THEN 
+          EOI = 1
+          APP.PO.LIMIT<1,3> = ECD.RET.VALUE
+*T25260        END
+      END CASE
+      SCV.REC(12)<ESN> = APP.PO.LIMIT<1,3> 
+      ECD.NUM = 12 ; GOSUB ACTION.5
+    UNTIL EOI DO REPEAT
+  END
+  RETURN
+*
+****************
+ENTER.LINE: 
+****************
+*
+  IF APP.PO.LEVEL > 1 THEN
+    IF APP.PO.FLAG<1,PO.POS> = "Y" THEN
+      GOSUB ENTER.APP.IDS
+    END
+  END
+  RETURN
+*
+***************
+ENTER.APP.IDS: 
+***************
+*
+  EOI = 0
+  LOOP
+    GOSUB SHOW.LINES
+    IF REQUEST = 'A' THEN
+      GOSUB REFRESH.APP.LINES
+    END
+    SLN=C.BEGIN.PAGE + LINE.SPACE * MOD(LN-1,C.PAGE.SIZE)
+    P_X  = COLUMN ; P_Y = SLN ; P_VALUE = "" ; P_OPT = "CL"
+    P_X  := AM:COLUMN ; P_Y := AM:SLN ; P_VALUE := AM:LN "R#2"
+    CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)
+    GOSUB REFRESH.APP.LINES
+    X=COLUMN+3;Y=SLN;TYP=1;MAXL=8;O.R='O';HMSG = "Enter Approver User Id."
+    CALL EDIT.SUB
+    BEGIN CASE
+      CASE VALUE = "" AND NOT(REQUIRED)
+        EOI = 1
+        P_X  = COLUMN+3 ; P_Y = SLN ; P_VALUE = APP.PO.ID<1,PO.POS,LN> ; P_OPT = "7"
+        CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT) 
+      CASE VALUE = "END"
+        IF REQUEST = "A" THEN
+          APP.PO.ID = DELETE(APP.PO.ID,1,PO.POS,LN)
+          P_X  = COLUMN+3 ; P_Y = SLN ; P_VALUE = "   " ; P_OPT = "3"
+          CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT)              
+          LINES=DCOUNT(APP.PO.ID<1,PO.POS>,SVM)
+        END ELSE
+          P_X  = COLUMN+3 ; P_Y = SLN ; P_VALUE = APP.PO.ID<1,PO.POS,LN> ; P_OPT = "7"
+          CALL VSI_PLINE(P_X,P_Y,P_VALUE,P_OPT) 
+        END
+        EOI = 1
+      CASE 1
+        INVALID.ID = 0
+        CHK.ID = CONO:VALUE:"!ALL"
+        READ CHECK.REC FROM APP.REQ,CHK.ID THEN
+          IF CHECK.REC<2> = "Y" THEN
+            NULL
+          END ELSE
+            CHK.ID = CONO:VALUE:"!":DIV
+            READ CHECK.REC FROM APP.REQ,CHK.ID ELSE
+              INVALID.ID = 1 
+            END
+          END
+        END ELSE
+          CHK.ID = CONO:VALUE:"!":DIV             
+          READ CHECK.REC FROM APP.REQ,CHK.ID ELSE 
+            INVALID.ID = 1                        
+          END                                     
+        END
+        IF NOT(INVALID.ID) THEN
+          LOCATE VALUE IN APP.PO.ID<1,PO.POS> SETTING POS THEN
+            IF POS # LN THEN
+              ERRMSG = "ALREADY ON LINE ":POS
+              GOSUB 91000
+            END
+          END ELSE
+            IF CHECK.REC<2> = "N" THEN
+              ERRMSG = "Approver ":VALUE:" is inactive."
+              GOSUB 91000
+            END ELSE
+              IF CHECK.REC<6> = APP.PO.LEVEL-1 THEN
+                IF CHECK.REC<3,PO.POS> = "N" THEN 
+                  ERRMSG = "Approver ":VALUE:" is not setup to approve ":PO.TYPE<PO.POS>:" PO's."
+                  GOSUB 91000
+                END ELSE
+                  ;*T25260 *app/req that has flag turned on  and limits set to unlimited 
+                  ;*T25260 * so has to have every approver above him.
+                  ;*T25260 IF APP.PO.LIMIT<1,PO.POS> = "UNLIMITED" THEN
+                  ;*T25260 IF CHECK.REC<4,POS> # "UNLIMITED" THEN
+                  ;*T25260 ERRMSG = "Approver ":VALUE:" does not have unlimited allowance "
+                  ;*T25260 GOSUB 91000
+                  ;*T25260 END ELSE
+                  ;*T25260 APP.PO.ID<1,PO.POS,LN>=VALUE
+                  ;*T25260 LINES=DCOUNT(APP.PO.ID<1,PO.POS>,SVM) 
+                  ;*T25260 EOI = 1 
+                  ;*T25260 END
+                  ;*T25260 END ELSE
+                  ;*T25260 IF CHECK.REC<4,PO.POS> < APP.PO.LIMIT<1,PO.POS> THEN
+                  ;*T25260 ERRMSG = "Maximum amount for approver ":VALUE:" is ":CHECK.REC<4,PO.POS>
+                  ;*T25260 GOSUB 91000
+                  ;*T25260 END ELSE
+                  APP.PO.ID<1,PO.POS,LN>=VALUE
+                  LINES=DCOUNT(APP.PO.ID<1,PO.POS>,SVM)
+                  EOI = 1
+                  ;*T25260 END
+                  ;*T25260 END
+                END
+              END ELSE
+                ERRMSG = "Invalid Approver level for ":PO.TYPE<PO.POS>:" PO's.  It has to be in level ":APP.PO.LEVEL-1:"."
+                GOSUB 91000
+              END
+            END
+          END
+        END ELSE
+          ERRMSG = "Invalid Approver Id."
+          GOSUB 91000
+        END
+    END CASE
+  UNTIL EOI DO REPEAT
+  RETURN
+*
+**************************************************************************
+**************
+CLEAR.SCREEN: 
+**************
+*
+  MAT SCV.REC = ""
+  ECD.ACTION=6;CALL SCRN.EDIT
+  RETURN
+*
+****************
+GET.DATA: 
+****************
+*
+  SCV.REC(3)<ESN>=APP.PO.LEVEL
+  SCV.REC(5)<ESN>=APP.CODE
+  SCV.REC(4)<ESN>=APP.NAME
+  SCV.REC(7)<ESN>=APP.PO.FLAG<1,1>
+  SCV.REC(8)<ESN>=APP.PO.LIMIT<1,1>
+  SCV.REC(9)<ESN>=APP.PO.FLAG<1,2>
+  SCV.REC(10)<ESN>=APP.PO.LIMIT<1,2>
+  SCV.REC(11)<ESN>=APP.PO.FLAG<1,3>
+  SCV.REC(12)<ESN>=APP.PO.LIMIT<1,3>
+  SCV.REC(24)<ESN>=APP.STATUS
+  RETURN
+*
+**
+*************
+ACTION.1: 
+*************
+  ECD.ACTION = 1 ; CALL SCRN.EDIT ; RETURN
+*************
+ACTION.2: 
+*************
+  ECD.ACTION = 2 ; CALL SCRN.EDIT ; RETURN
+*************
+ACTION.3: 
+*************
+  ECD.ACTION = 3 ; CALL SCRN.EDIT ; RETURN
+*************
+ACTION.4: 
+*************
+  ECD.ACTION = 4 ; CALL SCRN.EDIT ; RETURN
+*************
+ACTION.5: 
+*************
+  ECD.ACTION = 5 ; CALL SCRN.EDIT ; RETURN
+**
+*---- CALLS FOR SYSCOM
+91000 ERR.TYPE=1;CALL SYSCOM(MAT SYSCOM.REC);RETURN
+93000 ERR.TYPE=3;CALL SYSCOM(MAT SYSCOM.REC)
+99999*
+END
